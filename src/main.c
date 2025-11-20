@@ -29,6 +29,8 @@ int main(void) {
   printf("Platform: ESP32\n");
 #elif defined(ETHERVOX_PLATFORM_DESKTOP)
   printf("Platform: Desktop\n");
+#elif defined(ETHERVOX_PLATFORM_ANDROID)
+  printf("Platform: Android\n");
 #else
   printf("Platform: Unknown\n");
 #endif

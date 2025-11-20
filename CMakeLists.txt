@@ -10,7 +10,9 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 # Platform detection and configuration
 # Only auto-detect if not cross-compiling
 if(NOT DEFINED TARGET_PLATFORM AND NOT CMAKE_TOOLCHAIN_FILE)
-    if(WIN32)
+    if(ANDROID)
+        set(TARGET_PLATFORM "ANDROID")
+    elseif(WIN32)
         set(TARGET_PLATFORM "WINDOWS")
     elseif(UNIX AND NOT APPLE)
         set(TARGET_PLATFORM "LINUX")
@@ -21,7 +23,9 @@ if(NOT DEFINED TARGET_PLATFORM AND NOT CMAKE_TOOLCHAIN_FILE)
     endif()
 elseif(NOT DEFINED TARGET_PLATFORM)
     # Cross-compiling - let toolchain set the platform
-    if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm")
+    if(ANDROID)
+        set(TARGET_PLATFORM "ANDROID")
+    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "arm")
         set(TARGET_PLATFORM "RPI")
     endif()
 endif()
@@ -70,6 +74,14 @@ elseif(TARGET_PLATFORM STREQUAL "MACOS")
     add_definitions(-DPLATFORM_DESKTOP=1)
     set(ETHERVOX_PLATFORM_MACOS 1)
     set(ETHERVOX_PLATFORM_DESKTOP 1)
+
+elseif(TARGET_PLATFORM STREQUAL "ANDROID")
+    # Android specific settings
+    add_definitions(-DTARGET_ANDROID=1)
+    add_definitions(-DETHERVOX_PLATFORM_ANDROID=1)
+    add_definitions(-DPLATFORM_MOBILE=1)
+    set(ETHERVOX_PLATFORM_ANDROID 1)
+    set(ETHERVOX_PLATFORM_MOBILE 1)
 endif()
 
 # Show which platform macros are defined
@@ -88,6 +100,12 @@ if(DEFINED ETHERVOX_PLATFORM_LINUX)
 endif()
 if(DEFINED ETHERVOX_PLATFORM_DESKTOP)
     message(STATUS "ETHERVOX_PLATFORM_DESKTOP is DEFINED")
+endif()
+if(DEFINED ETHERVOX_PLATFORM_ANDROID)
+    message(STATUS "ETHERVOX_PLATFORM_ANDROID is DEFINED")
+endif()
+if(DEFINED ETHERVOX_PLATFORM_MOBILE)
+    message(STATUS "ETHERVOX_PLATFORM_MOBILE is DEFINED")
 endif()
 
 # Build configuration
@@ -128,8 +146,16 @@ file(GLOB ETHERVOXAI_CORE_SOURCES
     "src/plugins/*.c"
     "src/wake_word/*.c"
     "src/stt/*.c"
-    "src/llm/*.c"
 )
+
+# Add LLM sources only if LLM backends are enabled
+if(WITH_LLAMA OR WITH_TINYLLAMA)
+    file(GLOB LLM_SOURCES "src/llm/*.c")
+    list(APPEND ETHERVOXAI_CORE_SOURCES ${LLM_SOURCES})
+    message(STATUS "LLM backend sources included")
+else()
+    message(STATUS "LLM backend sources excluded (WITH_LLAMA=OFF, WITH_TINYLLAMA=OFF)")
+endif()
 
 # Shared audio core implementation (excluding platform-specific files)
 list(APPEND ETHERVOXAI_CORE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/audio/audio_core.c")
@@ -162,6 +188,12 @@ elseif(APPLE OR TARGET_PLATFORM STREQUAL "MACOS")
         src/audio/platform_macos.c
         src/platform/desktop_hal.c
     )
+elseif(ANDROID OR TARGET_PLATFORM STREQUAL "ANDROID")
+    message(STATUS "Building for Android - using Android platform sources")
+    set(PLATFORM_SOURCES
+        src/audio/platform_android.c
+        src/platform/android_hal.c
+    )
 else()
     message(STATUS "Building for Linux - using Linux platform sources")
     # Linux/Desktop default
@@ -177,6 +209,11 @@ endif()
 # Combine core and platform sources for the reusable library
 set(ETHERVOXAI_SOURCES ${COMMON_SOURCES} ${ETHERVOXAI_CORE_SOURCES} ${PLATFORM_SOURCES} src/platform/platform_core.c)
 
+# Add JNI wrapper for Android
+if(ANDROID)
+    list(APPEND ETHERVOXAI_SOURCES ethervox_multiplatform_core.c)
+endif()
+
 # Debug: Print sources being compiled
 # message(STATUS "Core sources: ${ETHERVOXAI_CORE_SOURCES}")
 # message(STATUS "Platform sources: ${PLATFORM_SOURCES}")
@@ -186,8 +223,19 @@ message(STATUS "Common sources: ${COMMON_SOURCES}")
 message(STATUS "Core sources: ${ETHERVOXAI_CORE_SOURCES}")
 message(STATUS "Platform sources: ${PLATFORM_SOURCES}")
 
-# Static library that can be reused by examples/tests
-add_library(ethervoxai STATIC ${ETHERVOXAI_SOURCES})
+# Create library - shared for Android, static for others
+if(ANDROID)
+    add_library(ethervoxai SHARED ${ETHERVOXAI_SOURCES})
+    
+    # Add 16KB page alignment for Android 15+ compatibility
+    target_link_options(ethervoxai PRIVATE
+        -Wl,-z,max-page-size=16384
+    )
+    message(STATUS "Enabled 16KB page alignment for Android")
+else()
+    add_library(ethervoxai STATIC ${ETHERVOXAI_SOURCES})
+endif()
+
 target_include_directories(ethervoxai
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -227,6 +275,27 @@ elseif(TARGET_PLATFORM STREQUAL "RPI")
         endif()
     endforeach()
 
+elseif(ANDROID)
+    # Android libraries
+    find_library(LOG_LIB log)
+    find_library(ANDROID_LIB android)
+    set(ETHERVOXAI_PLATFORM_LIBS ${LOG_LIB} ${ANDROID_LIB} m)
+    
+    # Add AAudio for API 26+, OpenSL ES for API 24+
+    if(ANDROID_PLATFORM_LEVEL GREATER_EQUAL 26)
+        find_library(AAUDIO_LIB aaudio)
+        if(AAUDIO_LIB)
+            list(APPEND ETHERVOXAI_PLATFORM_LIBS ${AAUDIO_LIB})
+            message(STATUS "AAudio library found: ${AAUDIO_LIB}")
+        endif()
+    endif()
+    
+    find_library(OPENSLES_LIB OpenSLES)
+    if(OPENSLES_LIB)
+        list(APPEND ETHERVOXAI_PLATFORM_LIBS ${OPENSLES_LIB})
+        message(STATUS "OpenSL ES library found: ${OPENSLES_LIB}")
+    endif()
+    
 elseif(UNIX AND NOT APPLE)
     set(ETHERVOXAI_PLATFORM_LIBS asound pthread curl ssl crypto m)
 elseif(APPLE)
@@ -239,17 +308,19 @@ endif()
 
 set_property(GLOBAL PROPERTY ETHERVOXAI_PLATFORM_LIBS "${ETHERVOXAI_PLATFORM_LIBS}")
 
-# CLI executable built on top of the reusable library
-add_executable(ethervoxai_app src/main.c)
-target_link_libraries(ethervoxai_app PRIVATE ethervoxai)
-set_target_properties(ethervoxai_app PROPERTIES OUTPUT_NAME ethervoxai)
+# CLI executable built on top of the reusable library (not for Android)
+if(NOT ANDROID)
+    add_executable(ethervoxai_app src/main.c)
+    target_link_libraries(ethervoxai_app PRIVATE ethervoxai)
+    set_target_properties(ethervoxai_app PROPERTIES OUTPUT_NAME ethervoxai)
+endif()
 
-# Optional: Examples and tests (if directories exist)
-if(BUILD_EXAMPLES AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/examples")
+# Optional: Examples and tests (if directories exist and not Android)
+if(BUILD_EXAMPLES AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/examples" AND NOT ANDROID)
     add_subdirectory(examples)
 endif()
 
-if(BUILD_TESTS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests")
+if(BUILD_TESTS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests" AND NOT ANDROID)
     enable_testing()
     add_subdirectory(tests)
 endif()
@@ -258,7 +329,9 @@ endif()
 install(TARGETS ethervoxai
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib)
-install(TARGETS ethervoxai_app RUNTIME DESTINATION bin)
+if(NOT ANDROID)
+    install(TARGETS ethervoxai_app RUNTIME DESTINATION bin)
+endif()
 install(DIRECTORY include/ DESTINATION include)
 install(FILES README.md LICENSE DESTINATION share/doc/ethervoxai)
 
