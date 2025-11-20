@@ -346,6 +346,20 @@ int ethervox_dialogue_parse_intent(ethervox_dialogue_engine_t* engine,
   if (!language_code || language_code[0] == '\0') {
     language_code = engine->llm_config.language_code ? engine->llm_config.language_code : "en";
   }
+  
+  // Normalize language code to just first 2 characters (en-US -> en)
+  char lang_normalized[8] = {0};
+  size_t lang_copy_len = strlen(language_code);
+  if (lang_copy_len > 2) {
+    lang_copy_len = 2; // Only take first 2 chars
+  }
+  strncpy(lang_normalized, language_code, lang_copy_len);
+  lang_normalized[lang_copy_len] = '\0';
+  
+  // Convert to lowercase
+  for (size_t i = 0; i < lang_copy_len; i++) {
+    lang_normalized[i] = (char)tolower((unsigned char)lang_normalized[i]);
+  }
 
   const char* text = request->text;
 
@@ -353,8 +367,17 @@ int ethervox_dialogue_parse_intent(ethervox_dialogue_engine_t* engine,
 
   // Copy input text
   intent->raw_text = strdup(text);
-  intent->normalized_text = strdup(text);  // TODO: Implement normalization
-  snprintf(intent->language_code, sizeof(intent->language_code), "%s", language_code);
+  
+  // Normalize text to lowercase for pattern matching
+  size_t text_len = strlen(text);
+  char* normalized = (char*)malloc(text_len + 1);
+  for (size_t i = 0; i < text_len; i++) {
+    normalized[i] = (char)tolower((unsigned char)text[i]);
+  }
+  normalized[text_len] = '\0';
+  intent->normalized_text = normalized;
+  
+  snprintf(intent->language_code, sizeof(intent->language_code), "%s", lang_normalized);
 
   // Simple pattern matching for intent detection
   intent->type = ETHERVOX_INTENT_UNKNOWN;
@@ -363,13 +386,13 @@ int ethervox_dialogue_parse_intent(ethervox_dialogue_engine_t* engine,
   const intent_pattern_t* patterns = (const intent_pattern_t*)engine->intent_patterns;
 
   for (int i = 0; patterns[i].pattern != NULL; i++) {
-    // Check if pattern matches language
-    if (language_code && strcmp(patterns[i].language, language_code) != 0) {
+    // Check if pattern matches language (use normalized language code)
+    if (strcmp(patterns[i].language, lang_normalized) != 0) {
       continue;
     }
 
-    // Simple substring matching (in production, would use more sophisticated NLP)
-    if (strstr(text, patterns[i].pattern) != NULL) {
+    // Case-insensitive substring matching
+    if (strstr(normalized, patterns[i].pattern) != NULL) {
       intent->type = patterns[i].intent_type;
       intent->confidence = 0.8f;  // Fixed confidence for demo
       break;
@@ -381,8 +404,9 @@ int ethervox_dialogue_parse_intent(ethervox_dialogue_engine_t* engine,
     intent->confidence = 0.1f;
   }
 
-  printf("Intent parsed: %s (confidence: %.2f)\n", ethervox_intent_type_to_string(intent->type),
-         intent->confidence);
+  printf("Intent parsed: %s (confidence: %.2f) for text: '%s' [lang: %s]\n", 
+         ethervox_intent_type_to_string(intent->type),
+         intent->confidence, text, lang_normalized);
 
   return 0;
 }
@@ -399,6 +423,7 @@ int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
 
   // For demo purposes, generate simple responses based on intent type
   const char* response_text = NULL;
+  bool conversation_ended = false;
 
   switch (intent->type) {
     case ETHERVOX_INTENT_GREETING:
@@ -423,6 +448,7 @@ int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
 
     case ETHERVOX_INTENT_COMMAND:
     case ETHERVOX_INTENT_CONTROL:
+      conversation_ended = true;  // Commands should not auto-restart microphone
       if (strcmp(intent->language_code, "es") == 0) {
         response_text = "Entendido. Ejecutando comando.";
       } else if (strcmp(intent->language_code, "zh") == 0) {
@@ -433,6 +459,7 @@ int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
       break;
 
     case ETHERVOX_INTENT_GOODBYE:
+      conversation_ended = true;  // Signal that conversation should end
       if (strcmp(intent->language_code, "es") == 0) {
         response_text = "¡Hasta luego! Que tengas un buen día.";
       } else if (strcmp(intent->language_code, "zh") == 0) {
@@ -443,7 +470,8 @@ int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
       break;
 
     default:
-      // For complex queries, indicate external LLM might be needed
+    case ETHERVOX_INTENT_UNKNOWN:
+      // For unknown intents, provide a helpful response
       response->requires_external_llm = true;
       response->external_llm_prompt = strdup(intent->raw_text);
 
@@ -459,11 +487,13 @@ int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
 
   response->text = strdup(response_text);
   snprintf(response->language_code, sizeof(response->language_code), "%s", intent->language_code);
-  response->confidence = kEthervoxResponseConfidence;
+  response->confidence = intent->confidence;  // Use actual intent confidence
   response->processing_time_ms = kEthervoxResponseProcessingTimeMs;  // Simulated processing time
   response->token_count = strlen(response_text) / kEthervoxTokenEstimateDivisor;  // Rough token estimate
+  response->conversation_ended = conversation_ended;  // Set flag to disable follow-up
 
-  printf("LLM response generated: %s\n", response->text);
+  printf("LLM response generated: %s (confidence: %.0f%%, conversation_ended: %s)\n", 
+         response->text, response->confidence * 100.0f, conversation_ended ? "true" : "false");
 
   return 0;
 }

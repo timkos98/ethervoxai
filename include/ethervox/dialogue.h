@@ -99,6 +99,7 @@ typedef struct {
   bool truncated;
   char* finish_reason;
   size_t tokens_used;  // Add if missing
+  bool conversation_ended;  // True when conversation should end (e.g., goodbye)
 } ethervox_llm_response_t;
 
 // Dialogue context
