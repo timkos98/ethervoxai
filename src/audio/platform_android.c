@@ -36,10 +36,10 @@
 #include <SLES/OpenSLES_Android.h>
 #endif
 
-#include "ethervox/config.h"
-#define LOGD(...) ETHERVOX_LOGD(__VA_ARGS__)
-#define LOGE(...) ETHERVOX_LOGE(__VA_ARGS__)
-#define LOGI(...) ETHERVOX_LOGI(__VA_ARGS__)
+#define LOG_TAG "EthervoxAudio"
+#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 
 // ===========================================================================
 // AAudio Implementation (API 26+)
@@ -130,8 +130,6 @@ static int aaudio_start_capture(ethervox_audio_runtime_t* runtime) {
   AAudioStreamBuilder_setBufferCapacityInFrames(builder, (int32_t)runtime->config.buffer_size);
   AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
   AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_EXCLUSIVE);
-  AAudioStreamBuilder_setUsage(builder, AAUDIO_USAGE_VOICE_COMMUNICATION);
-  AAudioStreamBuilder_setContentType(builder, AAUDIO_CONTENT_TYPE_SPEECH);
   AAudioStreamBuilder_setDataCallback(builder, aaudio_data_callback, runtime);
   AAudioStreamBuilder_setErrorCallback(builder, aaudio_error_callback, runtime);
 
@@ -190,8 +188,6 @@ static int aaudio_start_playback(ethervox_audio_runtime_t* runtime) {
   AAudioStreamBuilder_setChannelCount(builder, (int32_t)runtime->config.channels);
   AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
   AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
-  AAudioStreamBuilder_setUsage(builder, AAUDIO_USAGE_VOICE_COMMUNICATION);
-  AAudioStreamBuilder_setContentType(builder, AAUDIO_CONTENT_TYPE_SPEECH);
 
   result = AAudioStreamBuilder_openStream(builder, &audio_data->output_stream);
   AAudioStreamBuilder_delete(builder);

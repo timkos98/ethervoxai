@@ -326,6 +326,19 @@ else()
     add_library(ethervoxai STATIC ${ETHERVOXAI_SOURCES})
 endif()
 
+# Create library - shared for Android, static for others
+if(ANDROID)
+    add_library(ethervoxai SHARED ${ETHERVOXAI_SOURCES})
+    
+    # Add 16KB page alignment for Android 15+ compatibility
+    target_link_options(ethervoxai PRIVATE
+        -Wl,-z,max-page-size=16384
+    )
+    message(STATUS "Enabled 16KB page alignment for Android")
+else()
+    add_library(ethervoxai STATIC ${ETHERVOXAI_SOURCES})
+endif()
+
 target_include_directories(ethervoxai
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -387,6 +400,21 @@ elseif(TARGET_PLATFORM STREQUAL "RPI")
         target_compile_definitions(ethervoxai PUBLIC ETHERVOX_HAVE_BCM2835=0)
         message(STATUS "No CMAKE_SYSROOT defined; skipping bcm2835 library search")
     endif()
+
+elseif(ANDROID)
+    # Android libraries
+    find_library(LOG_LIB log)
+    find_library(ANDROID_LIB android)
+    set(ETHERVOXAI_PLATFORM_LIBS ${LOG_LIB} ${ANDROID_LIB} m)
+    
+    # Add AAudio for API 26+, OpenSL ES for API 24+
+    if(ANDROID_PLATFORM_LEVEL GREATER_EQUAL 26)
+        find_library(AAUDIO_LIB aaudio)
+        if(AAUDIO_LIB)
+            list(APPEND ETHERVOXAI_PLATFORM_LIBS ${AAUDIO_LIB})
+            message(STATUS "AAudio library found: ${AAUDIO_LIB}")
+        endif()
+    endforeach()
 
 elseif(ANDROID)
     # Android libraries
