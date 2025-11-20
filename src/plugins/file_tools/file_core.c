@@ -15,6 +15,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <libgen.h>
+#include <limits.h>
 
 #ifdef _WIN32
 #include <direct.h>
@@ -34,10 +35,10 @@ static bool is_path_allowed(
     }
     
     // Resolve to absolute path
-    char resolved[ETHERVOX_FILE_MAX_PATH];
+    char resolved[PATH_MAX];
     if (!realpath(path, resolved)) {
         // If realpath fails (e.g., file doesn't exist yet), try resolving the directory
-        char path_copy[ETHERVOX_FILE_MAX_PATH];
+        char path_copy[PATH_MAX];
         strncpy(path_copy, path, sizeof(path_copy) - 1);
         path_copy[sizeof(path_copy) - 1] = '\0';
         

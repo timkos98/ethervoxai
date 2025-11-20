@@ -5,7 +5,7 @@
 #include <stdio.h>
 
 static ethervox_log_level_t g_log_level = ETHERVOX_LOG_LEVEL_INFO;
-bool g_ethervox_debug_enabled = true;
+int g_ethervox_debug_enabled = 1;
 
 void ethervox_log_set_level(ethervox_log_level_t level) {
     g_log_level = level;
