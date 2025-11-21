@@ -137,6 +137,7 @@ static const intent_pattern_t INTENT_PATTERNS[] = {
     {"what time", ETHERVOX_INTENT_QUESTION, "en", false},
     {"what day", ETHERVOX_INTENT_QUESTION, "en", false},
     {"what date", ETHERVOX_INTENT_QUESTION, "en", false},
+    {"what week", ETHERVOX_INTENT_QUESTION, "en", false},
     {"what are", ETHERVOX_INTENT_QUESTION, "en", false},
     {"how to", ETHERVOX_INTENT_QUESTION, "en", false},
     {"how do", ETHERVOX_INTENT_QUESTION, "en", false},
@@ -693,6 +694,32 @@ static const char* answer_simple_question(const char* normalized_text, const cha
                "It's %d:%02d %s", hour, local->tm_min, period);
     }
     return time_response;
+  }
+  
+  // Week number questions
+  if (strstr(normalized_text, "what week") != NULL ||
+      strstr(normalized_text, "which week") != NULL ||
+      strstr(normalized_text, "week number") != NULL) {
+    time_t now = time(NULL);
+    struct tm* local = localtime(&now);
+    static char week_response[128];
+    
+    // Calculate ISO 8601 week number
+    char week_str[8];
+    strftime(week_str, sizeof(week_str), "%V", local);
+    int week_num = atoi(week_str);
+    
+    if (strcmp(language_code, "es") == 0) {
+      snprintf(week_response, sizeof(week_response), 
+               "Estamos en la semana %d", week_num);
+    } else if (strcmp(language_code, "zh") == 0) {
+      snprintf(week_response, sizeof(week_response), 
+               "这是第%d周", week_num);
+    } else {
+      snprintf(week_response, sizeof(week_response), 
+               "It's week %d", week_num);
+    }
+    return week_response;
   }
   
   // Date-related questions
