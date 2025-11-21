@@ -119,6 +119,152 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_platformCleanup(
     }
 }
 
+JNIEXPORT jboolean JNICALL
+Java_com_droid_ethervox_1multiplatform_1core_NativeLib_initializeWithModel(
+        JNIEnv* env,
+        jobject thiz,
+        jstring model_path,
+        jfloat temperature,
+        jint max_tokens,
+        jfloat top_p,
+        jint context_length) {
+    (void)thiz;
+    
+    if (!model_path) {
+        LOGE("Model path is null");
+        return JNI_FALSE;
+    }
+    
+    const char* path = (*env)->GetStringUTFChars(env, model_path, NULL);
+    if (!path) {
+        LOGE("Failed to get model path string");
+        return JNI_FALSE;
+    }
+    
+    LOGI("Initializing dialogue engine with model: %s (temp=%.2f, max_tokens=%d, top_p=%.2f, ctx=%d)",
+         path, temperature, max_tokens, top_p, context_length);
+    
+    // Clean up existing dialogue engine if any
+    if (g_dialogue_engine) {
+        ethervox_dialogue_cleanup(g_dialogue_engine);
+        free(g_dialogue_engine);
+        g_dialogue_engine = NULL;
+    }
+    
+    // Allocate new dialogue engine
+    g_dialogue_engine = (ethervox_dialogue_engine_t*)calloc(1, sizeof(ethervox_dialogue_engine_t));
+    if (!g_dialogue_engine) {
+        LOGE("Failed to allocate dialogue engine");
+        (*env)->ReleaseStringUTFChars(env, model_path, path);
+        return JNI_FALSE;
+    }
+    
+    // Create LLM config with user settings - ENABLE GPU ACCELERATION
+    ethervox_llm_config_t llm_config = ethervox_dialogue_get_default_llm_config();
+    llm_config.model_path = strdup(path);
+    llm_config.model_name = strdup("TinyLlama-1.1B");
+    llm_config.temperature = temperature;
+    llm_config.max_tokens = (uint32_t)max_tokens;
+    llm_config.top_p = top_p;
+    llm_config.context_length = (uint32_t)context_length;
+    llm_config.use_gpu = true;  // Force GPU acceleration ON
+    llm_config.gpu_layers = 99;  // Offload entire model to GPU
+    
+    // Initialize dialogue engine with LLM
+    int result = ethervox_dialogue_init(g_dialogue_engine, &llm_config);
+    
+    // Free temporary config strings
+    free(llm_config.model_path);
+    free(llm_config.model_name);
+    (*env)->ReleaseStringUTFChars(env, model_path, path);
+    
+    if (result != 0) {
+        LOGE("Failed to initialize dialogue engine with model");
+        free(g_dialogue_engine);
+        g_dialogue_engine = NULL;
+        return JNI_FALSE;
+    }
+    
+    // Check if LLM was actually loaded
+    if (g_dialogue_engine->llm_backend && g_dialogue_engine->use_llm_for_unknown) {
+        LOGI("Dialogue engine initialized with LLM support enabled");
+    } else {
+        LOGI("Dialogue engine initialized (LLM not available, using pattern-based responses)");
+    }
+    return JNI_TRUE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_droid_ethervox_1multiplatform_1core_NativeLib_updateLLMParams(
+        JNIEnv* env,
+        jobject thiz,
+        jfloat temperature,
+        jint max_tokens,
+        jfloat top_p) {
+    (void)env;
+    (void)thiz;
+    
+    if (!g_dialogue_engine || !g_dialogue_engine->llm_backend) {
+        LOGE("LLM backend not initialized");
+        return JNI_FALSE;
+    }
+    
+    LOGI("Updating LLM params: temp=%.2f, max_tokens=%d, top_p=%.2f", 
+         temperature, max_tokens, top_p);
+    
+    // Create config with new parameters
+    ethervox_llm_config_t config = {0};
+    config.temperature = temperature;
+    config.max_tokens = (uint32_t)max_tokens;
+    config.top_p = top_p;
+    
+    // Use the backend's update_config function if available
+    ethervox_llm_backend_t* backend = g_dialogue_engine->llm_backend;
+    if (!backend) {
+        LOGE("Backend is null");
+        return JNI_FALSE;
+    }
+    
+    if (backend->update_config) {
+        int result = backend->update_config(backend, &config);
+        if (result == 0) {
+            LOGI("LLM params updated successfully via backend function");
+            return JNI_TRUE;
+        } else {
+            LOGE("Failed to update LLM params via backend function");
+            return JNI_FALSE;
+        }
+    } else {
+        LOGE("Backend does not support runtime config updates");
+        return JNI_FALSE;
+    }
+    
+    LOGI("LLM params updated successfully");
+    return JNI_TRUE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_droid_ethervox_1multiplatform_1core_NativeLib_isLlmLoaded(
+        JNIEnv* env,
+        jobject thiz) {
+    (void)env;
+    (void)thiz;
+    
+    if (!g_dialogue_engine) {
+        return JNI_FALSE;
+    }
+    
+    // Check if LLM backend is loaded and available
+    ethervox_llm_backend_t* backend = (ethervox_llm_backend_t*)g_dialogue_engine->llm_backend;
+    if (backend && 
+        g_dialogue_engine->use_llm_for_unknown &&
+        backend->is_loaded) {
+        return JNI_TRUE;
+    }
+    
+    return JNI_FALSE;
+}
+
 JNIEXPORT jstring JNICALL
 Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getPlatformName(
         JNIEnv* env,
@@ -443,6 +589,160 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_processDialogue(
     (*env)->ReleaseStringUTFChars(env, language, lang);
     
     return result_str;
+}
+
+// Global callback context for streaming
+typedef struct {
+    JNIEnv* env;
+    jobject callback_obj;
+    jmethodID on_token_method;
+    jmethodID on_complete_method;
+    jmethodID on_error_method;
+    bool conversation_ended;
+} jni_stream_context_t;
+
+// Native callback function that will be called from C
+static void native_token_callback(const char* token, void* user_data) {
+    jni_stream_context_t* ctx = (jni_stream_context_t*)user_data;
+    if (!ctx || !ctx->env || !ctx->callback_obj) {
+        return;
+    }
+    
+    jstring j_token = create_jstring(ctx->env, token);
+    (*ctx->env)->CallVoidMethod(ctx->env, ctx->callback_obj, ctx->on_token_method, j_token);
+    (*ctx->env)->DeleteLocalRef(ctx->env, j_token);
+}
+
+JNIEXPORT void JNICALL
+Java_com_droid_ethervox_1multiplatform_1core_NativeLib_processDialogueStreamingNative(
+        JNIEnv* env,
+        jobject thiz,
+        jstring user_text,
+        jstring language,
+        jobject callback) {
+    (void)thiz;
+    
+    if (!g_dialogue_engine) {
+        LOGE("Dialogue engine not initialized");
+        // Call error callback
+        jclass callback_class = (*env)->GetObjectClass(env, callback);
+        jmethodID on_error = (*env)->GetMethodID(env, callback_class, "onError", "(Ljava/lang/String;)V");
+        if (on_error) {
+            jstring error_msg = create_jstring(env, "Dialogue engine not initialized");
+            (*env)->CallVoidMethod(env, callback, on_error, error_msg);
+            (*env)->DeleteLocalRef(env, error_msg);
+        }
+        return;
+    }
+    
+    const char* text = (*env)->GetStringUTFChars(env, user_text, NULL);
+    const char* lang = (*env)->GetStringUTFChars(env, language, NULL);
+    
+    LOGI("Processing dialogue (streaming): '%s' (language: %s)", text, lang);
+    
+    // Get callback methods
+    jclass callback_class = (*env)->GetObjectClass(env, callback);
+    jmethodID on_token = (*env)->GetMethodID(env, callback_class, "onToken", "(Ljava/lang/String;)V");
+    jmethodID on_complete = (*env)->GetMethodID(env, callback_class, "onComplete", "(Z)V");
+    jmethodID on_error = (*env)->GetMethodID(env, callback_class, "onError", "(Ljava/lang/String;)V");
+    
+    if (!on_token || !on_complete || !on_error) {
+        LOGE("Failed to get callback methods");
+        (*env)->ReleaseStringUTFChars(env, user_text, text);
+        (*env)->ReleaseStringUTFChars(env, language, lang);
+        return;
+    }
+    
+    // Setup stream context
+    jni_stream_context_t stream_ctx = {
+        .env = env,
+        .callback_obj = callback,
+        .on_token_method = on_token,
+        .on_complete_method = on_complete,
+        .on_error_method = on_error,
+        .conversation_ended = false
+    };
+    
+    // Parse intent
+    ethervox_intent_t intent;
+    memset(&intent, 0, sizeof(ethervox_intent_t));
+    
+    ethervox_dialogue_intent_request_t intent_req = {
+        .text = text,
+        .language_code = lang
+    };
+    
+    int result = ethervox_dialogue_parse_intent(g_dialogue_engine, &intent_req, &intent);
+    if (result != 0) {
+        LOGE("Failed to parse intent");
+        jstring error_msg = create_jstring(env, "Failed to parse intent");
+        (*env)->CallVoidMethod(env, callback, on_error, error_msg);
+        (*env)->DeleteLocalRef(env, error_msg);
+        (*env)->ReleaseStringUTFChars(env, user_text, text);
+        (*env)->ReleaseStringUTFChars(env, language, lang);
+        return;
+    }
+    
+    LOGI("Intent detected: %s (confidence: %.2f)", 
+         ethervox_intent_type_to_string(intent.type), intent.confidence);
+    
+    // Process with LLM using streaming
+    result = ethervox_dialogue_process_llm_stream(g_dialogue_engine, &intent, NULL, 
+                                                   native_token_callback, &stream_ctx,
+                                                   &stream_ctx.conversation_ended);
+    
+    if (result != 0) {
+        LOGE("Failed to process LLM stream");
+        jstring error_msg = create_jstring(env, "Failed to generate response");
+        (*env)->CallVoidMethod(env, callback, on_error, error_msg);
+        (*env)->DeleteLocalRef(env, error_msg);
+    } else {
+        // Call complete callback with conversation_ended flag
+        (*env)->CallVoidMethod(env, callback, on_complete, (jboolean)stream_ctx.conversation_ended);
+    }
+    
+    // Cleanup
+    ethervox_intent_free(&intent);
+    (*env)->ReleaseStringUTFChars(env, user_text, text);
+    (*env)->ReleaseStringUTFChars(env, language, lang);
+}
+
+JNIEXPORT void JNICALL
+Java_com_droid_ethervox_1multiplatform_1core_NativeLib_cancelProcessing(
+        JNIEnv* env,
+        jobject thiz) {
+    (void)env;
+    (void)thiz;
+    
+    if (!g_dialogue_engine) {
+        LOGE("Dialogue engine not initialized");
+        return;
+    }
+    
+    // Get the LLM backend handle
+    ethervox_llm_backend_t* backend = (ethervox_llm_backend_t*)g_dialogue_engine->llm_backend;
+    if (backend && backend->handle) {
+        // Access llama context and set cancel flag
+        typedef struct {
+            void* model;
+            void* ctx;
+            uint32_t n_ctx;
+            uint32_t n_predict;
+            float temperature;
+            float top_p;
+            uint32_t n_gpu_layers;
+            uint32_t n_threads;
+            uint32_t seed;
+            char* loaded_model_path;
+            bool use_mlock;
+            bool use_mmap;
+            volatile bool cancel_requested;
+        } llama_ctx_t;
+        
+        llama_ctx_t* llama_ctx = (llama_ctx_t*)backend->handle;
+        llama_ctx->cancel_requested = true;
+        LOGI("LLM processing cancellation requested");
+    }
 }
 
 JNIEXPORT jint JNICALL

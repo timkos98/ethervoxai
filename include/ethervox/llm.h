@@ -69,6 +69,10 @@ typedef struct ethervox_llm_backend {
   int (*get_capabilities)(struct ethervox_llm_backend* backend,
                          ethervox_llm_capabilities_t* capabilities);
   
+  // Update runtime parameters (temperature, max_tokens, top_p) without model reload
+  int (*update_config)(struct ethervox_llm_backend* backend,
+                      const ethervox_llm_config_t* config);
+  
   // Optional streaming support
   int (*generate_stream)(struct ethervox_llm_backend* backend,
                         const char* prompt,

@@ -122,6 +122,8 @@ typedef int (*ethervox_external_llm_callback_t)(const char* prompt, const char* 
 typedef struct {
   ethervox_llm_config_t llm_config;
   void* llm_model;  // Internal LLM model handle
+  void* llm_backend; // LLM backend instance (ethervox_llm_backend_t*)
+  bool use_llm_for_unknown; // Route unknown intents to LLM
   ethervox_dialogue_context_t* contexts;
   uint32_t max_contexts;
   uint32_t active_contexts;
@@ -166,6 +168,14 @@ int ethervox_dialogue_parse_intent(ethervox_dialogue_engine_t* engine,
 int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
                                   const ethervox_intent_t* intent, const char* context_id,
                                   ethervox_llm_response_t* response);
+
+// LLM processing with streaming
+int ethervox_dialogue_process_llm_stream(ethervox_dialogue_engine_t* engine,
+                                         const ethervox_intent_t* intent,
+                                         const ethervox_dialogue_context_t* context,
+                                         void (*token_callback)(const char* token, void* user_data),
+                                         void* user_data,
+                                         bool* conversation_ended);
 
 // Context management
 int ethervox_dialogue_create_context(ethervox_dialogue_engine_t* engine,

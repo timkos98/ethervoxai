@@ -82,6 +82,19 @@ elseif(TARGET_PLATFORM STREQUAL "ANDROID")
     add_definitions(-DPLATFORM_MOBILE=1)
     set(ETHERVOX_PLATFORM_ANDROID 1)
     set(ETHERVOX_PLATFORM_MOBILE 1)
+    
+    # Architecture-specific optimizations for Android - MAXIMUM PERFORMANCE
+    if(ANDROID_ABI STREQUAL "arm64-v8a")
+        # ARM64 NEON optimizations with aggressive flags
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Ofast -fno-finite-math-only -march=armv8-a+fp+simd+crypto -mtune=cortex-a76")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Ofast -fno-finite-math-only -march=armv8-a+fp+simd+crypto -mtune=cortex-a76")
+        message(STATUS "Enabled MAXIMUM ARM64 NEON optimizations for ${ANDROID_ABI}")
+    elseif(ANDROID_ABI STREQUAL "x86_64")
+        # x86_64 AVX optimizations - maximum performance
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Ofast -fno-finite-math-only -march=x86-64-v3 -mtune=generic")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Ofast -fno-finite-math-only -march=x86-64-v3 -mtune=generic")
+        message(STATUS "Enabled MAXIMUM x86_64 optimizations for ${ANDROID_ABI}")
+    endif()
 endif()
 
 # Show which platform macros are defined
@@ -130,6 +143,54 @@ if(WITH_TINYLLAMA)
     message(STATUS "TinyLlama backend enabled")
 endif()
 
+# llama.cpp integration
+message(STATUS "Checking llama.cpp: WITH_LLAMA=${WITH_LLAMA}, CMAKE_CURRENT_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}")
+message(STATUS "Checking path: ${CMAKE_CURRENT_SOURCE_DIR}/external/llama.cpp")
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/llama.cpp")
+    message(STATUS "llama.cpp directory EXISTS")
+else()
+    message(WARNING "llama.cpp directory DOES NOT EXIST at ${CMAKE_CURRENT_SOURCE_DIR}/external/llama.cpp")
+endif()
+
+if(WITH_LLAMA AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/llama.cpp")
+    message(STATUS "Adding llama.cpp from external/llama.cpp")
+    
+    # llama.cpp build options
+    set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+    set(BUILD_SHARED_LIBS ON CACHE BOOL "" FORCE)
+    
+    # Enable CPU backend optimizations
+    set(GGML_CPU ON CACHE BOOL "" FORCE)
+    set(GGML_NATIVE OFF CACHE BOOL "" FORCE)  # Disable native optimizations (can cause slowdowns)
+    
+    # Android-specific settings
+    if(ANDROID)
+        set(LLAMA_METAL OFF CACHE BOOL "" FORCE)
+        set(LLAMA_CUBLAS OFF CACHE BOOL "" FORCE)
+        set(LLAMA_CLBLAST OFF CACHE BOOL "" FORCE)
+        set(LLAMA_OPENBLAS OFF CACHE BOOL "" FORCE)
+        set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
+        # Enable NEON for ARM processors
+        if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm" OR CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR ANDROID_ABI STREQUAL "arm64-v8a")
+            set(GGML_CPU_ARM_NEON ON CACHE BOOL "" FORCE)
+            message(STATUS "Enabled ARM NEON optimizations for llama.cpp")
+        endif()
+    endif()
+    
+    # Add llama.cpp as subdirectory
+    add_subdirectory(external/llama.cpp)
+    
+    add_definitions(-DLLAMA_CPP_AVAILABLE=1)
+    message(STATUS "llama.cpp successfully configured")
+elseif(WITH_LLAMA)
+    message(WARNING "llama.cpp not found in external/llama.cpp - LLM features will be limited")
+    add_definitions(-DLLAMA_CPP_AVAILABLE=0)
+else()
+    add_definitions(-DLLAMA_CPP_AVAILABLE=0)
+endif()
+
 # Include directories
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -150,7 +211,11 @@ file(GLOB ETHERVOXAI_CORE_SOURCES
 
 # Add LLM sources only if LLM backends are enabled
 if(WITH_LLAMA OR WITH_TINYLLAMA)
-    file(GLOB LLM_SOURCES "src/llm/*.c")
+    file(GLOB LLM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/llm/*.c")
+    message(STATUS "Found LLM sources: ${LLM_SOURCES}")
+    # Exclude tinyllama_backend.c as it uses outdated APIs
+    list(FILTER LLM_SOURCES EXCLUDE REGEX ".*tinyllama_backend\\.c$")
+    message(STATUS "After filtering: ${LLM_SOURCES}")
     list(APPEND ETHERVOXAI_CORE_SOURCES ${LLM_SOURCES})
     message(STATUS "LLM backend sources included")
 else()
@@ -222,6 +287,7 @@ endif()
 message(STATUS "Common sources: ${COMMON_SOURCES}")
 message(STATUS "Core sources: ${ETHERVOXAI_CORE_SOURCES}")
 message(STATUS "Platform sources: ${PLATFORM_SOURCES}")
+message(STATUS "FINAL ETHERVOXAI_SOURCES: ${ETHERVOXAI_SOURCES}")
 
 # Create library - shared for Android, static for others
 if(ANDROID)
@@ -241,6 +307,30 @@ target_include_directories(ethervoxai
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+# Link llama.cpp if available
+if(WITH_LLAMA)
+    if(TARGET llama)
+        target_include_directories(ethervoxai PRIVATE 
+            ${CMAKE_CURRENT_SOURCE_DIR}/external/llama.cpp/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/external/llama.cpp/src
+        )
+        target_link_libraries(ethervoxai PUBLIC llama)
+        message(STATUS "Linked llama.cpp library to ethervoxai")
+    else()
+        message(WARNING "llama target not found - checking for ggml and llama-base")
+        if(TARGET ggml AND TARGET llama-base)
+            target_include_directories(ethervoxai PRIVATE 
+                ${CMAKE_CURRENT_SOURCE_DIR}/external/llama.cpp/include
+                ${CMAKE_CURRENT_SOURCE_DIR}/external/llama.cpp/src
+            )
+            target_link_libraries(ethervoxai PUBLIC ggml llama-base)
+            message(STATUS "Linked ggml and llama-base libraries to ethervoxai")
+        else()
+            message(WARNING "No llama.cpp targets found - LLM will not be available")
+        endif()
+    endif()
+endif()
 
 # Platform-specific linking for library consumers
 set(ETHERVOXAI_PLATFORM_LIBS "")
