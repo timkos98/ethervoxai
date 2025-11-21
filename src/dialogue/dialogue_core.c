@@ -138,7 +138,7 @@ static const language_strings_t LANGUAGE_STRINGS[] = {
     "en",
     {
       [LOC_GREETING_RESPONSE] = "Hello! How can I help you today?",
-      [LOC_NAME_RESPONSE] = "I'm EthervoxAI, your personal voice assistant",
+      [LOC_NAME_RESPONSE] = "I'm EthervoxAI",
       [LOC_CAPABILITIES_RESPONSE] = "I can answer questions, help with information, and have conversations with you - all completely offline and private",
       [LOC_PRIVACY_RESPONSE] = "I run completely offline on your device. I don't send any data to the cloud or internet. Everything you say stays private on your device",
       [LOC_WEATHER_NO_INTERNET] = "I'm sorry, I don't have internet access to check the weather",
@@ -157,7 +157,7 @@ static const language_strings_t LANGUAGE_STRINGS[] = {
     "es",
     {
       [LOC_GREETING_RESPONSE] = "¡Hola! ¿En qué puedo ayudarte?",
-      [LOC_NAME_RESPONSE] = "Soy EthervoxAI, tu asistente de voz personal",
+      [LOC_NAME_RESPONSE] = "Soy EthervoxAI",
       [LOC_CAPABILITIES_RESPONSE] = "Puedo responder preguntas, ayudar con información y tener conversaciones contigo - todo completamente sin conexión y privado",
       [LOC_PRIVACY_RESPONSE] = "Funciono completamente sin conexión en tu dispositivo. No envío ningún dato a la nube ni a internet. Todo lo que dices permanece privado en tu dispositivo",
       [LOC_WEATHER_NO_INTERNET] = "Lo siento, no tengo acceso a internet para verificar el clima",
@@ -176,7 +176,7 @@ static const language_strings_t LANGUAGE_STRINGS[] = {
     "zh",
     {
       [LOC_GREETING_RESPONSE] = "你好！我能为您做些什么？",
-      [LOC_NAME_RESPONSE] = "我是EthervoxAI，您的个人语音助手",
+      [LOC_NAME_RESPONSE] = "我是EthervoxAI",
       [LOC_CAPABILITIES_RESPONSE] = "我可以回答问题，提供信息帮助，并与您对话 - 完全离线且私密",
       [LOC_PRIVACY_RESPONSE] = "我完全在您的设备上离线运行。我不会向云端或互联网发送任何数据。您说的一切都保留在您的设备上",
       [LOC_WEATHER_NO_INTERNET] = "抱歉，我没有互联网访问权限来查看天气",
@@ -195,7 +195,7 @@ static const language_strings_t LANGUAGE_STRINGS[] = {
     "de",
     {
       [LOC_GREETING_RESPONSE] = "Hallo! Wie kann ich Ihnen heute helfen?",
-      [LOC_NAME_RESPONSE] = "Ich bin EthervoxAI, Ihr persönlicher Sprachassistent",
+      [LOC_NAME_RESPONSE] = "Ich bin EthervoxAI",
       [LOC_CAPABILITIES_RESPONSE] = "Ich kann Fragen beantworten, Informationen bereitstellen und mit Ihnen sprechen - alles komplett offline und privat",
       [LOC_PRIVACY_RESPONSE] = "Ich arbeite komplett offline auf Ihrem Gerät. Ich sende keine Daten in die Cloud oder ins Internet. Alles, was Sie sagen, bleibt privat auf Ihrem Gerät",
       [LOC_WEATHER_NO_INTERNET] = "Entschuldigung, ich habe keinen Internetzugang, um das Wetter zu überprüfen",
@@ -1574,7 +1574,7 @@ int ethervox_dialogue_process_llm_stream(ethervox_dialogue_engine_t* engine,
     // Use streaming for QUESTION intents that aren't in the simple set
     else if (intent->type == ETHERVOX_INTENT_QUESTION) {
       // Check if it's a simple question (returns NULL if not simple)
-      const char* simple_answer = answer_simple_question(intent->raw_text, intent->language_code);
+      const char* simple_answer = answer_simple_question(intent->normalized_text, intent->language_code);
       
       if (simple_answer == NULL) {
         // Not a simple question, will use LLM
