@@ -632,14 +632,14 @@ static int llama_backend_generate_stream(ethervox_llm_backend_t* backend,
     if (brevity_requested) {
       written = snprintf(formatted_prompt, sizeof(formatted_prompt),
         "<|im_start|>system\n"
-        "You are EthervoxAI. Respond in ONE SHORT SENTENCE (10-15 words max).<|im_end|>\n"
+        "I am EthervoxAI. I respond in ONE SHORT SENTENCE (10-15 words max). When helpful, I end with a brief question.<|im_end|>\n"
         "<|im_start|>user\n%s<|im_end|>\n"
         "<|im_start|>assistant\n",
         prompt);
     } else {
       written = snprintf(formatted_prompt, sizeof(formatted_prompt),
         "<|im_start|>system\n"
-        "You are EthervoxAI, a helpful voice assistant. Keep responses SHORT (2-3 sentences), conversational, and avoid formatting since your output is spoken aloud.<|im_end|>\n"
+        "I am EthervoxAI, a curious and engaging voice assistant. I keep my responses SHORT (2-3 sentences) and conversational. When appropriate, I ask follow-up questions to better understand the user and keep the conversation flowing naturally. I avoid formatting since my output is spoken aloud.<|im_end|>\n"
         "<|im_start|>user\n%s<|im_end|>\n"
         "<|im_start|>assistant\n",
         prompt);
@@ -649,14 +649,14 @@ static int llama_backend_generate_stream(ethervox_llm_backend_t* backend,
     if (brevity_requested) {
       written = snprintf(formatted_prompt, sizeof(formatted_prompt),
         "<|system|>\n"
-        "You are EthervoxAI. Respond in ONE SHORT SENTENCE (10-15 words max).</s>\n"
+        "I am EthervoxAI. I respond in ONE SHORT SENTENCE (10-15 words max). When helpful, I end with a brief question.</s>\n"
         "<|user|>\n%s</s>\n"
         "<|assistant|>\n",
         prompt);
     } else {
       written = snprintf(formatted_prompt, sizeof(formatted_prompt),
         "<|system|>\n"
-        "You are EthervoxAI, a helpful voice assistant. Keep responses SHORT (2-3 sentences), conversational, and avoid formatting since your output is spoken aloud.</s>\n"
+        "I am EthervoxAI, a curious and engaging voice assistant. I keep my responses SHORT (2-3 sentences) and conversational. When appropriate, I ask follow-up questions to better understand the user and keep the conversation flowing naturally. I avoid formatting since my output is spoken aloud.</s>\n"
         "<|user|>\n%s</s>\n"
         "<|assistant|>\n",
         prompt);
@@ -665,19 +665,19 @@ static int llama_backend_generate_stream(ethervox_llm_backend_t* backend,
     // DeepSeek uses simple format without special tokens
     if (brevity_requested) {
       written = snprintf(formatted_prompt, sizeof(formatted_prompt),
-        "You are EthervoxAI. Respond in ONE SHORT SENTENCE.\n\n"
+        "I am EthervoxAI. I respond in ONE SHORT SENTENCE. When helpful, I end with a brief question.\n\n"
         "User: %s\nAssistant:",
         prompt);
     } else {
       written = snprintf(formatted_prompt, sizeof(formatted_prompt),
-        "You are EthervoxAI, a helpful voice assistant. Keep responses SHORT (2-3 sentences) and conversational.\n\n"
+        "I am EthervoxAI, a curious and engaging voice assistant. I keep my responses SHORT (2-3 sentences) and conversational. When appropriate, I ask follow-up questions to better understand the user and keep the conversation flowing naturally.\n\n"
         "User: %s\nAssistant:",
         prompt);
     }
   } else {
     // Fallback: minimal format for unknown models
     written = snprintf(formatted_prompt, sizeof(formatted_prompt), 
-      "You are a helpful voice assistant. Respond in 2-3 short sentences.\n\n%s\n", 
+      "I am a curious and engaging voice assistant. I respond in 2-3 short sentences. When appropriate, I ask follow-up questions to better understand the user.\n\n%s\n", 
       prompt);
   }
   
