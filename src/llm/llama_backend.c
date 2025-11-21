@@ -26,15 +26,6 @@
 #include <string.h>
 #include <time.h>
 
-// For detecting CPU core count
-#ifdef ETHERVOX_PLATFORM_ANDROID
-#include <unistd.h>  // For sysconf()
-#elif defined(_WIN32)
-#include <windows.h>
-#else
-#include <unistd.h>  // POSIX systems
-#endif
-
 #ifdef ETHERVOX_PLATFORM_ANDROID
 #include <android/log.h>
 #define LLAMA_LOG(...) __android_log_print(ANDROID_LOG_INFO, "EthervoxLlama", __VA_ARGS__)
@@ -52,27 +43,16 @@
 #define LLAMA_HEADER_AVAILABLE 0
 #endif
 
-// Android-specific LLM defaults (from config.h)
-#ifdef ETHERVOX_PLATFORM_ANDROID
-#define LLAMA_DEFAULT_CONTEXT_LENGTH ETHERVOX_LLM_CONTEXT_LENGTH_ANDROID
-#define LLAMA_DEFAULT_MAX_TOKENS ETHERVOX_LLM_MAX_TOKENS_ANDROID
-#define LLAMA_DEFAULT_GPU_LAYERS ETHERVOX_LLM_GPU_LAYERS_ANDROID
-#define LLAMA_DEFAULT_BATCH_SIZE ETHERVOX_LLM_BATCH_SIZE_ANDROID
-#define LLAMA_PROMPT_BATCH_SIZE ETHERVOX_LLM_PROMPT_BATCH_SIZE_ANDROID
-#define LLAMA_MAX_RESPONSE_LENGTH ETHERVOX_LLM_MAX_RESPONSE_LENGTH_ANDROID
-#else
-// Desktop/other platform defaults
-#define LLAMA_DEFAULT_CONTEXT_LENGTH ETHERVOX_LLM_CONTEXT_LENGTH_DEFAULT
-#define LLAMA_DEFAULT_MAX_TOKENS ETHERVOX_LLM_MAX_TOKENS_DEFAULT
-#define LLAMA_DEFAULT_GPU_LAYERS ETHERVOX_LLM_GPU_LAYERS_DEFAULT
-#define LLAMA_DEFAULT_BATCH_SIZE 512U
-#define LLAMA_PROMPT_BATCH_SIZE 512U
-#define LLAMA_MAX_RESPONSE_LENGTH 4096U
-#endif
-
-// Common defaults (not platform-specific)
-#define LLAMA_DEFAULT_TEMPERATURE ETHERVOX_LLM_TEMPERATURE_DEFAULT
-#define LLAMA_DEFAULT_TOP_P ETHERVOX_LLM_TOP_P_DEFAULT
+// Default configuration values - ULTRA PERFORMANCE MODE
+#define LLAMA_DEFAULT_CONTEXT_LENGTH 2048  // Maximum context for best responses
+#define LLAMA_DEFAULT_MAX_TOKENS 4095  // Shorter responses for voice interactions
+#define LLAMA_DEFAULT_TEMPERATURE 0.7f
+#define LLAMA_DEFAULT_TOP_P 0.9f
+#define LLAMA_DEFAULT_GPU_LAYERS 99  // Offload everything to GPU for maximum speed
+#define LLAMA_DEFAULT_THREADS 8  // Optimal CPU threads (more isn't always better)
+#define LLAMA_DEFAULT_BATCH_SIZE 2048  // Massive batch for maximum throughput
+#define LLAMA_PROMPT_BATCH_SIZE 2048  // Maximum batch size for prompt processing
+#define LLAMA_MAX_RESPONSE_LENGTH 4096
 
 // Llama backend context
 typedef struct {
@@ -99,6 +79,7 @@ typedef struct {
   char* loaded_model_path;
   bool use_mlock;
   bool use_mmap;
+  volatile bool cancel_requested;  // Flag to cancel generation
   
 } llama_backend_context_t;
 
@@ -238,10 +219,10 @@ static int ethervox_llama_backend_init(ethervox_llm_backend_t* backend, const et
     ctx->seed = (uint32_t)time(NULL);
   }
   
-  // Detect optimal thread count based on available CPU cores
-  ctx->n_threads = get_optimal_thread_count();
+  ctx->n_threads = LLAMA_DEFAULT_THREADS;
   ctx->use_mlock = true;   // Lock model in RAM for maximum speed
   ctx->use_mmap = false;   // Disable mmap - preload entire model for speed
+  ctx->cancel_requested = false;
   
   // Initialize llama backend (global initialization)
   llama_backend_init();
@@ -478,19 +459,11 @@ static int llama_backend_generate(ethervox_llm_backend_t* backend,
   }
   
   // Add sampling strategies to the chain
-  // Repetition penalty MUST come before other samplers to prevent loops
-  llama_sampler_chain_add(sampler, llama_sampler_init_penalties(
-    64,      // penalty_last_n: penalize last 64 tokens
-    1.1f,    // penalty_repeat: 1.1 = slight penalty (1.0 = disabled)
-    0.0f,    // penalty_freq: 0.0 = disabled
-    0.0f     // penalty_present: 0.0 = disabled
-  ));
   llama_sampler_chain_add(sampler, llama_sampler_init_top_k(40));
-  llama_sampler_chain_add(sampler, llama_sampler_init_top_p(ctx->top_p, 1));
+  llama_sampler_chain_add(sampler, llama_sampler_init_top_p(0.9f, 1));
   llama_sampler_chain_add(sampler, llama_sampler_init_temp(ctx->temperature));
-  llama_sampler_chain_add(sampler, llama_sampler_init_dist(ctx->seed));
-  LLAMA_LOG("Sampler chain created with: temp=%.2f, top_p=%.2f, top_k=40, max_tokens=%d", 
-            ctx->temperature, ctx->top_p, ctx->n_predict);
+  llama_sampler_chain_add(sampler, llama_sampler_init_dist(0)); // seed=0 for deterministic sampling
+  LLAMA_LOG("Sampler chain created, starting token generation (max %d tokens)", ctx->n_predict);
   
   // Generate tokens
   int n_generated = 0;
@@ -584,8 +557,9 @@ static int llama_backend_generate_stream(ethervox_llm_backend_t* backend,
   LLAMA_LOG("Starting streaming generation for prompt: %s", prompt);
   clock_t start_time = clock();
 
-  // Note: We don't support mid-generation cancellation as it causes state corruption.
+  // Note: We don't try to cancel mid-generation as it causes state corruption.
   // Instead, Kotlin layer uses processing IDs to ignore results from old generations.
+  ctx->cancel_requested = false;
   
   // Synchronize to ensure any previous computation is complete
   llama_synchronize(ctx->ctx);
@@ -623,7 +597,7 @@ static int llama_backend_generate_stream(ethervox_llm_backend_t* backend,
                            strstr(prompt, "one sentence") != NULL ||
                            strstr(prompt, "shorter") != NULL);
   
-  // Format prompt based on model type with comprehensive system instructions
+  // Format prompt based on model type
   char formatted_prompt[2048];
   int written;
   
@@ -632,14 +606,16 @@ static int llama_backend_generate_stream(ethervox_llm_backend_t* backend,
     if (brevity_requested) {
       written = snprintf(formatted_prompt, sizeof(formatted_prompt),
         "<|im_start|>system\n"
-        "I am EthervoxAI. I respond in ONE SHORT SENTENCE (10-15 words max). When helpful, I end with a brief question.<|im_end|>\n"
+        "You are a helpful AI voice assistant. The user wants EXTREMELY BRIEF answers. "
+        "Respond in ONE SHORT SENTENCE only (10-15 words max). Be direct and concise.<|im_end|>\n"
         "<|im_start|>user\n%s<|im_end|>\n"
         "<|im_start|>assistant\n",
         prompt);
     } else {
       written = snprintf(formatted_prompt, sizeof(formatted_prompt),
         "<|im_start|>system\n"
-        "I am EthervoxAI, a curious and engaging voice assistant. I keep my responses SHORT (2-3 sentences) and conversational. When appropriate, I ask follow-up questions to better understand the user and keep the conversation flowing naturally. I avoid formatting since my output is spoken aloud.<|im_end|>\n"
+        "You are a helpful AI voice assistant. IMPORTANT: Keep responses SHORT and CONCISE (2-3 sentences max). "
+        "Be direct and to the point. Avoid long explanations or examples unless specifically asked.<|im_end|>\n"
         "<|im_start|>user\n%s<|im_end|>\n"
         "<|im_start|>assistant\n",
         prompt);
@@ -648,15 +624,13 @@ static int llama_backend_generate_stream(ethervox_llm_backend_t* backend,
     // TinyLlama uses Zephyr format (similar to ChatML but different tags)
     if (brevity_requested) {
       written = snprintf(formatted_prompt, sizeof(formatted_prompt),
-        "<|system|>\n"
-        "I am EthervoxAI. I respond in ONE SHORT SENTENCE (10-15 words max). When helpful, I end with a brief question.</s>\n"
+        "<|system|>\nYou are a helpful AI voice assistant. Respond in ONE SHORT SENTENCE only (10-15 words max).</s>\n"
         "<|user|>\n%s</s>\n"
         "<|assistant|>\n",
         prompt);
     } else {
       written = snprintf(formatted_prompt, sizeof(formatted_prompt),
-        "<|system|>\n"
-        "I am EthervoxAI, a curious and engaging voice assistant. I keep my responses SHORT (2-3 sentences) and conversational. When appropriate, I ask follow-up questions to better understand the user and keep the conversation flowing naturally. I avoid formatting since my output is spoken aloud.</s>\n"
+        "<|system|>\nYou are a helpful AI voice assistant. Keep responses SHORT and CONCISE (2-3 sentences max).</s>\n"
         "<|user|>\n%s</s>\n"
         "<|assistant|>\n",
         prompt);
@@ -665,20 +639,16 @@ static int llama_backend_generate_stream(ethervox_llm_backend_t* backend,
     // DeepSeek uses simple format without special tokens
     if (brevity_requested) {
       written = snprintf(formatted_prompt, sizeof(formatted_prompt),
-        "I am EthervoxAI. I respond in ONE SHORT SENTENCE. When helpful, I end with a brief question.\n\n"
-        "User: %s\nAssistant:",
+        "User: %s\nAssistant (respond in 1 short sentence):",
         prompt);
     } else {
       written = snprintf(formatted_prompt, sizeof(formatted_prompt),
-        "I am EthervoxAI, a curious and engaging voice assistant. I keep my responses SHORT (2-3 sentences) and conversational. When appropriate, I ask follow-up questions to better understand the user and keep the conversation flowing naturally.\n\n"
         "User: %s\nAssistant:",
         prompt);
     }
   } else {
     // Fallback: minimal format for unknown models
-    written = snprintf(formatted_prompt, sizeof(formatted_prompt), 
-      "I am a curious and engaging voice assistant. I respond in 2-3 short sentences. When appropriate, I ask follow-up questions to better understand the user.\n\n%s\n", 
-      prompt);
+    written = snprintf(formatted_prompt, sizeof(formatted_prompt), "%s\n", prompt);
   }
   
   if (written >= (int)sizeof(formatted_prompt)) {
@@ -729,20 +699,11 @@ static int llama_backend_generate_stream(ethervox_llm_backend_t* backend,
   LLAMA_LOG("Prompt evaluated successfully in %u ms (%.1f tokens/sec)", 
             prompt_eval_time, (float)n_prompt_tokens / (prompt_eval_time / 1000.0f));
 
-  // Create sampler chain with full sampling parameters
+  // Create sampler chain - simplified for speed
   struct llama_sampler* sampler = llama_sampler_chain_init(llama_sampler_chain_default_params());
-  // Add repetition penalty first to prevent loops
-  llama_sampler_chain_add(sampler, llama_sampler_init_penalties(
-    64,      // penalty_last_n: penalize last 64 tokens
-    1.1f,    // penalty_repeat: 1.1 = slight penalty
-    0.0f,    // penalty_freq: 0.0 = disabled
-    0.0f     // penalty_present: 0.0 = disabled
-  ));
-  llama_sampler_chain_add(sampler, llama_sampler_init_top_k(40));
-  llama_sampler_chain_add(sampler, llama_sampler_init_top_p(ctx->top_p, 1));
   llama_sampler_chain_add(sampler, llama_sampler_init_temp(ctx->temperature));
-  llama_sampler_chain_add(sampler, llama_sampler_init_dist(ctx->seed));
-  LLAMA_LOG("Streaming sampler chain created with: temp=%.2f, top_p=%.2f, top_k=40, max_tokens=%u", 
+  llama_sampler_chain_add(sampler, llama_sampler_init_dist(0));
+  LLAMA_LOG("Sampler chain created (temp=%.2f, top_p=%.2f), starting streaming token generation (max %u tokens)", 
             (double)ctx->temperature, (double)ctx->top_p, (unsigned int)ctx->n_predict);
 
   // Generate tokens and stream them

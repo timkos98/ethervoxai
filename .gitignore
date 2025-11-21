@@ -136,6 +136,4 @@ run-artifacts/
 *.md.bak
 bin/act
 dashboard/package-lock.json
-dashboard/package-lock.json
-dashboard/package-lock.json
 semester_project_TUM.org

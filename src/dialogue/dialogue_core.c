@@ -335,7 +335,6 @@ static const intent_pattern_t INTENT_PATTERNS[] = {
     {"set", ETHERVOX_INTENT_COMMAND, "en", true},
     {"play", ETHERVOX_INTENT_COMMAND, "en", true},
     {"stop", ETHERVOX_INTENT_COMMAND, "en", true},
-
     // Goodbyes must be at start or standalone
     {"goodbye", ETHERVOX_INTENT_GOODBYE, "en", true},
     {"bye", ETHERVOX_INTENT_GOODBYE, "en", true},
@@ -847,7 +846,6 @@ int ethervox_dialogue_parse_intent(ethervox_dialogue_engine_t* engine,
           continue;  // Not at start, skip this pattern
         }
       }
-
       // Pattern matched!
       intent->type = patterns[i].intent_type;
       intent->confidence = 0.8f;  // Fixed confidence for demo
@@ -1806,7 +1804,8 @@ int ethervox_dialogue_process_llm_stream(ethervox_dialogue_engine_t* engine,
                                          const ethervox_intent_t* intent,
                                          const ethervox_dialogue_context_t* context,
                                          void (*token_callback)(const char* token, void* user_data),
-                                         void* user_data, bool* conversation_ended) {
+                                         void* user_data,
+                                         bool* conversation_ended) {
   if (!engine || !intent || !token_callback) {
     return -1;
   }
