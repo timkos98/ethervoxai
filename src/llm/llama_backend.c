@@ -25,6 +25,15 @@
 #include <string.h>
 #include <time.h>
 
+// For detecting CPU core count
+#ifdef ETHERVOX_PLATFORM_ANDROID
+#include <unistd.h>  // For sysconf()
+#elif defined(_WIN32)
+#include <windows.h>
+#else
+#include <unistd.h>  // POSIX systems
+#endif
+
 #ifdef ETHERVOX_PLATFORM_ANDROID
 #include <android/log.h>
 #define LLAMA_LOG(...) __android_log_print(ANDROID_LOG_INFO, "EthervoxLlama", __VA_ARGS__)
@@ -48,7 +57,6 @@
 #define LLAMA_DEFAULT_TEMPERATURE 0.7f
 #define LLAMA_DEFAULT_TOP_P 0.9f
 #define LLAMA_DEFAULT_GPU_LAYERS 99  // Offload everything to GPU for maximum speed
-#define LLAMA_DEFAULT_THREADS 16
 #define LLAMA_DEFAULT_BATCH_SIZE 2048  // Massive batch for maximum throughput
 #define LLAMA_PROMPT_BATCH_SIZE 2048  // Maximum batch size for prompt processing
 #define LLAMA_MAX_RESPONSE_LENGTH 4096
@@ -80,6 +88,39 @@ typedef struct {
   bool use_mmap;
   
 } llama_backend_context_t;
+
+// Helper function to detect optimal thread count
+static uint32_t get_optimal_thread_count(void) {
+  uint32_t cpu_count = 0;
+  
+#ifdef _WIN32
+  SYSTEM_INFO sysinfo;
+  GetSystemInfo(&sysinfo);
+  cpu_count = sysinfo.dwNumberOfProcessors;
+#elif defined(_SC_NPROCESSORS_ONLN)
+  // POSIX and Android
+  long nproc = sysconf(_SC_NPROCESSORS_ONLN);
+  if (nproc > 0) {
+    cpu_count = (uint32_t)nproc;
+  }
+#endif
+  
+  // Fallback to 4 threads if detection fails
+  if (cpu_count == 0) {
+    LLAMA_LOG("Failed to detect CPU count, using 4 threads");
+    return 4;
+  }
+  
+  // Use all available cores, but cap at 16 to avoid diminishing returns
+  // For most LLM workloads, more than 16 threads doesn't help much
+  uint32_t optimal = cpu_count;
+  if (optimal > 16) {
+    optimal = 16;
+  }
+  
+  LLAMA_LOG("Detected %u CPU cores, using %u threads", cpu_count, optimal);
+  return optimal;
+}
 
 // Forward declarations
 static int ethervox_llama_backend_init(ethervox_llm_backend_t* backend, const ethervox_llm_config_t* config);
@@ -184,7 +225,8 @@ static int ethervox_llama_backend_init(ethervox_llm_backend_t* backend, const et
     ctx->seed = (uint32_t)time(NULL);
   }
   
-  ctx->n_threads = LLAMA_DEFAULT_THREADS;
+  // Detect optimal thread count based on available CPU cores
+  ctx->n_threads = get_optimal_thread_count();
   ctx->use_mlock = true;   // Lock model in RAM for maximum speed
   ctx->use_mmap = false;   // Disable mmap - preload entire model for speed
   
