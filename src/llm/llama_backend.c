@@ -48,7 +48,7 @@
 #define LLAMA_DEFAULT_TEMPERATURE 0.7f
 #define LLAMA_DEFAULT_TOP_P 0.9f
 #define LLAMA_DEFAULT_GPU_LAYERS 99  // Offload everything to GPU for maximum speed
-#define LLAMA_DEFAULT_THREADS 8  // Optimal CPU threads (more isn't always better)
+#define LLAMA_DEFAULT_THREADS 16
 #define LLAMA_DEFAULT_BATCH_SIZE 2048  // Massive batch for maximum throughput
 #define LLAMA_PROMPT_BATCH_SIZE 2048  // Maximum batch size for prompt processing
 #define LLAMA_MAX_RESPONSE_LENGTH 4096
@@ -78,7 +78,6 @@ typedef struct {
   char* loaded_model_path;
   bool use_mlock;
   bool use_mmap;
-  volatile bool cancel_requested;  // Flag to cancel generation
   
 } llama_backend_context_t;
 
@@ -188,7 +187,6 @@ static int ethervox_llama_backend_init(ethervox_llm_backend_t* backend, const et
   ctx->n_threads = LLAMA_DEFAULT_THREADS;
   ctx->use_mlock = true;   // Lock model in RAM for maximum speed
   ctx->use_mmap = false;   // Disable mmap - preload entire model for speed
-  ctx->cancel_requested = false;
   
   // Initialize llama backend (global initialization)
   llama_backend_init();
@@ -523,9 +521,8 @@ static int llama_backend_generate_stream(ethervox_llm_backend_t* backend,
   LLAMA_LOG("Starting streaming generation for prompt: %s", prompt);
   clock_t start_time = clock();
 
-  // Note: We don't try to cancel mid-generation as it causes state corruption.
+  // Note: We don't support mid-generation cancellation as it causes state corruption.
   // Instead, Kotlin layer uses processing IDs to ignore results from old generations.
-  ctx->cancel_requested = false;
   
   // Synchronize to ensure any previous computation is complete
   llama_synchronize(ctx->ctx);
