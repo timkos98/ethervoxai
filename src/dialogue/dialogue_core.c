@@ -725,9 +725,9 @@ static const char* answer_simple_question(const char* normalized_text, const cha
           if (valid) {
             // Format response
             if (strcmp(language_code, "es") == 0) {
-              snprintf(math_response, sizeof(math_response), "El resultado es %.2f", result);
+              snprintf(math_response, sizeof(math_response), "%.2f", result);
             } else if (strcmp(language_code, "zh") == 0) {
-              snprintf(math_response, sizeof(math_response), "结果是%.2f", result);
+              snprintf(math_response, sizeof(math_response), "%.2f", result);
             } else {
               snprintf(math_response, sizeof(math_response), "%.2f", result);
             }
