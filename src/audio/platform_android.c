@@ -130,6 +130,8 @@ static int aaudio_start_capture(ethervox_audio_runtime_t* runtime) {
   AAudioStreamBuilder_setBufferCapacityInFrames(builder, (int32_t)runtime->config.buffer_size);
   AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
   AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_EXCLUSIVE);
+  AAudioStreamBuilder_setUsage(builder, AAUDIO_USAGE_VOICE_COMMUNICATION);
+  AAudioStreamBuilder_setContentType(builder, AAUDIO_CONTENT_TYPE_SPEECH);
   AAudioStreamBuilder_setDataCallback(builder, aaudio_data_callback, runtime);
   AAudioStreamBuilder_setErrorCallback(builder, aaudio_error_callback, runtime);
 
@@ -188,6 +190,8 @@ static int aaudio_start_playback(ethervox_audio_runtime_t* runtime) {
   AAudioStreamBuilder_setChannelCount(builder, (int32_t)runtime->config.channels);
   AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
   AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+  AAudioStreamBuilder_setUsage(builder, AAUDIO_USAGE_VOICE_COMMUNICATION);
+  AAudioStreamBuilder_setContentType(builder, AAUDIO_CONTENT_TYPE_SPEECH);
 
   result = AAudioStreamBuilder_openStream(builder, &audio_data->output_stream);
   AAudioStreamBuilder_delete(builder);

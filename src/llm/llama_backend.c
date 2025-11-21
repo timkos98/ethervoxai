@@ -25,29 +25,32 @@
 #include <string.h>
 #include <time.h>
 
-#ifdef ETHERVOX_WITH_LLAMA
-// Include llama.cpp headers if available
-#if __has_include(<llama.h>)
+#ifdef ETHERVOX_PLATFORM_ANDROID
+#include <android/log.h>
+#define LLAMA_LOG(...) __android_log_print(ANDROID_LOG_INFO, "EthervoxLlama", __VA_ARGS__)
+#define LLAMA_ERROR(...) __android_log_print(ANDROID_LOG_ERROR, "EthervoxLlama", __VA_ARGS__)
+#else
+#define LLAMA_LOG(...) printf(__VA_ARGS__); printf("\n")
+#define LLAMA_ERROR(...) fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n")
+#endif
+
+#if defined(ETHERVOX_WITH_LLAMA) && defined(LLAMA_CPP_AVAILABLE) && LLAMA_CPP_AVAILABLE
+// Include llama.cpp headers
 #include <llama.h>
 #define LLAMA_HEADER_AVAILABLE 1
 #else
-/* MSVC doesn't support #warning, use #pragma message instead */
-#ifdef _MSC_VER
-#pragma message("llama.h not found - llama backend will use stub implementation")
-#else
-#warning "llama.h not found - llama backend will use stub implementation"
-#endif
 #define LLAMA_HEADER_AVAILABLE 0
 #endif
-#endif
 
-// Default configuration values
-#define LLAMA_DEFAULT_CONTEXT_LENGTH 2048
-#define LLAMA_DEFAULT_MAX_TOKENS 512
+// Default configuration values - ULTRA PERFORMANCE MODE
+#define LLAMA_DEFAULT_CONTEXT_LENGTH 2048  // Maximum context for best responses
+#define LLAMA_DEFAULT_MAX_TOKENS 4095  // Shorter responses for voice interactions
 #define LLAMA_DEFAULT_TEMPERATURE 0.7f
 #define LLAMA_DEFAULT_TOP_P 0.9f
-#define LLAMA_DEFAULT_GPU_LAYERS 0
-#define LLAMA_DEFAULT_THREADS 4
+#define LLAMA_DEFAULT_GPU_LAYERS 99  // Offload everything to GPU for maximum speed
+#define LLAMA_DEFAULT_THREADS 8  // Optimal CPU threads (more isn't always better)
+#define LLAMA_DEFAULT_BATCH_SIZE 2048  // Massive batch for maximum throughput
+#define LLAMA_PROMPT_BATCH_SIZE 2048  // Maximum batch size for prompt processing
 #define LLAMA_MAX_RESPONSE_LENGTH 4096
 
 // Llama backend context
@@ -75,11 +78,12 @@ typedef struct {
   char* loaded_model_path;
   bool use_mlock;
   bool use_mmap;
+  volatile bool cancel_requested;  // Flag to cancel generation
   
 } llama_backend_context_t;
 
 // Forward declarations
-static int llama_backend_init(ethervox_llm_backend_t* backend, const ethervox_llm_config_t* config);
+static int ethervox_llama_backend_init(ethervox_llm_backend_t* backend, const ethervox_llm_config_t* config);
 static void llama_backend_cleanup(ethervox_llm_backend_t* backend);
 static int llama_backend_load_model(ethervox_llm_backend_t* backend, const char* model_path);
 static void llama_backend_unload_model(ethervox_llm_backend_t* backend);
@@ -87,8 +91,41 @@ static int llama_backend_generate(ethervox_llm_backend_t* backend,
                                  const char* prompt,
                                  const char* language_code,
                                  ethervox_llm_response_t* response);
+static int llama_backend_generate_stream(ethervox_llm_backend_t* backend,
+                                         const char* prompt,
+                                         const char* language_code,
+                                         void (*callback)(const char* token, void* user_data),
+                                         void* user_data);
 static int llama_backend_get_capabilities(ethervox_llm_backend_t* backend,
                                         ethervox_llm_capabilities_t* capabilities);
+static int llama_backend_update_config(ethervox_llm_backend_t* backend,
+                                       const ethervox_llm_config_t* config);
+
+// Update runtime generation parameters (can be changed without reloading model)
+static int llama_backend_update_config(ethervox_llm_backend_t* backend,
+                                       const ethervox_llm_config_t* config) {
+  if (!backend || !backend->handle || !config) {
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
+  }
+  
+  llama_backend_context_t* ctx = (llama_backend_context_t*)backend->handle;
+  
+  // Update runtime parameters (don't require model reload)
+  if (config->max_tokens > 0) {
+    ctx->n_predict = config->max_tokens;
+  }
+  if (config->temperature > 0.0f) {
+    ctx->temperature = config->temperature;
+  }
+  if (config->top_p > 0.0f) {
+    ctx->top_p = config->top_p;
+  }
+  
+  ETHERVOX_LOG_INFO("Updated LLM params: max_tokens=%u, temp=%.2f, top_p=%.2f",
+                    ctx->n_predict, ctx->temperature, ctx->top_p);
+  
+  return ETHERVOX_SUCCESS;
+}
 
 // Create Llama backend instance
 ethervox_llm_backend_t* ethervox_llm_create_llama_backend(void) {
@@ -100,19 +137,21 @@ ethervox_llm_backend_t* ethervox_llm_create_llama_backend(void) {
   
   backend->type = ETHERVOX_LLM_BACKEND_LLAMA;
   backend->name = "Llama.cpp";
-  backend->init = llama_backend_init;
+  backend->init = ethervox_llama_backend_init;
   backend->cleanup = llama_backend_cleanup;
   backend->load_model = llama_backend_load_model;
   backend->unload_model = llama_backend_unload_model;
   backend->generate = llama_backend_generate;
+  backend->generate_stream = llama_backend_generate_stream;
   backend->get_capabilities = llama_backend_get_capabilities;
+  backend->update_config = llama_backend_update_config;
   backend->is_initialized = false;
   backend->is_loaded = false;
   
   return backend;
 }
 
-static int llama_backend_init(ethervox_llm_backend_t* backend, const ethervox_llm_config_t* config) {
+static int ethervox_llama_backend_init(ethervox_llm_backend_t* backend, const ethervox_llm_config_t* config) {
   if (!backend) {
     return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
@@ -147,10 +186,11 @@ static int llama_backend_init(ethervox_llm_backend_t* backend, const ethervox_ll
   }
   
   ctx->n_threads = LLAMA_DEFAULT_THREADS;
-  ctx->use_mlock = false;
-  ctx->use_mmap = true;
+  ctx->use_mlock = true;   // Lock model in RAM for maximum speed
+  ctx->use_mmap = false;   // Disable mmap - preload entire model for speed
+  ctx->cancel_requested = false;
   
-  // Initialize llama backend
+  // Initialize llama backend (global initialization)
   llama_backend_init();
   
   backend->handle = ctx;
@@ -164,21 +204,19 @@ static int llama_backend_init(ethervox_llm_backend_t* backend, const ethervox_ll
 }
 
 static void llama_backend_cleanup(ethervox_llm_backend_t* backend) {
-  if (!backend) {
+  if (!backend || !backend->handle) {
     return;
   }
-  
+
 #if defined(ETHERVOX_WITH_LLAMA) && LLAMA_HEADER_AVAILABLE
-  llama_backend_context_t* ctx = (llama_backend_context_t*)backend->handle;
-  
-  // Unload model if loaded
+  llama_backend_context_t* ctx = (llama_backend_context_t*)backend->handle;  // Unload model if loaded
   if (ctx->ctx) {
     llama_free(ctx->ctx);
     ctx->ctx = NULL;
   }
   
   if (ctx->model) {
-    llama_free_model(ctx->model);
+    llama_model_free(ctx->model);
     ctx->model = NULL;
   }
   
@@ -227,7 +265,7 @@ static int llama_backend_load_model(ethervox_llm_backend_t* backend, const char*
   ctx->model_params.use_mmap = ctx->use_mmap;
   
   // Load model
-  ctx->model = llama_load_model_from_file(model_path, ctx->model_params);
+  ctx->model = llama_model_load_from_file(model_path, ctx->model_params);
   if (!ctx->model) {
     ETHERVOX_LOG_ERROR("Failed to load model from: %s", model_path);
     return ETHERVOX_ERROR_FAILED;
@@ -237,13 +275,19 @@ static int llama_backend_load_model(ethervox_llm_backend_t* backend, const char*
   ctx->ctx_params = llama_context_default_params();
   ctx->ctx_params.n_ctx = ctx->n_ctx;
   ctx->ctx_params.n_threads = ctx->n_threads;
-  ctx->ctx_params.seed = ctx->seed;
+  ctx->ctx_params.n_batch = LLAMA_PROMPT_BATCH_SIZE;  // Use larger batch size for prompt processing
+  ctx->ctx_params.n_threads_batch = ctx->n_threads;  // Use same threads for batch processing
+  // Note: seed is now set via llama_sampler, not context params
+  
+  LLAMA_LOG("Context params: n_ctx=%u, n_batch=%u, n_threads=%u, n_threads_batch=%u",
+            ctx->ctx_params.n_ctx, ctx->ctx_params.n_batch, 
+            ctx->ctx_params.n_threads, ctx->ctx_params.n_threads_batch);
   
   // Create context
-  ctx->ctx = llama_new_context_with_model(ctx->model, ctx->ctx_params);
+  ctx->ctx = llama_init_from_model(ctx->model, ctx->ctx_params);
   if (!ctx->ctx) {
     ETHERVOX_LOG_ERROR("Failed to create Llama context");
-    llama_free_model(ctx->model);
+    llama_model_free(ctx->model);
     ctx->model = NULL;
     return ETHERVOX_ERROR_FAILED;
   }
@@ -251,6 +295,11 @@ static int llama_backend_load_model(ethervox_llm_backend_t* backend, const char*
   // Save model path
   ctx->loaded_model_path = strdup(model_path);
   backend->is_loaded = true;
+  
+  // Clear KV cache to ensure clean initial state
+  llama_memory_t mem = llama_get_memory(ctx->ctx);
+  llama_memory_seq_rm(mem, 0, -1, -1);
+  ETHERVOX_LOG_INFO("KV cache initialized");
   
   ETHERVOX_LOG_INFO("Llama model loaded successfully");
   ETHERVOX_LOG_INFO("Context size: %u, GPU layers: %u", ctx->n_ctx, ctx->n_gpu_layers);
@@ -273,7 +322,7 @@ static void llama_backend_unload_model(ethervox_llm_backend_t* backend) {
   }
   
   if (ctx->model) {
-    llama_free_model(ctx->model);
+    llama_model_free(ctx->model);
     ctx->model = NULL;
   }
   
@@ -308,13 +357,19 @@ static int llama_backend_generate(ethervox_llm_backend_t* backend,
     return ETHERVOX_ERROR_NOT_INITIALIZED;
   }
   
+  LLAMA_LOG("Starting LLM generation for prompt: %.50s...", prompt);
   clock_t start_time = clock();
+  
+  // Get model vocab for tokenization
+  const struct llama_vocab * vocab = llama_model_get_vocab(ctx->model);
+  LLAMA_LOG("Got vocab from model");
   
   // Tokenize prompt
   // llama_tokenize returns the negation of the required token count when called with
   // a NULL output buffer and zero size. Negate the result to get the positive token count.
-  const int n_prompt_tokens = -llama_tokenize(ctx->model, prompt, (int)strlen(prompt),
+  const int n_prompt_tokens = -llama_tokenize(vocab, prompt, (int)strlen(prompt),
                                               NULL, 0, true, true);
+  LLAMA_LOG("Tokenized prompt: %d tokens needed", n_prompt_tokens);
   
   if (n_prompt_tokens < 0) {
     ETHERVOX_LOG_ERROR("Failed to tokenize prompt");
@@ -327,7 +382,7 @@ static int llama_backend_generate(ethervox_llm_backend_t* backend,
     return ETHERVOX_ERROR_OUT_OF_MEMORY;
   }
   
-  int n_tokens = llama_tokenize(ctx->model, prompt, (int)strlen(prompt),
+  int n_tokens = llama_tokenize(vocab, prompt, (int)strlen(prompt),
                                 prompt_tokens, n_prompt_tokens, true, true);
   
   if (n_tokens < 0 || n_tokens > n_prompt_tokens) {
@@ -347,37 +402,55 @@ static int llama_backend_generate(ethervox_llm_backend_t* backend,
   response_text[0] = '\0';
   size_t response_len = 0;
   
+  LLAMA_LOG("Evaluating prompt with %d tokens", n_tokens);
   // Evaluate prompt
-  if (llama_decode(ctx->ctx, llama_batch_get_one(prompt_tokens, n_tokens, 0, 0)) != 0) {
+  if (llama_decode(ctx->ctx, llama_batch_get_one(prompt_tokens, n_tokens)) != 0) {
     ETHERVOX_LOG_ERROR("Failed to evaluate prompt");
     free(prompt_tokens);
     free(response_text);
     return ETHERVOX_ERROR_FAILED;
   }
+  LLAMA_LOG("Prompt evaluated successfully");
   
   free(prompt_tokens);
+  
+  LLAMA_LOG("Creating sampler chain");
+  // Create sampler chain for token generation
+  struct llama_sampler_chain_params sparams = llama_sampler_chain_default_params();
+  struct llama_sampler * sampler = llama_sampler_chain_init(sparams);
+  if (!sampler) {
+    ETHERVOX_LOG_ERROR("Failed to create sampler chain");
+    free(response_text);
+    return ETHERVOX_ERROR_FAILED;
+  }
+  
+  // Add sampling strategies to the chain
+  llama_sampler_chain_add(sampler, llama_sampler_init_top_k(40));
+  llama_sampler_chain_add(sampler, llama_sampler_init_top_p(0.9f, 1));
+  llama_sampler_chain_add(sampler, llama_sampler_init_temp(ctx->temperature));
+  llama_sampler_chain_add(sampler, llama_sampler_init_dist(0)); // seed=0 for deterministic sampling
+  LLAMA_LOG("Sampler chain created, starting token generation (max %d tokens)", ctx->n_predict);
   
   // Generate tokens
   int n_generated = 0;
   bool finished = false;
   
   for (int i = 0; i < (int)ctx->n_predict && !finished; i++) {
+    if (i % 10 == 0 && i > 0) {
+      LLAMA_LOG("Generated %d tokens so far...", i);
+    }
     // Sample next token
-    llama_token new_token = llama_sampler_sample(
-      llama_sampler_chain_default_params(),
-      ctx->ctx,
-      0
-    );
+    llama_token new_token = llama_sampler_sample(sampler, ctx->ctx, -1);
     
     // Check for end of generation
-    if (llama_token_is_eog(ctx->model, new_token)) {
+    if (llama_vocab_is_eog(vocab, new_token)) {
       finished = true;
       break;
     }
     
     // Decode token to text
     char piece[256];
-    int n_piece = llama_token_to_piece(ctx->model, new_token, piece, sizeof(piece), false);
+    int n_piece = llama_token_to_piece(vocab, new_token, piece, sizeof(piece), 0, false);
     
     if (n_piece > 0) {
       if (response_len + n_piece < LLAMA_MAX_RESPONSE_LENGTH - 1) {
@@ -388,7 +461,7 @@ static int llama_backend_generate(ethervox_llm_backend_t* backend,
     }
     
     // Evaluate next token
-    if (llama_decode(ctx->ctx, llama_batch_get_one(&new_token, 1, n_tokens + i, 0)) != 0) {
+    if (llama_decode(ctx->ctx, llama_batch_get_one(&new_token, 1)) != 0) {
       ETHERVOX_LOG_WARN("Failed to evaluate token at position %d", i);
       break;
     }
@@ -396,8 +469,13 @@ static int llama_backend_generate(ethervox_llm_backend_t* backend,
     n_generated++;
   }
   
+  // Calculate processing time
   clock_t end_time = clock();
   uint32_t processing_time = (uint32_t)(((double)(end_time - start_time) / CLOCKS_PER_SEC) * 1000);
+  
+  // Free sampler
+  llama_sampler_free(sampler);
+  LLAMA_LOG("Generation complete: %d tokens in %u ms", n_generated, processing_time);
   
   // Fill response structure
   response->text = response_text;
@@ -423,6 +501,274 @@ static int llama_backend_generate(ethervox_llm_backend_t* backend,
 #endif
 }
 
+// Generate response with streaming token callback
+static int llama_backend_generate_stream(ethervox_llm_backend_t* backend,
+                                         const char* prompt,
+                                         const char* language_code,
+                                         void (*callback)(const char* token, void* user_data),
+                                         void* user_data) {
+  if (!backend || !prompt || !callback) {
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
+  }
+
+#if !defined(ETHERVOX_WITH_LLAMA) || !LLAMA_HEADER_AVAILABLE
+  return ETHERVOX_ERROR_NOT_IMPLEMENTED;
+#else
+  llama_backend_context_t* ctx = (llama_backend_context_t*)backend->handle;
+  if (!ctx || !ctx->model || !ctx->ctx) {
+    LLAMA_ERROR("Model not loaded");
+    return ETHERVOX_ERROR_NOT_INITIALIZED;
+  }
+
+  LLAMA_LOG("Starting streaming generation for prompt: %s", prompt);
+  clock_t start_time = clock();
+
+  // Note: We don't try to cancel mid-generation as it causes state corruption.
+  // Instead, Kotlin layer uses processing IDs to ignore results from old generations.
+  ctx->cancel_requested = false;
+  
+  // Synchronize to ensure any previous computation is complete
+  llama_synchronize(ctx->ctx);
+  
+  // Check if KV cache is getting full and clear if needed
+  llama_memory_t mem = llama_get_memory(ctx->ctx);
+  llama_pos max_pos = llama_memory_seq_pos_max(mem, 0);
+  if (max_pos > (int32_t)(ctx->n_ctx * 0.85)) {  // Clear if >85% full
+    LLAMA_LOG("KV cache nearly full (pos=%d, limit=%u), clearing", max_pos, ctx->n_ctx);
+    llama_memory_seq_rm(mem, 0, -1, -1);
+    max_pos = -1;  // Reset after clearing
+  } else if (max_pos >= 0) {
+    LLAMA_LOG("KV cache usage: %d / %u tokens", max_pos, ctx->n_ctx);
+  }
+
+  const struct llama_vocab* vocab = llama_model_get_vocab(ctx->model);
+  
+  // Get special token IDs for debugging
+  llama_token bos_token = llama_vocab_bos(vocab);
+  llama_token eos_token = llama_vocab_eos(vocab);
+  LLAMA_LOG("Special tokens - BOS: %d, EOS: %d", bos_token, eos_token);
+  
+  // Detect model type from loaded model path for correct prompt formatting
+  bool is_qwen = (ctx->loaded_model_path && strstr(ctx->loaded_model_path, "qwen") != NULL);
+  bool is_tinyllama = (ctx->loaded_model_path && strstr(ctx->loaded_model_path, "tinyllama") != NULL);
+  bool is_deepseek = (ctx->loaded_model_path && strstr(ctx->loaded_model_path, "deepseek") != NULL);
+  
+  LLAMA_LOG("Model type detection: Qwen=%d, TinyLlama=%d, DeepSeek=%d", is_qwen, is_tinyllama, is_deepseek);
+  
+  // Check if user is explicitly requesting brevity
+  bool brevity_requested = (strstr(prompt, "concise") != NULL || 
+                           strstr(prompt, "brief") != NULL ||
+                           strstr(prompt, "short") != NULL ||
+                           strstr(prompt, "quick") != NULL ||
+                           strstr(prompt, "one sentence") != NULL ||
+                           strstr(prompt, "shorter") != NULL);
+  
+  // Format prompt based on model type
+  char formatted_prompt[2048];
+  int written;
+  
+  if (is_qwen) {
+    // Qwen2 uses ChatML format
+    if (brevity_requested) {
+      written = snprintf(formatted_prompt, sizeof(formatted_prompt),
+        "<|im_start|>system\n"
+        "You are a helpful AI voice assistant. The user wants EXTREMELY BRIEF answers. "
+        "Respond in ONE SHORT SENTENCE only (10-15 words max). Be direct and concise.<|im_end|>\n"
+        "<|im_start|>user\n%s<|im_end|>\n"
+        "<|im_start|>assistant\n",
+        prompt);
+    } else {
+      written = snprintf(formatted_prompt, sizeof(formatted_prompt),
+        "<|im_start|>system\n"
+        "You are a helpful AI voice assistant. IMPORTANT: Keep responses SHORT and CONCISE (2-3 sentences max). "
+        "Be direct and to the point. Avoid long explanations or examples unless specifically asked.<|im_end|>\n"
+        "<|im_start|>user\n%s<|im_end|>\n"
+        "<|im_start|>assistant\n",
+        prompt);
+    }
+  } else if (is_tinyllama) {
+    // TinyLlama uses Zephyr format (similar to ChatML but different tags)
+    if (brevity_requested) {
+      written = snprintf(formatted_prompt, sizeof(formatted_prompt),
+        "<|system|>\nYou are a helpful AI voice assistant. Respond in ONE SHORT SENTENCE only (10-15 words max).</s>\n"
+        "<|user|>\n%s</s>\n"
+        "<|assistant|>\n",
+        prompt);
+    } else {
+      written = snprintf(formatted_prompt, sizeof(formatted_prompt),
+        "<|system|>\nYou are a helpful AI voice assistant. Keep responses SHORT and CONCISE (2-3 sentences max).</s>\n"
+        "<|user|>\n%s</s>\n"
+        "<|assistant|>\n",
+        prompt);
+    }
+  } else if (is_deepseek) {
+    // DeepSeek uses simple format without special tokens
+    if (brevity_requested) {
+      written = snprintf(formatted_prompt, sizeof(formatted_prompt),
+        "User: %s\nAssistant (respond in 1 short sentence):",
+        prompt);
+    } else {
+      written = snprintf(formatted_prompt, sizeof(formatted_prompt),
+        "User: %s\nAssistant:",
+        prompt);
+    }
+  } else {
+    // Fallback: minimal format for unknown models
+    written = snprintf(formatted_prompt, sizeof(formatted_prompt), "%s\n", prompt);
+  }
+  
+  if (written >= (int)sizeof(formatted_prompt)) {
+    LLAMA_ERROR("Formatted prompt too long, truncated");
+  }
+  
+  const char* model_type = is_qwen ? "Qwen/ChatML" : (is_tinyllama ? "TinyLlama/Zephyr" : (is_deepseek ? "DeepSeek/Simple" : "Generic"));
+  LLAMA_LOG("Prompt prepared with %s format (cache pos: %d, brevity mode: %s)", 
+            model_type, max_pos, brevity_requested ? "ULTRA" : "NORMAL");
+  
+  // Tokenize formatted prompt
+  int n_prompt_tokens = -llama_tokenize(vocab, formatted_prompt, strlen(formatted_prompt), NULL, 0, true, false);
+  if (n_prompt_tokens <= 0 || n_prompt_tokens > (int)ctx->n_ctx - 10) {
+    LLAMA_ERROR("Invalid token count: %d (context size: %u)", n_prompt_tokens, ctx->n_ctx);
+    return ETHERVOX_ERROR_FAILED;
+  }
+  
+  llama_token* prompt_tokens = (llama_token*)malloc(n_prompt_tokens * sizeof(llama_token));
+  if (!prompt_tokens) {
+    LLAMA_ERROR("Failed to allocate memory for prompt tokens");
+    return ETHERVOX_ERROR_FAILED;
+  }
+  
+  llama_tokenize(vocab, formatted_prompt, strlen(formatted_prompt), prompt_tokens, n_prompt_tokens, true, false);
+  LLAMA_LOG("Prompt tokenized: %d tokens", n_prompt_tokens);
+
+  // Evaluate prompt in larger batches for faster parallel processing
+  // Use bigger batch size for prompt evaluation since it's embarrassingly parallel
+  clock_t prompt_eval_start = clock();
+  int batch_size = LLAMA_PROMPT_BATCH_SIZE;
+  LLAMA_LOG("Starting prompt evaluation with batch_size=%d, n_threads=%u", batch_size, ctx->n_threads);
+  
+  for (int i = 0; i < n_prompt_tokens; i += batch_size) {
+    int chunk_size = (i + batch_size > n_prompt_tokens) ? (n_prompt_tokens - i) : batch_size;
+    clock_t chunk_start = clock();
+    if (llama_decode(ctx->ctx, llama_batch_get_one(&prompt_tokens[i], chunk_size)) != 0) {
+      LLAMA_ERROR("Failed to evaluate prompt at position %d", i);
+      free(prompt_tokens);
+      return -1;
+    }
+    uint32_t chunk_time = (uint32_t)(((double)(clock() - chunk_start) / CLOCKS_PER_SEC) * 1000);
+    LLAMA_LOG("Batch %d/%d (%d tokens) processed in %u ms", 
+              (i/batch_size)+1, (n_prompt_tokens+batch_size-1)/batch_size, chunk_size, chunk_time);
+  }
+  free(prompt_tokens);
+  
+  uint32_t prompt_eval_time = (uint32_t)(((double)(clock() - prompt_eval_start) / CLOCKS_PER_SEC) * 1000);
+  LLAMA_LOG("Prompt evaluated successfully in %u ms (%.1f tokens/sec)", 
+            prompt_eval_time, (float)n_prompt_tokens / (prompt_eval_time / 1000.0f));
+
+  // Create sampler chain - simplified for speed
+  struct llama_sampler* sampler = llama_sampler_chain_init(llama_sampler_chain_default_params());
+  llama_sampler_chain_add(sampler, llama_sampler_init_temp(ctx->temperature));
+  llama_sampler_chain_add(sampler, llama_sampler_init_dist(0));
+  LLAMA_LOG("Sampler chain created (temp=%.2f, top_p=%.2f), starting streaming token generation (max %u tokens)", 
+            (double)ctx->temperature, (double)ctx->top_p, (unsigned int)ctx->n_predict);
+
+  // Generate tokens and stream them
+  int n_generated = 0;
+  bool finished = false;
+  
+  // Buffer to accumulate recent tokens for end marker detection
+  char recent_text[128] = {0};
+  int recent_text_len = 0;
+
+  for (int i = 0; i < (int)ctx->n_predict && !finished; i++) {
+    if (i % 10 == 0 && i > 0) {
+      LLAMA_LOG("Generated %d tokens so far...", i);
+    }
+    
+    // Sample next token
+    llama_token new_token = llama_sampler_sample(sampler, ctx->ctx, -1);
+
+    // Check for end of generation first (before decoding)
+    if (llama_vocab_is_eog(vocab, new_token)) {
+      finished = true;
+      LLAMA_LOG("EOG token detected at position %d (token_id=%d)", n_generated, new_token);
+      break;
+    }
+
+    // Log token details for debugging
+    if (n_generated < 5) {
+      LLAMA_LOG("Sampled token %d: id=%d, is_eog=%d", n_generated, new_token, llama_vocab_is_eog(vocab, new_token));
+    }
+
+    // Decode token to text
+    char piece[256];
+    int n_piece = llama_token_to_piece(vocab, new_token, piece, sizeof(piece), 0, false);
+
+    if (n_piece > 0) {
+      piece[n_piece] = '\0';
+      
+      // Log first few tokens to debug
+      if (n_generated < 5) {
+        LLAMA_LOG("Token %d: id=%d, text='%s' (len=%d)", n_generated, new_token, piece, n_piece);
+      }
+      
+      // Accumulate recent text for end marker detection (keep last 50 chars)
+      if (recent_text_len + n_piece >= (int)sizeof(recent_text) - 1) {
+        // Shift buffer left to make room
+        int shift = (recent_text_len + n_piece) - (int)sizeof(recent_text) + 1;
+        memmove(recent_text, recent_text + shift, recent_text_len - shift);
+        recent_text_len -= shift;
+      }
+      memcpy(recent_text + recent_text_len, piece, n_piece);
+      recent_text_len += n_piece;
+      recent_text[recent_text_len] = '\0';
+      
+      // Check for end markers based on model type in accumulated text
+      bool found_end_marker = false;
+      if (is_qwen) {
+        // Qwen ChatML markers
+        if (strstr(recent_text, "<|im_end|>") != NULL || strstr(recent_text, "<|endoftext|>") != NULL) {
+          found_end_marker = true;
+        }
+      } else if (is_tinyllama) {
+        // TinyLlama Zephyr markers
+        if (strstr(recent_text, "</s>") != NULL || strstr(recent_text, "<|assistant|>") != NULL) {
+          found_end_marker = true;
+        }
+      }
+      // DeepSeek and generic models rely on EOG token detection only
+      
+      if (found_end_marker) {
+        finished = true;
+        LLAMA_LOG("End marker detected for %s model, stopping generation", model_type);
+        // Don't send this token or any accumulated marker to output
+        break;
+      }
+      
+      // Send token to callback (only if no end marker detected)
+      callback(piece, user_data);
+    }
+
+    // Evaluate next token
+    if (llama_decode(ctx->ctx, llama_batch_get_one(&new_token, 1)) != 0) {
+      ETHERVOX_LOG_WARN("Failed to evaluate token at position %d", i);
+      break;
+    }
+
+    n_generated++;
+  }
+
+  clock_t end_time = clock();
+  uint32_t processing_time = (uint32_t)(((double)(end_time - start_time) / CLOCKS_PER_SEC) * 1000);
+
+  llama_sampler_free(sampler);
+  
+  LLAMA_LOG("Streaming generation complete: %d tokens in %u ms", n_generated, processing_time);
+
+  return ETHERVOX_SUCCESS;
+#endif
+}
+
 static int llama_backend_get_capabilities(ethervox_llm_backend_t* backend,
                                         ethervox_llm_capabilities_t* capabilities) {
   if (!backend || !capabilities) {
@@ -431,7 +777,7 @@ static int llama_backend_get_capabilities(ethervox_llm_backend_t* backend,
   
   llama_backend_context_t* ctx = (llama_backend_context_t*)backend->handle;
   
-  capabilities->supports_streaming = false;  // TODO: Implement streaming
+  capabilities->supports_streaming = true;  // Streaming now supported!
   capabilities->supports_gpu = true;
   capabilities->supports_quantization = true;
   capabilities->supports_context_caching = true;
