@@ -668,6 +668,77 @@ static const char* answer_simple_question(const char* normalized_text, const cha
     return NULL;
   }
   
+  // Math calculations - addition, subtraction, multiplication, division
+  // Pattern: "what is X plus/minus/times/divided by Y"
+  static char math_response[256];
+  const char* operators[] = {"plus", "minus", "times", "multiplied by", "divided by", "+", "-", "*", "x", "/"};
+  
+  for (int i = 0; i < 10; i++) {
+    const char* op_pos = strstr(normalized_text, operators[i]);
+    if (op_pos != NULL) {
+      // Try to extract numbers before and after operator
+      double num1 = 0, num2 = 0;
+      const char* start = normalized_text;
+      
+      // Find "what is" or similar prefix
+      const char* what_is = strstr(start, "what is");
+      const char* what_s = strstr(start, "what's");
+      const char* calculate = strstr(start, "calculate");
+      
+      if (what_is) start = what_is + 7;
+      else if (what_s) start = what_s + 6;
+      else if (calculate) start = calculate + 9;
+      
+      // Parse first number
+      while (*start && !isdigit(*start) && *start != '-') start++;
+      if (sscanf(start, "%lf", &num1) == 1) {
+        // Parse second number (after operator)
+        const char* after_op = op_pos + strlen(operators[i]);
+        while (*after_op && !isdigit(*after_op) && *after_op != '-') after_op++;
+        if (sscanf(after_op, "%lf", &num2) == 1) {
+          double result = 0;
+          bool valid = true;
+          
+          // Perform calculation
+          if (strcmp(operators[i], "plus") == 0 || strcmp(operators[i], "+") == 0) {
+            result = num1 + num2;
+          } else if (strcmp(operators[i], "minus") == 0 || strcmp(operators[i], "-") == 0) {
+            result = num1 - num2;
+          } else if (strcmp(operators[i], "times") == 0 || strcmp(operators[i], "multiplied by") == 0 || 
+                     strcmp(operators[i], "*") == 0 || strcmp(operators[i], "x") == 0) {
+            result = num1 * num2;
+          } else if (strcmp(operators[i], "divided by") == 0 || strcmp(operators[i], "/") == 0) {
+            if (num2 != 0) {
+              result = num1 / num2;
+            } else {
+              valid = false;
+              if (strcmp(language_code, "es") == 0) {
+                return "No se puede dividir entre cero";
+              } else if (strcmp(language_code, "zh") == 0) {
+                return "不能除以零";
+              } else {
+                return "Cannot divide by zero";
+              }
+            }
+          }
+          
+          if (valid) {
+            // Format response
+            if (strcmp(language_code, "es") == 0) {
+              snprintf(math_response, sizeof(math_response), "El resultado es %.2f", result);
+            } else if (strcmp(language_code, "zh") == 0) {
+              snprintf(math_response, sizeof(math_response), "结果是%.2f", result);
+            } else {
+              snprintf(math_response, sizeof(math_response), "%.2f", result);
+            }
+            return math_response;
+          }
+        }
+      }
+      break; // Found an operator, don't check others
+    }
+  }
+  
   // Time-related questions
   if (strstr(normalized_text, "what time is it") != NULL || 
       strstr(normalized_text, "what's the time") != NULL ||
