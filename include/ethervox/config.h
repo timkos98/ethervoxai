@@ -138,6 +138,28 @@ extern "C" {
 #endif
 #endif
 
+// Android-specific LLM configuration (high performance mobile)
+#ifdef ETHERVOX_PLATFORM_ANDROID
+#ifndef ETHERVOX_LLM_MAX_TOKENS_ANDROID
+#define ETHERVOX_LLM_MAX_TOKENS_ANDROID 4095U  // Longer responses for voice
+#endif
+#ifndef ETHERVOX_LLM_CONTEXT_LENGTH_ANDROID
+#define ETHERVOX_LLM_CONTEXT_LENGTH_ANDROID 2048U  // Balance context vs memory
+#endif
+#ifndef ETHERVOX_LLM_GPU_LAYERS_ANDROID
+#define ETHERVOX_LLM_GPU_LAYERS_ANDROID 99U  // Offload everything to GPU
+#endif
+#ifndef ETHERVOX_LLM_BATCH_SIZE_ANDROID
+#define ETHERVOX_LLM_BATCH_SIZE_ANDROID 2048U  // Large batch for throughput
+#endif
+#ifndef ETHERVOX_LLM_PROMPT_BATCH_SIZE_ANDROID
+#define ETHERVOX_LLM_PROMPT_BATCH_SIZE_ANDROID 2048U  // Parallel prompt processing
+#endif
+#ifndef ETHERVOX_LLM_MAX_RESPONSE_LENGTH_ANDROID
+#define ETHERVOX_LLM_MAX_RESPONSE_LENGTH_ANDROID 4096U  // Maximum response buffer
+#endif
+#endif
+
 // Debug configuration
 #ifdef DEBUG_ENABLED
 #define ETHERVOX_DEBUG 1
@@ -147,11 +169,19 @@ extern "C" {
 #define ETHERVOX_LOG_LEVEL 2  // Error only
 #endif
 
-// Version information
+// Version information (single source of truth)
 #define ETHERVOX_VERSION_MAJOR 0
 #define ETHERVOX_VERSION_MINOR 1
 #define ETHERVOX_VERSION_PATCH 0
-#define ETHERVOX_VERSION_STRING "0.1.0"
+#define ETHERVOX_BUILD_TYPE "Engineering"
+
+// Build version string from components
+#define ETHERVOX_STRINGIFY(x) #x
+#define ETHERVOX_TOSTRING(x) ETHERVOX_STRINGIFY(x)
+#define ETHERVOX_VERSION_STRING \
+  ETHERVOX_TOSTRING(ETHERVOX_VERSION_MAJOR) "." \
+  ETHERVOX_TOSTRING(ETHERVOX_VERSION_MINOR) "." \
+  ETHERVOX_TOSTRING(ETHERVOX_VERSION_PATCH)
 
 #ifdef __cplusplus
 }

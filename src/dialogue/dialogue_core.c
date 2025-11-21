@@ -20,10 +20,14 @@
 
 #ifdef ETHERVOX_PLATFORM_ANDROID
 #include <android/log.h>
+#include <sys/system_properties.h>  // For Android properties
+#else
+#include <sys/utsname.h>  // For system info on non-Android platforms
 #endif
 
 #include "ethervox/dialogue.h"
 #include "ethervox/llm.h"
+#include "ethervox/config.h"  // For version information
 
 #ifndef ETHERVOX_UNUSED
 #if defined(__GNUC__)
@@ -101,6 +105,9 @@ const char* ethervox_dialogue_detect_system_language(void) {
 #include <inttypes.h>
 #include <time.h>
 
+// Forward declarations
+static char* add_smart_punctuation(const char* text, const char* language_code);
+
 // Supported languages for MVP
 static const char* SUPPORTED_LANGUAGES[] = {"en",  // English
                                             "es",  // Spanish
@@ -127,10 +134,26 @@ static const intent_pattern_t INTENT_PATTERNS[] = {
     // Questions can appear anywhere
     {"what is", ETHERVOX_INTENT_QUESTION, "en", false},
     {"what's", ETHERVOX_INTENT_QUESTION, "en", false},
+    {"what time", ETHERVOX_INTENT_QUESTION, "en", false},
+    {"what day", ETHERVOX_INTENT_QUESTION, "en", false},
+    {"what date", ETHERVOX_INTENT_QUESTION, "en", false},
+    {"what are", ETHERVOX_INTENT_QUESTION, "en", false},
     {"how to", ETHERVOX_INTENT_QUESTION, "en", false},
     {"how do", ETHERVOX_INTENT_QUESTION, "en", false},
+    {"how can", ETHERVOX_INTENT_QUESTION, "en", false},
+    {"how does", ETHERVOX_INTENT_QUESTION, "en", false},
     {"where is", ETHERVOX_INTENT_QUESTION, "en", false},
+    {"where are", ETHERVOX_INTENT_QUESTION, "en", false},
     {"when is", ETHERVOX_INTENT_QUESTION, "en", false},
+    {"when are", ETHERVOX_INTENT_QUESTION, "en", false},
+    {"who is", ETHERVOX_INTENT_QUESTION, "en", false},
+    {"who are", ETHERVOX_INTENT_QUESTION, "en", false},
+    {"why is", ETHERVOX_INTENT_QUESTION, "en", false},
+    {"why are", ETHERVOX_INTENT_QUESTION, "en", false},
+    {"can you", ETHERVOX_INTENT_QUESTION, "en", false},
+    {"do you", ETHERVOX_INTENT_QUESTION, "en", false},
+    {"are you", ETHERVOX_INTENT_QUESTION, "en", false},
+    {"is there", ETHERVOX_INTENT_QUESTION, "en", false},
     
     // Control commands - should be at start
     {"turn on", ETHERVOX_INTENT_CONTROL, "en", true},
@@ -461,14 +484,18 @@ int ethervox_dialogue_parse_intent(ethervox_dialogue_engine_t* engine,
 
   memset(intent, 0, sizeof(ethervox_intent_t));
 
-  // Copy input text
-  intent->raw_text = strdup(text);
+  // Add smart punctuation if missing (helps LLM understand context)
+  char* punctuated_text = add_smart_punctuation(text, lang_normalized);
+  const char* final_text = punctuated_text ? punctuated_text : text;
+
+  // Copy input text (use punctuated version)
+  intent->raw_text = strdup(final_text);
   
   // Normalize text to lowercase for pattern matching
-  size_t text_len = strlen(text);
+  size_t text_len = strlen(final_text);
   char* normalized = (char*)malloc(text_len + 1);
   for (size_t i = 0; i < text_len; i++) {
-    normalized[i] = (char)tolower((unsigned char)text[i]);
+    normalized[i] = (char)tolower((unsigned char)final_text[i]);
   }
   normalized[text_len] = '\0';
   intent->normalized_text = normalized;
@@ -512,9 +539,453 @@ int ethervox_dialogue_parse_intent(ethervox_dialogue_engine_t* engine,
 
   printf("Intent parsed: %s (confidence: %.2f) for text: '%s' [lang: %s]\n", 
          ethervox_intent_type_to_string(intent->type),
-         intent->confidence, text, lang_normalized);
+         intent->confidence, final_text, lang_normalized);
+
+  // Free punctuated text if it was allocated
+  if (punctuated_text) {
+    free(punctuated_text);
+  }
 
   return 0;
+}
+
+// Infer punctuation for unpunctuated STT output
+static char* add_smart_punctuation(const char* text, const char* language_code) {
+  if (!text || !text[0]) {
+    return NULL;
+  }
+  
+  size_t len = strlen(text);
+  // Allocate buffer (original + potential punctuation + null terminator)
+  char* punctuated = (char*)malloc(len + 10);
+  if (!punctuated) {
+    return NULL;
+  }
+  
+  // Copy original text
+  strcpy(punctuated, text);
+  
+  // Check if already has ending punctuation (ASCII)
+  char last_char = text[len - 1];
+  if (last_char == '.' || last_char == '?' || last_char == '!') {
+    free(punctuated);
+    return NULL;  // Already punctuated, return NULL to use original
+  }
+  
+  // Check for multi-byte Chinese punctuation at end
+  if (len >= 3) {
+    const char* end = text + len - 3;
+    // Chinese period 。 (E3 80 82), question mark ？ (EF BC 9F), exclamation ！ (EF BC 81)
+    if (memcmp(end, "\xE3\x80\x82", 3) == 0 || 
+        memcmp(end, "\xEF\xBC\x9F", 3) == 0 || 
+        memcmp(end, "\xEF\xBC\x81", 3) == 0) {
+      free(punctuated);
+      return NULL;  // Already has Chinese punctuation
+    }
+  }
+  
+  // Convert to lowercase for pattern matching
+  char* lower = (char*)malloc(len + 1);
+  if (!lower) {
+    free(punctuated);
+    return NULL;
+  }
+  for (size_t i = 0; i < len; i++) {
+    lower[i] = (char)tolower((unsigned char)text[i]);
+  }
+  lower[len] = '\0';
+  
+  // Detect questions by interrogative words at the start
+  bool is_question = false;
+  
+  // English question words
+  if (strncmp(lower, "what ", 5) == 0 || strncmp(lower, "what's ", 7) == 0 ||
+      strncmp(lower, "where ", 6) == 0 || strncmp(lower, "where's ", 8) == 0 ||
+      strncmp(lower, "when ", 5) == 0 || strncmp(lower, "when's ", 7) == 0 ||
+      strncmp(lower, "who ", 4) == 0 || strncmp(lower, "who's ", 6) == 0 ||
+      strncmp(lower, "why ", 4) == 0 || strncmp(lower, "how ", 4) == 0 ||
+      strncmp(lower, "which ", 6) == 0 || strncmp(lower, "whose ", 6) == 0 ||
+      strncmp(lower, "can you ", 8) == 0 || strncmp(lower, "could you ", 10) == 0 ||
+      strncmp(lower, "would you ", 10) == 0 || strncmp(lower, "will you ", 9) == 0 ||
+      strncmp(lower, "do you ", 7) == 0 || strncmp(lower, "does ", 6) == 0 ||
+      strncmp(lower, "did you ", 8) == 0 || strncmp(lower, "are you ", 8) == 0 ||
+      strncmp(lower, "is ", 3) == 0 || strncmp(lower, "was ", 4) == 0 ||
+      strncmp(lower, "were ", 5) == 0 || strncmp(lower, "have you ", 9) == 0 ||
+      strncmp(lower, "has ", 4) == 0 || strncmp(lower, "should ", 7) == 0) {
+    is_question = true;
+  }
+  
+  // Spanish question words
+  if (strcmp(language_code, "es") == 0) {
+    if (strncmp(lower, "qué ", 5) == 0 || strncmp(lower, "que ", 4) == 0 ||
+        strncmp(lower, "dónde ", 7) == 0 || strncmp(lower, "donde ", 6) == 0 ||
+        strncmp(lower, "cuándo ", 8) == 0 || strncmp(lower, "cuando ", 7) == 0 ||
+        strncmp(lower, "quién ", 7) == 0 || strncmp(lower, "quien ", 6) == 0 ||
+        strncmp(lower, "por qué ", 9) == 0 || strncmp(lower, "cómo ", 6) == 0 ||
+        strncmp(lower, "como ", 5) == 0 || strncmp(lower, "cuál ", 6) == 0 ||
+        strncmp(lower, "puedes ", 7) == 0 || strncmp(lower, "podrías ", 9) == 0) {
+      is_question = true;
+    }
+  }
+  
+  // Chinese question particles (usually at end, but STT might miss them)
+  if (strcmp(language_code, "zh") == 0) {
+    if (strstr(lower, "什么") != NULL || strstr(lower, "哪里") != NULL ||
+        strstr(lower, "什么时候") != NULL || strstr(lower, "谁") != NULL ||
+        strstr(lower, "为什么") != NULL || strstr(lower, "怎么") != NULL ||
+        strstr(lower, "如何") != NULL || strstr(lower, "哪个") != NULL ||
+        strstr(lower, "能不能") != NULL || strstr(lower, "可以") != NULL ||
+        strstr(lower, "是不是") != NULL || strstr(lower, "吗") != NULL) {
+      is_question = true;
+    }
+  }
+  
+  free(lower);
+  
+  // Add appropriate punctuation
+  if (is_question) {
+    if (strcmp(language_code, "zh") == 0) {
+      strcat(punctuated, "\xEF\xBC\x9F");  // Chinese full-width question mark ？
+    } else {
+      strcat(punctuated, "?");
+    }
+  } else {
+    // Default to period for statements
+    if (strcmp(language_code, "zh") == 0) {
+      strcat(punctuated, "\xE3\x80\x82");  // Chinese period 。
+    } else {
+      strcat(punctuated, ".");
+    }
+  }
+  
+  return punctuated;
+}
+
+// Simple question answering for common queries
+static const char* answer_simple_question(const char* normalized_text, const char* language_code) {
+  if (!normalized_text || !language_code) {
+    return NULL;
+  }
+  
+  // Time-related questions
+  if (strstr(normalized_text, "what time is it") != NULL || 
+      strstr(normalized_text, "what's the time") != NULL ||
+      strstr(normalized_text, "tell me the time") != NULL) {
+    time_t now = time(NULL);
+    struct tm* local = localtime(&now);
+    static char time_response[128];
+    
+    if (strcmp(language_code, "es") == 0) {
+      snprintf(time_response, sizeof(time_response), 
+               "Son las %d:%02d", local->tm_hour, local->tm_min);
+    } else if (strcmp(language_code, "zh") == 0) {
+      snprintf(time_response, sizeof(time_response), 
+               "现在是%d点%02d分", local->tm_hour, local->tm_min);
+    } else {
+      int hour = local->tm_hour;
+      const char* period = "AM";
+      if (hour >= 12) {
+        period = "PM";
+        if (hour > 12) hour -= 12;
+      }
+      if (hour == 0) hour = 12;
+      snprintf(time_response, sizeof(time_response), 
+               "It's %d:%02d %s", hour, local->tm_min, period);
+    }
+    return time_response;
+  }
+  
+  // Date-related questions
+  if (strstr(normalized_text, "what date") != NULL || 
+      strstr(normalized_text, "what's the date") != NULL ||
+      strstr(normalized_text, "what day is it") != NULL ||
+      strstr(normalized_text, "what day") != NULL ||
+      strstr(normalized_text, "what's today") != NULL ||
+      strstr(normalized_text, "today's date") != NULL) {
+    time_t now = time(NULL);
+    struct tm* local = localtime(&now);
+    static char date_response[128];
+    
+    const char* months[] = {"January", "February", "March", "April", "May", "June",
+                           "July", "August", "September", "October", "November", "December"};
+    const char* days[] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+    
+    if (strcmp(language_code, "es") == 0) {
+      const char* months_es[] = {"enero", "febrero", "marzo", "abril", "mayo", "junio",
+                                "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"};
+      snprintf(date_response, sizeof(date_response), 
+               "Hoy es %d de %s de %d", local->tm_mday, months_es[local->tm_mon], 1900 + local->tm_year);
+    } else if (strcmp(language_code, "zh") == 0) {
+      snprintf(date_response, sizeof(date_response), 
+               "今天是%d年%d月%d日", 1900 + local->tm_year, local->tm_mon + 1, local->tm_mday);
+    } else {
+      snprintf(date_response, sizeof(date_response), 
+               "Today is %s, %s %d, %d", 
+               days[local->tm_wday], months[local->tm_mon], local->tm_mday, 1900 + local->tm_year);
+    }
+    return date_response;
+  }
+  
+  // Name/identity questions
+  if (strstr(normalized_text, "what's your name") != NULL || 
+      strstr(normalized_text, "what is your name") != NULL ||
+      strstr(normalized_text, "who are you") != NULL) {
+    if (strcmp(language_code, "es") == 0) {
+      return "Soy EthervoxAI, tu asistente de voz personal";
+    } else if (strcmp(language_code, "zh") == 0) {
+      return "我是EthervoxAI，您的个人语音助手";
+    } else {
+      return "I'm EthervoxAI, your personal voice assistant";
+    }
+  }
+  
+  // Capability questions
+  if (strstr(normalized_text, "what can you do") != NULL ||
+      strstr(normalized_text, "what can you help") != NULL ||
+      strstr(normalized_text, "how can you help") != NULL) {
+    if (strcmp(language_code, "es") == 0) {
+      return "Puedo responder preguntas, ayudarte con información y controlar dispositivos. ¿En qué puedo ayudarte?";
+    } else if (strcmp(language_code, "zh") == 0) {
+      return "我可以回答问题、提供信息和控制设备。我能为您做什么？";
+    } else {
+      return "I can answer questions, provide information, and help with tasks. What would you like to know?";
+    }
+  }
+  
+  // How are you questions
+  if (strstr(normalized_text, "how are you") != NULL ||
+      strstr(normalized_text, "how are you doing") != NULL) {
+    if (strcmp(language_code, "es") == 0) {
+      return "Estoy funcionando perfectamente, gracias por preguntar. ¿Y tú?";
+    } else if (strcmp(language_code, "zh") == 0) {
+      return "我很好，谢谢询问。您呢？";
+    } else {
+      return "I'm working perfectly, thanks for asking. How can I help you?";
+    }
+  }
+  
+  // Weather questions (we can't actually answer these without internet)
+  if (strstr(normalized_text, "weather") != NULL ||
+      strstr(normalized_text, "temperature") != NULL) {
+    if (strcmp(language_code, "es") == 0) {
+      return "Lo siento, no tengo acceso a Internet para consultar el clima actual";
+    } else if (strcmp(language_code, "zh") == 0) {
+      return "抱歉，我没有互联网访问权限来查看天气";
+    } else {
+      return "I'm sorry, I don't have internet access to check the weather";
+    }
+  }
+  
+  // Thank you (not really a question but common response)
+  if (strstr(normalized_text, "thank") != NULL ||
+      strstr(normalized_text, "thanks") != NULL) {
+    if (strcmp(language_code, "es") == 0) {
+      return "De nada, estoy aquí para ayudar";
+    } else if (strcmp(language_code, "zh") == 0) {
+      return "不客气，很高兴能帮到您";
+    } else {
+      return "You're welcome! Happy to help";
+    }
+  }
+  
+  // Online/Internet status questions
+  if (strstr(normalized_text, "are you online") != NULL ||
+      strstr(normalized_text, "do you have internet") != NULL ||
+      strstr(normalized_text, "are you connected") != NULL ||
+      strstr(normalized_text, "do you need internet") != NULL) {
+    if (strcmp(language_code, "es") == 0) {
+      return "No, funciono completamente sin conexión. Toda tu información permanece privada en tu dispositivo";
+    } else if (strcmp(language_code, "zh") == 0) {
+      return "不，我完全离线运行。您的所有信息都保留在您的设备上";
+    } else {
+      return "No, I work completely offline. All your information stays private on your device";
+    }
+  }
+  
+  // Version/System info questions
+  if (strstr(normalized_text, "what version") != NULL ||
+      strstr(normalized_text, "what's your version") != NULL ||
+      strstr(normalized_text, "version are you") != NULL) {
+    static char version_response[256];
+    
+#ifdef ETHERVOX_PLATFORM_ANDROID
+    // Get Android version info
+    char android_version[PROP_VALUE_MAX] = {0};
+    char device_model[PROP_VALUE_MAX] = {0};
+    char sdk_version[PROP_VALUE_MAX] = {0};
+    
+    __system_property_get("ro.build.version.release", android_version);
+    __system_property_get("ro.product.model", device_model);
+    __system_property_get("ro.build.version.sdk", sdk_version);
+    
+    if (strcmp(language_code, "es") == 0) {
+      snprintf(version_response, sizeof(version_response),
+               "EthervoxAI versión %s, compilación %s. Ejecutándose en Android %s, SDK %s, dispositivo %s",
+               ETHERVOX_VERSION_STRING, ETHERVOX_BUILD_TYPE, android_version, sdk_version, device_model);
+    } else if (strcmp(language_code, "zh") == 0) {
+      snprintf(version_response, sizeof(version_response),
+               "EthervoxAI版本%s，%s版本。运行在Android %s，SDK %s，设备%s",
+               ETHERVOX_VERSION_STRING, ETHERVOX_BUILD_TYPE, android_version, sdk_version, device_model);
+    } else {
+      snprintf(version_response, sizeof(version_response),
+               "EthervoxAI version %s, %s build. Running on Android %s, SDK %s, device %s",
+               ETHERVOX_VERSION_STRING, ETHERVOX_BUILD_TYPE, android_version, sdk_version, device_model);
+    }
+#else
+    // Non-Android platform
+    struct utsname sys_info;
+    if (uname(&sys_info) == 0) {
+      if (strcmp(language_code, "es") == 0) {
+        snprintf(version_response, sizeof(version_response),
+                 "EthervoxAI versión %s, compilación %s. Ejecutándose en %s %s",
+                 ETHERVOX_VERSION_STRING, ETHERVOX_BUILD_TYPE, sys_info.sysname, sys_info.release);
+      } else if (strcmp(language_code, "zh") == 0) {
+        snprintf(version_response, sizeof(version_response),
+                 "EthervoxAI版本%s，%s版本。运行在%s %s",
+                 ETHERVOX_VERSION_STRING, ETHERVOX_BUILD_TYPE, sys_info.sysname, sys_info.release);
+      } else {
+        snprintf(version_response, sizeof(version_response),
+                 "EthervoxAI version %s, %s build. Running on %s %s",
+                 ETHERVOX_VERSION_STRING, ETHERVOX_BUILD_TYPE, sys_info.sysname, sys_info.release);
+      }
+    } else {
+      // Fallback if uname fails
+      if (strcmp(language_code, "es") == 0) {
+        snprintf(version_response, sizeof(version_response),
+                 "EthervoxAI versión %s, compilación %s",
+                 ETHERVOX_VERSION_STRING, ETHERVOX_BUILD_TYPE);
+      } else if (strcmp(language_code, "zh") == 0) {
+        snprintf(version_response, sizeof(version_response),
+                 "EthervoxAI版本%s，%s版本",
+                 ETHERVOX_VERSION_STRING, ETHERVOX_BUILD_TYPE);
+      } else {
+        snprintf(version_response, sizeof(version_response),
+                 "EthervoxAI version %s, %s build",
+                 ETHERVOX_VERSION_STRING, ETHERVOX_BUILD_TYPE);
+      }
+    }
+#endif
+    return version_response;
+  }
+  
+  // Platform/Device questions
+  if (strstr(normalized_text, "what device") != NULL ||
+      strstr(normalized_text, "what platform") != NULL ||
+      strstr(normalized_text, "what system") != NULL) {
+    static char device_response[256];
+    
+#ifdef ETHERVOX_PLATFORM_ANDROID
+    char device_model[PROP_VALUE_MAX] = {0};
+    char manufacturer[PROP_VALUE_MAX] = {0};
+    char android_version[PROP_VALUE_MAX] = {0};
+    
+    __system_property_get("ro.product.model", device_model);
+    __system_property_get("ro.product.manufacturer", manufacturer);
+    __system_property_get("ro.build.version.release", android_version);
+    
+    if (strcmp(language_code, "es") == 0) {
+      snprintf(device_response, sizeof(device_response),
+               "Estoy ejecutándome en un %s %s con Android %s, completamente en tu dispositivo",
+               manufacturer, device_model, android_version);
+    } else if (strcmp(language_code, "zh") == 0) {
+      snprintf(device_response, sizeof(device_response),
+               "我在%s %s上运行，Android %s，完全在您的设备上",
+               manufacturer, device_model, android_version);
+    } else {
+      snprintf(device_response, sizeof(device_response),
+               "I'm running on a %s %s with Android %s, entirely on your device",
+               manufacturer, device_model, android_version);
+    }
+#else
+    struct utsname sys_info;
+    if (uname(&sys_info) == 0) {
+      if (strcmp(language_code, "es") == 0) {
+        snprintf(device_response, sizeof(device_response),
+                 "Estoy ejecutándome en %s %s, %s",
+                 sys_info.sysname, sys_info.release, sys_info.machine);
+      } else if (strcmp(language_code, "zh") == 0) {
+        snprintf(device_response, sizeof(device_response),
+                 "我在%s %s上运行，%s",
+                 sys_info.sysname, sys_info.release, sys_info.machine);
+      } else {
+        snprintf(device_response, sizeof(device_response),
+                 "I'm running on %s %s, %s architecture",
+                 sys_info.sysname, sys_info.release, sys_info.machine);
+      }
+    } else {
+      return "I'm running locally on your system";
+    }
+#endif
+    return device_response;
+  }
+  
+  // Privacy questions
+  if (strstr(normalized_text, "is my data safe") != NULL ||
+      strstr(normalized_text, "are you private") != NULL ||
+      strstr(normalized_text, "do you track me") != NULL ||
+      strstr(normalized_text, "is this private") != NULL) {
+    if (strcmp(language_code, "es") == 0) {
+      return "Sí, todo se procesa localmente en tu dispositivo. No se envía nada a Internet";
+    } else if (strcmp(language_code, "zh") == 0) {
+      return "是的，一切都在您的设备上本地处理。没有任何内容发送到互联网";
+    } else {
+      return "Yes, everything is processed locally on your device. Nothing is sent to the internet";
+    }
+  }
+  
+  // No simple answer found
+  return NULL;
+}
+
+// Helper function to check if user is confirming/acknowledging
+static bool is_confirmation(const char* normalized_text) {
+  if (!normalized_text) {
+    return false;
+  }
+  
+  // Check for common confirmation words
+  return (strcmp(normalized_text, "yes") == 0 ||
+          strcmp(normalized_text, "yeah") == 0 ||
+          strcmp(normalized_text, "yep") == 0 ||
+          strcmp(normalized_text, "sure") == 0 ||
+          strcmp(normalized_text, "okay") == 0 ||
+          strcmp(normalized_text, "ok") == 0 ||
+          strcmp(normalized_text, "alright") == 0 ||
+          strcmp(normalized_text, "correct") == 0 ||
+          strcmp(normalized_text, "right") == 0 ||
+          strcmp(normalized_text, "exactly") == 0 ||
+          // Spanish
+          strcmp(normalized_text, "sí") == 0 ||
+          strcmp(normalized_text, "si") == 0 ||
+          strcmp(normalized_text, "vale") == 0 ||
+          strcmp(normalized_text, "bueno") == 0 ||
+          strcmp(normalized_text, "correcto") == 0 ||
+          // Chinese
+          strcmp(normalized_text, "是") == 0 ||
+          strcmp(normalized_text, "对") == 0 ||
+          strcmp(normalized_text, "好") == 0 ||
+          strcmp(normalized_text, "可以") == 0);
+}
+
+// Helper function to check if user is asking for listening confirmation
+static bool is_listening_check(const char* normalized_text) {
+  if (!normalized_text) {
+    return false;
+  }
+  
+  return (strstr(normalized_text, "can you hear") != NULL ||
+          strstr(normalized_text, "are you listening") != NULL ||
+          strstr(normalized_text, "do you hear me") != NULL ||
+          strstr(normalized_text, "are you there") != NULL ||
+          strstr(normalized_text, "hello") == normalized_text ||  // "hello" at start
+          // Spanish
+          strstr(normalized_text, "me escuchas") != NULL ||
+          strstr(normalized_text, "estás ahí") != NULL ||
+          strstr(normalized_text, "me oyes") != NULL ||
+          // Chinese
+          strstr(normalized_text, "能听到") != NULL ||
+          strstr(normalized_text, "在吗") != NULL ||
+          strstr(normalized_text, "听得到") != NULL);
 }
 
 // Process with LLM
@@ -527,12 +998,36 @@ int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
 
   memset(response, 0, sizeof(ethervox_llm_response_t));
 
-  // For demo purposes, generate simple responses based on intent type
+  // Declare variables
   const char* response_text = NULL;
   bool conversation_ended = false;
 
-  switch (intent->type) {
-    case ETHERVOX_INTENT_GREETING:
+  // Check for confirmation/acknowledgment first (applies to all intent types)
+  if (is_confirmation(intent->normalized_text)) {
+    conversation_ended = false;  // Confirmations should continue conversation
+    if (strcmp(intent->language_code, "es") == 0) {
+      response_text = "Entendido. ¿En qué más puedo ayudarte?";
+    } else if (strcmp(intent->language_code, "zh") == 0) {
+      response_text = "好的。还有什么我可以帮您的吗？";
+    } else {
+      response_text = "Got it. What else can I help you with?";
+    }
+  }
+  // Check for listening confirmation
+  else if (is_listening_check(intent->normalized_text)) {
+    conversation_ended = false;  // Listening checks should continue conversation
+    if (strcmp(intent->language_code, "es") == 0) {
+      response_text = "Sí, te escucho. ¿Qué necesitas?";
+    } else if (strcmp(intent->language_code, "zh") == 0) {
+      response_text = "是的，我在听。您需要什么？";
+    } else {
+      response_text = "Yes, I'm listening. What do you need?";
+    }
+  }
+  // Otherwise process by intent type
+  else {
+    switch (intent->type) {
+      case ETHERVOX_INTENT_GREETING:
       if (strcmp(intent->language_code, "es") == 0) {
         response_text = "¡Hola! ¿En qué puedo ayudarte?";
       } else if (strcmp(intent->language_code, "zh") == 0) {
@@ -543,12 +1038,55 @@ int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
       break;
 
     case ETHERVOX_INTENT_QUESTION:
+      // Try to answer simple questions directly
+      response_text = answer_simple_question(intent->normalized_text, intent->language_code);
+      
+      if (response_text) {
+        // We found a simple answer, use it
+        conversation_ended = true;  // Questions should end conversation (no follow-up)
+#ifdef ETHERVOX_PLATFORM_ANDROID
+        __android_log_print(ANDROID_LOG_INFO, "EthervoxDialogue", 
+                           "Answered simple question directly: %s", response_text);
+#else
+        printf("Answered simple question directly: %s\n", response_text);
+#endif
+        break;  // Use the direct answer
+      }
+      
+      // No simple answer found, try LLM if available
+#if defined(ETHERVOX_WITH_LLAMA) && defined(LLAMA_CPP_AVAILABLE) && LLAMA_CPP_AVAILABLE
+      if (engine->llm_backend && engine->use_llm_for_unknown) {
+        ethervox_llm_backend_t* backend = (ethervox_llm_backend_t*)engine->llm_backend;
+        
+        if (backend->is_loaded) {
+#ifdef ETHERVOX_PLATFORM_ANDROID
+          __android_log_print(ANDROID_LOG_INFO, "EthervoxDialogue", 
+                             "Question not in simple set, using LLM: %s", intent->raw_text);
+#else
+          printf("Question not in simple set, using LLM: %s\n", intent->raw_text);
+#endif
+          
+          // Generate response with LLM
+          int llm_result = ethervox_llm_backend_generate(backend, intent->raw_text, 
+                                                        intent->language_code, response);
+          if (llm_result == 0 && response->text && response->text[0] != '\0') {
+            response->confidence = 0.7f;
+            response->processing_time_ms = kEthervoxResponseProcessingTimeMs;
+            response->conversation_ended = true;  // LLM questions also end conversation
+            return 0;
+          }
+        }
+      }
+#endif
+      
+      // Fallback if LLM not available or failed
+      conversation_ended = true;  // Even failed questions should end conversation
       if (strcmp(intent->language_code, "es") == 0) {
-        response_text = "Déjame pensar en eso. ¿Puedes ser más específico?";
+        response_text = "Lo siento, no puedo responder esa pregunta en este momento";
       } else if (strcmp(intent->language_code, "zh") == 0) {
-        response_text = "让我想想。您能更具体一些吗？";
+        response_text = "抱歉，我现在无法回答这个问题";
       } else {
-        response_text = "Let me think about that. Can you be more specific?";
+        response_text = "I'm sorry, I can't answer that question right now";
       }
       break;
 
@@ -672,9 +1210,11 @@ int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
         response_text = "I'm sorry, I don't fully understand. Could you rephrase?";
       }
       break;
+    }
   }
 
   response->text = strdup(response_text);
+  response->user_prompt_punctuated = intent->raw_text ? strdup(intent->raw_text) : NULL;
   snprintf(response->language_code, sizeof(response->language_code), "%s", intent->language_code);
   response->confidence = intent->confidence;  // Use actual intent confidence
   response->processing_time_ms = kEthervoxResponseProcessingTimeMs;  // Simulated processing time
@@ -717,8 +1257,12 @@ int ethervox_dialogue_process_llm_stream(ethervox_dialogue_engine_t* engine,
 #endif
   
   // Fallback: process with regular dialogue engine and stream the result
+#ifdef ETHERVOX_PLATFORM_ANDROID
   __android_log_print(ANDROID_LOG_INFO, "EthervoxDialogue", 
                      "LLM streaming not available, using regular dialogue processing");
+#else
+  printf("LLM streaming not available, using regular dialogue processing\n");
+#endif
   
   ethervox_llm_response_t response;
   memset(&response, 0, sizeof(ethervox_llm_response_t));
@@ -865,6 +1409,11 @@ void ethervox_llm_response_free(ethervox_llm_response_t* response) {
   if (response->text) {
     free(response->text);
     response->text = NULL;
+  }
+
+  if (response->user_prompt_punctuated) {
+    free(response->user_prompt_punctuated);
+    response->user_prompt_punctuated = NULL;
   }
 
   if (response->model_name) {

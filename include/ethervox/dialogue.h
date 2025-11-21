@@ -89,6 +89,7 @@ typedef struct {
 // LLM response
 typedef struct {
   char* text;
+  char* user_prompt_punctuated;  // User's input with smart punctuation applied
   char language_code[ETHERVOX_LANG_CODE_LEN];
   float confidence;
   uint32_t processing_time_ms;
