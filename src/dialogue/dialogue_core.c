@@ -839,25 +839,33 @@ static const char* answer_simple_question(const char* normalized_text, const cha
   }
   
   // Math calculations - addition, subtraction, multiplication, division
-  // Pattern: "what is X plus/minus/times/divided by Y"
+  // Pattern: "what is X plus/minus/times/divided by Y" or German "was ist X plus/minus/mal/geteilt durch Y"
   static char math_response[256];
-  const char* operators[] = {"plus", "minus", "times", "multiplied by", "divided by", "+", "-", "*", "x", "/"};
+  const char* operators[] = {
+    "plus", "minus", "times", "multiplied by", "divided by", 
+    "+", "-", "*", "x", "/",
+    "mal", "geteilt durch"  // German operators
+  };
   
-  for (int i = 0; i < 10; i++) {
+  for (int i = 0; i < 12; i++) {
     const char* op_pos = strstr(normalized_text, operators[i]);
     if (op_pos != NULL) {
       // Try to extract numbers before and after operator
       double num1 = 0, num2 = 0;
       const char* start = normalized_text;
       
-      // Find "what is" or similar prefix
+      // Find "what is" or similar prefix (English and German)
       const char* what_is = strstr(start, "what is");
       const char* what_s = strstr(start, "what's");
       const char* calculate = strstr(start, "calculate");
+      const char* was_ist = strstr(start, "was ist");
+      const char* rechne = strstr(start, "rechne");
       
       if (what_is) start = what_is + 7;
       else if (what_s) start = what_s + 6;
       else if (calculate) start = calculate + 9;
+      else if (was_ist) start = was_ist + 7;
+      else if (rechne) start = rechne + 6;
       
       // Parse first number
       while (*start && !isdigit(*start) && *start != '-') start++;
@@ -875,9 +883,11 @@ static const char* answer_simple_question(const char* normalized_text, const cha
           } else if (strcmp(operators[i], "minus") == 0 || strcmp(operators[i], "-") == 0) {
             result = num1 - num2;
           } else if (strcmp(operators[i], "times") == 0 || strcmp(operators[i], "multiplied by") == 0 || 
-                     strcmp(operators[i], "*") == 0 || strcmp(operators[i], "x") == 0) {
+                     strcmp(operators[i], "*") == 0 || strcmp(operators[i], "x") == 0 ||
+                     strcmp(operators[i], "mal") == 0) {
             result = num1 * num2;
-          } else if (strcmp(operators[i], "divided by") == 0 || strcmp(operators[i], "/") == 0) {
+          } else if (strcmp(operators[i], "divided by") == 0 || strcmp(operators[i], "/") == 0 ||
+                     strcmp(operators[i], "geteilt durch") == 0) {
             if (num2 != 0) {
               result = num1 / num2;
             } else {
@@ -886,6 +896,8 @@ static const char* answer_simple_question(const char* normalized_text, const cha
                 return "No se puede dividir entre cero";
               } else if (strcmp(language_code, "zh") == 0) {
                 return "不能除以零";
+              } else if (strcmp(language_code, "de") == 0) {
+                return "Man kann nicht durch null teilen";
               } else {
                 return "Cannot divide by zero";
               }
@@ -893,14 +905,8 @@ static const char* answer_simple_question(const char* normalized_text, const cha
           }
           
           if (valid) {
-            // Format response
-            if (strcmp(language_code, "es") == 0) {
-              snprintf(math_response, sizeof(math_response), "%.2f", result);
-            } else if (strcmp(language_code, "zh") == 0) {
-              snprintf(math_response, sizeof(math_response), "%.2f", result);
-            } else {
-              snprintf(math_response, sizeof(math_response), "%.2f", result);
-            }
+            // Format response - just return the number, language-agnostic
+            snprintf(math_response, sizeof(math_response), "%.2f", result);
             return math_response;
           }
         }
@@ -1015,11 +1021,16 @@ static const char* answer_simple_question(const char* normalized_text, const cha
   // Name/identity questions
   if (strstr(normalized_text, "what's your name") != NULL || 
       strstr(normalized_text, "what is your name") != NULL ||
-      strstr(normalized_text, "who are you") != NULL) {
+      strstr(normalized_text, "who are you") != NULL ||
+      strstr(normalized_text, "wie heißt du") != NULL ||
+      strstr(normalized_text, "wie heissen sie") != NULL ||
+      strstr(normalized_text, "wer bist du") != NULL) {
     if (strcmp(language_code, "es") == 0) {
       return "Soy EthervoxAI, tu asistente de voz personal";
     } else if (strcmp(language_code, "zh") == 0) {
       return "我是EthervoxAI，您的个人语音助手";
+    } else if (strcmp(language_code, "de") == 0) {
+      return "Ich bin EthervoxAI, dein persönlicher Sprachassistent";
     } else {
       return "I'm EthervoxAI, your personal voice assistant";
     }
@@ -1028,11 +1039,16 @@ static const char* answer_simple_question(const char* normalized_text, const cha
   // Capability questions
   if (strstr(normalized_text, "what can you do") != NULL ||
       strstr(normalized_text, "what can you help") != NULL ||
-      strstr(normalized_text, "how can you help") != NULL) {
+      strstr(normalized_text, "how can you help") != NULL ||
+      strstr(normalized_text, "was kannst du") != NULL ||
+      strstr(normalized_text, "was können sie") != NULL ||
+      strstr(normalized_text, "wobei kannst du helfen") != NULL) {
     if (strcmp(language_code, "es") == 0) {
       return "Puedo responder preguntas, ayudarte con información y controlar dispositivos. ¿En qué puedo ayudarte?";
     } else if (strcmp(language_code, "zh") == 0) {
       return "我可以回答问题、提供信息和控制设备。我能为您做什么？";
+    } else if (strcmp(language_code, "de") == 0) {
+      return "Ich kann Fragen beantworten, Informationen bereitstellen und bei Aufgaben helfen. Womit kann ich dir helfen?";
     } else {
       return "I can answer questions, provide information, and help with tasks. What would you like to know?";
     }
@@ -1040,11 +1056,15 @@ static const char* answer_simple_question(const char* normalized_text, const cha
   
   // How are you questions
   if (strstr(normalized_text, "how are you") != NULL ||
-      strstr(normalized_text, "how are you doing") != NULL) {
+      strstr(normalized_text, "how are you doing") != NULL ||
+      strstr(normalized_text, "wie geht es dir") != NULL ||
+      strstr(normalized_text, "wie geht's") != NULL) {
     if (strcmp(language_code, "es") == 0) {
       return "Estoy funcionando perfectamente, gracias por preguntar. ¿Y tú?";
     } else if (strcmp(language_code, "zh") == 0) {
       return "我很好，谢谢询问。您呢？";
+    } else if (strcmp(language_code, "de") == 0) {
+      return "Mir geht es gut, danke der Nachfrage. Wie kann ich dir helfen?";
     } else {
       return "I'm working perfectly, thanks for asking. How can I help you?";
     }
@@ -1052,11 +1072,15 @@ static const char* answer_simple_question(const char* normalized_text, const cha
   
   // Weather questions (we can't actually answer these without internet)
   if (strstr(normalized_text, "weather") != NULL ||
-      strstr(normalized_text, "temperature") != NULL) {
+      strstr(normalized_text, "temperature") != NULL ||
+      strstr(normalized_text, "wetter") != NULL ||
+      strstr(normalized_text, "temperatur") != NULL) {
     if (strcmp(language_code, "es") == 0) {
       return "Lo siento, no tengo acceso a Internet para consultar el clima actual";
     } else if (strcmp(language_code, "zh") == 0) {
       return "抱歉，我没有互联网访问权限来查看天气";
+    } else if (strcmp(language_code, "de") == 0) {
+      return "Entschuldigung, ich habe keinen Internetzugang, um das Wetter abzurufen";
     } else {
       return "I'm sorry, I don't have internet access to check the weather";
     }
@@ -1064,11 +1088,15 @@ static const char* answer_simple_question(const char* normalized_text, const cha
   
   // Thank you (not really a question but common response)
   if (strstr(normalized_text, "thank") != NULL ||
-      strstr(normalized_text, "thanks") != NULL) {
+      strstr(normalized_text, "thanks") != NULL ||
+      strstr(normalized_text, "danke") != NULL ||
+      strstr(normalized_text, "vielen dank") != NULL) {
     if (strcmp(language_code, "es") == 0) {
       return "De nada, estoy aquí para ayudar";
     } else if (strcmp(language_code, "zh") == 0) {
       return "不客气，很高兴能帮到您";
+    } else if (strcmp(language_code, "de") == 0) {
+      return "Gern geschehen! Ich helfe gerne";
     } else {
       return "You're welcome! Happy to help";
     }
@@ -1078,11 +1106,15 @@ static const char* answer_simple_question(const char* normalized_text, const cha
   if (strstr(normalized_text, "are you online") != NULL ||
       strstr(normalized_text, "do you have internet") != NULL ||
       strstr(normalized_text, "are you connected") != NULL ||
-      strstr(normalized_text, "do you need internet") != NULL) {
+      strstr(normalized_text, "do you need internet") != NULL ||
+      strstr(normalized_text, "bist du online") != NULL ||
+      strstr(normalized_text, "hast du internet") != NULL) {
     if (strcmp(language_code, "es") == 0) {
       return "No, funciono completamente sin conexión. Toda tu información permanece privada en tu dispositivo";
     } else if (strcmp(language_code, "zh") == 0) {
       return "不，我完全离线运行。您的所有信息都保留在您的设备上";
+    } else if (strcmp(language_code, "de") == 0) {
+      return "Nein, ich funktioniere vollständig offline. Alle deine Informationen bleiben privat auf deinem Gerät";
     } else {
       return "No, I work completely offline. All your information stays private on your device";
     }
@@ -1091,7 +1123,8 @@ static const char* answer_simple_question(const char* normalized_text, const cha
   // Version/System info questions
   if (strstr(normalized_text, "what version") != NULL ||
       strstr(normalized_text, "what's your version") != NULL ||
-      strstr(normalized_text, "version are you") != NULL) {
+      strstr(normalized_text, "version are you") != NULL ||
+      strstr(normalized_text, "welche version") != NULL) {
     static char version_response[256];
     
 #ifdef ETHERVOX_PLATFORM_ANDROID
@@ -1112,6 +1145,10 @@ static const char* answer_simple_question(const char* normalized_text, const cha
       snprintf(version_response, sizeof(version_response),
                "EthervoxAI版本%s，%s版本。运行在Android %s，SDK %s，设备%s",
                ETHERVOX_VERSION_STRING, ETHERVOX_BUILD_TYPE, android_version, sdk_version, device_model);
+    } else if (strcmp(language_code, "de") == 0) {
+      snprintf(version_response, sizeof(version_response),
+               "EthervoxAI Version %s, %s Build. Läuft auf Android %s, SDK %s, Gerät %s",
+               ETHERVOX_VERSION_STRING, ETHERVOX_BUILD_TYPE, android_version, sdk_version, device_model);
     } else {
       snprintf(version_response, sizeof(version_response),
                "EthervoxAI version %s, %s build. Running on Android %s, SDK %s, device %s",
@@ -1129,6 +1166,10 @@ static const char* answer_simple_question(const char* normalized_text, const cha
         snprintf(version_response, sizeof(version_response),
                  "EthervoxAI版本%s，%s版本。运行在%s %s",
                  ETHERVOX_VERSION_STRING, ETHERVOX_BUILD_TYPE, sys_info.sysname, sys_info.release);
+      } else if (strcmp(language_code, "de") == 0) {
+        snprintf(version_response, sizeof(version_response),
+                 "EthervoxAI Version %s, %s Build. Läuft auf %s %s",
+                 ETHERVOX_VERSION_STRING, ETHERVOX_BUILD_TYPE, sys_info.sysname, sys_info.release);
       } else {
         snprintf(version_response, sizeof(version_response),
                  "EthervoxAI version %s, %s build. Running on %s %s",
@@ -1144,6 +1185,10 @@ static const char* answer_simple_question(const char* normalized_text, const cha
         snprintf(version_response, sizeof(version_response),
                  "EthervoxAI版本%s，%s版本",
                  ETHERVOX_VERSION_STRING, ETHERVOX_BUILD_TYPE);
+      } else if (strcmp(language_code, "de") == 0) {
+        snprintf(version_response, sizeof(version_response),
+                 "EthervoxAI Version %s, %s Build",
+                 ETHERVOX_VERSION_STRING, ETHERVOX_BUILD_TYPE);
       } else {
         snprintf(version_response, sizeof(version_response),
                  "EthervoxAI version %s, %s build",
@@ -1157,7 +1202,9 @@ static const char* answer_simple_question(const char* normalized_text, const cha
   // Platform/Device questions
   if (strstr(normalized_text, "what device") != NULL ||
       strstr(normalized_text, "what platform") != NULL ||
-      strstr(normalized_text, "what system") != NULL) {
+      strstr(normalized_text, "what system") != NULL ||
+      strstr(normalized_text, "welches gerät") != NULL ||
+      strstr(normalized_text, "welche plattform") != NULL) {
     static char device_response[256];
     
 #ifdef ETHERVOX_PLATFORM_ANDROID
@@ -1177,6 +1224,10 @@ static const char* answer_simple_question(const char* normalized_text, const cha
       snprintf(device_response, sizeof(device_response),
                "我在%s %s上运行，Android %s，完全在您的设备上",
                manufacturer, device_model, android_version);
+    } else if (strcmp(language_code, "de") == 0) {
+      snprintf(device_response, sizeof(device_response),
+               "Ich laufe auf einem %s %s mit Android %s, vollständig auf deinem Gerät",
+               manufacturer, device_model, android_version);
     } else {
       snprintf(device_response, sizeof(device_response),
                "I'm running on a %s %s with Android %s, entirely on your device",
@@ -1192,6 +1243,10 @@ static const char* answer_simple_question(const char* normalized_text, const cha
       } else if (strcmp(language_code, "zh") == 0) {
         snprintf(device_response, sizeof(device_response),
                  "我在%s %s上运行，%s",
+                 sys_info.sysname, sys_info.release, sys_info.machine);
+      } else if (strcmp(language_code, "de") == 0) {
+        snprintf(device_response, sizeof(device_response),
+                 "Ich laufe auf %s %s, %s Architektur",
                  sys_info.sysname, sys_info.release, sys_info.machine);
       } else {
         snprintf(device_response, sizeof(device_response),
