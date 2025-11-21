@@ -326,19 +326,6 @@ else()
     add_library(ethervoxai STATIC ${ETHERVOXAI_SOURCES})
 endif()
 
-# Create library - shared for Android, static for others
-if(ANDROID)
-    add_library(ethervoxai SHARED ${ETHERVOXAI_SOURCES})
-    
-    # Add 16KB page alignment for Android 15+ compatibility
-    target_link_options(ethervoxai PRIVATE
-        -Wl,-z,max-page-size=16384
-    )
-    message(STATUS "Enabled 16KB page alignment for Android")
-else()
-    add_library(ethervoxai STATIC ${ETHERVOXAI_SOURCES})
-endif()
-
 target_include_directories(ethervoxai
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
