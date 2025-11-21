@@ -141,7 +141,7 @@ extern "C" {
 // Android-specific LLM configuration (high performance mobile)
 #ifdef ETHERVOX_PLATFORM_ANDROID
 #ifndef ETHERVOX_LLM_MAX_TOKENS_ANDROID
-#define ETHERVOX_LLM_MAX_TOKENS_ANDROID 4095U  // Longer responses for voice
+#define ETHERVOX_LLM_MAX_TOKENS_ANDROID 200  // Longer responses for voice
 #endif
 #ifndef ETHERVOX_LLM_CONTEXT_LENGTH_ANDROID
 #define ETHERVOX_LLM_CONTEXT_LENGTH_ANDROID 2048U  // Balance context vs memory
@@ -150,10 +150,10 @@ extern "C" {
 #define ETHERVOX_LLM_GPU_LAYERS_ANDROID 99U  // Offload everything to GPU
 #endif
 #ifndef ETHERVOX_LLM_BATCH_SIZE_ANDROID
-#define ETHERVOX_LLM_BATCH_SIZE_ANDROID 2048U  // Large batch for throughput
+#define ETHERVOX_LLM_BATCH_SIZE_ANDROID 512U  // Batch size for generation (reduced for lower latency)
 #endif
 #ifndef ETHERVOX_LLM_PROMPT_BATCH_SIZE_ANDROID
-#define ETHERVOX_LLM_PROMPT_BATCH_SIZE_ANDROID 2048U  // Parallel prompt processing
+#define ETHERVOX_LLM_PROMPT_BATCH_SIZE_ANDROID 64U  // Small batches for low latency (voice queries are short)
 #endif
 #ifndef ETHERVOX_LLM_MAX_RESPONSE_LENGTH_ANDROID
 #define ETHERVOX_LLM_MAX_RESPONSE_LENGTH_ANDROID 4096U  // Maximum response buffer

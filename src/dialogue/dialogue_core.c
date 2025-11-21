@@ -108,10 +108,133 @@ const char* ethervox_dialogue_detect_system_language(void) {
 // Forward declarations
 static char* add_smart_punctuation(const char* text, const char* language_code);
 
+// Localization string IDs
+typedef enum {
+  LOC_GREETING_RESPONSE,
+  LOC_NAME_RESPONSE,
+  LOC_CAPABILITIES_RESPONSE,
+  LOC_PRIVACY_RESPONSE,
+  LOC_WEATHER_NO_INTERNET,
+  LOC_THANK_YOU_RESPONSE,
+  LOC_OFFLINE_STATUS,
+  LOC_MATH_RESULT,
+  LOC_MATH_DIVISION_BY_ZERO,
+  LOC_GOODBYE_RESPONSE,
+  LOC_UNKNOWN_RESPONSE,
+  LOC_CONFIRMATION_RESPONSE,
+  LOC_LISTENING_RESPONSE,
+  LOC_WEEK_NUMBER_RESPONSE,
+  LOC_STRING_COUNT
+} localization_string_id_t;
+
+// Language-specific string table
+typedef struct {
+  const char* lang_code;
+  const char* strings[LOC_STRING_COUNT];
+} language_strings_t;
+
+static const language_strings_t LANGUAGE_STRINGS[] = {
+  {
+    "en",
+    {
+      [LOC_GREETING_RESPONSE] = "Hello! How can I help you today?",
+      [LOC_NAME_RESPONSE] = "I'm EthervoxAI, your personal voice assistant",
+      [LOC_CAPABILITIES_RESPONSE] = "I can answer questions, help with information, and have conversations with you - all completely offline and private",
+      [LOC_PRIVACY_RESPONSE] = "I run completely offline on your device. I don't send any data to the cloud or internet. Everything you say stays private on your device",
+      [LOC_WEATHER_NO_INTERNET] = "I'm sorry, I don't have internet access to check the weather",
+      [LOC_THANK_YOU_RESPONSE] = "You're welcome! Happy to help",
+      [LOC_OFFLINE_STATUS] = "No, I work completely offline. All your information stays private on your device",
+      [LOC_MATH_RESULT] = "%.2f",
+      [LOC_MATH_DIVISION_BY_ZERO] = "Cannot divide by zero",
+      [LOC_GOODBYE_RESPONSE] = "Goodbye! Feel free to call me anytime",
+      [LOC_UNKNOWN_RESPONSE] = "I'm sorry, I don't fully understand. Could you rephrase?",
+      [LOC_CONFIRMATION_RESPONSE] = "Got it. What else can I help you with?",
+      [LOC_LISTENING_RESPONSE] = "Yes, I'm listening. What do you need?",
+      [LOC_WEEK_NUMBER_RESPONSE] = "It's week %d"
+    }
+  },
+  {
+    "es",
+    {
+      [LOC_GREETING_RESPONSE] = "¡Hola! ¿En qué puedo ayudarte?",
+      [LOC_NAME_RESPONSE] = "Soy EthervoxAI, tu asistente de voz personal",
+      [LOC_CAPABILITIES_RESPONSE] = "Puedo responder preguntas, ayudar con información y tener conversaciones contigo - todo completamente sin conexión y privado",
+      [LOC_PRIVACY_RESPONSE] = "Funciono completamente sin conexión en tu dispositivo. No envío ningún dato a la nube ni a internet. Todo lo que dices permanece privado en tu dispositivo",
+      [LOC_WEATHER_NO_INTERNET] = "Lo siento, no tengo acceso a internet para verificar el clima",
+      [LOC_THANK_YOU_RESPONSE] = "De nada, estoy aquí para ayudar",
+      [LOC_OFFLINE_STATUS] = "No, funciono completamente sin conexión. Toda tu información permanece privada en tu dispositivo",
+      [LOC_MATH_RESULT] = "%.2f",
+      [LOC_MATH_DIVISION_BY_ZERO] = "No se puede dividir entre cero",
+      [LOC_GOODBYE_RESPONSE] = "¡Adiós! No dudes en llamarme en cualquier momento",
+      [LOC_UNKNOWN_RESPONSE] = "Lo siento, no entiendo completamente. ¿Podrías reformular?",
+      [LOC_CONFIRMATION_RESPONSE] = "Entendido. ¿En qué más puedo ayudarte?",
+      [LOC_LISTENING_RESPONSE] = "Sí, te escucho. ¿Qué necesitas?",
+      [LOC_WEEK_NUMBER_RESPONSE] = "Estamos en la semana %d"
+    }
+  },
+  {
+    "zh",
+    {
+      [LOC_GREETING_RESPONSE] = "你好！我能为您做些什么？",
+      [LOC_NAME_RESPONSE] = "我是EthervoxAI，您的个人语音助手",
+      [LOC_CAPABILITIES_RESPONSE] = "我可以回答问题，提供信息帮助，并与您对话 - 完全离线且私密",
+      [LOC_PRIVACY_RESPONSE] = "我完全在您的设备上离线运行。我不会向云端或互联网发送任何数据。您说的一切都保留在您的设备上",
+      [LOC_WEATHER_NO_INTERNET] = "抱歉，我没有互联网访问权限来查看天气",
+      [LOC_THANK_YOU_RESPONSE] = "不客气，很高兴能帮到您",
+      [LOC_OFFLINE_STATUS] = "不，我完全离线运行。您的所有信息都保留在您的设备上",
+      [LOC_MATH_RESULT] = "%.2f",
+      [LOC_MATH_DIVISION_BY_ZERO] = "不能除以零",
+      [LOC_GOODBYE_RESPONSE] = "再见！随时欢迎您再来",
+      [LOC_UNKNOWN_RESPONSE] = "抱歉，我不太理解。您能重新表述一下吗？",
+      [LOC_CONFIRMATION_RESPONSE] = "好的。还有什么我可以帮您的吗？",
+      [LOC_LISTENING_RESPONSE] = "是的，我在听。您需要什么？",
+      [LOC_WEEK_NUMBER_RESPONSE] = "这是第%d周"
+    }
+  },
+  {
+    "de",
+    {
+      [LOC_GREETING_RESPONSE] = "Hallo! Wie kann ich Ihnen heute helfen?",
+      [LOC_NAME_RESPONSE] = "Ich bin EthervoxAI, Ihr persönlicher Sprachassistent",
+      [LOC_CAPABILITIES_RESPONSE] = "Ich kann Fragen beantworten, Informationen bereitstellen und mit Ihnen sprechen - alles komplett offline und privat",
+      [LOC_PRIVACY_RESPONSE] = "Ich arbeite komplett offline auf Ihrem Gerät. Ich sende keine Daten in die Cloud oder ins Internet. Alles, was Sie sagen, bleibt privat auf Ihrem Gerät",
+      [LOC_WEATHER_NO_INTERNET] = "Entschuldigung, ich habe keinen Internetzugang, um das Wetter zu überprüfen",
+      [LOC_THANK_YOU_RESPONSE] = "Gerne! Ich helfe Ihnen gerne weiter",
+      [LOC_OFFLINE_STATUS] = "Nein, ich arbeite komplett offline. Alle Ihre Informationen bleiben privat auf Ihrem Gerät",
+      [LOC_MATH_RESULT] = "%.2f",
+      [LOC_MATH_DIVISION_BY_ZERO] = "Division durch Null ist nicht möglich",
+      [LOC_GOODBYE_RESPONSE] = "Auf Wiedersehen! Rufen Sie mich jederzeit wieder",
+      [LOC_UNKNOWN_RESPONSE] = "Entschuldigung, ich verstehe das nicht ganz. Können Sie das umformulieren?",
+      [LOC_CONFIRMATION_RESPONSE] = "Verstanden. Womit kann ich Ihnen noch helfen?",
+      [LOC_LISTENING_RESPONSE] = "Ja, ich höre zu. Was brauchen Sie?",
+      [LOC_WEEK_NUMBER_RESPONSE] = "Es ist Woche %d"
+    }
+  },
+  {NULL, {NULL}} // Sentinel
+};
+
+// Get localized string
+static const char* get_localized_string(const char* lang_code, localization_string_id_t string_id) {
+  if (!lang_code || string_id >= LOC_STRING_COUNT) {
+    return NULL;
+  }
+  
+  // Find language table
+  for (int i = 0; LANGUAGE_STRINGS[i].lang_code != NULL; i++) {
+    if (strcmp(LANGUAGE_STRINGS[i].lang_code, lang_code) == 0) {
+      return LANGUAGE_STRINGS[i].strings[string_id];
+    }
+  }
+  
+  // Fallback to English
+  return LANGUAGE_STRINGS[0].strings[string_id];
+}
+
 // Supported languages for MVP
 static const char* SUPPORTED_LANGUAGES[] = {"en",  // English
                                             "es",  // Spanish
                                             "zh",  // Mandarin Chinese
+                                            "de",  // German
                                             NULL};
 
 // Simple intent patterns for demonstration
@@ -191,6 +314,29 @@ static const intent_pattern_t INTENT_PATTERNS[] = {
     {"停止", ETHERVOX_INTENT_COMMAND, "zh", true},
     {"再见", ETHERVOX_INTENT_GOODBYE, "zh", true},
 
+    // German patterns
+    {"hallo", ETHERVOX_INTENT_GREETING, "de", true},
+    {"guten morgen", ETHERVOX_INTENT_GREETING, "de", true},
+    {"guten tag", ETHERVOX_INTENT_GREETING, "de", true},
+    {"guten abend", ETHERVOX_INTENT_GREETING, "de", true},
+    {"was ist", ETHERVOX_INTENT_QUESTION, "de", false},
+    {"was sind", ETHERVOX_INTENT_QUESTION, "de", false},
+    {"wie viel", ETHERVOX_INTENT_QUESTION, "de", false},
+    {"welche", ETHERVOX_INTENT_QUESTION, "de", false},
+    {"wann", ETHERVOX_INTENT_QUESTION, "de", false},
+    {"wo", ETHERVOX_INTENT_QUESTION, "de", false},
+    {"wer", ETHERVOX_INTENT_QUESTION, "de", false},
+    {"warum", ETHERVOX_INTENT_QUESTION, "de", false},
+    {"wie", ETHERVOX_INTENT_QUESTION, "de", false},
+    {"kannst du", ETHERVOX_INTENT_QUESTION, "de", false},
+    {"können sie", ETHERVOX_INTENT_QUESTION, "de", false},
+    {"einschalten", ETHERVOX_INTENT_CONTROL, "de", true},
+    {"ausschalten", ETHERVOX_INTENT_CONTROL, "de", true},
+    {"abspielen", ETHERVOX_INTENT_COMMAND, "de", true},
+    {"stopp", ETHERVOX_INTENT_COMMAND, "de", true},
+    {"auf wiedersehen", ETHERVOX_INTENT_GOODBYE, "de", true},
+    {"tschüss", ETHERVOX_INTENT_GOODBYE, "de", true},
+
     {NULL, ETHERVOX_INTENT_UNKNOWN, NULL, false}  // Sentinel
 };
 
@@ -250,7 +396,12 @@ ethervox_llm_config_t ethervox_dialogue_get_default_llm_config(void) {
                                     .gpu_layers = ETHERVOX_LLM_GPU_LAYERS_DEFAULT,
                                   .language_code = NULL};
 
-#ifdef ETHERVOX_PLATFORM_DESKTOP
+#ifdef ETHERVOX_PLATFORM_ANDROID
+  config.max_tokens = ETHERVOX_LLM_MAX_TOKENS_ANDROID;
+  config.context_length = ETHERVOX_LLM_CONTEXT_LENGTH_ANDROID;
+  config.use_gpu = true;
+  config.gpu_layers = ETHERVOX_LLM_GPU_LAYERS_ANDROID;
+#elif defined(ETHERVOX_PLATFORM_DESKTOP)
   config.max_tokens = ETHERVOX_LLM_MAX_TOKENS_DESKTOP;
   config.context_length = ETHERVOX_LLM_CONTEXT_LENGTH_DESKTOP;
   config.use_gpu = true;
@@ -273,6 +424,11 @@ bool ethervox_dialogue_is_language_supported(const char* language_code) {
   }
 
   return false;
+}
+
+// Get list of supported languages
+const char** ethervox_dialogue_get_supported_languages(void) {
+  return SUPPORTED_LANGUAGES;
 }
 
 // Generate conversation ID
@@ -629,6 +785,20 @@ static char* add_smart_punctuation(const char* text, const char* language_code) 
     }
   }
   
+  // German question words
+  if (strcmp(language_code, "de") == 0) {
+    if (strncmp(lower, "was ", 4) == 0 || strncmp(lower, "wer ", 4) == 0 ||
+        strncmp(lower, "wo ", 3) == 0 || strncmp(lower, "wann ", 5) == 0 ||
+        strncmp(lower, "warum ", 6) == 0 || strncmp(lower, "wie ", 4) == 0 ||
+        strncmp(lower, "welche ", 7) == 0 || strncmp(lower, "welcher ", 8) == 0 ||
+        strncmp(lower, "welches ", 8) == 0 || strncmp(lower, "können ", 8) == 0 ||
+        strncmp(lower, "kannst ", 7) == 0 || strncmp(lower, "hast ", 5) == 0 ||
+        strncmp(lower, "haben ", 6) == 0 || strncmp(lower, "bist ", 5) == 0 ||
+        strncmp(lower, "sind ", 5) == 0 || strncmp(lower, "ist ", 4) == 0) {
+      is_question = true;
+    }
+  }
+  
   // Chinese question particles (usually at end, but STT might miss them)
   if (strcmp(language_code, "zh") == 0) {
     if (strstr(lower, "什么") != NULL || strstr(lower, "哪里") != NULL ||
@@ -742,7 +912,9 @@ static const char* answer_simple_question(const char* normalized_text, const cha
   // Time-related questions
   if (strstr(normalized_text, "what time is it") != NULL || 
       strstr(normalized_text, "what's the time") != NULL ||
-      strstr(normalized_text, "tell me the time") != NULL) {
+      strstr(normalized_text, "tell me the time") != NULL ||
+      strstr(normalized_text, "wie spät") != NULL ||
+      strstr(normalized_text, "wie viel uhr") != NULL) {
     time_t now = time(NULL);
     struct tm* local = localtime(&now);
     static char time_response[128];
@@ -753,6 +925,9 @@ static const char* answer_simple_question(const char* normalized_text, const cha
     } else if (strcmp(language_code, "zh") == 0) {
       snprintf(time_response, sizeof(time_response), 
                "现在是%d点%02d分", local->tm_hour, local->tm_min);
+    } else if (strcmp(language_code, "de") == 0) {
+      snprintf(time_response, sizeof(time_response), 
+               "Es ist %d:%02d Uhr", local->tm_hour, local->tm_min);
     } else {
       int hour = local->tm_hour;
       const char* period = "AM";
@@ -770,7 +945,8 @@ static const char* answer_simple_question(const char* normalized_text, const cha
   // Week number questions
   if (strstr(normalized_text, "what week") != NULL ||
       strstr(normalized_text, "which week") != NULL ||
-      strstr(normalized_text, "week number") != NULL) {
+      strstr(normalized_text, "week number") != NULL ||
+      strstr(normalized_text, "welche woche") != NULL) {
     time_t now = time(NULL);
     struct tm* local = localtime(&now);
     static char week_response[128];
@@ -786,6 +962,9 @@ static const char* answer_simple_question(const char* normalized_text, const cha
     } else if (strcmp(language_code, "zh") == 0) {
       snprintf(week_response, sizeof(week_response), 
                "这是第%d周", week_num);
+    } else if (strcmp(language_code, "de") == 0) {
+      snprintf(week_response, sizeof(week_response), 
+               "Es ist Woche %d", week_num);
     } else {
       snprintf(week_response, sizeof(week_response), 
                "It's week %d", week_num);
@@ -799,7 +978,9 @@ static const char* answer_simple_question(const char* normalized_text, const cha
       strstr(normalized_text, "what day is it") != NULL ||
       strstr(normalized_text, "what day") != NULL ||
       strstr(normalized_text, "what's today") != NULL ||
-      strstr(normalized_text, "today's date") != NULL) {
+      strstr(normalized_text, "today's date") != NULL ||
+      strstr(normalized_text, "welches datum") != NULL ||
+      strstr(normalized_text, "welcher tag") != NULL) {
     time_t now = time(NULL);
     struct tm* local = localtime(&now);
     static char date_response[128];
@@ -816,6 +997,13 @@ static const char* answer_simple_question(const char* normalized_text, const cha
     } else if (strcmp(language_code, "zh") == 0) {
       snprintf(date_response, sizeof(date_response), 
                "今天是%d年%d月%d日", 1900 + local->tm_year, local->tm_mon + 1, local->tm_mday);
+    } else if (strcmp(language_code, "de") == 0) {
+      const char* months_de[] = {"Januar", "Februar", "März", "April", "Mai", "Juni",
+                                "Juli", "August", "September", "Oktober", "November", "Dezember"};
+      const char* days_de[] = {"Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"};
+      snprintf(date_response, sizeof(date_response), 
+               "Heute ist %s, der %d. %s %d", 
+               days_de[local->tm_wday], local->tm_mday, months_de[local->tm_mon], 1900 + local->tm_year);
     } else {
       snprintf(date_response, sizeof(date_response), 
                "Today is %s, %s %d, %d", 
@@ -1103,36 +1291,18 @@ int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
   // Check for confirmation/acknowledgment first (applies to all intent types)
   if (is_confirmation(intent->normalized_text)) {
     conversation_ended = false;  // Confirmations should continue conversation
-    if (strcmp(intent->language_code, "es") == 0) {
-      response_text = "Entendido. ¿En qué más puedo ayudarte?";
-    } else if (strcmp(intent->language_code, "zh") == 0) {
-      response_text = "好的。还有什么我可以帮您的吗？";
-    } else {
-      response_text = "Got it. What else can I help you with?";
-    }
+    response_text = get_localized_string(intent->language_code, LOC_CONFIRMATION_RESPONSE);
   }
   // Check for listening confirmation
   else if (is_listening_check(intent->normalized_text)) {
     conversation_ended = false;  // Listening checks should continue conversation
-    if (strcmp(intent->language_code, "es") == 0) {
-      response_text = "Sí, te escucho. ¿Qué necesitas?";
-    } else if (strcmp(intent->language_code, "zh") == 0) {
-      response_text = "是的，我在听。您需要什么？";
-    } else {
-      response_text = "Yes, I'm listening. What do you need?";
-    }
+    response_text = get_localized_string(intent->language_code, LOC_LISTENING_RESPONSE);
   }
   // Otherwise process by intent type
   else {
     switch (intent->type) {
       case ETHERVOX_INTENT_GREETING:
-      if (strcmp(intent->language_code, "es") == 0) {
-        response_text = "¡Hola! ¿En qué puedo ayudarte?";
-      } else if (strcmp(intent->language_code, "zh") == 0) {
-        response_text = "你好！我能为您做些什么？";
-      } else {
-        response_text = "Hello! How can I help you today?";
-      }
+      response_text = get_localized_string(intent->language_code, LOC_GREETING_RESPONSE);
       break;
 
     case ETHERVOX_INTENT_QUESTION:
@@ -1338,10 +1508,26 @@ int ethervox_dialogue_process_llm_stream(ethervox_dialogue_engine_t* engine,
 
 #if defined(ETHERVOX_WITH_LLAMA) && defined(LLAMA_CPP_AVAILABLE) && LLAMA_CPP_AVAILABLE
   ethervox_llm_backend_t* backend = (ethervox_llm_backend_t*)engine->llm_backend;
-  if (backend && backend->is_loaded && intent->type == ETHERVOX_INTENT_UNKNOWN) {
+  // Use streaming for any intent that will use the LLM (UNKNOWN, QUESTION that's not simple)
+  if (backend && backend->is_loaded && backend->generate_stream) {
+    bool use_llm_streaming = false;
     
-    // Use the backend's generate_stream function if available
-    if (backend->generate_stream) {
+    // Always use streaming for UNKNOWN intents
+    if (intent->type == ETHERVOX_INTENT_UNKNOWN) {
+      use_llm_streaming = true;
+    }
+    // Use streaming for QUESTION intents that aren't in the simple set
+    else if (intent->type == ETHERVOX_INTENT_QUESTION) {
+      // Check if it's a simple question (returns NULL if not simple)
+      const char* simple_answer = answer_simple_question(intent->raw_text, intent->language_code);
+      
+      if (simple_answer == NULL) {
+        // Not a simple question, will use LLM
+        use_llm_streaming = true;
+      }
+    }
+    
+    if (use_llm_streaming) {
       __android_log_print(ANDROID_LOG_INFO, "EthervoxDialogue", 
                          "Using LLM backend streaming for: %s", intent->raw_text);
       

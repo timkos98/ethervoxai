@@ -206,6 +206,7 @@ const char* ethervox_entity_type_to_string(ethervox_entity_type_t type);
 bool ethervox_dialogue_is_language_supported(const char* language_code);
 int ethervox_dialogue_add_language_support(ethervox_dialogue_engine_t* engine,
                                            const char* language_code);
+const char** ethervox_dialogue_get_supported_languages(void);
 
 #ifdef __cplusplus
 }
