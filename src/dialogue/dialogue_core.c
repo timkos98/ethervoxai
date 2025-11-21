@@ -110,20 +110,33 @@ static char* add_smart_punctuation(const char* text, const char* language_code);
 
 // Localization string IDs
 typedef enum {
+  // Basic responses
   LOC_GREETING_RESPONSE,
   LOC_NAME_RESPONSE,
   LOC_CAPABILITIES_RESPONSE,
   LOC_PRIVACY_RESPONSE,
-  LOC_WEATHER_NO_INTERNET,
   LOC_THANK_YOU_RESPONSE,
-  LOC_OFFLINE_STATUS,
-  LOC_MATH_RESULT,
-  LOC_MATH_DIVISION_BY_ZERO,
   LOC_GOODBYE_RESPONSE,
   LOC_UNKNOWN_RESPONSE,
   LOC_CONFIRMATION_RESPONSE,
   LOC_LISTENING_RESPONSE,
+  
+  // Question-specific responses
+  LOC_HOW_ARE_YOU_RESPONSE,
+  LOC_OFFLINE_STATUS,
+  LOC_WEATHER_NO_INTERNET,
+  LOC_PRIVACY_QUESTION_RESPONSE,
+  LOC_CREATOR_RESPONSE,
+  LOC_PURPOSE_RESPONSE,
+  LOC_LLM_UNAVAILABLE,
+  LOC_COMMAND_UNDERSTOOD,
+  
+  // Math responses
+  LOC_MATH_DIVISION_BY_ZERO,
+  
+  // Time/Date responses (format strings)
   LOC_WEEK_NUMBER_RESPONSE,
+  
   LOC_STRING_COUNT
 } localization_string_id_t;
 
@@ -139,17 +152,22 @@ static const language_strings_t LANGUAGE_STRINGS[] = {
     {
       [LOC_GREETING_RESPONSE] = "Hello! How can I help you today?",
       [LOC_NAME_RESPONSE] = "I'm EthervoxAI",
-      [LOC_CAPABILITIES_RESPONSE] = "I can answer questions, help with information, and have conversations with you - all completely offline and private",
+      [LOC_CAPABILITIES_RESPONSE] = "I can answer questions, provide information, and help with tasks. What would you like to know?",
       [LOC_PRIVACY_RESPONSE] = "I run completely offline on your device. I don't send any data to the cloud or internet. Everything you say stays private on your device",
-      [LOC_WEATHER_NO_INTERNET] = "I'm sorry, I don't have internet access to check the weather",
       [LOC_THANK_YOU_RESPONSE] = "You're welcome! Happy to help",
-      [LOC_OFFLINE_STATUS] = "No, I work completely offline. All your information stays private on your device",
-      [LOC_MATH_RESULT] = "%.2f",
-      [LOC_MATH_DIVISION_BY_ZERO] = "Cannot divide by zero",
       [LOC_GOODBYE_RESPONSE] = "Goodbye! Feel free to call me anytime",
       [LOC_UNKNOWN_RESPONSE] = "I'm sorry, I don't fully understand. Could you rephrase?",
       [LOC_CONFIRMATION_RESPONSE] = "Got it. What else can I help you with?",
       [LOC_LISTENING_RESPONSE] = "Yes, I'm listening. What do you need?",
+      [LOC_HOW_ARE_YOU_RESPONSE] = "I'm working perfectly, thanks for asking. How can I help you?",
+      [LOC_OFFLINE_STATUS] = "No, I work completely offline. All your information stays private on your device",
+      [LOC_WEATHER_NO_INTERNET] = "I'm sorry, I don't have internet access to check the weather",
+      [LOC_PRIVACY_QUESTION_RESPONSE] = "Everything stays on your device. I don't connect to the internet or send any data anywhere",
+      [LOC_CREATOR_RESPONSE] = "I was created by the EthervoxAI team",
+      [LOC_PURPOSE_RESPONSE] = "I'm here to help answer questions and assist you with various tasks - all while keeping your data private on your device",
+      [LOC_LLM_UNAVAILABLE] = "I'm sorry, I can't answer that question right now",
+      [LOC_COMMAND_UNDERSTOOD] = "Understood. Executing command.",
+      [LOC_MATH_DIVISION_BY_ZERO] = "Cannot divide by zero",
       [LOC_WEEK_NUMBER_RESPONSE] = "It's week %d"
     }
   },
@@ -158,17 +176,22 @@ static const language_strings_t LANGUAGE_STRINGS[] = {
     {
       [LOC_GREETING_RESPONSE] = "¡Hola! ¿En qué puedo ayudarte?",
       [LOC_NAME_RESPONSE] = "Soy EthervoxAI",
-      [LOC_CAPABILITIES_RESPONSE] = "Puedo responder preguntas, ayudar con información y tener conversaciones contigo - todo completamente sin conexión y privado",
+      [LOC_CAPABILITIES_RESPONSE] = "Puedo responder preguntas, ayudarte con información y controlar dispositivos. ¿En qué puedo ayudarte?",
       [LOC_PRIVACY_RESPONSE] = "Funciono completamente sin conexión en tu dispositivo. No envío ningún dato a la nube ni a internet. Todo lo que dices permanece privado en tu dispositivo",
-      [LOC_WEATHER_NO_INTERNET] = "Lo siento, no tengo acceso a internet para verificar el clima",
       [LOC_THANK_YOU_RESPONSE] = "De nada, estoy aquí para ayudar",
-      [LOC_OFFLINE_STATUS] = "No, funciono completamente sin conexión. Toda tu información permanece privada en tu dispositivo",
-      [LOC_MATH_RESULT] = "%.2f",
-      [LOC_MATH_DIVISION_BY_ZERO] = "No se puede dividir entre cero",
       [LOC_GOODBYE_RESPONSE] = "¡Adiós! No dudes en llamarme en cualquier momento",
       [LOC_UNKNOWN_RESPONSE] = "Lo siento, no entiendo completamente. ¿Podrías reformular?",
       [LOC_CONFIRMATION_RESPONSE] = "Entendido. ¿En qué más puedo ayudarte?",
       [LOC_LISTENING_RESPONSE] = "Sí, te escucho. ¿Qué necesitas?",
+      [LOC_HOW_ARE_YOU_RESPONSE] = "Estoy funcionando perfectamente, gracias por preguntar. ¿Y tú?",
+      [LOC_OFFLINE_STATUS] = "No, funciono completamente sin conexión. Toda tu información permanece privada en tu dispositivo",
+      [LOC_WEATHER_NO_INTERNET] = "Lo siento, no tengo acceso a Internet para consultar el clima actual",
+      [LOC_PRIVACY_QUESTION_RESPONSE] = "Todo permanece en tu dispositivo. No me conecto a internet ni envío datos a ninguna parte",
+      [LOC_CREATOR_RESPONSE] = "Fui creado por el equipo de EthervoxAI",
+      [LOC_PURPOSE_RESPONSE] = "Estoy aquí para ayudar a responder preguntas y asistirte con varias tareas, todo manteniendo tus datos privados en tu dispositivo",
+      [LOC_LLM_UNAVAILABLE] = "Lo siento, no puedo responder esa pregunta en este momento",
+      [LOC_COMMAND_UNDERSTOOD] = "Entendido. Ejecutando comando.",
+      [LOC_MATH_DIVISION_BY_ZERO] = "No se puede dividir entre cero",
       [LOC_WEEK_NUMBER_RESPONSE] = "Estamos en la semana %d"
     }
   },
@@ -177,17 +200,22 @@ static const language_strings_t LANGUAGE_STRINGS[] = {
     {
       [LOC_GREETING_RESPONSE] = "你好！我能为您做些什么？",
       [LOC_NAME_RESPONSE] = "我是EthervoxAI",
-      [LOC_CAPABILITIES_RESPONSE] = "我可以回答问题，提供信息帮助，并与您对话 - 完全离线且私密",
+      [LOC_CAPABILITIES_RESPONSE] = "我可以回答问题、提供信息和控制设备。我能为您做什么？",
       [LOC_PRIVACY_RESPONSE] = "我完全在您的设备上离线运行。我不会向云端或互联网发送任何数据。您说的一切都保留在您的设备上",
-      [LOC_WEATHER_NO_INTERNET] = "抱歉，我没有互联网访问权限来查看天气",
       [LOC_THANK_YOU_RESPONSE] = "不客气，很高兴能帮到您",
-      [LOC_OFFLINE_STATUS] = "不，我完全离线运行。您的所有信息都保留在您的设备上",
-      [LOC_MATH_RESULT] = "%.2f",
-      [LOC_MATH_DIVISION_BY_ZERO] = "不能除以零",
       [LOC_GOODBYE_RESPONSE] = "再见！随时欢迎您再来",
       [LOC_UNKNOWN_RESPONSE] = "抱歉，我不太理解。您能重新表述一下吗？",
       [LOC_CONFIRMATION_RESPONSE] = "好的。还有什么我可以帮您的吗？",
       [LOC_LISTENING_RESPONSE] = "是的，我在听。您需要什么？",
+      [LOC_HOW_ARE_YOU_RESPONSE] = "我很好，谢谢询问。您呢？",
+      [LOC_OFFLINE_STATUS] = "不，我完全离线运行。您的所有信息都保留在您的设备上",
+      [LOC_WEATHER_NO_INTERNET] = "抱歉，我没有互联网访问权限来查看天气",
+      [LOC_PRIVACY_QUESTION_RESPONSE] = "一切都保留在您的设备上。我不连接互联网，也不向任何地方发送数据",
+      [LOC_CREATOR_RESPONSE] = "我由EthervoxAI团队创建",
+      [LOC_PURPOSE_RESPONSE] = "我在这里帮助回答问题并协助您完成各种任务，同时将您的数据保密在您的设备上",
+      [LOC_LLM_UNAVAILABLE] = "抱歉，我现在无法回答这个问题",
+      [LOC_COMMAND_UNDERSTOOD] = "明白了。正在执行命令。",
+      [LOC_MATH_DIVISION_BY_ZERO] = "不能除以零",
       [LOC_WEEK_NUMBER_RESPONSE] = "这是第%d周"
     }
   },
@@ -196,17 +224,22 @@ static const language_strings_t LANGUAGE_STRINGS[] = {
     {
       [LOC_GREETING_RESPONSE] = "Hallo! Wie kann ich Ihnen heute helfen?",
       [LOC_NAME_RESPONSE] = "Ich bin EthervoxAI",
-      [LOC_CAPABILITIES_RESPONSE] = "Ich kann Fragen beantworten, Informationen bereitstellen und mit Ihnen sprechen - alles komplett offline und privat",
+      [LOC_CAPABILITIES_RESPONSE] = "Ich kann Fragen beantworten, Informationen bereitstellen und bei Aufgaben helfen. Womit kann ich dir helfen?",
       [LOC_PRIVACY_RESPONSE] = "Ich arbeite komplett offline auf Ihrem Gerät. Ich sende keine Daten in die Cloud oder ins Internet. Alles, was Sie sagen, bleibt privat auf Ihrem Gerät",
-      [LOC_WEATHER_NO_INTERNET] = "Entschuldigung, ich habe keinen Internetzugang, um das Wetter zu überprüfen",
-      [LOC_THANK_YOU_RESPONSE] = "Gerne! Ich helfe Ihnen gerne weiter",
-      [LOC_OFFLINE_STATUS] = "Nein, ich arbeite komplett offline. Alle Ihre Informationen bleiben privat auf Ihrem Gerät",
-      [LOC_MATH_RESULT] = "%.2f",
-      [LOC_MATH_DIVISION_BY_ZERO] = "Division durch Null ist nicht möglich",
+      [LOC_THANK_YOU_RESPONSE] = "Gern geschehen! Ich helfe gerne",
       [LOC_GOODBYE_RESPONSE] = "Auf Wiedersehen! Rufen Sie mich jederzeit wieder",
       [LOC_UNKNOWN_RESPONSE] = "Entschuldigung, ich verstehe das nicht ganz. Können Sie das umformulieren?",
       [LOC_CONFIRMATION_RESPONSE] = "Verstanden. Womit kann ich Ihnen noch helfen?",
       [LOC_LISTENING_RESPONSE] = "Ja, ich höre zu. Was brauchen Sie?",
+      [LOC_HOW_ARE_YOU_RESPONSE] = "Mir geht es gut, danke der Nachfrage. Wie kann ich dir helfen?",
+      [LOC_OFFLINE_STATUS] = "Nein, ich arbeite komplett offline. Alle Ihre Informationen bleiben privat auf Ihrem Gerät",
+      [LOC_WEATHER_NO_INTERNET] = "Entschuldigung, ich habe keinen Internetzugang, um das Wetter abzurufen",
+      [LOC_PRIVACY_QUESTION_RESPONSE] = "Alles bleibt auf Ihrem Gerät. Ich verbinde mich nicht mit dem Internet und sende keine Daten irgendwohin",
+      [LOC_CREATOR_RESPONSE] = "Ich wurde vom EthervoxAI-Team erstellt",
+      [LOC_PURPOSE_RESPONSE] = "Ich bin hier, um Fragen zu beantworten und Sie bei verschiedenen Aufgaben zu unterstützen - alles während Ihre Daten privat auf Ihrem Gerät bleiben",
+      [LOC_LLM_UNAVAILABLE] = "Es tut mir leid, ich kann diese Frage im Moment nicht beantworten",
+      [LOC_COMMAND_UNDERSTOOD] = "Verstanden. Führe Befehl aus.",
+      [LOC_MATH_DIVISION_BY_ZERO] = "Division durch Null ist nicht möglich",
       [LOC_WEEK_NUMBER_RESPONSE] = "Es ist Woche %d"
     }
   },
@@ -272,6 +305,10 @@ static const intent_pattern_t INTENT_PATTERNS[] = {
     {"when are", ETHERVOX_INTENT_QUESTION, "en", false},
     {"who is", ETHERVOX_INTENT_QUESTION, "en", false},
     {"who are", ETHERVOX_INTENT_QUESTION, "en", false},
+    {"who made", ETHERVOX_INTENT_QUESTION, "en", false},
+    {"who created", ETHERVOX_INTENT_QUESTION, "en", false},
+    {"who built", ETHERVOX_INTENT_QUESTION, "en", false},
+    {"who developed", ETHERVOX_INTENT_QUESTION, "en", false},
     {"why is", ETHERVOX_INTENT_QUESTION, "en", false},
     {"why are", ETHERVOX_INTENT_QUESTION, "en", false},
     {"can you", ETHERVOX_INTENT_QUESTION, "en", false},
@@ -295,24 +332,60 @@ static const intent_pattern_t INTENT_PATTERNS[] = {
     // Spanish patterns
     {"hola", ETHERVOX_INTENT_GREETING, "es", true},
     {"buenos días", ETHERVOX_INTENT_GREETING, "es", true},
+    {"buenas tardes", ETHERVOX_INTENT_GREETING, "es", true},
+    {"buenas noches", ETHERVOX_INTENT_GREETING, "es", true},
     {"qué es", ETHERVOX_INTENT_QUESTION, "es", false},
+    {"qué hora", ETHERVOX_INTENT_QUESTION, "es", false},
+    {"qué día", ETHERVOX_INTENT_QUESTION, "es", false},
+    {"qué fecha", ETHERVOX_INTENT_QUESTION, "es", false},
+    {"cuál es", ETHERVOX_INTENT_QUESTION, "es", false},
+    {"cuándo", ETHERVOX_INTENT_QUESTION, "es", false},
+    {"dónde", ETHERVOX_INTENT_QUESTION, "es", false},
+    {"quién", ETHERVOX_INTENT_QUESTION, "es", false},
+    {"quién creó", ETHERVOX_INTENT_QUESTION, "es", false},
+    {"quién hizo", ETHERVOX_INTENT_QUESTION, "es", false},
+    {"por qué", ETHERVOX_INTENT_QUESTION, "es", false},
     {"cómo", ETHERVOX_INTENT_QUESTION, "es", false},
+    {"puedes", ETHERVOX_INTENT_QUESTION, "es", false},
+    {"podrías", ETHERVOX_INTENT_QUESTION, "es", false},
+    {"eres", ETHERVOX_INTENT_QUESTION, "es", false},
+    {"estás", ETHERVOX_INTENT_QUESTION, "es", false},
     {"encender", ETHERVOX_INTENT_CONTROL, "es", true},
     {"apagar", ETHERVOX_INTENT_CONTROL, "es", true},
     {"reproducir", ETHERVOX_INTENT_COMMAND, "es", true},
     {"parar", ETHERVOX_INTENT_COMMAND, "es", true},
     {"adiós", ETHERVOX_INTENT_GOODBYE, "es", true},
+    {"hasta luego", ETHERVOX_INTENT_GOODBYE, "es", true},
+    {"chao", ETHERVOX_INTENT_GOODBYE, "es", true},
 
     // Chinese patterns (simplified)
     {"你好", ETHERVOX_INTENT_GREETING, "zh", true},
     {"早上好", ETHERVOX_INTENT_GREETING, "zh", true},
+    {"下午好", ETHERVOX_INTENT_GREETING, "zh", true},
+    {"晚上好", ETHERVOX_INTENT_GREETING, "zh", true},
     {"什么是", ETHERVOX_INTENT_QUESTION, "zh", false},
+    {"什么时候", ETHERVOX_INTENT_QUESTION, "zh", false},
+    {"几点", ETHERVOX_INTENT_QUESTION, "zh", false},
+    {"现在几点", ETHERVOX_INTENT_QUESTION, "zh", false},
+    {"今天几号", ETHERVOX_INTENT_QUESTION, "zh", false},
+    {"哪里", ETHERVOX_INTENT_QUESTION, "zh", false},
+    {"什么地方", ETHERVOX_INTENT_QUESTION, "zh", false},
+    {"谁", ETHERVOX_INTENT_QUESTION, "zh", false},
+    {"谁创造", ETHERVOX_INTENT_QUESTION, "zh", false},
+    {"谁开发", ETHERVOX_INTENT_QUESTION, "zh", false},
+    {"为什么", ETHERVOX_INTENT_QUESTION, "zh", false},
     {"怎么", ETHERVOX_INTENT_QUESTION, "zh", false},
+    {"怎么样", ETHERVOX_INTENT_QUESTION, "zh", false},
+    {"如何", ETHERVOX_INTENT_QUESTION, "zh", false},
+    {"能不能", ETHERVOX_INTENT_QUESTION, "zh", false},
+    {"可以", ETHERVOX_INTENT_QUESTION, "zh", false},
+    {"你是", ETHERVOX_INTENT_QUESTION, "zh", false},
     {"打开", ETHERVOX_INTENT_CONTROL, "zh", true},
     {"关闭", ETHERVOX_INTENT_CONTROL, "zh", true},
     {"播放", ETHERVOX_INTENT_COMMAND, "zh", true},
     {"停止", ETHERVOX_INTENT_COMMAND, "zh", true},
     {"再见", ETHERVOX_INTENT_GOODBYE, "zh", true},
+    {"拜拜", ETHERVOX_INTENT_GOODBYE, "zh", true},
 
     // German patterns
     {"hallo", ETHERVOX_INTENT_GREETING, "de", true},
@@ -892,15 +965,7 @@ static const char* answer_simple_question(const char* normalized_text, const cha
               result = num1 / num2;
             } else {
               valid = false;
-              if (strcmp(language_code, "es") == 0) {
-                return "No se puede dividir entre cero";
-              } else if (strcmp(language_code, "zh") == 0) {
-                return "不能除以零";
-              } else if (strcmp(language_code, "de") == 0) {
-                return "Man kann nicht durch null teilen";
-              } else {
-                return "Cannot divide by zero";
-              }
+              return get_localized_string(language_code, LOC_MATH_DIVISION_BY_ZERO);
             }
           }
           
@@ -1022,84 +1087,103 @@ static const char* answer_simple_question(const char* normalized_text, const cha
   if (strstr(normalized_text, "what's your name") != NULL || 
       strstr(normalized_text, "what is your name") != NULL ||
       strstr(normalized_text, "who are you") != NULL ||
+      strstr(normalized_text, "cómo te llamas") != NULL ||
+      strstr(normalized_text, "cuál es tu nombre") != NULL ||
+      strstr(normalized_text, "quién eres") != NULL ||
+      strstr(normalized_text, "你叫什么") != NULL ||
+      strstr(normalized_text, "你的名字") != NULL ||
+      strstr(normalized_text, "你是谁") != NULL ||
       strstr(normalized_text, "wie heißt du") != NULL ||
       strstr(normalized_text, "wie heissen sie") != NULL ||
       strstr(normalized_text, "wer bist du") != NULL) {
-    if (strcmp(language_code, "es") == 0) {
-      return "Soy EthervoxAI, tu asistente de voz personal";
-    } else if (strcmp(language_code, "zh") == 0) {
-      return "我是EthervoxAI，您的个人语音助手";
-    } else if (strcmp(language_code, "de") == 0) {
-      return "Ich bin EthervoxAI, dein persönlicher Sprachassistent";
-    } else {
-      return "I'm EthervoxAI, your personal voice assistant";
-    }
+    return get_localized_string(language_code, LOC_NAME_RESPONSE);
   }
   
   // Capability questions
   if (strstr(normalized_text, "what can you do") != NULL ||
       strstr(normalized_text, "what can you help") != NULL ||
       strstr(normalized_text, "how can you help") != NULL ||
+      strstr(normalized_text, "qué puedes hacer") != NULL ||
+      strstr(normalized_text, "en qué puedes ayudar") != NULL ||
+      strstr(normalized_text, "cómo puedes ayudar") != NULL ||
+      strstr(normalized_text, "你能做什么") != NULL ||
+      strstr(normalized_text, "你可以帮我") != NULL ||
+      strstr(normalized_text, "你会什么") != NULL ||
       strstr(normalized_text, "was kannst du") != NULL ||
       strstr(normalized_text, "was können sie") != NULL ||
       strstr(normalized_text, "wobei kannst du helfen") != NULL) {
-    if (strcmp(language_code, "es") == 0) {
-      return "Puedo responder preguntas, ayudarte con información y controlar dispositivos. ¿En qué puedo ayudarte?";
-    } else if (strcmp(language_code, "zh") == 0) {
-      return "我可以回答问题、提供信息和控制设备。我能为您做什么？";
-    } else if (strcmp(language_code, "de") == 0) {
-      return "Ich kann Fragen beantworten, Informationen bereitstellen und bei Aufgaben helfen. Womit kann ich dir helfen?";
-    } else {
-      return "I can answer questions, provide information, and help with tasks. What would you like to know?";
-    }
+    return get_localized_string(language_code, LOC_CAPABILITIES_RESPONSE);
   }
   
   // How are you questions
   if (strstr(normalized_text, "how are you") != NULL ||
       strstr(normalized_text, "how are you doing") != NULL ||
+      strstr(normalized_text, "cómo estás") != NULL ||
+      strstr(normalized_text, "cómo te va") != NULL ||
+      strstr(normalized_text, "qué tal") != NULL ||
+      strstr(normalized_text, "你好吗") != NULL ||
+      strstr(normalized_text, "你怎么样") != NULL ||
       strstr(normalized_text, "wie geht es dir") != NULL ||
       strstr(normalized_text, "wie geht's") != NULL) {
-    if (strcmp(language_code, "es") == 0) {
-      return "Estoy funcionando perfectamente, gracias por preguntar. ¿Y tú?";
-    } else if (strcmp(language_code, "zh") == 0) {
-      return "我很好，谢谢询问。您呢？";
-    } else if (strcmp(language_code, "de") == 0) {
-      return "Mir geht es gut, danke der Nachfrage. Wie kann ich dir helfen?";
-    } else {
-      return "I'm working perfectly, thanks for asking. How can I help you?";
-    }
+    return get_localized_string(language_code, LOC_HOW_ARE_YOU_RESPONSE);
+  }
+  
+  // Creator questions
+  if (strstr(normalized_text, "who made you") != NULL ||
+      strstr(normalized_text, "who created you") != NULL ||
+      strstr(normalized_text, "who built you") != NULL ||
+      strstr(normalized_text, "who developed you") != NULL ||
+      strstr(normalized_text, "quién te creó") != NULL ||
+      strstr(normalized_text, "quién te hizo") != NULL ||
+      strstr(normalized_text, "谁创造了你") != NULL ||
+      strstr(normalized_text, "谁做的你") != NULL ||
+      strstr(normalized_text, "谁开发了你") != NULL ||
+      strstr(normalized_text, "wer hat dich") != NULL) {
+    return get_localized_string(language_code, LOC_CREATOR_RESPONSE);
+  }
+  
+  // Purpose questions
+  if (strstr(normalized_text, "what are you for") != NULL ||
+      strstr(normalized_text, "why were you made") != NULL ||
+      strstr(normalized_text, "why were you created") != NULL ||
+      strstr(normalized_text, "what's your purpose") != NULL ||
+      strstr(normalized_text, "what is your purpose") != NULL ||
+      strstr(normalized_text, "para qué fuiste") != NULL ||
+      strstr(normalized_text, "cuál es tu propósito") != NULL ||
+      strstr(normalized_text, "para qué sirves") != NULL ||
+      strstr(normalized_text, "你是干什么的") != NULL ||
+      strstr(normalized_text, "你的目的是什么") != NULL ||
+      strstr(normalized_text, "你有什么用") != NULL ||
+      strstr(normalized_text, "warum wurdest du") != NULL ||
+      strstr(normalized_text, "wofür bist du") != NULL) {
+    return get_localized_string(language_code, LOC_PURPOSE_RESPONSE);
   }
   
   // Weather questions (we can't actually answer these without internet)
   if (strstr(normalized_text, "weather") != NULL ||
       strstr(normalized_text, "temperature") != NULL ||
+      strstr(normalized_text, "clima") != NULL ||
+      strstr(normalized_text, "tiempo") != NULL ||
+      strstr(normalized_text, "temperatura") != NULL ||
+      strstr(normalized_text, "天气") != NULL ||
+      strstr(normalized_text, "气温") != NULL ||
+      strstr(normalized_text, "温度") != NULL ||
       strstr(normalized_text, "wetter") != NULL ||
       strstr(normalized_text, "temperatur") != NULL) {
-    if (strcmp(language_code, "es") == 0) {
-      return "Lo siento, no tengo acceso a Internet para consultar el clima actual";
-    } else if (strcmp(language_code, "zh") == 0) {
-      return "抱歉，我没有互联网访问权限来查看天气";
-    } else if (strcmp(language_code, "de") == 0) {
-      return "Entschuldigung, ich habe keinen Internetzugang, um das Wetter abzurufen";
-    } else {
-      return "I'm sorry, I don't have internet access to check the weather";
-    }
+    return get_localized_string(language_code, LOC_WEATHER_NO_INTERNET);
   }
   
   // Thank you (not really a question but common response)
   if (strstr(normalized_text, "thank") != NULL ||
       strstr(normalized_text, "thanks") != NULL ||
+      strstr(normalized_text, "gracias") != NULL ||
+      strstr(normalized_text, "muchas gracias") != NULL ||
+      strstr(normalized_text, "谢谢") != NULL ||
+      strstr(normalized_text, "谢了") != NULL ||
+      strstr(normalized_text, "感谢") != NULL ||
       strstr(normalized_text, "danke") != NULL ||
       strstr(normalized_text, "vielen dank") != NULL) {
-    if (strcmp(language_code, "es") == 0) {
-      return "De nada, estoy aquí para ayudar";
-    } else if (strcmp(language_code, "zh") == 0) {
-      return "不客气，很高兴能帮到您";
-    } else if (strcmp(language_code, "de") == 0) {
-      return "Gern geschehen! Ich helfe gerne";
-    } else {
-      return "You're welcome! Happy to help";
-    }
+    return get_localized_string(language_code, LOC_THANK_YOU_RESPONSE);
   }
   
   // Online/Internet status questions
@@ -1107,17 +1191,17 @@ static const char* answer_simple_question(const char* normalized_text, const cha
       strstr(normalized_text, "do you have internet") != NULL ||
       strstr(normalized_text, "are you connected") != NULL ||
       strstr(normalized_text, "do you need internet") != NULL ||
+      strstr(normalized_text, "estás en línea") != NULL ||
+      strstr(normalized_text, "tienes internet") != NULL ||
+      strstr(normalized_text, "estás conectado") != NULL ||
+      strstr(normalized_text, "necesitas internet") != NULL ||
+      strstr(normalized_text, "你在线吗") != NULL ||
+      strstr(normalized_text, "你有网络") != NULL ||
+      strstr(normalized_text, "你联网了") != NULL ||
+      strstr(normalized_text, "需要网络") != NULL ||
       strstr(normalized_text, "bist du online") != NULL ||
       strstr(normalized_text, "hast du internet") != NULL) {
-    if (strcmp(language_code, "es") == 0) {
-      return "No, funciono completamente sin conexión. Toda tu información permanece privada en tu dispositivo";
-    } else if (strcmp(language_code, "zh") == 0) {
-      return "不，我完全离线运行。您的所有信息都保留在您的设备上";
-    } else if (strcmp(language_code, "de") == 0) {
-      return "Nein, ich funktioniere vollständig offline. Alle deine Informationen bleiben privat auf deinem Gerät";
-    } else {
-      return "No, I work completely offline. All your information stays private on your device";
-    }
+    return get_localized_string(language_code, LOC_OFFLINE_STATUS);
   }
   
   // Version/System info questions
@@ -1264,14 +1348,10 @@ static const char* answer_simple_question(const char* normalized_text, const cha
   if (strstr(normalized_text, "is my data safe") != NULL ||
       strstr(normalized_text, "are you private") != NULL ||
       strstr(normalized_text, "do you track me") != NULL ||
-      strstr(normalized_text, "is this private") != NULL) {
-    if (strcmp(language_code, "es") == 0) {
-      return "Sí, todo se procesa localmente en tu dispositivo. No se envía nada a Internet";
-    } else if (strcmp(language_code, "zh") == 0) {
-      return "是的，一切都在您的设备上本地处理。没有任何内容发送到互联网";
-    } else {
-      return "Yes, everything is processed locally on your device. Nothing is sent to the internet";
-    }
+      strstr(normalized_text, "is this private") != NULL ||
+      strstr(normalized_text, "ist das privat") != NULL ||
+      strstr(normalized_text, "verfolgst du mich") != NULL) {
+    return get_localized_string(language_code, LOC_PRIVACY_QUESTION_RESPONSE);
   }
   
   // No simple answer found
@@ -1404,36 +1484,18 @@ int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
       
       // Fallback if LLM not available or failed
       conversation_ended = true;  // Even failed questions should end conversation
-      if (strcmp(intent->language_code, "es") == 0) {
-        response_text = "Lo siento, no puedo responder esa pregunta en este momento";
-      } else if (strcmp(intent->language_code, "zh") == 0) {
-        response_text = "抱歉，我现在无法回答这个问题";
-      } else {
-        response_text = "I'm sorry, I can't answer that question right now";
-      }
+      response_text = get_localized_string(intent->language_code, LOC_LLM_UNAVAILABLE);
       break;
 
     case ETHERVOX_INTENT_COMMAND:
     case ETHERVOX_INTENT_CONTROL:
       conversation_ended = true;  // Commands should not auto-restart microphone
-      if (strcmp(intent->language_code, "es") == 0) {
-        response_text = "Entendido. Ejecutando comando.";
-      } else if (strcmp(intent->language_code, "zh") == 0) {
-        response_text = "明白了。正在执行命令。";
-      } else {
-        response_text = "Understood. Executing command.";
-      }
+      response_text = get_localized_string(intent->language_code, LOC_COMMAND_UNDERSTOOD);
       break;
 
     case ETHERVOX_INTENT_GOODBYE:
       conversation_ended = true;  // Signal that conversation should end
-      if (strcmp(intent->language_code, "es") == 0) {
-        response_text = "¡Hasta luego! Que tengas un buen día.";
-      } else if (strcmp(intent->language_code, "zh") == 0) {
-        response_text = "再见！祝您有美好的一天。";
-      } else {
-        response_text = "Goodbye! Have a great day.";
-      }
+      response_text = get_localized_string(intent->language_code, LOC_GOODBYE_RESPONSE);
       break;
 
     default:
@@ -1525,13 +1587,7 @@ int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
       response->requires_external_llm = true;
       response->external_llm_prompt = strdup(intent->raw_text);
 
-      if (strcmp(intent->language_code, "es") == 0) {
-        response_text = "Lo siento, no entiendo completamente. ¿Podrías reformular?";
-      } else if (strcmp(intent->language_code, "zh") == 0) {
-        response_text = "抱歉，我不太理解。您能重新表述一下吗？";
-      } else {
-        response_text = "I'm sorry, I don't fully understand. Could you rephrase?";
-      }
+      response_text = get_localized_string(intent->language_code, LOC_UNKNOWN_RESPONSE);
       break;
     }
   }
