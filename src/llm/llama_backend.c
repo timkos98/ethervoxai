@@ -19,6 +19,7 @@
 #include "ethervox/llm.h"
 #include "ethervox/error.h"
 #include "ethervox/logging.h"
+#include "ethervox/config.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -51,15 +52,27 @@
 #define LLAMA_HEADER_AVAILABLE 0
 #endif
 
-// Default configuration values - ULTRA PERFORMANCE MODE
-#define LLAMA_DEFAULT_CONTEXT_LENGTH 2048  // Maximum context for best responses
-#define LLAMA_DEFAULT_MAX_TOKENS 4095  // Shorter responses for voice interactions
-#define LLAMA_DEFAULT_TEMPERATURE 0.7f
-#define LLAMA_DEFAULT_TOP_P 0.9f
-#define LLAMA_DEFAULT_GPU_LAYERS 99  // Offload everything to GPU for maximum speed
-#define LLAMA_DEFAULT_BATCH_SIZE 2048  // Massive batch for maximum throughput
-#define LLAMA_PROMPT_BATCH_SIZE 2048  // Maximum batch size for prompt processing
-#define LLAMA_MAX_RESPONSE_LENGTH 4096
+// Android-specific LLM defaults (from config.h)
+#ifdef ETHERVOX_PLATFORM_ANDROID
+#define LLAMA_DEFAULT_CONTEXT_LENGTH ETHERVOX_LLM_CONTEXT_LENGTH_ANDROID
+#define LLAMA_DEFAULT_MAX_TOKENS ETHERVOX_LLM_MAX_TOKENS_ANDROID
+#define LLAMA_DEFAULT_GPU_LAYERS ETHERVOX_LLM_GPU_LAYERS_ANDROID
+#define LLAMA_DEFAULT_BATCH_SIZE ETHERVOX_LLM_BATCH_SIZE_ANDROID
+#define LLAMA_PROMPT_BATCH_SIZE ETHERVOX_LLM_PROMPT_BATCH_SIZE_ANDROID
+#define LLAMA_MAX_RESPONSE_LENGTH ETHERVOX_LLM_MAX_RESPONSE_LENGTH_ANDROID
+#else
+// Desktop/other platform defaults
+#define LLAMA_DEFAULT_CONTEXT_LENGTH ETHERVOX_LLM_CONTEXT_LENGTH_DEFAULT
+#define LLAMA_DEFAULT_MAX_TOKENS ETHERVOX_LLM_MAX_TOKENS_DEFAULT
+#define LLAMA_DEFAULT_GPU_LAYERS ETHERVOX_LLM_GPU_LAYERS_DEFAULT
+#define LLAMA_DEFAULT_BATCH_SIZE 512U
+#define LLAMA_PROMPT_BATCH_SIZE 512U
+#define LLAMA_MAX_RESPONSE_LENGTH 4096U
+#endif
+
+// Common defaults (not platform-specific)
+#define LLAMA_DEFAULT_TEMPERATURE ETHERVOX_LLM_TEMPERATURE_DEFAULT
+#define LLAMA_DEFAULT_TOP_P ETHERVOX_LLM_TOP_P_DEFAULT
 
 // Llama backend context
 typedef struct {
