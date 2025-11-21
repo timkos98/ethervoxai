@@ -609,6 +609,9 @@ static void native_token_callback(const char* token, void* user_data) {
         return;
     }
     
+    // Log each token for debugging streaming issues
+    __android_log_print(ANDROID_LOG_DEBUG, "EthervoxJNI", "Streaming token: '%s'", token);
+    
     jstring j_token = create_jstring(ctx->env, token);
     (*ctx->env)->CallVoidMethod(ctx->env, ctx->callback_obj, ctx->on_token_method, j_token);
     (*ctx->env)->DeleteLocalRef(ctx->env, j_token);
@@ -817,3 +820,64 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getVersion(
     return create_jstring(env, "EthervoxAI v0.1.0");
 }
 
+JNIEXPORT jobject JNICALL
+Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getDefaultLlmConfig(
+        JNIEnv* env,
+        jobject thiz) {
+    (void)thiz;
+    
+    // Get default config from C
+    ethervox_llm_config_t config = ethervox_dialogue_get_default_llm_config();
+
+    // Find the LlmConfig class
+    jclass llmConfigClass = (*env)->FindClass(env, "com/droid/ethervox_multiplatform_core/LlmConfig");
+    if (llmConfigClass == NULL) {
+        return NULL;
+    }
+
+    // Get the constructor (Float, Int, Float, Int)
+    jmethodID constructor = (*env)->GetMethodID(env, llmConfigClass, "<init>", "(FIFI)V");
+    if (constructor == NULL) {
+        (*env)->DeleteLocalRef(env, llmConfigClass);
+        return NULL;
+    }
+
+    // Create the object
+    jobject llmConfigObj = (*env)->NewObject(env, llmConfigClass, constructor,
+                                             (jfloat)config.temperature,
+                                             (jint)config.max_tokens,
+                                             (jfloat)config.top_p,
+                                             (jint)config.context_length);
+
+    (*env)->DeleteLocalRef(env, llmConfigClass);
+    return llmConfigObj;
+}
+
+JNIEXPORT jobjectArray JNICALL
+Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getSupportedLanguages(
+        JNIEnv* env,
+        jobject thiz) {
+    (void)thiz;
+    
+    // Get supported languages from dialogue core
+    const char** languages = ethervox_dialogue_get_supported_languages();
+    
+    // Count languages
+    int count = 0;
+    while (languages[count] != NULL) {
+        count++;
+    }
+    
+    // Create Java String array
+    jclass stringClass = (*env)->FindClass(env, "java/lang/String");
+    jobjectArray languageArray = (*env)->NewObjectArray(env, count, stringClass, NULL);
+    
+    // Populate array with language codes
+    for (int i = 0; i < count; i++) {
+        jstring langCode = create_jstring(env, languages[i]);
+        (*env)->SetObjectArrayElement(env, languageArray, i, langCode);
+        (*env)->DeleteLocalRef(env, langCode);
+    }
+    
+    return languageArray;
+}

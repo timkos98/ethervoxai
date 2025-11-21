@@ -478,11 +478,19 @@ static int llama_backend_generate(ethervox_llm_backend_t* backend,
   }
   
   // Add sampling strategies to the chain
+  // Repetition penalty MUST come before other samplers to prevent loops
+  llama_sampler_chain_add(sampler, llama_sampler_init_penalties(
+    64,      // penalty_last_n: penalize last 64 tokens
+    1.1f,    // penalty_repeat: 1.1 = slight penalty (1.0 = disabled)
+    0.0f,    // penalty_freq: 0.0 = disabled
+    0.0f     // penalty_present: 0.0 = disabled
+  ));
   llama_sampler_chain_add(sampler, llama_sampler_init_top_k(40));
-  llama_sampler_chain_add(sampler, llama_sampler_init_top_p(0.9f, 1));
+  llama_sampler_chain_add(sampler, llama_sampler_init_top_p(ctx->top_p, 1));
   llama_sampler_chain_add(sampler, llama_sampler_init_temp(ctx->temperature));
-  llama_sampler_chain_add(sampler, llama_sampler_init_dist(0)); // seed=0 for deterministic sampling
-  LLAMA_LOG("Sampler chain created, starting token generation (max %d tokens)", ctx->n_predict);
+  llama_sampler_chain_add(sampler, llama_sampler_init_dist(ctx->seed));
+  LLAMA_LOG("Sampler chain created with: temp=%.2f, top_p=%.2f, top_k=40, max_tokens=%d", 
+            ctx->temperature, ctx->top_p, ctx->n_predict);
   
   // Generate tokens
   int n_generated = 0;
@@ -624,29 +632,14 @@ static int llama_backend_generate_stream(ethervox_llm_backend_t* backend,
     if (brevity_requested) {
       written = snprintf(formatted_prompt, sizeof(formatted_prompt),
         "<|im_start|>system\n"
-        "I am EthervoxAI, a privacy-focused voice assistant running locally on the user's device. "
-        "I have NO internet access and operate completely offline, ensuring user privacy. "
-        "My responses are spoken aloud via text-to-speech, so I speak conversationally and naturally. "
-        "\n"
-        "CRITICAL: The user specifically requested a BRIEF answer. I will respond in ONE SHORT SENTENCE (10-15 words max). "
-        "I am direct, clear, and conversational. I avoid technical jargon unless asked.<|im_end|>\n"
+        "You are EthervoxAI. Respond in ONE SHORT SENTENCE (10-15 words max).<|im_end|>\n"
         "<|im_start|>user\n%s<|im_end|>\n"
         "<|im_start|>assistant\n",
         prompt);
     } else {
       written = snprintf(formatted_prompt, sizeof(formatted_prompt),
         "<|im_start|>system\n"
-        "I am EthervoxAI, a privacy-focused voice assistant running locally on the user's device. "
-        "I have NO internet access and operate completely offline, ensuring user privacy. "
-        "My responses are spoken aloud via text-to-speech, so I speak conversationally and naturally. "
-        "\n"
-        "How I communicate:\n"
-        "- I keep responses SHORT and CONCISE (2-3 sentences maximum)\n"
-        "- I use natural, spoken language - like talking to a friend\n"
-        "- I am helpful, friendly, and direct\n"
-        "- I avoid markdown, code blocks, or formatting (my output will be spoken)\n"
-        "- I don't mention being offline unless it's relevant to the question\n"
-        "- If I don't know something, I admit it honestly and suggest what I CAN help with<|im_end|>\n"
+        "You are EthervoxAI, a helpful voice assistant. Keep responses SHORT (2-3 sentences), conversational, and avoid formatting since your output is spoken aloud.<|im_end|>\n"
         "<|im_start|>user\n%s<|im_end|>\n"
         "<|im_start|>assistant\n",
         prompt);
@@ -656,20 +649,14 @@ static int llama_backend_generate_stream(ethervox_llm_backend_t* backend,
     if (brevity_requested) {
       written = snprintf(formatted_prompt, sizeof(formatted_prompt),
         "<|system|>\n"
-        "I am EthervoxAI, a privacy-focused voice assistant running locally on the user's device. "
-        "I operate completely offline. My responses will be spoken aloud. "
-        "The user wants a BRIEF answer - I will respond in ONE SHORT SENTENCE (10-15 words max). "
-        "I am conversational and natural.</s>\n"
+        "You are EthervoxAI. Respond in ONE SHORT SENTENCE (10-15 words max).</s>\n"
         "<|user|>\n%s</s>\n"
         "<|assistant|>\n",
         prompt);
     } else {
       written = snprintf(formatted_prompt, sizeof(formatted_prompt),
         "<|system|>\n"
-        "I am EthervoxAI, a privacy-focused voice assistant running locally on the user's device. "
-        "I operate completely offline. My responses will be spoken aloud, so I speak conversationally. "
-        "I keep responses SHORT (2-3 sentences max). I use natural spoken language. "
-        "I am helpful and friendly. I avoid markdown or formatting.</s>\n"
+        "You are EthervoxAI, a helpful voice assistant. Keep responses SHORT (2-3 sentences), conversational, and avoid formatting since your output is spoken aloud.</s>\n"
         "<|user|>\n%s</s>\n"
         "<|assistant|>\n",
         prompt);
@@ -678,21 +665,19 @@ static int llama_backend_generate_stream(ethervox_llm_backend_t* backend,
     // DeepSeek uses simple format without special tokens
     if (brevity_requested) {
       written = snprintf(formatted_prompt, sizeof(formatted_prompt),
-        "I am EthervoxAI, an offline voice assistant. My response will be spoken aloud. "
-        "I respond in 1 short, conversational sentence.\n\n"
+        "You are EthervoxAI. Respond in ONE SHORT SENTENCE.\n\n"
         "User: %s\nAssistant:",
         prompt);
     } else {
       written = snprintf(formatted_prompt, sizeof(formatted_prompt),
-        "I am EthervoxAI, an offline voice assistant. My responses will be spoken aloud. "
-        "I keep it short (2-3 sentences), conversational, and natural. No markdown.\n\n"
+        "You are EthervoxAI, a helpful voice assistant. Keep responses SHORT (2-3 sentences) and conversational.\n\n"
         "User: %s\nAssistant:",
         prompt);
     }
   } else {
     // Fallback: minimal format for unknown models
     written = snprintf(formatted_prompt, sizeof(formatted_prompt), 
-      "I am a helpful voice assistant. I respond conversationally in 2-3 sentences.\n\n%s\n", 
+      "You are a helpful voice assistant. Respond in 2-3 short sentences.\n\n%s\n", 
       prompt);
   }
   
@@ -744,11 +729,20 @@ static int llama_backend_generate_stream(ethervox_llm_backend_t* backend,
   LLAMA_LOG("Prompt evaluated successfully in %u ms (%.1f tokens/sec)", 
             prompt_eval_time, (float)n_prompt_tokens / (prompt_eval_time / 1000.0f));
 
-  // Create sampler chain - simplified for speed
+  // Create sampler chain with full sampling parameters
   struct llama_sampler* sampler = llama_sampler_chain_init(llama_sampler_chain_default_params());
+  // Add repetition penalty first to prevent loops
+  llama_sampler_chain_add(sampler, llama_sampler_init_penalties(
+    64,      // penalty_last_n: penalize last 64 tokens
+    1.1f,    // penalty_repeat: 1.1 = slight penalty
+    0.0f,    // penalty_freq: 0.0 = disabled
+    0.0f     // penalty_present: 0.0 = disabled
+  ));
+  llama_sampler_chain_add(sampler, llama_sampler_init_top_k(40));
+  llama_sampler_chain_add(sampler, llama_sampler_init_top_p(ctx->top_p, 1));
   llama_sampler_chain_add(sampler, llama_sampler_init_temp(ctx->temperature));
-  llama_sampler_chain_add(sampler, llama_sampler_init_dist(0));
-  LLAMA_LOG("Sampler chain created (temp=%.2f, top_p=%.2f), starting streaming token generation (max %u tokens)", 
+  llama_sampler_chain_add(sampler, llama_sampler_init_dist(ctx->seed));
+  LLAMA_LOG("Streaming sampler chain created with: temp=%.2f, top_p=%.2f, top_k=40, max_tokens=%u", 
             (double)ctx->temperature, (double)ctx->top_p, (unsigned int)ctx->n_predict);
 
   // Generate tokens and stream them
