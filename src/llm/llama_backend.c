@@ -118,7 +118,7 @@ static uint32_t get_optimal_thread_count(void) {
     optimal = 16;
   }
   
-  LLAMA_LOG("Detected %u CPU cores, using %u threads", cpu_count, optimal);
+  LLAMA_LOG("Detected CPU cores and threads: %u cores, %u threads", (unsigned int)cpu_count, (unsigned int)optimal);
   return optimal;
 }
 
@@ -602,7 +602,7 @@ static int llama_backend_generate_stream(ethervox_llm_backend_t* backend,
                            strstr(prompt, "one sentence") != NULL ||
                            strstr(prompt, "shorter") != NULL);
   
-  // Format prompt based on model type
+  // Format prompt based on model type with comprehensive system instructions
   char formatted_prompt[2048];
   int written;
   
@@ -611,16 +611,29 @@ static int llama_backend_generate_stream(ethervox_llm_backend_t* backend,
     if (brevity_requested) {
       written = snprintf(formatted_prompt, sizeof(formatted_prompt),
         "<|im_start|>system\n"
-        "You are a helpful AI voice assistant. The user wants EXTREMELY BRIEF answers. "
-        "Respond in ONE SHORT SENTENCE only (10-15 words max). Be direct and concise.<|im_end|>\n"
+        "I am EthervoxAI, a privacy-focused voice assistant running locally on the user's device. "
+        "I have NO internet access and operate completely offline, ensuring user privacy. "
+        "My responses are spoken aloud via text-to-speech, so I speak conversationally and naturally. "
+        "\n"
+        "CRITICAL: The user specifically requested a BRIEF answer. I will respond in ONE SHORT SENTENCE (10-15 words max). "
+        "I am direct, clear, and conversational. I avoid technical jargon unless asked.<|im_end|>\n"
         "<|im_start|>user\n%s<|im_end|>\n"
         "<|im_start|>assistant\n",
         prompt);
     } else {
       written = snprintf(formatted_prompt, sizeof(formatted_prompt),
         "<|im_start|>system\n"
-        "You are a helpful AI voice assistant. IMPORTANT: Keep responses SHORT and CONCISE (2-3 sentences max). "
-        "Be direct and to the point. Avoid long explanations or examples unless specifically asked.<|im_end|>\n"
+        "I am EthervoxAI, a privacy-focused voice assistant running locally on the user's device. "
+        "I have NO internet access and operate completely offline, ensuring user privacy. "
+        "My responses are spoken aloud via text-to-speech, so I speak conversationally and naturally. "
+        "\n"
+        "How I communicate:\n"
+        "- I keep responses SHORT and CONCISE (2-3 sentences maximum)\n"
+        "- I use natural, spoken language - like talking to a friend\n"
+        "- I am helpful, friendly, and direct\n"
+        "- I avoid markdown, code blocks, or formatting (my output will be spoken)\n"
+        "- I don't mention being offline unless it's relevant to the question\n"
+        "- If I don't know something, I admit it honestly and suggest what I CAN help with<|im_end|>\n"
         "<|im_start|>user\n%s<|im_end|>\n"
         "<|im_start|>assistant\n",
         prompt);
@@ -629,13 +642,21 @@ static int llama_backend_generate_stream(ethervox_llm_backend_t* backend,
     // TinyLlama uses Zephyr format (similar to ChatML but different tags)
     if (brevity_requested) {
       written = snprintf(formatted_prompt, sizeof(formatted_prompt),
-        "<|system|>\nYou are a helpful AI voice assistant. Respond in ONE SHORT SENTENCE only (10-15 words max).</s>\n"
+        "<|system|>\n"
+        "I am EthervoxAI, a privacy-focused voice assistant running locally on the user's device. "
+        "I operate completely offline. My responses will be spoken aloud. "
+        "The user wants a BRIEF answer - I will respond in ONE SHORT SENTENCE (10-15 words max). "
+        "I am conversational and natural.</s>\n"
         "<|user|>\n%s</s>\n"
         "<|assistant|>\n",
         prompt);
     } else {
       written = snprintf(formatted_prompt, sizeof(formatted_prompt),
-        "<|system|>\nYou are a helpful AI voice assistant. Keep responses SHORT and CONCISE (2-3 sentences max).</s>\n"
+        "<|system|>\n"
+        "I am EthervoxAI, a privacy-focused voice assistant running locally on the user's device. "
+        "I operate completely offline. My responses will be spoken aloud, so I speak conversationally. "
+        "I keep responses SHORT (2-3 sentences max). I use natural spoken language. "
+        "I am helpful and friendly. I avoid markdown or formatting.</s>\n"
         "<|user|>\n%s</s>\n"
         "<|assistant|>\n",
         prompt);
@@ -644,16 +665,22 @@ static int llama_backend_generate_stream(ethervox_llm_backend_t* backend,
     // DeepSeek uses simple format without special tokens
     if (brevity_requested) {
       written = snprintf(formatted_prompt, sizeof(formatted_prompt),
-        "User: %s\nAssistant (respond in 1 short sentence):",
+        "I am EthervoxAI, an offline voice assistant. My response will be spoken aloud. "
+        "I respond in 1 short, conversational sentence.\n\n"
+        "User: %s\nAssistant:",
         prompt);
     } else {
       written = snprintf(formatted_prompt, sizeof(formatted_prompt),
+        "I am EthervoxAI, an offline voice assistant. My responses will be spoken aloud. "
+        "I keep it short (2-3 sentences), conversational, and natural. No markdown.\n\n"
         "User: %s\nAssistant:",
         prompt);
     }
   } else {
     // Fallback: minimal format for unknown models
-    written = snprintf(formatted_prompt, sizeof(formatted_prompt), "%s\n", prompt);
+    written = snprintf(formatted_prompt, sizeof(formatted_prompt), 
+      "I am a helpful voice assistant. I respond conversationally in 2-3 sentences.\n\n%s\n", 
+      prompt);
   }
   
   if (written >= (int)sizeof(formatted_prompt)) {
