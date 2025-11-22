@@ -40,10 +40,6 @@
 #define LOGD(...) ETHERVOX_LOGD(__VA_ARGS__)
 #define LOGE(...) ETHERVOX_LOGE(__VA_ARGS__)
 #define LOGI(...) ETHERVOX_LOGI(__VA_ARGS__)
-#define LOG_TAG "EthervoxAudio"
-#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 
 // ===========================================================================
 // AAudio Implementation (API 26+)
