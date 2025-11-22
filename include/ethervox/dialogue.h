@@ -134,6 +134,11 @@ typedef struct {
   void* external_llm_user_data;
   bool prefer_external_llm;
 
+  // Governor integration (tool-aware LLM orchestration)
+  void* governor;  // ethervox_governor_t*
+  void* governor_tool_registry;  // ethervox_tool_registry_t*
+  bool use_governor;  // Enable Governor for complex queries
+
   // Intent parsing patterns
   void* intent_patterns;  // Platform-specific pattern storage
 
