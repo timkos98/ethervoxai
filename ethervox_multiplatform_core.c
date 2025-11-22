@@ -11,6 +11,7 @@
 #include <jni.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include <android/log.h>
 
 #include "ethervox/audio.h"
@@ -18,11 +19,51 @@
 #include "ethervox/stt.h"
 #include "ethervox/llm.h"
 #include "ethervox/dialogue.h"
+#include "ethervox/governor.h"
+#include "ethervox/timer_tools.h"
 #include "ethervox/platform.h"
+#include "ethervox/config.h"
 
-#define LOG_TAG "EthervoxJNI"
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#define LOGI(...) ETHERVOX_LOGI(__VA_ARGS__)
+#define LOGE(...) ETHERVOX_LOGE(__VA_ARGS__)
+
+// Global debug mode flag (default to enabled, can be toggled at runtime)
+int g_ethervox_debug_enabled = 1;
+
+// Global log callback for sending C logs to Java/Kotlin debug window
+ethervox_log_callback_t g_ethervox_log_callback = NULL;
+
+// Logging helper that sends to both logcat and callback
+void ethervox_log_with_callback(int level, const char* tag, const char* fmt, ...) {
+    if (!g_ethervox_debug_enabled) return;
+    
+    // Guard against NULL format string
+    if (!fmt) {
+        fmt = "(null format string)";
+    }
+    if (!tag) {
+        tag = "EthervoxCore";
+    }
+    
+    char buffer[512];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buffer, sizeof(buffer), fmt, args);
+    va_end(args);
+    
+    // Send to Android logcat
+    __android_log_print(level, tag, "%s", buffer);
+    
+    // Send to callback (debug window) if registered
+    if (g_ethervox_log_callback) {
+        g_ethervox_log_callback(level, tag, buffer);
+    }
+}
+
+// JNI callback storage for log forwarding
+static JavaVM* g_jvm = NULL;
+static jobject g_log_callback_obj = NULL;
+static jmethodID g_log_callback_method = NULL;
 
 // Global runtime instances (managed from Java layer)
 static ethervox_audio_runtime_t* g_audio_runtime = NULL;
@@ -45,6 +86,61 @@ static jstring create_jstring(JNIEnv* env, const char* str) {
 // ===========================================================================
 // Platform Initialization
 // ===========================================================================
+
+JNIEXPORT jboolean JNICALL
+Java_com_droid_ethervox_1multiplatform_1core_NativeLib_loadGovernorModel(
+    JNIEnv* env, jobject thiz, jstring modelPath) {
+    (void)thiz;
+    
+    if (!g_dialogue_engine || !g_dialogue_engine->governor) {
+        LOGE("Cannot load Governor model - dialogue engine or governor not initialized");
+        return JNI_FALSE;
+    }
+    
+    const char* path = (*env)->GetStringUTFChars(env, modelPath, NULL);
+    
+    LOGI("[JNI] Loading Governor model from: %s", path);
+    
+    ethervox_governor_t* governor = (ethervox_governor_t*)g_dialogue_engine->governor;
+    int result = ethervox_governor_load_model(governor, path);
+    
+    (*env)->ReleaseStringUTFChars(env, modelPath, path);
+    
+    if (result == 0) {
+        LOGI("[JNI] Governor model loaded successfully");
+        return JNI_TRUE;
+    } else {
+        LOGE("Failed to load Governor model");
+        return JNI_FALSE;
+    }
+}
+
+JNIEXPORT jobjectArray JNICALL
+Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getRegisteredPlugins(
+    JNIEnv* env, jobject thiz) {
+    
+    if (!g_dialogue_engine || !g_dialogue_engine->governor_tool_registry) {
+        // Return empty array if not initialized
+        jclass stringClass = (*env)->FindClass(env, "java/lang/String");
+        return (*env)->NewObjectArray(env, 0, stringClass, NULL);
+    }
+    
+    ethervox_tool_registry_t* registry = (ethervox_tool_registry_t*)g_dialogue_engine->governor_tool_registry;
+    int tool_count = registry->tool_count;
+    
+    // Create Java string array
+    jclass stringClass = (*env)->FindClass(env, "java/lang/String");
+    jobjectArray result = (*env)->NewObjectArray(env, tool_count, stringClass, NULL);
+    
+    // Populate array with tool names
+    for (int i = 0; i < tool_count; i++) {
+        jstring toolName = (*env)->NewStringUTF(env, registry->tools[i].name);
+        (*env)->SetObjectArrayElement(env, result, i, toolName);
+        (*env)->DeleteLocalRef(env, toolName);
+    }
+    
+    return result;
+}
 
 JNIEXPORT jint JNICALL
 Java_com_droid_ethervox_1multiplatform_1core_NativeLib_platformInit(
@@ -598,6 +694,7 @@ typedef struct {
     jmethodID on_token_method;
     jmethodID on_complete_method;
     jmethodID on_error_method;
+    jmethodID on_governor_progress_method;  // New: Governor progress callback
     bool conversation_ended;
 } jni_stream_context_t;
 
@@ -608,9 +705,67 @@ static void native_token_callback(const char* token, void* user_data) {
         return;
     }
     
+    // Guard against NULL token
+    if (!token) {
+        token = "(null token)";
+    }
+    
+    // Log each token for debugging streaming issues
+    __android_log_print(ANDROID_LOG_DEBUG, "EthervoxJNI", "Streaming token: '%s'", token);
+    
     jstring j_token = create_jstring(ctx->env, token);
     (*ctx->env)->CallVoidMethod(ctx->env, ctx->callback_obj, ctx->on_token_method, j_token);
     (*ctx->env)->DeleteLocalRef(ctx->env, j_token);
+}
+
+// Governor progress callback function
+static void native_governor_progress_callback(
+    ethervox_governor_event_type_t event_type,
+    const char* message,
+    void* user_data
+) {
+    jni_stream_context_t* ctx = (jni_stream_context_t*)user_data;
+    if (!ctx || !ctx->env || !ctx->callback_obj || !ctx->on_governor_progress_method) {
+        return;  // Callback not set or not available
+    }
+    
+    // Guard against NULL message
+    if (!message) {
+        message = "(null message)";
+    }
+    
+    // Map event type to string
+    const char* event_str;
+    switch (event_type) {
+        case ETHERVOX_GOVERNOR_EVENT_ITERATION_START:
+            event_str = "ITERATION_START";
+            break;
+        case ETHERVOX_GOVERNOR_EVENT_THINKING:
+            event_str = "THINKING";
+            break;
+        case ETHERVOX_GOVERNOR_EVENT_TOOL_CALL:
+            event_str = "TOOL_CALL";
+            break;
+        case ETHERVOX_GOVERNOR_EVENT_TOOL_RESULT:
+            event_str = "TOOL_RESULT";
+            break;
+        case ETHERVOX_GOVERNOR_EVENT_CONFIDENCE_UPDATE:
+            event_str = "CONFIDENCE_UPDATE";
+            break;
+        case ETHERVOX_GOVERNOR_EVENT_COMPLETE:
+            event_str = "COMPLETE";
+            break;
+        default:
+            event_str = "UNKNOWN";
+    }
+    
+    __android_log_print(ANDROID_LOG_INFO, "EthervoxGovernor", "[%s] %s", event_str, message);
+    
+    jstring j_event = create_jstring(ctx->env, event_str);
+    jstring j_message = create_jstring(ctx->env, message);
+    (*ctx->env)->CallVoidMethod(ctx->env, ctx->callback_obj, ctx->on_governor_progress_method, j_event, j_message);
+    (*ctx->env)->DeleteLocalRef(ctx->env, j_event);
+    (*ctx->env)->DeleteLocalRef(ctx->env, j_message);
 }
 
 JNIEXPORT void JNICALL
@@ -645,6 +800,7 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_processDialogueStreamingN
     jmethodID on_token = (*env)->GetMethodID(env, callback_class, "onToken", "(Ljava/lang/String;)V");
     jmethodID on_complete = (*env)->GetMethodID(env, callback_class, "onComplete", "(Z)V");
     jmethodID on_error = (*env)->GetMethodID(env, callback_class, "onError", "(Ljava/lang/String;)V");
+    jmethodID on_governor_progress = (*env)->GetMethodID(env, callback_class, "onGovernorProgress", "(Ljava/lang/String;Ljava/lang/String;)V");
     
     if (!on_token || !on_complete || !on_error) {
         LOGE("Failed to get callback methods");
@@ -660,6 +816,7 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_processDialogueStreamingN
         .on_token_method = on_token,
         .on_complete_method = on_complete,
         .on_error_method = on_error,
+        .on_governor_progress_method = on_governor_progress,  // May be NULL if not implemented
         .conversation_ended = false
     };
     
@@ -805,6 +962,172 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getVersion(
         JNIEnv* env,
         jobject thiz) {
     (void)thiz;
-    return create_jstring(env, "EthervoxAI v0.1.0");
+    return create_jstring(env, ETHERVOX_VERSION_STRING);
 }
 
+JNIEXPORT jstring JNICALL
+Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getActiveTimerStatus(
+        JNIEnv* env,
+        jobject thiz) {
+    (void)thiz;
+    
+    char* status = ethervox_timer_get_active_status();
+    if (!status) {
+        return create_jstring(env, "{\"has_timer\": false}");
+    }
+    
+    jstring result = create_jstring(env, status);
+    free(status);
+    return result;
+}
+
+JNIEXPORT jobject JNICALL
+Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getDefaultLlmConfig(
+        JNIEnv* env,
+        jobject thiz) {
+    (void)thiz;
+    
+    // Get default config from C
+    ethervox_llm_config_t config = ethervox_dialogue_get_default_llm_config();
+
+    // Find the LlmConfig class
+    jclass llmConfigClass = (*env)->FindClass(env, "com/droid/ethervox_multiplatform_core/LlmConfig");
+    if (llmConfigClass == NULL) {
+        return NULL;
+    }
+
+    // Get the constructor (Float, Int, Float, Int)
+    jmethodID constructor = (*env)->GetMethodID(env, llmConfigClass, "<init>", "(FIFI)V");
+    if (constructor == NULL) {
+        (*env)->DeleteLocalRef(env, llmConfigClass);
+        return NULL;
+    }
+
+    // Create the object
+    jobject llmConfigObj = (*env)->NewObject(env, llmConfigClass, constructor,
+                                             (jfloat)config.temperature,
+                                             (jint)config.max_tokens,
+                                             (jfloat)config.top_p,
+                                             (jint)config.context_length);
+
+    (*env)->DeleteLocalRef(env, llmConfigClass);
+    return llmConfigObj;
+}
+
+JNIEXPORT jobjectArray JNICALL
+Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getSupportedLanguages(
+        JNIEnv* env,
+        jobject thiz) {
+    (void)thiz;
+    
+    // Get supported languages from dialogue core
+    const char** languages = ethervox_dialogue_get_supported_languages();
+    
+    // Count languages
+    int count = 0;
+    while (languages[count] != NULL) {
+        count++;
+    }
+    
+    // Create Java String array
+    jclass stringClass = (*env)->FindClass(env, "java/lang/String");
+    jobjectArray languageArray = (*env)->NewObjectArray(env, count, stringClass, NULL);
+    
+    // Populate array with language codes
+    for (int i = 0; i < count; i++) {
+        jstring langCode = create_jstring(env, languages[i]);
+        (*env)->SetObjectArrayElement(env, languageArray, i, langCode);
+        (*env)->DeleteLocalRef(env, langCode);
+    }
+    
+    return languageArray;
+}
+
+// ===========================================================================
+// Debug Mode Control
+// ===========================================================================
+
+JNIEXPORT void JNICALL
+Java_com_droid_ethervox_1multiplatform_1core_NativeLib_setDebugMode(JNIEnv* env, jobject thiz, jboolean enabled) {
+    g_ethervox_debug_enabled = enabled ? 1 : 0;
+    LOGI("Debug mode %s", g_ethervox_debug_enabled ? "enabled" : "disabled");
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getDebugMode(JNIEnv* env, jobject thiz) {
+    return (jboolean)(g_ethervox_debug_enabled ? JNI_TRUE : JNI_FALSE);
+}
+
+// C callback that forwards logs to Java
+static void java_log_callback_wrapper(int level, const char* tag, const char* message) {
+    if (!g_jvm || !g_log_callback_obj || !g_log_callback_method) {
+        return;
+    }
+    
+    // Guard against NULL pointers
+    if (!tag) tag = "EthervoxCore";
+    if (!message) message = "";
+    
+    JNIEnv* env = NULL;
+    jint result = (*g_jvm)->GetEnv(g_jvm, (void**)&env, JNI_VERSION_1_6);
+    
+    bool detach = false;
+    if (result == JNI_EDETACHED) {
+        if ((*g_jvm)->AttachCurrentThread(g_jvm, &env, NULL) != JNI_OK) {
+            return;
+        }
+        detach = true;
+    }
+    
+    jstring jTag = (*env)->NewStringUTF(env, tag);
+    jstring jMessage = (*env)->NewStringUTF(env, message);
+    
+    if (jTag && jMessage) {
+        (*env)->CallVoidMethod(env, g_log_callback_obj, g_log_callback_method, level, jTag, jMessage);
+    }
+    
+    if (jTag) (*env)->DeleteLocalRef(env, jTag);
+    if (jMessage) (*env)->DeleteLocalRef(env, jMessage);
+    
+    if (detach) {
+        (*g_jvm)->DetachCurrentThread(g_jvm);
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_droid_ethervox_1multiplatform_1core_NativeLib_setLogCallback(
+    JNIEnv* env, jobject thiz, jobject callback) {
+    
+    // Store JavaVM reference if not already stored
+    if (!g_jvm) {
+        (*env)->GetJavaVM(env, &g_jvm);
+    }
+    
+    // Clear old callback
+    if (g_log_callback_obj) {
+        (*env)->DeleteGlobalRef(env, g_log_callback_obj);
+        g_log_callback_obj = NULL;
+        g_log_callback_method = NULL;
+        g_ethervox_log_callback = NULL;
+    }
+    
+    // Register new callback
+    if (callback) {
+        g_log_callback_obj = (*env)->NewGlobalRef(env, callback);
+        
+        jclass callbackClass = (*env)->GetObjectClass(env, callback);
+        g_log_callback_method = (*env)->GetMethodID(env, callbackClass, 
+            "onLog", "(ILjava/lang/String;Ljava/lang/String;)V");
+        
+        if (g_log_callback_method) {
+            g_ethervox_log_callback = java_log_callback_wrapper;
+            LOGI("Log callback registered successfully");
+        } else {
+            LOGE("Failed to find onLog method in callback object");
+            (*env)->DeleteGlobalRef(env, g_log_callback_obj);
+            g_log_callback_obj = NULL;
+        }
+    } else {
+        LOGI("Log callback cleared");
+    }
+}

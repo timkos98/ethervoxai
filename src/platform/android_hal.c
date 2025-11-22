@@ -25,11 +25,11 @@
 #include <sys/sysinfo.h>
 
 #include "ethervox/platform.h"
+#include "ethervox/config.h"
 
-#define LOG_TAG "EthervoxHAL"
-#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+#define LOGD(...) ETHERVOX_LOGD(__VA_ARGS__)
+#define LOGE(...) ETHERVOX_LOGE(__VA_ARGS__)
+#define LOGI(...) ETHERVOX_LOGI(__VA_ARGS__)
 
 // Android platform-specific data
 typedef struct {
@@ -266,13 +266,7 @@ int ethervox_platform_hal_register_android(ethervox_platform_t* platform) {
     return -1;
   }
 
-  // Initialize platform info
-  if (android_init(&platform->info) != 0) {
-    LOGE("Failed to initialize Android platform info");
-    return -1;
-  }
-
-  // Register HAL function pointers
+  // Register HAL function pointers (init will be called by platform_init)
   platform->hal.init = android_init;
   platform->hal.cleanup = android_cleanup;
   
@@ -307,9 +301,6 @@ int ethervox_platform_hal_register_android(ethervox_platform_t* platform) {
   platform->hal.get_battery_voltage = android_get_battery_voltage;
   platform->hal.delay_us = android_delay_us;
   platform->hal.delay_ms = android_delay_ms;
-
-  platform->is_initialized = true;
-  platform->boot_time = android_get_timestamp_us();
 
   LOGI("Android HAL registered successfully");
   return 0;
