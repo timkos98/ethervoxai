@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(EthervoxAI VERSION 0.1.0 LANGUAGES C)
+project(EthervoxAI VERSION 0.0.3 LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -206,7 +206,13 @@ file(GLOB ETHERVOXAI_CORE_SOURCES
     "src/plugins/*.c"
     "src/wake_word/*.c"
     "src/stt/*.c"
+    "src/governor/*.c"
+    "src/plugins/compute_tools/*.c"
+    "src/plugins/timer_tools/*.c"
 )
+
+# Exclude test files from the main library
+list(FILTER ETHERVOXAI_CORE_SOURCES EXCLUDE REGEX ".*test_.*\\.c$")
 
 # Add LLM sources only if LLM backends are enabled
 if(WITH_LLAMA OR WITH_TINYLLAMA)

@@ -580,7 +580,7 @@ int ethervox_dialogue_init(ethervox_dialogue_engine_t* engine,
 #if defined(ETHERVOX_WITH_LLAMA) && defined(LLAMA_CPP_AVAILABLE) && LLAMA_CPP_AVAILABLE
   if (config && config->model_path) {
 #ifdef ETHERVOX_PLATFORM_ANDROID
-    ETHERVOX_LOGI(
+    __android_log_print(ANDROID_LOG_INFO, "EthervoxDialogue",
                         "Initializing LLM backend with model: %s", config->model_path);
 #else
     printf("Initializing LLM backend with model: %s\n", config->model_path);
@@ -598,14 +598,14 @@ int ethervox_dialogue_init(ethervox_dialogue_engine_t* engine,
           engine->llm_backend = backend;
           engine->use_llm_for_unknown = true;
 #ifdef ETHERVOX_PLATFORM_ANDROID
-          ETHERVOX_LOGI(
+          __android_log_print(ANDROID_LOG_INFO, "EthervoxDialogue",
                               "LLM backend initialized successfully");
 #else
           printf("LLM backend initialized successfully\n");
 #endif
         } else {
 #ifdef ETHERVOX_PLATFORM_ANDROID
-          ETHERVOX_LOGE( "Failed to load LLM model: %d",
+          __android_log_print(ANDROID_LOG_ERROR, "EthervoxDialogue", "Failed to load LLM model: %d",
                               result);
 #else
           printf("Failed to load LLM model: %d\n", result);
@@ -615,7 +615,7 @@ int ethervox_dialogue_init(ethervox_dialogue_engine_t* engine,
         }
       } else {
 #ifdef ETHERVOX_PLATFORM_ANDROID
-        ETHERVOX_LOGE(
+        __android_log_print(ANDROID_LOG_ERROR, "EthervoxDialogue",
                             "Failed to initialize LLM backend: %d", result);
 #else
         printf("Failed to initialize LLM backend: %d\n", result);
@@ -624,7 +624,7 @@ int ethervox_dialogue_init(ethervox_dialogue_engine_t* engine,
       }
     } else {
 #ifdef ETHERVOX_PLATFORM_ANDROID
-      ETHERVOX_LOGE( "Failed to create LLM backend");
+      __android_log_print(ANDROID_LOG_ERROR, "EthervoxDialogue", "Failed to create LLM backend");
 #else
       printf("Failed to create LLM backend\n");
 #endif
@@ -633,7 +633,7 @@ int ethervox_dialogue_init(ethervox_dialogue_engine_t* engine,
 #else
   if (config && config->model_path) {
 #ifdef ETHERVOX_PLATFORM_ANDROID
-    ETHERVOX_LOGW(
+    __android_log_print(ANDROID_LOG_WARN, "EthervoxDialogue",
                         "LLM support not compiled in (LLAMA_CPP_AVAILABLE not defined)");
 #else
     printf("LLM support not compiled in (LLAMA_CPP_AVAILABLE not defined)\n");
@@ -647,7 +647,7 @@ int ethervox_dialogue_init(ethervox_dialogue_engine_t* engine,
   engine->use_governor = false;
 
 #ifdef ETHERVOX_PLATFORM_ANDROID
-  ETHERVOX_LOGI(
+  __android_log_print(ANDROID_LOG_INFO, "EthervoxDialogue",
                       "Initializing Governor with compute tools...");
 #else
   printf("Initializing Governor with compute tools...\\n");
@@ -667,7 +667,7 @@ int ethervox_dialogue_init(ethervox_dialogue_engine_t* engine,
     tool_count += 4;
 
 #ifdef ETHERVOX_PLATFORM_ANDROID
-    ETHERVOX_LOGI( "Registered %d tools total",
+    __android_log_print(ANDROID_LOG_INFO, "EthervoxDialogue", "Registered %d tools total",
                         tool_count);
 #else
     printf("Registered %d tools total\\n", tool_count);
@@ -683,21 +683,21 @@ int ethervox_dialogue_init(ethervox_dialogue_engine_t* engine,
       engine->use_governor = true;
 
 #ifdef ETHERVOX_PLATFORM_ANDROID
-      ETHERVOX_LOGI(
+      __android_log_print(ANDROID_LOG_INFO, "EthervoxDialogue",
                           "Governor initialized successfully");
 #else
       printf("Governor initialized successfully\\n");
 #endif
     } else {
 #ifdef ETHERVOX_PLATFORM_ANDROID
-      ETHERVOX_LOGE( "Failed to initialize Governor");
+      __android_log_print(ANDROID_LOG_ERROR, "EthervoxDialogue", "Failed to initialize Governor");
 #endif
       ethervox_tool_registry_cleanup(registry);
       free(registry);
     }
   } else {
 #ifdef ETHERVOX_PLATFORM_ANDROID
-    ETHERVOX_LOGE( "Failed to create tool registry");
+    __android_log_print(ANDROID_LOG_ERROR, "EthervoxDialogue", "Failed to create tool registry");
 #endif
     if (registry)
       free(registry);
@@ -1502,7 +1502,7 @@ int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
   // Try Governor first for ALL intent types (if enabled)
   if (engine->use_governor && engine->governor) {
 #ifdef ETHERVOX_PLATFORM_ANDROID
-    ETHERVOX_LOGI( 
+    __android_log_print(ANDROID_LOG_INFO, "EthervoxDialogue", 
                        "Using Governor for intent: %s", intent->raw_text);
 #endif
     
@@ -1516,13 +1516,12 @@ int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
         &gov_response,
         &gov_error,
         &metrics,
-        NULL,  // Progress callback
-        NULL,  // Token callback (not streaming)
-        NULL   // User data
+        NULL,
+        NULL
     );
     
     if (status == ETHERVOX_GOVERNOR_SUCCESS && gov_response) {
-      response->text = strdup(gov_response);
+      snprintf(response->text, sizeof(response->text), "%s", gov_response);
       response->confidence = metrics.confidence;
       response->processing_time_ms = 100;
       response->conversation_ended = true;
@@ -1540,7 +1539,7 @@ int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
     ethervox_llm_backend_t* backend = (ethervox_llm_backend_t*)engine->llm_backend;
     if (backend->is_loaded) {
 #ifdef ETHERVOX_PLATFORM_ANDROID
-      ETHERVOX_LOGI(
+      __android_log_print(ANDROID_LOG_INFO, "EthervoxDialogue",
                           "Using LLM backend for intent: %s", intent->raw_text);
 #endif
       int llm_result = ethervox_llm_backend_generate(backend, intent->raw_text,
@@ -1575,7 +1574,7 @@ int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
       if (engine->use_governor && engine->governor) {
         
 #ifdef ETHERVOX_PLATFORM_ANDROID
-        ETHERVOX_LOGI( 
+        __android_log_print(ANDROID_LOG_INFO, "EthervoxDialogue", 
                            "Using Governor for query: %s", intent->raw_text);
 #else
         printf("Using Governor for query: %s\\n", intent->raw_text);
@@ -1592,8 +1591,7 @@ int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
             &gov_error,
             &metrics,
             NULL,  // TODO: Add progress callback for UI updates
-            NULL,  // Token callback (not streaming)
-            NULL   // User data
+            NULL
         );
         
         if (status == ETHERVOX_GOVERNOR_SUCCESS && gov_response) {
@@ -1607,13 +1605,13 @@ int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
           if (gov_error) free(gov_error);
           
 #ifdef ETHERVOX_PLATFORM_ANDROID
-          ETHERVOX_LOGI( 
+          __android_log_print(ANDROID_LOG_INFO, "EthervoxDialogue", 
                              "Governor response: %s (conf=%.2f)", response->text, metrics.confidence);
 #endif
           return 0;
         } else if (gov_error) {
 #ifdef ETHERVOX_PLATFORM_ANDROID
-          ETHERVOX_LOGW( 
+          __android_log_print(ANDROID_LOG_WARN, "EthervoxDialogue", 
                              "Governor error: %s", gov_error);
 #endif
           free(gov_error);
@@ -1630,7 +1628,7 @@ int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
 
           if (backend->is_loaded) {
 #ifdef ETHERVOX_PLATFORM_ANDROID
-            ETHERVOX_LOGI(
+            __android_log_print(ANDROID_LOG_INFO, "EthervoxDialogue",
                                 "Using LLM backend for question: %s", intent->raw_text);
 #else
             printf("Using LLM backend for question: %s\n", intent->raw_text);
@@ -1656,7 +1654,7 @@ int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
           // We found a simple answer, use it as last resort
           conversation_ended = true;  // Questions should end conversation (no follow-up)
 #ifdef ETHERVOX_PLATFORM_ANDROID
-          ETHERVOX_LOGI(
+          __android_log_print(ANDROID_LOG_INFO, "EthervoxDialogue",
                               "Answered simple question directly (fallback): %s", response_text);
 #else
           printf("Answered simple question directly (fallback): %s\n", response_text);
@@ -1684,7 +1682,7 @@ int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
       case ETHERVOX_INTENT_UNKNOWN:
         // Try LLM backend if available
 #ifdef ETHERVOX_PLATFORM_ANDROID
-        ETHERVOX_LOGI( "UNKNOWN intent received: %s",
+        __android_log_print(ANDROID_LOG_INFO, "EthervoxDialogue", "UNKNOWN intent received: %s",
                             intent->raw_text);
 #else
         printf("UNKNOWN intent received: %s\n", intent->raw_text);
@@ -1692,8 +1690,8 @@ int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
 
 #if defined(ETHERVOX_WITH_LLAMA) && defined(LLAMA_CPP_AVAILABLE) && LLAMA_CPP_AVAILABLE
 #ifdef ETHERVOX_PLATFORM_ANDROID
-        ETHERVOX_LOGI( "LLM compile flags are defined");
-        ETHERVOX_LOGI(
+        __android_log_print(ANDROID_LOG_INFO, "EthervoxDialogue", "LLM compile flags are defined");
+        __android_log_print(ANDROID_LOG_INFO, "EthervoxDialogue",
                             "engine->llm_backend = %p, engine->use_llm_for_unknown = %d",
                             engine->llm_backend, engine->use_llm_for_unknown);
 #else
@@ -1706,9 +1704,9 @@ int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
           ethervox_llm_backend_t* backend = (ethervox_llm_backend_t*)engine->llm_backend;
 
 #ifdef ETHERVOX_PLATFORM_ANDROID
-          ETHERVOX_LOGI(
+          __android_log_print(ANDROID_LOG_INFO, "EthervoxDialogue",
                               "LLM backend exists, checking if loaded...");
-          ETHERVOX_LOGI( "backend->is_loaded = %d",
+          __android_log_print(ANDROID_LOG_INFO, "EthervoxDialogue", "backend->is_loaded = %d",
                               backend->is_loaded);
 #else
           printf("LLM backend exists, checking if loaded...\n");
@@ -1730,7 +1728,7 @@ int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
               response->processing_time_ms = kEthervoxResponseProcessingTimeMs;
               response->conversation_ended = false;  // Don't end conversation
 #ifdef ETHERVOX_PLATFORM_ANDROID
-              ETHERVOX_LOGI(
+              __android_log_print(ANDROID_LOG_INFO, "EthervoxDialogue",
                                   "LLM backend generated response: %s", response->text);
 #else
               printf("LLM backend generated response: %s\n", response->text);
@@ -1738,7 +1736,7 @@ int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
               return 0;
             } else {
 #ifdef ETHERVOX_PLATFORM_ANDROID
-              ETHERVOX_LOGW(
+              __android_log_print(ANDROID_LOG_WARN, "EthervoxDialogue",
                                   "LLM backend generation failed or empty response: %d",
                                   llm_result);
 #else
@@ -1747,7 +1745,7 @@ int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
             }
           } else {
 #ifdef ETHERVOX_PLATFORM_ANDROID
-            ETHERVOX_LOGI(
+            __android_log_print(ANDROID_LOG_INFO, "EthervoxDialogue",
                                 "LLM backend not loaded (is_loaded=%d), using fallback response",
                                 backend->is_loaded);
 #else
@@ -1757,7 +1755,7 @@ int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
           }
         } else {
 #ifdef ETHERVOX_PLATFORM_ANDROID
-          ETHERVOX_LOGI(
+          __android_log_print(ANDROID_LOG_INFO, "EthervoxDialogue",
                               "LLM backend not available: llm_backend=%p, use_llm_for_unknown=%d",
                               engine->llm_backend, engine->use_llm_for_unknown);
 #else
@@ -1767,7 +1765,7 @@ int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
         }
 #else
 #ifdef ETHERVOX_PLATFORM_ANDROID
-        ETHERVOX_LOGI(
+        __android_log_print(ANDROID_LOG_INFO, "EthervoxDialogue",
                             "LLM compile flags NOT defined - ETHERVOX_WITH_LLAMA and/or "
                             "LLAMA_CPP_AVAILABLE not set");
 #else
@@ -1811,12 +1809,11 @@ int ethervox_dialogue_process_llm_stream(ethervox_dialogue_engine_t* engine,
     return -1;
   }
 
-  // Route to Governor for questions and unknown intents if enabled
-  if (engine->use_governor && engine->governor && 
-      (intent->type == ETHERVOX_INTENT_QUESTION || intent->type == ETHERVOX_INTENT_UNKNOWN)) {
+  // Route to Governor for all questions if enabled
+  if (engine->use_governor && engine->governor && intent->type == ETHERVOX_INTENT_QUESTION) {
     
 #ifdef ETHERVOX_PLATFORM_ANDROID
-    ETHERVOX_LOGI( 
+    __android_log_print(ANDROID_LOG_INFO, "EthervoxDialogue", 
                        "Using Governor (streaming) for: %s", intent->raw_text);
 #endif
     
@@ -1833,13 +1830,13 @@ int ethervox_dialogue_process_llm_stream(ethervox_dialogue_engine_t* engine,
         &gov_error,
         &metrics,
         NULL,  // Progress callback (will be wired through JNI)
-        token_callback,  // Token callback for streaming
-        user_data
+        NULL
     );
     
     if (status == ETHERVOX_GOVERNOR_SUCCESS && gov_response) {
-      // Response was already streamed via token_callback
-      // Just set conversation_ended flag
+      // Stream the final response
+      token_callback(gov_response, user_data);
+      
       if (conversation_ended) {
         *conversation_ended = true;
       }
@@ -1849,7 +1846,7 @@ int ethervox_dialogue_process_llm_stream(ethervox_dialogue_engine_t* engine,
       return 0;
     } else if (gov_error) {
 #ifdef ETHERVOX_PLATFORM_ANDROID
-      ETHERVOX_LOGW( 
+      __android_log_print(ANDROID_LOG_WARN, "EthervoxDialogue", 
                          "Governor failed: %s", gov_error);
 #endif
       free(gov_error);
@@ -1876,7 +1873,7 @@ int ethervox_dialogue_process_llm_stream(ethervox_dialogue_engine_t* engine,
     }
 
     if (use_llm_streaming) {
-      ETHERVOX_LOGI(
+      __android_log_print(ANDROID_LOG_INFO, "EthervoxDialogue",
                           "Using LLM backend streaming for: %s", intent->raw_text);
 
       return backend->generate_stream(backend, intent->raw_text, intent->language_code,
@@ -1887,7 +1884,7 @@ int ethervox_dialogue_process_llm_stream(ethervox_dialogue_engine_t* engine,
 
   // Fallback: process with regular dialogue engine and stream the result
 #ifdef ETHERVOX_PLATFORM_ANDROID
-  ETHERVOX_LOGI(
+  __android_log_print(ANDROID_LOG_INFO, "EthervoxDialogue",
                       "LLM streaming not available, using regular dialogue processing");
 #else
   printf("LLM streaming not available, using regular dialogue processing\n");
@@ -1899,9 +1896,7 @@ int ethervox_dialogue_process_llm_stream(ethervox_dialogue_engine_t* engine,
   int result = ethervox_dialogue_process_llm(engine, intent, NULL, &response);
   if (result == 0 && response.text) {
     // Stream the complete response as one token
-    if (token_callback) {
-      token_callback(response.text, user_data);
-    }
+    token_callback(response.text, user_data);
 
     // Set conversation_ended flag if provided
     if (conversation_ended) {

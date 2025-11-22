@@ -160,6 +160,74 @@ extern "C" {
 #endif
 #endif
 
+// ===========================================================================
+// Governor (Qwen2.5-0.5B Tool Orchestration) Configuration
+// ===========================================================================
+
+#ifndef ETHERVOX_GOVERNOR_CONFIDENCE_THRESHOLD
+#define ETHERVOX_GOVERNOR_CONFIDENCE_THRESHOLD 0.85f  // 85% confidence required
+#endif
+
+#ifndef ETHERVOX_GOVERNOR_MAX_ITERATIONS
+#define ETHERVOX_GOVERNOR_MAX_ITERATIONS 5  // Maximum reasoning iterations
+#endif
+
+#ifndef ETHERVOX_GOVERNOR_TIMEOUT_SECONDS
+#define ETHERVOX_GOVERNOR_TIMEOUT_SECONDS 30  // Maximum execution time
+#endif
+
+#ifndef ETHERVOX_GOVERNOR_GPU_LAYERS
+#define ETHERVOX_GOVERNOR_GPU_LAYERS 999  // Full GPU offloading
+#endif
+
+#ifndef ETHERVOX_GOVERNOR_CONTEXT_SIZE
+#define ETHERVOX_GOVERNOR_CONTEXT_SIZE 8192  // Larger context for tool orchestration
+#endif
+
+#ifndef ETHERVOX_GOVERNOR_BATCH_SIZE
+#define ETHERVOX_GOVERNOR_BATCH_SIZE 1024  // Larger batch for faster inference
+#endif
+
+#ifndef ETHERVOX_GOVERNOR_THREADS
+#define ETHERVOX_GOVERNOR_THREADS 8  // More threads for small model
+#endif
+
+#ifndef ETHERVOX_GOVERNOR_TEMPERATURE
+#define ETHERVOX_GOVERNOR_TEMPERATURE 0.3f  // Low temperature for deterministic tool use
+#endif
+
+#ifndef ETHERVOX_GOVERNOR_MAX_TOKENS_PER_ITERATION
+#define ETHERVOX_GOVERNOR_MAX_TOKENS_PER_ITERATION 64  // Very concise responses - most tool calls are <20 tokens
+#endif
+
+#ifndef ETHERVOX_GOVERNOR_USE_MMAP
+#define ETHERVOX_GOVERNOR_USE_MMAP false  // Original: load into RAM
+#endif
+
+#ifndef ETHERVOX_GOVERNOR_KV_CACHE_TYPE
+#define ETHERVOX_GOVERNOR_KV_CACHE_TYPE GGML_TYPE_Q8_0  // Q8_0 quantized for memory savings (requires flash attention)
+#endif
+
+#ifndef ETHERVOX_GOVERNOR_FLASH_ATTN_TYPE
+#define ETHERVOX_GOVERNOR_FLASH_ATTN_TYPE -1  // -1=AUTO, 0=DISABLED, 1=ENABLED (required for quantized V cache)
+#endif
+
+#ifndef ETHERVOX_GOVERNOR_REPETITION_PENALTY
+#define ETHERVOX_GOVERNOR_REPETITION_PENALTY 1.1f  // Penalty for repeating tokens (1.0 = no penalty)
+#endif
+
+#ifndef ETHERVOX_GOVERNOR_FREQUENCY_PENALTY
+#define ETHERVOX_GOVERNOR_FREQUENCY_PENALTY 0.0f  // Penalty based on token frequency
+#endif
+
+#ifndef ETHERVOX_GOVERNOR_PRESENCE_PENALTY
+#define ETHERVOX_GOVERNOR_PRESENCE_PENALTY 0.0f  // Penalty for tokens already present
+#endif
+
+#ifndef ETHERVOX_GOVERNOR_PENALTY_LAST_N
+#define ETHERVOX_GOVERNOR_PENALTY_LAST_N 64  // Apply penalties to last N tokens
+#endif
+
 // Debug configuration
 #ifdef DEBUG_ENABLED
 #define ETHERVOX_DEBUG 1
@@ -169,10 +237,36 @@ extern "C" {
 #define ETHERVOX_LOG_LEVEL 2  // Error only
 #endif
 
+// Runtime debug mode control (can be toggled at runtime)
+extern int g_ethervox_debug_enabled;
+
+// C log callback for sending logs to Java/Kotlin debug window
+typedef void (*ethervox_log_callback_t)(int level, const char* tag, const char* message);
+extern ethervox_log_callback_t g_ethervox_log_callback;
+
+// Forward declare logging helper  
+void ethervox_log_with_callback(int level, const char* tag, const char* fmt, ...);
+
+// Logging macros that respect runtime debug flag
+#if defined(__ANDROID__)
+  #include <android/log.h>
+  #define ETHERVOX_LOG_TAG "EthervoxCore"
+  #define ETHERVOX_LOGD(...) ethervox_log_with_callback(ANDROID_LOG_DEBUG, ETHERVOX_LOG_TAG, __VA_ARGS__)
+  #define ETHERVOX_LOGI(...) ethervox_log_with_callback(ANDROID_LOG_INFO, ETHERVOX_LOG_TAG, __VA_ARGS__)
+  #define ETHERVOX_LOGW(...) ethervox_log_with_callback(ANDROID_LOG_WARN, ETHERVOX_LOG_TAG, __VA_ARGS__)
+  #define ETHERVOX_LOGE(...) ethervox_log_with_callback(ANDROID_LOG_ERROR, ETHERVOX_LOG_TAG, __VA_ARGS__)
+#else
+  #include <stdio.h>
+  #define ETHERVOX_LOGD(...) do { if (g_ethervox_debug_enabled) { printf("[DEBUG] "); printf(__VA_ARGS__); printf("\n"); } } while(0)
+  #define ETHERVOX_LOGI(...) do { if (g_ethervox_debug_enabled) { printf("[INFO] "); printf(__VA_ARGS__); printf("\n"); } } while(0)
+  #define ETHERVOX_LOGW(...) do { if (g_ethervox_debug_enabled) { printf("[WARN] "); printf(__VA_ARGS__); printf("\n"); } } while(0)
+  #define ETHERVOX_LOGE(...) do { if (g_ethervox_debug_enabled) { printf("[ERROR] "); printf(__VA_ARGS__); printf("\n"); } } while(0)
+#endif
+
 // Version information (single source of truth)
 #define ETHERVOX_VERSION_MAJOR 0
-#define ETHERVOX_VERSION_MINOR 1
-#define ETHERVOX_VERSION_PATCH 0
+#define ETHERVOX_VERSION_MINOR 0
+#define ETHERVOX_VERSION_PATCH 3
 #define ETHERVOX_BUILD_TYPE "Engineering"
 
 // Build version string from components
