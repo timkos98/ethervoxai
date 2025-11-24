@@ -235,6 +235,14 @@ static inline ethervox_governor_config_t ethervox_governor_default_config(void) 
     return config;
 }
 
+/**
+ * Get the tool registry from Governor
+ * 
+ * @param governor Governor instance
+ * @return Tool registry pointer, or NULL if invalid
+ */
+ethervox_tool_registry_t* ethervox_governor_get_registry(ethervox_governor_t* governor);
+
 #ifdef __cplusplus
 }
 #endif

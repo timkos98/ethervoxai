@@ -4,6 +4,28 @@ This folder contains utility scripts for building, deploying, and setting up cro
 
 ---
 
+## download-governor-model.sh
+**Purpose:** Downloads the Qwen2.5-3B-Instruct quantized model for Governor orchestration.
+
+**Usage:**
+```bash
+./scripts/download-governor-model.sh
+```
+
+**Details:**
+- Downloads ~2GB Q4_K_M quantized GGUF model
+- Saves to `models/Qwen2.5-3B-Instruct-Q4_K_M.gguf`
+- Requires curl or wget
+- Resumes interrupted downloads
+
+**Example:**
+```bash
+./scripts/download-governor-model.sh
+# Model will be saved to: models/Qwen2.5-3B-Instruct-Q4_K_M.gguf
+```
+
+---
+
 ## build.sh
 **Purpose:** Cross-platform build orchestrator for EthervoxAI.
 
