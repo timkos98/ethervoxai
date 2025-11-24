@@ -115,11 +115,13 @@ int ethervox_tool_registry_build_system_prompt(
     bool is_mobile = is_mobile_platform();
     
     // Qwen2.5 uses <|im_start|> and <|im_end|> format
-    // Desktop: Memory and file tools available but optional
+    // Desktop: More detailed with memory/file tools emphasized
     // Mobile: Concise, focused on voice interaction
     const char* platform_context = is_mobile
         ? "You are Ethervox, a concise voice assistant optimized for mobile. Keep responses brief and actionable."
-        : "You are Ethervox, an intelligent assistant with memory capabilities. Use tools ONLY when necessary for the user's needs.";
+        : "You are Ethervox, an intelligent assistant. You MUST use tools - you cannot answer from memory alone.\n\n"
+          "CRITICAL: When user asks about past information (name, preferences, previous topics), you MUST call memory_search tool. "
+          "Do NOT try to answer without searching memory first.";
     
     int written = snprintf(buffer, buffer_size,
         "<|im_start|>system\n"

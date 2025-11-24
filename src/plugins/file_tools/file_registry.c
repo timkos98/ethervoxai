@@ -230,6 +230,7 @@ static int tool_file_write_wrapper(
         *error = strdup("File tools not initialized");
         return -1;
     }
+    char content[ETHERVOX_FILE_MAX_SIZE];
     
     if (parse_json_string(args_json, "file_path", file_path, sizeof(file_path)) != 0) {
         *error = strdup("Missing 'file_path' parameter");
@@ -327,6 +328,12 @@ static int tool_file_write_wrapper(
     if (ethervox_file_write(config, file_path, unescaped) != 0) {
         free(content);
         free(unescaped);
+    if (parse_json_string(args_json, "content", content, sizeof(content)) != 0) {
+        *error = strdup("Missing 'content' parameter");
+        return -1;
+    }
+    
+    if (ethervox_file_write(config, file_path, content) != 0) {
         *error = strdup("Write failed (check permissions and access mode)");
         return -1;
     }
