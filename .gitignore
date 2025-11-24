@@ -92,6 +92,20 @@ Thumbs.db
 tmp/
 temp/
 
+# Memory plugin runtime files
+memory_data/
+*.jsonl
+conversation_export.json
+conversation_export.md
+test_export.json
+test_cli.txt
+
+# Downloaded model files (too large for git)
+models/
+*.gguf
+*.bin
+*.safetensors
+
 # Implementation and Internal Documentation and notes
 IMPLEMENTATION_NOTES.md
 IMPLEMENTATION_COMPLETE.md
@@ -123,3 +137,4 @@ run-artifacts/
 bin/act
 
 
+semester_project_TUM.org

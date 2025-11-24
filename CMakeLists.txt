@@ -232,6 +232,16 @@ else()
     message(STATUS "LLM backend sources excluded (WITH_LLAMA=OFF, WITH_TINYLLAMA=OFF)")
 endif()
 
+# Add memory tools plugin sources
+file(GLOB MEMORY_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/memory_tools/*.c")
+list(APPEND ETHERVOXAI_CORE_SOURCES ${MEMORY_TOOLS_SOURCES})
+message(STATUS "Memory tools plugin sources included")
+
+# Add file tools plugin sources
+file(GLOB FILE_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/file_tools/*.c")
+list(APPEND ETHERVOXAI_CORE_SOURCES ${FILE_TOOLS_SOURCES})
+message(STATUS "File tools plugin sources included")
+
 # Shared audio core implementation (excluding platform-specific files)
 list(APPEND ETHERVOXAI_CORE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/audio/audio_core.c")
 
@@ -412,6 +422,18 @@ set_property(GLOBAL PROPERTY ETHERVOXAI_PLATFORM_LIBS "${ETHERVOXAI_PLATFORM_LIB
 if(NOT ANDROID)
     add_executable(ethervoxai_app src/main.c)
     target_link_libraries(ethervoxai_app PRIVATE ethervoxai)
+    
+    # Add readline for command history on macOS/Linux
+    if(APPLE OR UNIX)
+        find_library(READLINE_LIBRARY readline)
+        if(READLINE_LIBRARY)
+            target_link_libraries(ethervoxai_app PRIVATE ${READLINE_LIBRARY})
+            message(STATUS "Readline library found: ${READLINE_LIBRARY}")
+        else()
+            message(WARNING "Readline library not found - command history will be disabled")
+        endif()
+    endif()
+    
     set_target_properties(ethervoxai_app PROPERTIES OUTPUT_NAME ethervoxai)
 endif()
 
