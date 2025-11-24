@@ -182,6 +182,10 @@ if(WITH_LLAMA AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/llama.cpp")
     # Add llama.cpp as subdirectory
     add_subdirectory(external/llama.cpp)
     
+    # Add llama.cpp include directories
+    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/external/llama.cpp/include)
+    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/external/llama.cpp/ggml/include)
+    
     add_definitions(-DLLAMA_CPP_AVAILABLE=1)
     message(STATUS "llama.cpp successfully configured")
 elseif(WITH_LLAMA)
