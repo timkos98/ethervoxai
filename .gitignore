@@ -53,6 +53,25 @@ build-*/
 sysroot/
 esp32-project/build/
 
+# CMake build artifacts
+CMakeCache.txt
+CMakeFiles/
+CPackConfig.cmake
+CPackSourceConfig.cmake
+CTestTestfile.cmake
+cmake_install.cmake
+compile_commands.json
+Makefile
+!archive/Makefile*
+*.cmake
+!CMakeLists.txt
+!cmake/*.cmake
+bin/
+lib/
+
+# External dependencies (cloned at build time)
+external/
+
 # OS generated files
 .DS_Store
 .DS_Store?
