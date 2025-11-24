@@ -162,10 +162,17 @@ static int execute_tool_call(
     
     // Common attributes to extract
     const char* attrs[] = {
+        // Calculator/compute
         "expression", "value", "percentage", "operation",
         "from", "to", "amount",
         "duration_seconds", "label", "hour", "minute",
-        "decimal_places", NULL
+        "decimal_places",
+        // File tools
+        "directory", "file_path", "pattern", "recursive",
+        // Memory tools
+        "content", "tags", "query", "limit", "window_size", "format",
+        "min_importance", "max_age_hours",
+        NULL
     };
     
     for (int i = 0; attrs[i] != NULL; i++) {
@@ -173,17 +180,24 @@ static int execute_tool_call(
         if (attr_value) {
             if (!first) strcat(json_input, ", ");
             
-            // Check if value is numeric
-            bool is_numeric = true;
+            // Check if value is numeric (must have at least one digit)
+            bool is_numeric = false;
+            bool has_digit = false;
             const char* p = attr_value;
+            
             if (*p == '-' || *p == '+') p++;
+            
             while (*p) {
-                if (*p != '.' && (*p < '0' || *p > '9')) {
-                    is_numeric = false;
+                if (*p >= '0' && *p <= '9') {
+                    has_digit = true;
+                } else if (*p != '.') {
+                    has_digit = false;
                     break;
                 }
                 p++;
             }
+            
+            is_numeric = has_digit && (p > attr_value);
             
             if (is_numeric) {
                 char field[256];
@@ -202,14 +216,24 @@ static int execute_tool_call(
     
     strcat(json_input, "}");
     
+    GOV_LOG("Built JSON for tool '%s': %s", tool->name, json_input);
+    
     free(tool_name);
     
     // Execute tool
-    return tool->execute(json_input, result, error);
+    int ret = tool->execute(json_input, result, error);
+    if (ret != 0) {
+        GOV_ERROR("Tool '%s' execution failed with code %d, error: %s", 
+                  tool->name, ret, error && *error ? *error : "unknown");
+    } else {
+        GOV_LOG("Tool '%s' executed successfully, result length: %zu", 
+                tool->name, result && *result ? strlen(*result) : 0);
+    }
+    return ret;
 }
 
 /**
- * Load Qwen2.5-1.5B-Instruct model and process system prompt into KV cache
+ * Load Qwen2.5-3B-Instruct (quantized) model and process system prompt into KV cache
  */
 int ethervox_governor_load_model(ethervox_governor_t* governor, const char* model_path) {
     if (!governor || !model_path) return -1;
@@ -218,6 +242,41 @@ int ethervox_governor_load_model(ethervox_governor_t* governor, const char* mode
     GOV_ERROR("llama.cpp not available - cannot load model");
     return -1;
 #else
+    
+    // If a model is already loaded, unload it first
+    if (governor->llm_loaded) {
+        GOV_LOG("[Governor] Unloading existing model before loading new one");
+        
+        // Free pre-tokenized wrappers
+        if (governor->tool_result_prefix_tokens) {
+            free(governor->tool_result_prefix_tokens);
+            governor->tool_result_prefix_tokens = NULL;
+            governor->tool_result_prefix_len = 0;
+        }
+        if (governor->tool_result_suffix_tokens) {
+            free(governor->tool_result_suffix_tokens);
+            governor->tool_result_suffix_tokens = NULL;
+            governor->tool_result_suffix_len = 0;
+        }
+        
+        // Free context and model
+        if (governor->llm_ctx) {
+            llama_free(governor->llm_ctx);
+            governor->llm_ctx = NULL;
+        }
+        if (governor->llm_model) {
+            llama_model_free(governor->llm_model);
+            governor->llm_model = NULL;
+        }
+        if (governor->model_path) {
+            free(governor->model_path);
+            governor->model_path = NULL;
+        }
+        
+        governor->llm_loaded = false;
+        governor->system_prompt_token_count = 0;
+        governor->current_kv_pos = 0;
+    }
     
     GOV_LOG("[Governor] Loading model: %s", model_path);
     
@@ -271,6 +330,8 @@ int ethervox_governor_load_model(ethervox_governor_t* governor, const char* mode
         governor->llm_model = NULL;
         return -1;
     }
+    
+    GOV_LOG("System prompt (%zu chars):\n%s", strlen(system_prompt), system_prompt);
     
     GOV_LOG("System prompt built (%zu chars)", strlen(system_prompt));
     
@@ -447,19 +508,29 @@ ethervox_governor_status_t ethervox_governor_execute(
     // Reset iteration counter
     governor->last_iteration_count = 0;
     
-    // Clear KV cache after system prompt to prepare for new query
-    // Keep sequence 0, remove positions from system_prompt_token_count onwards
-    llama_memory_t mem = llama_get_memory(governor->llm_ctx);
-    llama_memory_seq_rm(mem, 0, governor->system_prompt_token_count, -1);
+    // DO NOT clear KV cache - maintain conversation history
+    // The KV cache contains: system prompt + previous conversation turns + tool results
+    // Only clear if we exceed context limits
     
-    // Reset KV cache position to start after system prompt
-    governor->current_kv_pos = governor->system_prompt_token_count;
+    // Note: For now we keep the full conversation in KV cache
+    // TODO: Add conversation window management when approaching context limits
     
     const struct llama_vocab* vocab = llama_model_get_vocab(governor->llm_model);
     
     // Build conversation history in Qwen2.5 format
+    // Include recent context from memory if available
     char conversation[8192];
-    snprintf(conversation, sizeof(conversation), 
+    size_t conv_pos = 0;
+    
+    // Check if we have a memory store to get recent conversation turns
+    // We want the actual RECENT conversation, not a search result
+    // Access the memory store directly if possible through the tool registry
+    
+    // For now, just use the current user query without trying to inject old context
+    // The memory is better used explicitly via memory_search tool when needed
+    
+    // Add current user query
+    conv_pos += snprintf(conversation + conv_pos, sizeof(conversation) - conv_pos,
         "<|im_start|>user\n%s<|im_end|>\n<|im_start|>assistant\n", user_query);
     
     // Track how much of conversation has been processed to avoid re-processing
@@ -512,34 +583,59 @@ ethervox_governor_status_t ethervox_governor_execute(
             
             llama_tokenize(vocab, new_content, new_content_len, tokens, n_tokens, false, false);
             
-            // Create batch with explicit positions starting at current KV position
-            llama_batch batch = llama_batch_init(n_tokens, 0, 1);
-            batch.n_tokens = n_tokens;
-            for (int i = 0; i < n_tokens; i++) {
-                batch.token[i] = tokens[i];
-                batch.pos[i] = governor->current_kv_pos + i;
-                batch.n_seq_id[i] = 1;
-                batch.seq_id[i][0] = 0;
-                batch.logits[i] = false;
-            }
-            batch.logits[n_tokens - 1] = true;  // Only need logits from last token
+            GOV_LOG("About to decode: current_kv_pos=%d, n_tokens=%d, n_ctx=%d",
+                    governor->current_kv_pos, n_tokens, llama_n_ctx(governor->llm_ctx));
             
-            GOV_LOG("Decoding batch: n_tokens=%d, pos_start=%d, pos_end=%d, n_ctx=%d", 
-                    n_tokens, governor->current_kv_pos, governor->current_kv_pos + n_tokens - 1,
-                    llama_n_ctx(governor->llm_ctx));
-            
-            // Decode tokens (append to KV cache)
-            if (llama_decode(governor->llm_ctx, batch) != 0) {
-                GOV_ERROR("Decode failed: n_tokens=%d, pos_start=%d, pos_end=%d", 
-                         n_tokens, governor->current_kv_pos, governor->current_kv_pos + n_tokens - 1);
-                llama_batch_free(batch);
+            // Check if we're about to exceed context window
+            int n_ctx = llama_n_ctx(governor->llm_ctx);
+            if (governor->current_kv_pos + n_tokens > n_ctx) {
+                GOV_ERROR("Context window exceeded: current_pos=%d + new_tokens=%d > n_ctx=%d",
+                         governor->current_kv_pos, n_tokens, n_ctx);
                 free(tokens);
-                if (error) *error = strdup("Failed to decode conversation");
+                if (error) *error = strdup("Context window exceeded - conversation too long");
                 return ETHERVOX_GOVERNOR_ERROR;
             }
             
-            llama_batch_free(batch);
-            free(tokens);
+            // Process tokens in chunks to respect batch size limit (n_batch = 1024)
+            const int n_batch = 1024;  // llama.cpp default batch size
+            int tokens_processed = 0;
+            
+            while (tokens_processed < n_tokens) {
+                int batch_size = (n_tokens - tokens_processed > n_batch) ? n_batch : (n_tokens - tokens_processed);
+                
+                llama_batch batch = llama_batch_init(batch_size, 0, 1);
+                batch.n_tokens = batch_size;
+                for (int i = 0; i < batch_size; i++) {
+                    batch.token[i] = tokens[tokens_processed + i];
+                    batch.pos[i] = governor->current_kv_pos + tokens_processed + i;
+                    batch.n_seq_id[i] = 1;
+                    batch.seq_id[i][0] = 0;
+                    batch.logits[i] = false;
+                }
+                // Only need logits from last token of final batch
+                if (tokens_processed + batch_size >= n_tokens) {
+                    batch.logits[batch_size - 1] = true;
+                }
+                
+                GOV_LOG("Decoding batch chunk: n_tokens=%d, pos_start=%d, pos_end=%d (chunk %d/%d)", 
+                        batch_size, governor->current_kv_pos + tokens_processed, 
+                        governor->current_kv_pos + tokens_processed + batch_size - 1,
+                        tokens_processed / n_batch + 1, (n_tokens + n_batch - 1) / n_batch);
+                
+                // Decode tokens (append to KV cache)
+                if (llama_decode(governor->llm_ctx, batch) != 0) {
+                    GOV_ERROR("Decode failed: n_tokens=%d, pos_start=%d, pos_end=%d", 
+                             batch_size, governor->current_kv_pos + tokens_processed, 
+                             governor->current_kv_pos + tokens_processed + batch_size - 1);
+                    llama_batch_free(batch);
+                    free(tokens);
+                    if (error) *error = strdup("Failed to decode conversation");
+                    return ETHERVOX_GOVERNOR_ERROR;
+                }
+                
+                llama_batch_free(batch);
+                tokens_processed += batch_size;
+            }            free(tokens);
             
             // Update KV cache position
             governor->current_kv_pos += n_tokens;
@@ -569,6 +665,7 @@ ethervox_governor_status_t ethervox_governor_execute(
         while (generated_count < max_tokens_safety) {
             llama_token next_token = llama_sampler_sample(sampler, governor->llm_ctx, -1);
             
+            // Check for EOG token (proper way)
             if (llama_vocab_is_eog(vocab, next_token)) {
                 break;
             }
@@ -581,6 +678,32 @@ ethervox_governor_status_t ethervox_governor_execute(
                 
                 // Add to buffer first
                 strncat(llm_response_buffer, token_text, sizeof(llm_response_buffer) - strlen(llm_response_buffer) - 1);
+                
+                // Check for stop sequences in text form (in case they're generated as text tokens)
+                // Check as soon as we see the start of a stop token to prevent partial generation
+                // Look for " <|" or just "<|" at the end of the buffer
+                size_t buf_len = strlen(llm_response_buffer);
+                if (buf_len >= 3 && strcmp(llm_response_buffer + buf_len - 3, " <|") == 0) {
+                    // Truncate to remove " <|"
+                    llm_response_buffer[buf_len - 3] = '\0';
+                    GOV_LOG("Stop token pattern ' <|' detected, ending generation");
+                    break;
+                } else if (buf_len >= 2 && strcmp(llm_response_buffer + buf_len - 2, "<|") == 0) {
+                    // Truncate to remove "<|"
+                    llm_response_buffer[buf_len - 2] = '\0';
+                    GOV_LOG("Stop token pattern '<|' detected, ending generation");
+                    break;
+                }
+                // Also check for <|im anywhere in the buffer (middle of special token)
+                if (strstr(llm_response_buffer, "<|im")) {
+                    char* stop_pos = strstr(llm_response_buffer, " <|im");
+                    if (!stop_pos) stop_pos = strstr(llm_response_buffer, "<|im");
+                    if (stop_pos) {
+                        *stop_pos = '\0';
+                        GOV_LOG("Stop token pattern detected in text, removed and ending generation");
+                    }
+                    break;
+                }
                 
                 // Check if we're entering or exiting a tool call
                 if (!inside_tool_call && strstr(llm_response_buffer, "<tool_call")) {
@@ -649,6 +772,14 @@ ethervox_governor_status_t ethervox_governor_execute(
             }
             
             // Feed token back to context for next prediction with explicit position
+            // Check if we're about to exceed context window
+            int n_ctx = llama_n_ctx(governor->llm_ctx);
+            if (governor->current_kv_pos >= n_ctx) {
+                GOV_ERROR("Context window exceeded during generation: current_pos=%d >= n_ctx=%d",
+                         governor->current_kv_pos, n_ctx);
+                break;  // Stop generation gracefully
+            }
+            
             llama_batch next_batch = llama_batch_init(1, 0, 1);
             next_batch.n_tokens = 1;
             next_batch.token[0] = next_token;
@@ -673,11 +804,18 @@ ethervox_governor_status_t ethervox_governor_execute(
                 break;  // Tool call complete, stop immediately
             }
             
-            // 2. Stop if we see <|im_start|> (model is hallucinating new examples)
-            if (strstr(llm_response_buffer, "<|im_start|>")) {
+            // 2. Stop if we see <|im_start|> or <tool_result> (model is hallucinating examples from system prompt)
+            if (strstr(llm_response_buffer, "<|im_start") || strstr(llm_response_buffer, "<tool_result")) {
                 // Truncate the buffer to remove the hallucinated content
-                char* hallucination_start = strstr(llm_response_buffer, "<|im_start|>");
-                *hallucination_start = '\0';
+                char* hallucination_start = strstr(llm_response_buffer, "<|im_start");
+                if (!hallucination_start) hallucination_start = strstr(llm_response_buffer, "<tool_result");
+                if (hallucination_start) *hallucination_start = '\0';
+                
+                // Also remove any <|im variant before it
+                char* end_marker = strstr(llm_response_buffer, " <|im");
+                if (!end_marker) end_marker = strstr(llm_response_buffer, "<|im");
+                if (end_marker) *end_marker = '\0';
+                
                 GOV_LOG("Early stop: Hallucination detected and truncated (%d tokens)", generated_count);
                 break;
             }
@@ -696,6 +834,15 @@ ethervox_governor_status_t ethervox_governor_execute(
         llama_sampler_free(sampler);
         
         GOV_LOG("Generation complete: %d tokens generated", generated_count);
+        
+        // Clean up any stop tokens that made it into the output
+        // Check for all possible partial versions starting with <|im
+        char* stop_marker = strstr(llm_response_buffer, " <|im");
+        if (!stop_marker) stop_marker = strstr(llm_response_buffer, "<|im");
+        if (stop_marker) {
+            *stop_marker = '\0';
+        }
+        
         const char* llm_response = llm_response_buffer;
         GOV_LOG("Generated response: %s", llm_response);
         
@@ -734,6 +881,11 @@ ethervox_governor_status_t ethervox_governor_execute(
                 );
                 
                 if (status == 0 && tool_result) {
+                    GOV_LOG("Tool '%s' executed successfully, result length: %zu", 
+                            tool_name ? tool_name : "unknown", strlen(tool_result));
+                    GOV_LOG("Tool result content: %.200s%s", 
+                            tool_result, strlen(tool_result) > 200 ? "..." : "");
+                    
                     // Notify tool result (simplified - avoid formatting in hot path)
                     if (progress_callback) {
                         progress_callback(ETHERVOX_GOVERNOR_EVENT_TOOL_RESULT, tool_result, user_data);
@@ -759,26 +911,55 @@ ethervox_governor_status_t ethervox_governor_execute(
                         governor->current_kv_pos += governor->tool_result_prefix_len;
                     }
                     
-                    // Tokenize and decode actual tool result
+                    // Tokenize and decode actual tool result (in chunks if large)
                     size_t result_len = strlen(tool_result);
                     int result_n_tokens = -llama_tokenize(vocab, tool_result, result_len, NULL, 0, false, false);
                     if (result_n_tokens > 0) {
+                        // Check if tool result will fit in context
+                        int n_ctx = llama_n_ctx(governor->llm_ctx);
+                        if (governor->current_kv_pos + result_n_tokens > n_ctx) {
+                            GOV_LOG("Tool result too large: %d tokens would exceed context (pos=%d, ctx=%d). Truncating.",
+                                    result_n_tokens, governor->current_kv_pos, n_ctx);
+                            // Truncate to fit
+                            result_n_tokens = n_ctx - governor->current_kv_pos;
+                            if (result_n_tokens <= 0) {
+                                GOV_ERROR("No context space remaining for tool result");
+                                continue;  // Skip this tool result
+                            }
+                        }
+                        
                         llama_token* result_tokens = malloc(result_n_tokens * sizeof(llama_token));
                         if (result_tokens) {
                             llama_tokenize(vocab, tool_result, result_len, result_tokens, result_n_tokens, false, false);
                             
-                            llama_batch result_batch = llama_batch_init(result_n_tokens, 0, 1);
-                            result_batch.n_tokens = result_n_tokens;
-                            for (int j = 0; j < result_n_tokens; j++) {
-                                result_batch.token[j] = result_tokens[j];
-                                result_batch.pos[j] = governor->current_kv_pos + j;
-                                result_batch.n_seq_id[j] = 1;
-                                result_batch.seq_id[j][0] = 0;
-                                result_batch.logits[j] = false;
+                            // Process in chunks to respect batch size limit
+                            const int n_batch = 1024;
+                            int tokens_processed = 0;
+                            
+                            while (tokens_processed < result_n_tokens) {
+                                int batch_size = (result_n_tokens - tokens_processed > n_batch) ? n_batch : (result_n_tokens - tokens_processed);
+                                
+                                llama_batch result_batch = llama_batch_init(batch_size, 0, 1);
+                                result_batch.n_tokens = batch_size;
+                                for (int j = 0; j < batch_size; j++) {
+                                    result_batch.token[j] = result_tokens[tokens_processed + j];
+                                    result_batch.pos[j] = governor->current_kv_pos + j;
+                                    result_batch.n_seq_id[j] = 1;
+                                    result_batch.seq_id[j][0] = 0;
+                                    result_batch.logits[j] = false;
+                                }
+                                
+                                if (llama_decode(governor->llm_ctx, result_batch) != 0) {
+                                    GOV_ERROR("Failed to decode tool result chunk at pos %d", governor->current_kv_pos);
+                                    llama_batch_free(result_batch);
+                                    break;
+                                }
+                                llama_batch_free(result_batch);
+                                
+                                governor->current_kv_pos += batch_size;
+                                tokens_processed += batch_size;
                             }
-                            llama_decode(governor->llm_ctx, result_batch);
-                            llama_batch_free(result_batch);
-                            governor->current_kv_pos += result_n_tokens;
+                            
                             free(result_tokens);
                         }
                     }
@@ -892,4 +1073,8 @@ void ethervox_governor_cleanup(ethervox_governor_t* governor) {
 #endif
     
     free(governor);
+}
+
+ethervox_tool_registry_t* ethervox_governor_get_registry(ethervox_governor_t* governor) {
+    return governor ? governor->tool_registry : NULL;
 }
