@@ -559,7 +559,11 @@ int main(int argc, char** argv) {
     
     // Set initial log level based on quiet mode
     if (!quiet_mode) {
-        ethervox_log_set_level(ETHERVOX_LOG_LEVEL_INFO);
+        if (g_debug_enabled) {
+            ethervox_log_set_level(ETHERVOX_LOG_LEVEL_DEBUG);
+        } else {
+            ethervox_log_set_level(ETHERVOX_LOG_LEVEL_INFO);
+        }
         g_ethervox_debug_enabled = 1;  // Also enable legacy debug flag
     } else {
         ethervox_log_set_level(ETHERVOX_LOG_LEVEL_OFF);
@@ -698,7 +702,7 @@ int main(int argc, char** argv) {
         base_paths[path_count++] = strdup(cwd);  // Needs to persist
     }
     
-    if (ethervox_file_tools_init(&file_config, base_paths, ETHERVOX_FILE_ACCESS_READ_ONLY) == 0) {
+    if (ethervox_file_tools_init(&file_config, base_paths, ETHERVOX_FILE_ACCESS_READ_WRITE) == 1) {
         // Add allowed file extensions
         ethervox_file_tools_add_filter(&file_config, ".txt");
         ethervox_file_tools_add_filter(&file_config, ".md");
@@ -710,7 +714,7 @@ int main(int argc, char** argv) {
         
         // Register with Governor
         if (ethervox_file_tools_register(&registry, &file_config) == 0) {
-            printf("File Tools: Registered with Governor (read-only: .txt/.md/.org/.c/.cpp/.h/.sh)\n");
+            printf("File Tools: Registered with Governor (read-write: .txt/.md/.org/.c/.cpp/.h/.sh)\n");
         }
     }
     

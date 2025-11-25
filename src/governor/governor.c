@@ -170,8 +170,8 @@ static int execute_tool_call(
         // File tools
         "directory", "file_path", "pattern", "recursive",
         // Memory tools
-        "content", "tags", "query", "limit", "window_size", "format",
-        "min_importance", "max_age_hours",
+        "text", "content", "tags", "query", "limit", "window_size", "format",
+        "importance", "min_importance", "max_age_hours", "is_user",
         NULL
     };
     
@@ -232,9 +232,7 @@ static int execute_tool_call(
     return ret;
 }
 
-/**
- * Load Qwen2.5-3B-Instruct (quantized) model and process system prompt into KV cache
- */
+
 int ethervox_governor_load_model(ethervox_governor_t* governor, const char* model_path) {
     if (!governor || !model_path) return -1;
     
@@ -819,16 +817,6 @@ ethervox_governor_status_t ethervox_governor_execute(
                 GOV_LOG("Early stop: Hallucination detected and truncated (%d tokens)", generated_count);
                 break;
             }
-            
-            // 3. For responses with tool calls - stop after brief answer
-            if (strstr(llm_response_buffer, "<tool_call")) {
-                // After using a tool, keep the answer brief (32 tokens)
-                if (generated_count > 32) {
-                    GOV_LOG("Early stop: Tool-based answer length limit reached (%d tokens)", generated_count);
-                    break;
-                }
-            }
-            // Note: No token limit for direct answers - let model finish naturally
         }
         
         llama_sampler_free(sampler);
@@ -881,10 +869,9 @@ ethervox_governor_status_t ethervox_governor_execute(
                 );
                 
                 if (status == 0 && tool_result) {
-                    GOV_LOG("Tool '%s' executed successfully, result length: %zu", 
+                    GOV_LOG("Tool '%s' called and e successfully, result length: %zu", 
                             tool_name ? tool_name : "unknown", strlen(tool_result));
-                    GOV_LOG("Tool result content: %.200s%s", 
-                            tool_result, strlen(tool_result) > 200 ? "..." : "");
+                    GOV_LOG("Tool result content: %s", tool_result);
                     
                     // Notify tool result (simplified - avoid formatting in hot path)
                     if (progress_callback) {

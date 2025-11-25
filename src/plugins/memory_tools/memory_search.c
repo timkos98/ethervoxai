@@ -27,24 +27,53 @@ static float calculate_text_similarity(const char* text1, const char* text2) {
     for (char* p = buf1; *p; p++) *p = tolower((unsigned char)*p);
     for (char* p = buf2; *p; p++) *p = tolower((unsigned char)*p);
     
-    // Count matching words (very simple)
-    uint32_t matches = 0;
-    uint32_t total_words = 0;
+    // Tokenize both texts into word sets
+    char* words1[64] = {0};
+    char* words2[64] = {0};
+    uint32_t count1 = 0, count2 = 0;
     
-    char* word1 = strtok(buf1, " \t\n.,!?;:");
-    while (word1) {
-        total_words++;
-        if (strstr(buf2, word1)) {
-            matches++;
+    // Tokenize query
+    char* word = strtok(buf1, " \t\n.,!?;:");
+    while (word && count1 < 64) {
+        // Skip very short words (articles, etc.)
+        if (strlen(word) > 2) {
+            words1[count1++] = word;
         }
-        word1 = strtok(NULL, " \t\n.,!?;:");
+        word = strtok(NULL, " \t\n.,!?;:");
     }
     
-    if (total_words == 0) {
+    // Tokenize entry text
+    word = strtok(buf2, " \t\n.,!?;:");
+    while (word && count2 < 64) {
+        if (strlen(word) > 2) {
+            words2[count2++] = word;
+        }
+        word = strtok(NULL, " \t\n.,!?;:");
+    }
+    
+    if (count1 == 0 || count2 == 0) {
         return 0.0f;
     }
     
-    return (float)matches / (float)total_words;
+    // Count matching words
+    uint32_t matches = 0;
+    for (uint32_t i = 0; i < count1; i++) {
+        for (uint32_t j = 0; j < count2; j++) {
+            if (strcmp(words1[i], words2[j]) == 0) {
+                matches++;
+                break;  // Each query word matches at most once
+            }
+        }
+    }
+    
+    float similarity = (count1 > 0) ? ((float)matches / (float)count1) : 0.0f;
+    
+    // Debug logging
+    ethervox_log(ETHERVOX_LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__,
+                "Similarity: query_words=%u, entry_words=%u, matches=%u, score=%.2f | Query: '%s' | Entry: '%.50s...'",
+                count1, count2, matches, similarity, text1, text2);
+    
+    return similarity;
 }
 
 // Check if entry has all required tags
@@ -98,13 +127,18 @@ int ethervox_memory_search(
     
     store->total_searches++;
     
+    ethervox_log(ETHERVOX_LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__,
+                "memory_search START: query='%s', query_ptr=%p, query[0]=%d, limit=%u, entry_count=%u",
+                query ? query : "(null)", (void*)query, query ? (int)query[0] : -1, limit, store->entry_count);
+    
     if (limit == 0) {
         limit = 10;  // Default limit
     }
     
-    // Allocate results buffer (max limit size)
+    // Allocate results buffer for ALL matching entries (not just limit)
+    // We need to find all matches, sort them, then return top N
     ethervox_memory_search_result_t* temp_results = malloc(
-        limit * sizeof(ethervox_memory_search_result_t)
+        store->entry_count * sizeof(ethervox_memory_search_result_t)
     );
     if (!temp_results) {
         return -1;
@@ -112,8 +146,8 @@ int ethervox_memory_search(
     
     uint32_t found_count = 0;
     
-    // Search through all entries
-    for (uint32_t i = 0; i < store->entry_count && found_count < limit; i++) {
+    // Search through ALL entries to find best matches
+    for (uint32_t i = 0; i < store->entry_count; i++) {
         ethervox_memory_entry_t* entry = &store->entries[i];
         
         // Apply tag filter
@@ -128,8 +162,15 @@ int ethervox_memory_search(
             // Text similarity scoring
             relevance = calculate_text_similarity(query, entry->text);
             
+            ethervox_log(ETHERVOX_LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__,
+                        "Entry %u: similarity=%.2f, importance=%.2f, text='%.60s...'",
+                        i, relevance, entry->importance, entry->text);
+            
             // Boost by importance
             relevance = relevance * 0.7f + entry->importance * 0.3f;
+            
+            ethervox_log(ETHERVOX_LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__,
+                        "Entry %u: final relevance=%.2f", i, relevance);
         } else {
             // No query = just use importance and recency
             // More recent entries score higher
@@ -149,9 +190,30 @@ int ethervox_memory_search(
               compare_results);
     }
     
-    // Return results
-    *results = temp_results;
-    *result_count = found_count;
+    // Limit to requested count and resize
+    uint32_t return_count = (found_count > limit) ? limit : found_count;
+    
+    if (return_count > 0 && return_count < store->entry_count) {
+        // Allocate final results array with exact size needed
+        ethervox_memory_search_result_t* final_results = malloc(
+            return_count * sizeof(ethervox_memory_search_result_t)
+        );
+        if (final_results) {
+            // Copy only the top N results
+            memcpy(final_results, temp_results, return_count * sizeof(ethervox_memory_search_result_t));
+            free(temp_results);
+            *results = final_results;
+            *result_count = return_count;
+        } else {
+            // Allocation failed, return original buffer
+            *results = temp_results;
+            *result_count = return_count;
+        }
+    } else {
+        // No need to resize
+        *results = temp_results;
+        *result_count = return_count;
+    }
     
     ethervox_log(ETHERVOX_LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__,
                 "Search completed: query='%s', filters=%u, found=%u",

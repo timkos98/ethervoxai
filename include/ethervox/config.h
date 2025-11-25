@@ -173,7 +173,7 @@ extern "C" {
 #endif
 
 #ifndef ETHERVOX_GOVERNOR_TIMEOUT_SECONDS
-#define ETHERVOX_GOVERNOR_TIMEOUT_SECONDS 30  // Maximum execution time
+#define ETHERVOX_GOVERNOR_TIMEOUT_SECONDS 300  // Maximum execution time
 #endif
 
 #ifndef ETHERVOX_GOVERNOR_GPU_LAYERS

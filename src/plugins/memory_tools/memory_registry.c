@@ -20,12 +20,22 @@ static ethervox_memory_store_t* g_memory_store = NULL;
 // JSON parsing helper (simplified - would use cJSON in production)
 static int parse_json_string(const char* json, const char* key, char* value, size_t value_len) {
     char search[128];
-    snprintf(search, sizeof(search), "\"%s\":\"", key);
+    snprintf(search, sizeof(search), "\"%s\":", key);
     
     const char* start = strstr(json, search);
     if (!start) return -1;
     
     start += strlen(search);
+    
+    // Skip whitespace after colon
+    while (*start == ' ' || *start == '\t' || *start == '\n' || *start == '\r') {
+        start++;
+    }
+    
+    // Expect opening quote
+    if (*start != '"') return -1;
+    start++;
+    
     const char* end = strchr(start, '"');
     if (!end) return -1;
     
@@ -123,11 +133,18 @@ static int tool_memory_search_wrapper(
 ) {
     ethervox_memory_store_t* store = g_memory_store;
     
+    ethervox_log(ETHERVOX_LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__,
+                "memory_search_wrapper INPUT: args_json='%s'", args_json ? args_json : "(null)");
+    
     char query[512] = {0};
     uint32_t limit = 10;
     
     parse_json_string(args_json, "query", query, sizeof(query));
     parse_json_uint(args_json, "limit", &limit);
+    
+    ethervox_log(ETHERVOX_LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__,
+                "memory_search_wrapper: query='%s', limit=%u, query[0]=%d",
+                query, limit, (int)query[0]);
     
     ethervox_memory_search_result_t* results = NULL;
     uint32_t result_count = 0;

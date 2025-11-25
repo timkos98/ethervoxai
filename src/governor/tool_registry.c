@@ -193,7 +193,7 @@ int ethervox_tool_registry_build_system_prompt(
           "<tool_result>{\"results\":[{\"text\":\"Discussed project timeline\"}]}</tool_result>\n"
           "Assistant: Hi! I see we were discussing the project timeline. How's that going?\n\n"
           "User: My name is Tim\n"
-          "Assistant: <tool_call name=\"memory_store\" content=\"User's name is Tim\" tags=\"personal\" importance=\"0.95\" />\n"
+          "Assistant: <tool_call name=\"memory_store\" text=\"User's name is Tim\" tags=\"personal\" importance=\"0.95\" />\n"
           "<tool_result>{\"success\":true}</tool_result>\n"
           "Assistant: Nice to meet you, Tim!\n\n"
           "User: What's my name?\n"
