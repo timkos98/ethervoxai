@@ -266,7 +266,7 @@ int ethervox_file_tools_register(
     // Register file_list tool
     ethervox_tool_t tool_list = {
         .name = "file_list",
-        .description = "List files and directories in a given path. Only reads .txt, .md, and .org files.",
+        .description = "List files and directories in a given path.",
         .parameters_json_schema =
             "{\"type\":\"object\",\"properties\":{"
             "\"directory\":{\"type\":\"string\",\"description\":\"Directory path to list\"},"
@@ -284,7 +284,7 @@ int ethervox_file_tools_register(
     // Register file_read tool
     ethervox_tool_t tool_read = {
         .name = "file_read",
-        .description = "Read contents of a text file (.txt, .md, .org). Maximum 10MB.",
+        .description = "Read contents of a text based file (.txt, .md, .org, .c, etc.). Maximum 10MB.",
         .parameters_json_schema =
             "{\"type\":\"object\",\"properties\":{"
             "\"file_path\":{\"type\":\"string\",\"description\":\"Path to file to read\"}"

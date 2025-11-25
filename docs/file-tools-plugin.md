@@ -225,9 +225,9 @@ message(STATUS "File tools plugin sources included")
    npm run build
    ```
 
-2. Run CLI with auto-loaded Governor:
+2. Run CLI without auto-loaded Governor:
    ```bash
-   ./build/ethervoxai --govautoload
+   ./build/ethervoxai --noautoload
    ```
 
 3. Test file reading:

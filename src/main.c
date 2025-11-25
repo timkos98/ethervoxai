@@ -508,10 +508,15 @@ int main(int argc, char** argv) {
     const char* memory_dir = NULL;
     bool interactive = true;
     
-    bool auto_load_model = false;
     bool run_tests = false;
     bool quiet_mode = true;  // Default to quiet mode
     bool no_persist = false;
+
+    // Dafualt to auto-load model unless --noautoload specified
+    bool auto_load_model = true;
+    if (!model_path) {
+        model_path = "models/granite-4.0-h-tiny-Q4_K_M.gguf";  // Default model path
+    }
     
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--model") == 0 && i + 1 < argc) {
@@ -521,10 +526,10 @@ int main(int argc, char** argv) {
         } else if (strcmp(argv[i], "--no-persist") == 0) {
             no_persist = true;
             memory_dir = NULL; // Memory-only mode
-        } else if (strcmp(argv[i], "--govautoload") == 0) {
-            auto_load_model = true;
-            if (!model_path) {
-                model_path = "models/Qwen2.5-3B-Instruct-Q4_K_M.gguf";
+        } else if (strcmp(argv[i], "--noautoload") == 0) {
+            auto_load_model = false;
+            if (model_path) {
+                model_path = NULL;  // Default model path
             }
         } else if (strcmp(argv[i], "--debug") == 0 || strcmp(argv[i], "-d") == 0) {
             quiet_mode = false;
@@ -540,7 +545,7 @@ int main(int argc, char** argv) {
             printf("Usage: %s [options]\n\n", argv[0]);
             printf("Options:\n");
             printf("  --model <path>     Path to Governor GGUF model\n");
-            printf("  --govautoload      Auto-load default Governor model on startup\n");
+            printf("  --noautoload       Suppress auto-loading default Governor model on startup\n");
             printf("  --memory <dir>     Directory for memory persistence\n");
             printf("  --no-persist       Run in memory-only mode (no files)\n");
             printf("  --debug, -d        Enable debug logging (default: off)\n");
@@ -698,10 +703,14 @@ int main(int argc, char** argv) {
         ethervox_file_tools_add_filter(&file_config, ".txt");
         ethervox_file_tools_add_filter(&file_config, ".md");
         ethervox_file_tools_add_filter(&file_config, ".org");
+        ethervox_file_tools_add_filter(&file_config, ".c");
+        ethervox_file_tools_add_filter(&file_config, ".cpp");
+        ethervox_file_tools_add_filter(&file_config, ".h");
+        ethervox_file_tools_add_filter(&file_config, ".sh");
         
         // Register with Governor
         if (ethervox_file_tools_register(&registry, &file_config) == 0) {
-            printf("File Tools: Registered with Governor (read-only: .txt/.md/.org)\n");
+            printf("File Tools: Registered with Governor (read-only: .txt/.md/.org/.c/.cpp/.h/.sh)\n");
         }
     }
     
@@ -815,10 +824,10 @@ int main(int argc, char** argv) {
         printf("\n");
     } else if (model_path) {
         printf("\nModel available: %s\n", model_path);
-        printf("Use /load %s to load it, or restart with --govautoload\n\n", model_path);
+        printf("Use /load %s to load it, or restart with --load <path>\n\n", model_path);
     } else {
-        printf("\nNo model specified. Use /load <path> or --govautoload flag.\n");
-        printf("Recommended: models/Qwen2.5-3B-Instruct-Q4_K_M.gguf\n\n");
+        printf("\nNo model specified. Use /load <path> or --load <path> flag.\n");
+        printf("Recommended: models/granite-4.0-h-tiny-Q4_K_M.gguf\n\n");
     }
     
     print_help();
