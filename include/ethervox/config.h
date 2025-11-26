@@ -169,7 +169,7 @@ extern "C" {
 #endif
 
 #ifndef ETHERVOX_GOVERNOR_MAX_ITERATIONS
-#define ETHERVOX_GOVERNOR_MAX_ITERATIONS 5  // Maximum reasoning iterations
+#define ETHERVOX_GOVERNOR_MAX_ITERATIONS 10  // Maximum reasoning iterations
 #endif
 
 #ifndef ETHERVOX_GOVERNOR_TIMEOUT_SECONDS

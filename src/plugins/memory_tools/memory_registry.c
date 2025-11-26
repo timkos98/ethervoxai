@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 
 // Global memory store pointer for tool wrappers
 // Note: Not thread-safe, but sufficient for single-threaded CLI
@@ -87,42 +88,132 @@ static int parse_json_bool(const char* json, const char* key, bool* value) {
 
 // Tool wrappers that bridge between Governor API and memory functions
 
+
+// Parse a JSON array of strings: "tags": ["reminder", "recurring"]
+// OR a single string: "tags": "reminder"
+static int parse_json_string_array(const char* json, const char* key, char tags[][32], uint32_t* tag_count, uint32_t max_tags) {
+    char search[128];
+    snprintf(search, sizeof(search), "\"%s\":", key);
+    const char* start = strstr(json, search);
+    if (!start) return -1;
+    start += strlen(search);
+    while (*start == ' ' || *start == '\t' || *start == '\n' || *start == '\r') start++;
+    
+    *tag_count = 0;
+    
+    // Handle single string: "tags": "reminder"
+    if (*start == '"') {
+        start++;
+        const char* end = strchr(start, '"');
+        if (!end) return -1;
+        size_t len = end - start;
+        if (len > 0 && len < 32) {
+            strncpy(tags[0], start, len);
+            tags[0][len] = '\0';
+            (*tag_count) = 1;
+            return 0;
+        }
+        return -1;
+    }
+    
+    // Handle array: "tags": ["reminder", "recurring"]
+    if (*start != '[') return -1;
+    start++;
+    while (*start && *start != ']') {
+        while (*start == ' ' || *start == '\t' || *start == ',') start++;
+        if (*start == '"') {
+            start++;
+            const char* end = strchr(start, '"');
+            if (!end) break;
+            size_t len = end - start;
+            if (len > 0 && len < 32 && *tag_count < max_tags) {
+                strncpy(tags[*tag_count], start, len);
+                tags[*tag_count][len] = '\0';
+                (*tag_count)++;
+            }
+            start = end + 1;
+        } else {
+            break;
+        }
+    }
+    return (*tag_count > 0) ? 0 : -1;
+}
+
 static int tool_memory_store_wrapper(
     const char* args_json,
     char** result,
     char** error
 ) {
     ethervox_memory_store_t* store = g_memory_store;
-    
     char text[ETHERVOX_MEMORY_MAX_TEXT_LEN];
     float importance = 0.5f;
     bool is_user = false;
-    
+    char tags[8][32];
+    uint32_t tag_count = 0;
+
     // Parse arguments
     if (parse_json_string(args_json, "text", text, sizeof(text)) != 0) {
         *error = strdup("Missing 'text' parameter");
         return -1;
     }
-    
     parse_json_float(args_json, "importance", &importance);
     parse_json_bool(args_json, "is_user", &is_user);
     
-    // TODO: Parse tags array
-    const char* tags[] = {"general"};
-    uint32_t tag_count = 1;
-    
+    // Try to parse tags; if none provided, default to "general"
+    if (parse_json_string_array(args_json, "tags", tags, &tag_count, 8) != 0) {
+        // Only use "general" if tags were not provided at all
+        strncpy(tags[0], "general", 32);
+        tag_count = 1;
+    }
+
+    // Convert to const char* array
+    const char* tag_ptrs[8];
+    for (uint32_t i = 0; i < tag_count; i++) tag_ptrs[i] = tags[i];
+
     uint64_t memory_id;
-    if (ethervox_memory_store_add(store, text, tags, tag_count,
+    if (ethervox_memory_store_add(store, text, tag_ptrs, tag_count,
                                   importance, is_user, &memory_id) != 0) {
         *error = strdup("Failed to store memory");
         return -1;
     }
-    
-    // Return result
     char* res = malloc(256);
     snprintf(res, 256, "{\"success\":true,\"memory_id\":%llu}", (unsigned long long)memory_id);
     *result = res;
-    
+    return 0;
+}
+// Tool: memory_reminder_list - returns all reminders (tagged 'reminder')
+static int tool_memory_reminder_list_wrapper(
+    const char* args_json,
+    char** result,
+    char** error
+) {
+    ethervox_memory_store_t* store = g_memory_store;
+    ethervox_memory_search_result_t* results = NULL;
+    uint32_t result_count = 0;
+    const char* tag_filter[] = {"reminder"};
+    // Find up to 32 reminders
+    if (ethervox_memory_search(store, NULL, tag_filter, 1, 32, &results, &result_count) != 0) {
+        *error = strdup("Search failed");
+        return -1;
+    }
+    // Build JSON response
+    size_t res_len = 4096;
+    char* res = malloc(res_len);
+    int pos = snprintf(res, res_len, "{\"reminders\":[");
+    for (uint32_t i = 0; i < result_count; i++) {
+        const ethervox_memory_entry_t* e = &results[i].entry;
+        pos += snprintf(res + pos, res_len - pos,
+            "%s{\"text\":\"%s\",\"tags\":[",
+            i > 0 ? "," : "",
+            e->text);
+        for (uint32_t t = 0; t < e->tag_count; t++) {
+            pos += snprintf(res + pos, res_len - pos, "%s\"%s\"", t > 0 ? "," : "", e->tags[t]);
+        }
+        pos += snprintf(res + pos, res_len - pos, "],\"timestamp\":%llu}", (unsigned long long)e->timestamp);
+    }
+    snprintf(res + pos, res_len - pos, "],\"count\":%u}", result_count);
+    free(results);
+    *result = res;
     return 0;
 }
 
@@ -148,6 +239,28 @@ static int tool_memory_search_wrapper(
     
     ethervox_memory_search_result_t* results = NULL;
     uint32_t result_count = 0;
+    
+    // If empty query, return most recent message instead
+    if (query[0] == '\0' && store && store->entry_count > 0) {
+        // Find the most recent entry
+        ethervox_memory_entry_t* most_recent = &store->entries[0];
+        for (uint32_t i = 1; i < store->entry_count; i++) {
+            if (store->entries[i].timestamp > most_recent->timestamp) {
+                most_recent = &store->entries[i];
+            }
+        }
+        
+        // Build JSON response with most recent entry
+        size_t res_len = 4096;
+        char* res = malloc(res_len);
+        snprintf(res, res_len,
+                "{\"results\":[{\"text\":\"%s\",\"relevance\":1.0,\"importance\":%.2f}],\"count\":1}",
+                most_recent->text,
+                most_recent->importance);
+        
+        *result = res;
+        return 0;
+    }
     
     if (ethervox_memory_search(store, query, NULL, 0, limit,
                               &results, &result_count) != 0) {
@@ -209,14 +322,69 @@ static int tool_memory_summarize_wrapper(
     return 0;
 }
 
+// Tool: memory_complete_reminder - marks a reminder as completed by adding a 'completed' tag
+static int tool_memory_complete_reminder_wrapper(
+    const char* args_json,
+    char** result,
+    char** error
+) {
+    ethervox_memory_store_t* store = g_memory_store;
+    if (!store) {
+        *error = strdup("Memory store not initialized");
+        return -1;
+    }
+    
+    uint64_t memory_id = 0;
+    char id_str[32];
+    if (parse_json_string(args_json, "memory_id", id_str, sizeof(id_str)) != 0) {
+        *error = strdup("Missing 'memory_id' parameter");
+        return -1;
+    }
+    memory_id = strtoull(id_str, NULL, 10);
+    
+    int found = 0;
+    for (uint32_t i = 0; i < store->entry_count; i++) {
+        ethervox_memory_entry_t* entry = &store->entries[i];
+        if (entry->memory_id == memory_id) {
+            int already = 0;
+            for (uint32_t t = 0; t < entry->tag_count; t++) {
+                if (strncmp(entry->tags[t], "completed", ETHERVOX_MEMORY_TAG_LEN) == 0) {
+                    already = 1;
+                    break;
+                }
+            }
+            if (!already && entry->tag_count < ETHERVOX_MEMORY_MAX_TAGS) {
+                strncpy(entry->tags[entry->tag_count], "completed", ETHERVOX_MEMORY_TAG_LEN - 1);
+                entry->tags[entry->tag_count][ETHERVOX_MEMORY_TAG_LEN - 1] = '\0';
+                entry->tag_count++;
+            }
+            found = 1;
+            break;
+        }
+    }
+    if (!found) {
+        *error = strdup("Reminder not found");
+        return -1;
+    }
+    char* res = malloc(64);
+    snprintf(res, 64, "{\"success\":true,\"memory_id\":%llu}", (unsigned long long)memory_id);
+    *result = res;
+    return 0;
+}
+
+// Tool: memory_export_wrapper - export conversation to file
 static int tool_memory_export_wrapper(
     const char* args_json,
     char** result,
     char** error
 ) {
     ethervox_memory_store_t* store = g_memory_store;
+    if (!store) {
+        *error = strdup("Memory store not initialized");
+        return -1;
+    }
     
-    char filepath[512];
+    char filepath[512] = {0};
     char format[32] = "json";
     
     if (parse_json_string(args_json, "filepath", filepath, sizeof(filepath)) != 0) {
@@ -269,34 +437,57 @@ int ethervox_memory_tools_register(
     void* registry_ptr,
     ethervox_memory_store_t* store
 ) {
+
+
     ethervox_tool_registry_t* registry = (ethervox_tool_registry_t*)registry_ptr;
     if (!registry || !store) {
         return -1;
     }
-    
     // Set global memory store for tool wrappers to access
     g_memory_store = store;
-    
     int ret = 0;
+
+    // Register memory_complete_reminder tool
+    ethervox_tool_t tool_complete_reminder = {
+        .name = "memory_complete_reminder",
+        .description = "Mark a reminder as completed/done by its memory_id. Use the memory_id from memory_reminder_list to complete specific reminders.",
+        .parameters_json_schema =
+            "{"
+            "  \"type\": \"object\","
+            "  \"properties\": {"
+            "    \"memory_id\": {\"type\": \"string\", \"description\": \"The unique ID of the reminder to mark complete (from memory_reminder_list)\"}"
+            "  },"
+            "  \"required\": [\"memory_id\"]"
+            "}",
+        .execute = tool_memory_complete_reminder_wrapper,
+        .is_deterministic = false,
+        .requires_confirmation = false,
+        .is_stateful = true,
+        .estimated_latency_ms = 5.0f
+    };
+    ret |= ethervox_tool_registry_add(registry, &tool_complete_reminder);
     
-    // Register memory_store tool
+    // Register memory_store tool (single definition)
     ethervox_tool_t tool_store = {
         .name = "memory_store",
-        .description = "Save a fact or event to conversation memory",
-        .parameters_json_schema = 
-            "{\"type\":\"object\",\"properties\":{"
-            "\"text\":{\"type\":\"string\",\"description\":\"Content to remember\"},"
-            "\"tags\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},"
-            "\"importance\":{\"type\":\"number\",\"minimum\":0,\"maximum\":1},"
-            "\"is_user\":{\"type\":\"boolean\"}"
-            "},\"required\":[\"text\"]}",
+        .description = "Save a fact, event, or reminder to conversation memory. For reminders, include 'reminder' tag and deadline info in text (e.g., 'Call John at 2:30 PM today' or 'Team meeting in 5 mins'). Use importance 0.0-1.0 where 1.0 is critical.",
+        .parameters_json_schema =
+            "{"
+            "  \"type\": \"object\","
+            "  \"properties\": {"
+            "    \"text\": {\"type\": \"string\", \"description\": \"Content to remember. For reminders, include deadline/time info in the text.\"},"
+            "    \"tags\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}, \"description\": \"Labels like 'reminder', 'important', 'urgent', etc.\"},"
+            "    \"importance\": {\"type\": \"number\", \"minimum\": 0, \"maximum\": 1, \"description\": \"0.0=low to 1.0=critical. Use 0.9+ for urgent reminders.\"},"
+            "    \"is_user\": {\"type\": \"boolean\", \"description\": \"True if this is user input, false if assistant generated\"}"
+            "  },"
+            "  \"required\": [\"text\"]"
+            "}",
         .execute = tool_memory_store_wrapper,
         .is_deterministic = false,
         .requires_confirmation = false,
         .is_stateful = true,
         .estimated_latency_ms = 5.0f
     };
-    
     ret |= ethervox_tool_registry_add(registry, &tool_store);
     
     // Register memory_search tool
@@ -318,25 +509,20 @@ int ethervox_memory_tools_register(
     
     ret |= ethervox_tool_registry_add(registry, &tool_search);
     
-    // Register memory_summarize tool
-    ethervox_tool_t tool_summarize = {
-        .name = "memory_summarize",
-        .description = "Generate summary of recent conversation",
-        .parameters_json_schema =
-            "{\"type\":\"object\",\"properties\":{"
-            "\"window_size\":{\"type\":\"integer\",\"minimum\":1},"
-            "\"focus_topic\":{\"type\":\"string\"}"
-            "}}",
-        .execute = tool_memory_summarize_wrapper,
+
+
+    // Register memory_reminder_list tool
+    ethervox_tool_t tool_reminder_list = {
+        .name = "memory_reminder_list",
+        .description = "List all active reminders (entries tagged with 'reminder'). Returns reminder text, deadlines, importance, and memory_id for completing reminders.",
+        .parameters_json_schema = "{\"type\":\"object\",\"properties\":{}}",
+        .execute = tool_memory_reminder_list_wrapper,
         .is_deterministic = true,
         .requires_confirmation = false,
         .is_stateful = false,
-        .estimated_latency_ms = 20.0f
+        .estimated_latency_ms = 10.0f
     };
-    
-    ret |= ethervox_tool_registry_add(registry, &tool_summarize);
-    
-    // Register memory_export tool
+    ret |= ethervox_tool_registry_add(registry, &tool_reminder_list);
     ethervox_tool_t tool_export = {
         .name = "memory_export",
         .description = "Export conversation to JSON or Markdown file",

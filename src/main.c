@@ -91,7 +91,10 @@ static void print_help(void) {
     printf("  /debug             Toggle debug logging on/off\n");
     printf("  /clear             Clear conversation memory\n");
     printf("  /reset             Reset conversation (reload model)\n");
+    printf("  /paste             Enter paste mode for multi-line input\n");
     printf("  /quit              Exit the program\n");
+    printf("\nPaste Mode: Type /paste to enter, then paste multi-line text.\n");
+    printf("Exit with /end on its own line or Ctrl+D.\n");
     printf("\nOr just type a message to chat with the Governor.\n\n");
 }
 
@@ -209,6 +212,104 @@ static void print_stats(ethervox_memory_store_t* memory) {
         printf("Storage:          Memory-only (no persistence)\n");
     }
     printf("\n");
+}
+
+// Paste mode: accumulate multi-line input until /end or Ctrl+D
+static char* read_paste_input(void) {
+    // Allocate buffer for accumulated input (64KB max)
+    size_t buffer_size = 65536;
+    char* buffer = malloc(buffer_size);
+    if (!buffer) {
+        fprintf(stderr, "Memory allocation failed for paste mode\n");
+        return NULL;
+    }
+    
+    buffer[0] = '\0';
+    size_t total_len = 0;
+    
+#if defined(__APPLE__) || defined(__linux__)
+    // Readline-based paste mode
+    printf("(Paste mode - type /end or press Ctrl+D to submit)\n");
+    
+    while (1) {
+        char* line = readline("paste> ");
+        
+        if (!line) {
+            // Ctrl+D (EOF) - exit paste mode and submit
+            printf("\n");
+            break;
+        }
+        
+        // Check for /end command
+        if (strcmp(line, "/end") == 0) {
+            free(line);
+            printf("\n");
+            break;
+        }
+        
+        // Append line to buffer with newline
+        size_t line_len = strlen(line);
+        if (total_len + line_len + 2 > buffer_size) {
+            fprintf(stderr, "Paste buffer exceeded 64KB limit\n");
+            free(line);
+            free(buffer);
+            return NULL;
+        }
+        
+        if (total_len > 0) {
+            buffer[total_len++] = '\n';
+        }
+        strcpy(buffer + total_len, line);
+        total_len += line_len;
+        buffer[total_len] = '\0';
+        
+        free(line);
+    }
+#else
+    // Fallback paste mode (no readline)
+    printf("(Paste mode - type /end or press Ctrl+D to submit)\n");
+    char line[2048];
+    
+    while (1) {
+        printf("paste> ");
+        fflush(stdout);
+        
+        if (!fgets(line, sizeof(line), stdin)) {
+            // Ctrl+D (EOF) - exit paste mode and submit
+            printf("\n");
+            break;
+        }
+        
+        // Remove newline
+        size_t len = strlen(line);
+        if (len > 0 && line[len - 1] == '\n') {
+            line[len - 1] = '\0';
+            len--;
+        }
+        
+        // Check for /end command
+        if (strcmp(line, "/end") == 0) {
+            printf("\n");
+            break;
+        }
+        
+        // Append line to buffer with newline
+        if (total_len + len + 2 > buffer_size) {
+            fprintf(stderr, "Paste buffer exceeded 64KB limit\n");
+            free(buffer);
+            return NULL;
+        }
+        
+        if (total_len > 0) {
+            buffer[total_len++] = '\n';
+        }
+        strcpy(buffer + total_len, line);
+        total_len += len;
+        buffer[total_len] = '\0';
+    }
+#endif
+    
+    return buffer;
 }
 
 static void handle_search(ethervox_memory_store_t* memory, const char* query) {
@@ -428,6 +529,20 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         return;
     }
     
+    if (strcmp(line, "/paste") == 0) {
+        printf("Entering paste mode...\n");
+        char* pasted = read_paste_input();
+        if (!pasted || pasted[0] == '\0') {
+            printf("Paste mode cancelled (empty input).\n");
+            if (pasted) free(pasted);
+            return;
+        }
+        // Recursively process the pasted content as a command
+        process_command(pasted, memory, governor, quit_flag);
+        free(pasted);
+        return;
+    }
+    
     // Not a command - treat as user message
     printf("\n");
     
@@ -446,9 +561,6 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
     }
     
     // Send to Governor for processing
-    printf("\033[36m");  // Cyan color for assistant response
-    fflush(stdout);
-    
     char* response = NULL;
     char* error = NULL;
     ethervox_confidence_metrics_t metrics;
@@ -466,19 +578,24 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
     
     // Restore stderr if we redirected it
     if (g_quiet_mode && stderr_backup != -1) {
+        fflush(stderr);  // Flush any pending stderr output before restoring
         dup2(stderr_backup, STDERR_FILENO);
         close(stderr_backup);
     }
     
+    // Now apply cyan color to the response output
+    printf("\033[36m");  // Cyan color for assistant response
+    fflush(stdout);
+    
     if (status == ETHERVOX_GOVERNOR_SUCCESS && response) {
-        printf("%s\033[0m\n\n", response);  // Print response and reset color
+        printf("%s\033[0m\n\n", response);  // Print response in cyan, then reset color
         
         // Store assistant response
         store_message(memory, response, false, 0.8f);
         
         free(response);
     } else if (status == ETHERVOX_GOVERNOR_ERROR) {
-        printf("\033[0m");  // Reset color
+        printf("\033[0m");  // Reset color before error
         if (error) {
             printf("[Error: %s]\n\n", error);
             free(error);
@@ -486,6 +603,7 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
             printf("[Error: Governor execution failed]\n\n");
         }
     } else {
+        printf("\033[0m");  // Reset color before status message
         printf("[Status: %d - Response may be incomplete]\n\n", status);
         if (response) free(response);
         if (error) free(error);

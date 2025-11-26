@@ -115,13 +115,11 @@ int ethervox_tool_registry_build_system_prompt(
     bool is_mobile = is_mobile_platform();
     
     // Qwen2.5 uses <|im_start|> and <|im_end|> format
-    // Desktop: More detailed with memory/file tools emphasized
+    // Desktop: Memory and file tools available but optional
     // Mobile: Concise, focused on voice interaction
     const char* platform_context = is_mobile
         ? "You are Ethervox, a concise voice assistant optimized for mobile. Keep responses brief and actionable."
-        : "You are Ethervox, an intelligent assistant. You MUST use tools - you cannot answer from memory alone.\n\n"
-          "CRITICAL: When user asks about past information (name, preferences, previous topics), you MUST call memory_search tool. "
-          "Do NOT try to answer without searching memory first.";
+        : "You are Ethervox, an intelligent assistant with memory capabilities. Use tools ONLY when necessary for the user's needs.";
     
     int written = snprintf(buffer, buffer_size,
         "<|im_start|>system\n"
@@ -184,14 +182,17 @@ int ethervox_tool_registry_build_system_prompt(
         
         // Desktop: Comprehensive with memory/file context
         : "\n\nTOOL USAGE:\n"
-          "When you need to use a tool, output: <tool_call name=\"tool_name\" param=\"value\" />\n"
+          "Use tools when they help answer the user's specific request. Tools are optional.\n"
+          "When you use a tool, output: <tool_call name=\"tool_name\" param=\"value\" />\n"
           "After tool execution, you'll receive: <tool_result>JSON data</tool_result>\n"
           "Then respond naturally using that data.\n\n"
           "EXAMPLES:\n"
           "User: Hi\n"
+          "Assistant: Hi there! How can I help you?\n\n"
+          "User: What did we talk about last time?\n"
           "Assistant: <tool_call name=\"memory_search\" query=\"\" limit=\"5\" />\n"
           "<tool_result>{\"results\":[{\"text\":\"Discussed project timeline\"}]}</tool_result>\n"
-          "Assistant: Hi! I see we were discussing the project timeline. How's that going?\n\n"
+          "Assistant: We were discussing the project timeline. How's that progressing?\n\n"
           "User: My name is Tim\n"
           "Assistant: <tool_call name=\"memory_store\" text=\"User's name is Tim\" tags=\"personal\" importance=\"0.95\" />\n"
           "<tool_result>{\"success\":true}</tool_result>\n"
@@ -201,25 +202,29 @@ int ethervox_tool_registry_build_system_prompt(
           "<tool_result>{\"results\":[{\"text\":\"User's name is Tim\"}]}</tool_result>\n"
           "Assistant: Your name is Tim!\n\n"
           "User: What time is it?\n"
-          "Assistant: <tool_call name=\"time_get_current\" />\n\n"
+          "Assistant: <tool_call name=\"time_get_current\" />\n"
+          "<tool_result>{\"time_12hr\": \"3:45 PM\"}</tool_result>\n"
+          "The current time is 3:45 PM.\n\n"
           "User: Calculate 17 divided by 12\n"
-          "Assistant: <tool_call name=\"calculator_compute\" expression=\"17/12\" />\n\n"
-          "User: List files here\n"
-          "Assistant: <tool_call name=\"file_list\" directory=\".\" recursive=\"false\" />\n\n"
-          "User: Read semester_project_TUM.org\n"
-          "Assistant: <tool_call name=\"file_read\" file_path=\"semester_project_TUM.org\" />\n\n"
-          "MANDATORY MEMORY RULES:\n"
-          "1. GREETING (hi/hello/hey) → ALWAYS use memory_search first\n"
-          "2. QUESTIONS ABOUT PAST (name/preferences/previous topics) → ALWAYS use memory_search\n"
-          "3. USER SHARES INFO → IMMEDIATELY use memory_store BEFORE responding\n"
-          "4. NEVER answer 'I don't know' or 'you haven't told me' - search memory first!\n"
-          "5. Store importance: 0.95 personal facts, 0.8 questions, 0.7 preferences\n\n"
-          "WRONG: 'You have not shared your name with me'\n"
-          "RIGHT: <tool_call name=\"memory_search\" query=\"name\" limit=\"5\" />\n\n"
-          "OTHER RULES:\n"
+          "Assistant: <tool_call name=\"calculator_compute\" expression=\"17/12\" />\n"
+          "<tool_result>{\"result\": 1.42}</tool_result>\n"
+          "17 divided by 12 is approximately 1.42.\n\n"
+          "User: Set a reminder in 5 minutes\n"
+          "Assistant: <tool_call name=\"memory_store\" text=\"Reminder set for 5 minutes from now\" tags=\"reminder\" importance=\"0.9\" />\n"
+          "<tool_result>{\"success\":true}</tool_result>\n"
+          "Done! I've set a reminder for 5 minutes from now.\n\n"
+          "TOOL SELECTION RULES:\n"
+          "1. Use memory_search ONLY when user asks about past information/context\n"
+          "2. Use memory_store when user shares personal info or creates reminders\n"
+          "3. Use calculator_compute for math/numeric operations\n"
+          "4. Use time tools when user asks about date/time\n"
+          "5. Use file tools for document access\n"
+          "6. Do NOT use tools for simple greetings or conversational responses\n"
+          "7. Store importance: 0.95 personal facts, 0.9 urgent reminders, 0.8 preferences\n\n"
+          "RESPONSE STYLE:\n"
           "1. Respond conversationally - NO role labels\n"
-          "2. Use calculator_compute for ALL math\n"
-          "3. Use file tools for document access<|im_end|>\n";
+          "2. Be helpful and contextual\n"
+          "3. Only use tools when they directly help answer the user<|im_end|>\n";
     
     int instr_written = snprintf(ptr, remaining, "%s", usage_section);
     
