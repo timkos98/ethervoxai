@@ -51,8 +51,12 @@ static char g_loaded_model_path[512] = {0};  // Track loaded model path for /res
 static const char* DEFAULT_STARTUP_PROMPT = 
     "Check for any pending reminders using memory_reminder_list. "
     "Search for important recent memories using memory_search with min_importance=0.8 (or 0.9 for critical items). "
-    "Get the current date and time. "
-    "Then greet the user briefly and mention the date, time, and if there are any reminders that are not yet completed or important items.";
+    "Get the current date"
+    "Get the current time in 24hr format."
+    "Get the current week number"
+    "look for notes or memos stored in memory."
+    "Greet the user tell them the week number, the date, and time in 24hr format"
+    "List reminders if they exist, do not make up any reminders. If the tool finds no reminders, just say that there are no reminders.";
 
 static void signal_handler(int sig) {
     (void)sig;

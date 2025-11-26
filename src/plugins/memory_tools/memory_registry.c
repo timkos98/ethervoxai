@@ -569,6 +569,44 @@ static int tool_memory_delete_wrapper(
     return 0;
 }
 
+// Tool: memory_update_reminder - update reminder text by ID
+static int tool_memory_update_reminder_wrapper(
+    const char* args_json,
+    char** result,
+    char** error
+) {
+    ethervox_memory_store_t* store = g_memory_store;
+    
+    // Parse memory_id
+    char id_str[32];
+    if (parse_json_string(args_json, "memory_id", id_str, sizeof(id_str)) != 0) {
+        *error = strdup("Missing 'memory_id' parameter");
+        return -1;
+    }
+    
+    uint64_t memory_id = strtoull(id_str, NULL, 10);
+    
+    // Parse new_text
+    char new_text[ETHERVOX_MEMORY_MAX_TEXT_LEN];
+    if (parse_json_string(args_json, "new_text", new_text, sizeof(new_text)) != 0) {
+        *error = strdup("Missing 'new_text' parameter");
+        return -1;
+    }
+    
+    // Update the reminder text
+    if (ethervox_memory_update_text(store, memory_id, new_text) != 0) {
+        *error = strdup("Failed to update reminder - memory_id not found");
+        return -1;
+    }
+    
+    char* res = malloc(512);
+    snprintf(res, 512, "{\"success\":true,\"memory_id\":%llu,\"updated_text\":\"%s\"}", 
+             (unsigned long long)memory_id, new_text);
+    *result = res;
+    
+    return 0;
+}
+
 int ethervox_memory_tools_register(
     void* registry_ptr,
     ethervox_memory_store_t* store
@@ -602,6 +640,27 @@ int ethervox_memory_tools_register(
         .estimated_latency_ms = 5.0f
     };
     ret |= ethervox_tool_registry_add(registry, &tool_complete_reminder);
+    
+    // Register memory_update_reminder tool
+    ethervox_tool_t tool_update_reminder = {
+        .name = "memory_update_reminder",
+        .description = "Update a reminder's text (e.g., change due date, modify description). Use memory_id from memory_reminder_list. Updates the full text - include all details like deadline.",
+        .parameters_json_schema =
+            "{"
+            "  \"type\": \"object\","
+            "  \"properties\": {"
+            "    \"memory_id\": {\"type\": \"string\", \"description\": \"The unique ID of the reminder to update (from memory_reminder_list)\"},"
+            "    \"new_text\": {\"type\": \"string\", \"description\": \"New reminder text with updated deadline/description (e.g., 'Call John at 3:00 PM today')\"}"
+            "  },"
+            "  \"required\": [\"memory_id\", \"new_text\"]"
+            "}",
+        .execute = tool_memory_update_reminder_wrapper,
+        .is_deterministic = false,
+        .requires_confirmation = false,
+        .is_stateful = true,
+        .estimated_latency_ms = 5.0f
+    };
+    ret |= ethervox_tool_registry_add(registry, &tool_update_reminder);
     
     // Register memory_store tool (single definition)
     ethervox_tool_t tool_store = {

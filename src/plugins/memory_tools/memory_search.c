@@ -359,8 +359,17 @@ int ethervox_memory_forget(
             }
             write_idx++;
         } else {
+            // Write DELETE record to persist the removal
+            if (store->append_log) {
+                fprintf(store->append_log, "{\"op\":\"delete\",\"id\":%llu}\n", entry->memory_id);
+            }
             pruned++;
         }
+    }
+    
+    // Flush to ensure deletions are persisted
+    if (store->append_log && pruned > 0) {
+        fflush(store->append_log);
     }
     
     store->entry_count = write_idx;

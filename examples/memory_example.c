@@ -67,10 +67,10 @@ int main(void) {
                                  tags[i], tag_count,
                                  importance[i], false, &assistant_id);
         
-        printf("  Turn %d stored (IDs: %lu, %lu)\n", i + 1, user_id, assistant_id);
+        printf("  Turn %d stored (IDs: %llu, %llu)\n", i + 1, (unsigned long long)user_id, (unsigned long long)assistant_id);
     }
     
-    printf("\nTotal memories stored: %lu\n\n", memory_store.total_memories_stored);
+    printf("\nTotal memories stored: %llu\n\n", (unsigned long long)memory_store.total_memories_stored);
     
     // Search for specific topics
     printf("=== Search: 'llama.cpp compilation' ===\n");
@@ -135,11 +135,11 @@ int main(void) {
     
     ethervox_memory_export(&memory_store, "conversation_export.json",
                           "json", &bytes_written);
-    printf("  JSON export: %lu bytes written to conversation_export.json\n", bytes_written);
+    printf("  JSON export: %llu bytes written to conversation_export.json\n", (unsigned long long)bytes_written);
     
     ethervox_memory_export(&memory_store, "conversation_export.md",
                           "markdown", &bytes_written);
-    printf("  Markdown export: %lu bytes written to conversation_export.md\n", bytes_written);
+    printf("  Markdown export: %llu bytes written to conversation_export.md\n", (unsigned long long)bytes_written);
     
     // Test forget functionality
     printf("\n=== Testing memory pruning ===\n");
@@ -153,9 +153,9 @@ int main(void) {
     
     // Cleanup
     printf("\n=== Statistics ===\n");
-    printf("Total memories stored: %lu\n", memory_store.total_memories_stored);
-    printf("Total searches: %lu\n", memory_store.total_searches);
-    printf("Total exports: %lu\n", memory_store.total_exports);
+    printf("Total memories stored: %llu\n", (unsigned long long)memory_store.total_memories_stored);
+    printf("Total searches: %llu\n", (unsigned long long)memory_store.total_searches);
+    printf("Total exports: %llu\n", (unsigned long long)memory_store.total_exports);
     
     ethervox_memory_cleanup(&memory_store);
     

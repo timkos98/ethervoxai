@@ -179,6 +179,20 @@ int ethervox_memory_update_tags(
 );
 
 /**
+ * Update text content for an existing memory entry
+ * 
+ * @param store Memory store
+ * @param memory_id ID of memory to update
+ * @param new_text New text content
+ * @return 0 on success, negative on error
+ */
+int ethervox_memory_update_text(
+    ethervox_memory_store_t* store,
+    uint64_t memory_id,
+    const char* new_text
+);
+
+/**
  * TOOL: memory_summarize - Generate summary of recent conversation
  * 
  * @param store Memory store

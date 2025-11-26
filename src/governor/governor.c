@@ -171,7 +171,7 @@ static int execute_tool_call(
         // File tools
         "directory", "file_path", "pattern", "recursive",
         // Memory tools
-        "text", "content", "tags", "query", "limit", "window_size", "format",
+        "text", "new_text", "content", "tags", "query", "limit", "window_size", "format",
         "importance", "min_importance", "max_age_hours", "is_user",
         "memory_id", "memory_ids", "filepath",
         "older_than_seconds", "importance_threshold",
@@ -191,6 +191,7 @@ static int execute_tool_call(
                                strcmp(attrs[i], "tags") == 0 ||
                                strcmp(attrs[i], "query") == 0 ||
                                strcmp(attrs[i], "text") == 0 ||
+                               strcmp(attrs[i], "new_text") == 0 ||
                                strcmp(attrs[i], "content") == 0 ||
                                strcmp(attrs[i], "directory") == 0 ||
                                strcmp(attrs[i], "pattern") == 0 ||

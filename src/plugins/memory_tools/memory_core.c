@@ -367,6 +367,63 @@ int ethervox_memory_update_tags(
     return memory_update_tags_internal(store, memory_id, tags, tag_count, true);
 }
 
+int ethervox_memory_update_text(
+    ethervox_memory_store_t* store,
+    uint64_t memory_id,
+    const char* new_text
+) {
+    if (!store || !store->is_initialized || !new_text) {
+        return -1;
+    }
+    
+    // Find the entry
+    ethervox_memory_entry_t* entry = NULL;
+    for (uint32_t i = 0; i < store->entry_count; i++) {
+        if (store->entries[i].memory_id == memory_id) {
+            entry = &store->entries[i];
+            break;
+        }
+    }
+    
+    if (!entry) {
+        return -1;  // Not found
+    }
+    
+    // Update the text
+    strncpy(entry->text, new_text, ETHERVOX_MEMORY_MAX_TEXT_LEN - 1);
+    entry->text[ETHERVOX_MEMORY_MAX_TEXT_LEN - 1] = '\0';
+    
+    // Write UPDATE record with new text
+    if (store->append_log) {
+        fprintf(store->append_log, "{\"op\":\"update_text\",\"id\":%llu,\"text\":\"", memory_id);
+        
+        // Escape special characters in JSON string
+        for (const char* p = new_text; *p && (p - new_text) < ETHERVOX_MEMORY_MAX_TEXT_LEN - 1; p++) {
+            if (*p == '"' || *p == '\\') {
+                fputc('\\', store->append_log);
+            } else if (*p == '\n') {
+                fputs("\\n", store->append_log);
+                continue;
+            } else if (*p == '\r') {
+                fputs("\\r", store->append_log);
+                continue;
+            } else if (*p == '\t') {
+                fputs("\\t", store->append_log);
+                continue;
+            }
+            fputc(*p, store->append_log);
+        }
+        
+        fprintf(store->append_log, "\"}\n");
+        fflush(store->append_log);
+    }
+    
+    ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
+                "Updated text for memory %llu", (unsigned long long)memory_id);
+    
+    return 0;
+}
+
 int ethervox_memory_get_by_id(
     ethervox_memory_store_t* store,
     uint64_t memory_id,

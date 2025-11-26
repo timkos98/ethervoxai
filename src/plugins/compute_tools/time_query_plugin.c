@@ -119,7 +119,7 @@ static int time_get_date_execute(const char* args_json, char** result, char** er
 
 static ethervox_tool_t time_get_date_tool = {
     .name = "time_get_date",
-    .description = "Get current date (day/month/year). Use when user asks 'what's the date', needs today's date for calculations, or asks about days until/since an event.",
+    .description = "Get current date (day/month/year). Use to get today's date. Use when user asks 'what's the date', needs today's date for calculations, or asks about days until/since an event.",
     .parameters_json_schema = "{}",
     .execute = time_get_date_execute,
     .is_deterministic = false,

@@ -264,7 +264,60 @@ int ethervox_memory_import(
             continue;  // Skip to next line
         }
         
-        // Check if this is an UPDATE operation
+        // Check if this is an UPDATE_TEXT operation
+        char* update_text_op = strstr(line, "\"op\":\"update_text\"");
+        if (update_text_op) {
+            // Handle UPDATE_TEXT record - update text content for existing memory
+            char* id_ptr = strstr(line, "\"id\":");
+            if (!id_ptr) continue;
+            
+            uint64_t memory_id = strtoull(id_ptr + 5, NULL, 10);
+            
+            // Parse new text
+            char* text_start = strstr(line, "\"text\":\"");
+            if (text_start) {
+                text_start += 8;  // Skip "text":"
+                char* text_end = text_start;
+                
+                // Find end quote, handling escaped quotes
+                while (*text_end) {
+                    if (*text_end == '"' && (text_end == text_start || *(text_end - 1) != '\\')) {
+                        break;
+                    }
+                    text_end++;
+                }
+                
+                if (*text_end == '"') {
+                    char new_text[ETHERVOX_MEMORY_MAX_TEXT_LEN];
+                    size_t text_len = text_end - text_start;
+                    if (text_len >= ETHERVOX_MEMORY_MAX_TEXT_LEN) {
+                        text_len = ETHERVOX_MEMORY_MAX_TEXT_LEN - 1;
+                    }
+                    
+                    // Copy and unescape
+                    size_t out_idx = 0;
+                    for (size_t i = 0; i < text_len && out_idx < ETHERVOX_MEMORY_MAX_TEXT_LEN - 1; i++) {
+                        if (text_start[i] == '\\' && i + 1 < text_len) {
+                            i++;
+                            if (text_start[i] == 'n') new_text[out_idx++] = '\n';
+                            else if (text_start[i] == 'r') new_text[out_idx++] = '\r';
+                            else if (text_start[i] == 't') new_text[out_idx++] = '\t';
+                            else new_text[out_idx++] = text_start[i];
+                        } else {
+                            new_text[out_idx++] = text_start[i];
+                        }
+                    }
+                    new_text[out_idx] = '\0';
+                    
+                    // Apply update
+                    ethervox_memory_update_text(store, memory_id, new_text);
+                }
+            }
+            
+            continue;  // Skip to next line
+        }
+        
+        // Check if this is an UPDATE operation (tags)
         char* op_ptr = strstr(line, "\"op\":\"update\"");
         if (op_ptr) {
             // Handle UPDATE record - update tags for existing memory
