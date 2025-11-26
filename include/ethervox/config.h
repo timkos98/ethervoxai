@@ -266,7 +266,7 @@ void ethervox_log_with_callback(int level, const char* tag, const char* fmt, ...
 // Version information (single source of truth)
 #define ETHERVOX_VERSION_MAJOR 0
 #define ETHERVOX_VERSION_MINOR 0
-#define ETHERVOX_VERSION_PATCH 3
+#define ETHERVOX_VERSION_PATCH 4
 #define ETHERVOX_BUILD_TYPE "Engineering"
 
 // Build version string from components
