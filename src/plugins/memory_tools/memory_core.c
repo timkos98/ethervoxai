@@ -311,6 +311,51 @@ int ethervox_memory_store_add(
                                     timestamp, memory_id_out);
 }
 
+int ethervox_memory_update_tags(
+    ethervox_memory_store_t* store,
+    uint64_t memory_id,
+    const char* tags[],
+    uint32_t tag_count
+) {
+    if (!store || !store->is_initialized || !tags || tag_count == 0 || tag_count > ETHERVOX_MEMORY_MAX_TAGS) {
+        return -1;
+    }
+    
+    // Find the entry
+    ethervox_memory_entry_t* entry = NULL;
+    for (uint32_t i = 0; i < store->entry_count; i++) {
+        if (store->entries[i].memory_id == memory_id) {
+            entry = &store->entries[i];
+            break;
+        }
+    }
+    
+    if (!entry) {
+        return -1;  // Not found
+    }
+    
+    // Update tags in memory
+    for (uint32_t i = 0; i < tag_count && i < ETHERVOX_MEMORY_MAX_TAGS; i++) {
+        snprintf(entry->tags[i], ETHERVOX_MEMORY_TAG_LEN, "%s", tags[i]);
+    }
+    entry->tag_count = tag_count;
+    
+    // Persist the update to JSONL file as an UPDATE record
+    if (store->append_log) {
+        fprintf(store->append_log,
+                "{\"op\":\"update\",\"id\":%llu,\"tags\":[",
+                (unsigned long long)memory_id);
+        
+        for (uint32_t i = 0; i < tag_count; i++) {
+            fprintf(store->append_log, "%s\"%s\"", i > 0 ? "," : "", tags[i]);
+        }
+        fprintf(store->append_log, "]}\n");
+        fflush(store->append_log);
+    }
+    
+    return 0;
+}
+
 int ethervox_memory_get_by_id(
     ethervox_memory_store_t* store,
     uint64_t memory_id,

@@ -163,6 +163,22 @@ int ethervox_memory_search(
 );
 
 /**
+ * Update tags for an existing memory entry
+ * 
+ * @param store Memory store
+ * @param memory_id ID of memory to update
+ * @param tags Array of new tags (replaces all existing tags)
+ * @param tag_count Number of tags
+ * @return 0 on success, negative on error
+ */
+int ethervox_memory_update_tags(
+    ethervox_memory_store_t* store,
+    uint64_t memory_id,
+    const char* tags[],
+    uint32_t tag_count
+);
+
+/**
  * TOOL: memory_summarize - Generate summary of recent conversation
  * 
  * @param store Memory store
@@ -226,6 +242,22 @@ int ethervox_memory_forget(
     uint64_t older_than_seconds,
     float importance_threshold,
     uint32_t* items_pruned
+);
+
+/**
+ * TOOL: memory_delete - Delete specific memories by ID
+ * 
+ * @param store Memory store
+ * @param memory_ids Array of memory IDs to delete
+ * @param id_count Number of IDs in the array
+ * @param items_deleted Output: number of items deleted
+ * @return 0 on success, negative on error
+ */
+int ethervox_memory_delete_by_ids(
+    ethervox_memory_store_t* store,
+    const uint64_t* memory_ids,
+    uint32_t id_count,
+    uint32_t* items_deleted
 );
 
 /**

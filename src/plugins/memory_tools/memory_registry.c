@@ -230,13 +230,15 @@ static int tool_memory_search_wrapper(
     
     char query[512] = {0};
     uint32_t limit = 10;
+    float min_importance = 0.0f;  // Default: no importance filter
     
     parse_json_string(args_json, "query", query, sizeof(query));
     parse_json_uint(args_json, "limit", &limit);
+    parse_json_float(args_json, "min_importance", &min_importance);
     
     ethervox_log(ETHERVOX_LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__,
-                "memory_search_wrapper: query='%s', limit=%u, query[0]=%d",
-                query, limit, (int)query[0]);
+                "memory_search_wrapper: query='%s', limit=%u, min_importance=%.2f, query[0]=%d",
+                query, limit, min_importance, (int)query[0]);
     
     ethervox_memory_search_result_t* results = NULL;
     uint32_t result_count = 0;
@@ -269,21 +271,27 @@ static int tool_memory_search_wrapper(
         return -1;
     }
     
-    // Build JSON response
+    // Build JSON response, filtering by min_importance
     size_t res_len = 4096;
     char* res = malloc(res_len);
     int pos = snprintf(res, res_len, "{\"results\":[");
     
-    for (uint32_t i = 0; i < result_count && i < limit; i++) {
+    uint32_t output_count = 0;
+    for (uint32_t i = 0; i < result_count && output_count < limit; i++) {
+        // Skip entries below importance threshold
+        if (min_importance > 0.0f && results[i].entry.importance < min_importance) {
+            continue;
+        }
         pos += snprintf(res + pos, res_len - pos,
                        "%s{\"text\":\"%s\",\"relevance\":%.2f,\"importance\":%.2f}",
-                       i > 0 ? "," : "",
+                       output_count > 0 ? "," : "",
                        results[i].entry.text,
                        results[i].relevance,
                        results[i].entry.importance);
+        output_count++;
     }
     
-    snprintf(res + pos, res_len - pos, "],\"count\":%u}", result_count);
+    snprintf(res + pos, res_len - pos, "],\"count\":%u}", output_count);
     
     free(results);
     *result = res;
@@ -343,30 +351,48 @@ static int tool_memory_complete_reminder_wrapper(
     }
     memory_id = strtoull(id_str, NULL, 10);
     
-    int found = 0;
+    // Find the entry and check if already completed
+    ethervox_memory_entry_t* entry = NULL;
     for (uint32_t i = 0; i < store->entry_count; i++) {
-        ethervox_memory_entry_t* entry = &store->entries[i];
-        if (entry->memory_id == memory_id) {
-            int already = 0;
-            for (uint32_t t = 0; t < entry->tag_count; t++) {
-                if (strncmp(entry->tags[t], "completed", ETHERVOX_MEMORY_TAG_LEN) == 0) {
-                    already = 1;
-                    break;
-                }
-            }
-            if (!already && entry->tag_count < ETHERVOX_MEMORY_MAX_TAGS) {
-                strncpy(entry->tags[entry->tag_count], "completed", ETHERVOX_MEMORY_TAG_LEN - 1);
-                entry->tags[entry->tag_count][ETHERVOX_MEMORY_TAG_LEN - 1] = '\0';
-                entry->tag_count++;
-            }
-            found = 1;
+        if (store->entries[i].memory_id == memory_id) {
+            entry = &store->entries[i];
             break;
         }
     }
-    if (!found) {
+    
+    if (!entry) {
         *error = strdup("Reminder not found");
         return -1;
     }
+    
+    // Check if already completed
+    int already_completed = 0;
+    for (uint32_t t = 0; t < entry->tag_count; t++) {
+        if (strncmp(entry->tags[t], "completed", ETHERVOX_MEMORY_TAG_LEN) == 0) {
+            already_completed = 1;
+            break;
+        }
+    }
+    
+    if (!already_completed && entry->tag_count < ETHERVOX_MEMORY_MAX_TAGS) {
+        // Build new tag array with existing tags + "completed"
+        const char* new_tags[ETHERVOX_MEMORY_MAX_TAGS];
+        uint32_t new_tag_count = 0;
+        
+        // Copy existing tags
+        for (uint32_t t = 0; t < entry->tag_count && new_tag_count < ETHERVOX_MEMORY_MAX_TAGS; t++) {
+            new_tags[new_tag_count++] = entry->tags[t];
+        }
+        
+        // Add "completed" tag
+        if (new_tag_count < ETHERVOX_MEMORY_MAX_TAGS) {
+            new_tags[new_tag_count++] = "completed";
+        }
+        
+        // Update tags and persist to JSONL
+        ethervox_memory_update_tags(store, memory_id, new_tags, new_tag_count);
+    }
+    
     char* res = malloc(64);
     snprintf(res, 64, "{\"success\":true,\"memory_id\":%llu}", (unsigned long long)memory_id);
     *result = res;
@@ -408,12 +434,21 @@ static int tool_memory_export_wrapper(
     return 0;
 }
 
+// Forward declaration for delegation
+static int tool_memory_delete_wrapper(const char* args_json, char** result, char** error);
+
 static int tool_memory_forget_wrapper(
     const char* args_json,
     char** result,
     char** error
 ) {
     ethervox_memory_store_t* store = g_memory_store;
+    
+    // Check if memory_ids parameter is present (delegate to delete functionality)
+    if (strstr(args_json, "\"memory_ids\"")) {
+        // Delegate to delete logic
+        return tool_memory_delete_wrapper(args_json, result, error);
+    }
     
     uint64_t older_than = 0;
     float importance_threshold = 0.0f;
@@ -429,6 +464,106 @@ static int tool_memory_forget_wrapper(
     
     char* res = malloc(256);
     snprintf(res, 256, "{\"success\":true,\"items_pruned\":%u}", pruned);
+    *result = res;
+    
+    return 0;
+}
+
+// Tool: memory_delete - delete specific memories by ID
+static int tool_memory_delete_wrapper(
+    const char* args_json,
+    char** result,
+    char** error
+) {
+    ethervox_memory_store_t* store = g_memory_store;
+    if (!store) {
+        *error = strdup("Memory store not initialized");
+        return -1;
+    }
+    
+    // Parse memory_ids - can be either:
+    // 1. JSON array: "memory_ids":[123,456,789]
+    // 2. String with array: "memory_ids":"[123,456,789]"
+    // 3. Single ID: "memory_id":"123"
+    
+    uint64_t ids[100]; // Max 100 IDs at once
+    uint32_t id_count = 0;
+    
+    // Try to find memory_ids as JSON array
+    char* ids_start = strstr(args_json, "\"memory_ids\":[");
+    if (ids_start) {
+        ids_start += 14; // Skip "memory_ids":[
+        
+        // Parse array of IDs
+        char* cursor = ids_start;
+        while (*cursor && *cursor != ']' && id_count < 100) {
+            // Skip whitespace and commas
+            while (*cursor && (*cursor == ' ' || *cursor == ',')) cursor++;
+            
+            if (*cursor >= '0' && *cursor <= '9') {
+                ids[id_count++] = strtoull(cursor, &cursor, 10);
+            } else {
+                break;
+            }
+        }
+    } else {
+        // Try memory_ids as string containing array: "memory_ids":"[123,456]"
+        char ids_str[512];
+        if (parse_json_string(args_json, "memory_ids", ids_str, sizeof(ids_str)) == 0) {
+            // Parse the string as an array
+            char* cursor = ids_str;
+            
+            // Skip opening bracket if present
+            if (*cursor == '[') cursor++;
+            
+            while (*cursor && id_count < 100) {
+                // Skip whitespace and commas
+                while (*cursor && (*cursor == ' ' || *cursor == ',' || *cursor == '[')) cursor++;
+                
+                if (*cursor >= '0' && *cursor <= '9') {
+                    ids[id_count++] = strtoull(cursor, &cursor, 10);
+                } else if (*cursor == ']') {
+                    break;
+                } else if (*cursor == '\0') {
+                    break;
+                } else {
+                    cursor++;
+                }
+            }
+        } else {
+            // Try single memory_id parameter
+            char id_str[32];
+            if (parse_json_string(args_json, "memory_id", id_str, sizeof(id_str)) == 0) {
+                uint64_t single_id = strtoull(id_str, NULL, 10);
+                uint32_t deleted = 0;
+                if (ethervox_memory_delete_by_ids(store, &single_id, 1, &deleted) != 0) {
+                    *error = strdup("Delete operation failed");
+                    return -1;
+                }
+                char* res = malloc(256);
+                snprintf(res, 256, "{\"success\":true,\"items_deleted\":%u}", deleted);
+                *result = res;
+                return 0;
+            }
+            
+            *error = strdup("Missing 'memory_ids' or 'memory_id' parameter");
+            return -1;
+        }
+    }
+    
+    if (id_count == 0) {
+        *error = strdup("No valid memory IDs provided");
+        return -1;
+    }
+    
+    uint32_t deleted = 0;
+    if (ethervox_memory_delete_by_ids(store, ids, id_count, &deleted) != 0) {
+        *error = strdup("Delete operation failed");
+        return -1;
+    }
+    
+    char* res = malloc(256);
+    snprintf(res, 256, "{\"success\":true,\"items_deleted\":%u}", deleted);
     *result = res;
     
     return 0;
@@ -494,12 +629,13 @@ int ethervox_memory_tools_register(
     // Register memory_search tool
     ethervox_tool_t tool_search = {
         .name = "memory_search",
-        .description = "Search conversation memory by text similarity and tags",
+        .description = "Search conversation memory by text similarity and tags. Results are sorted by relevance and importance. Use min_importance to filter for important memories (0.9+ for critical info, 0.8+ for important context).",
         .parameters_json_schema =
             "{\"type\":\"object\",\"properties\":{"
             "\"query\":{\"type\":\"string\",\"description\":\"Search query\"},"
             "\"tag_filter\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},"
-            "\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100}"
+            "\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100},"
+            "\"min_importance\":{\"type\":\"number\",\"minimum\":0.0,\"maximum\":1.0,\"description\":\"Minimum importance threshold (0.0-1.0). Use 0.8+ for important context, 0.9+ for critical info.\"}"
             "}}",
         .execute = tool_memory_search_wrapper,
         .is_deterministic = true,
@@ -559,9 +695,27 @@ int ethervox_memory_tools_register(
     
     ret |= ethervox_tool_registry_add(registry, &tool_forget);
     
+    // Register memory_delete tool
+    ethervox_tool_t tool_delete = {
+        .name = "memory_delete",
+        .description = "Delete specific memories by their IDs. Use memory_ids array for multiple, or memory_id for single deletion.",
+        .parameters_json_schema =
+            "{\"type\":\"object\",\"properties\":{"
+            "\"memory_ids\":{\"type\":\"array\",\"items\":{\"type\":\"integer\"}},"
+            "\"memory_id\":{\"type\":\"string\"}"
+            "}}",
+        .execute = tool_memory_delete_wrapper,
+        .is_deterministic = false,
+        .requires_confirmation = true,
+        .is_stateful = true,
+        .estimated_latency_ms = 10.0f
+    };
+    
+    ret |= ethervox_tool_registry_add(registry, &tool_delete);
+    
     if (ret == 0) {
         ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
-                    "Registered 5 memory tools with Governor");
+                    "Registered 6 memory tools with Governor");
     }
     
     return ret;

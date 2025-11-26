@@ -377,3 +377,71 @@ int ethervox_memory_forget(
     
     return 0;
 }
+
+// Internal delete function - doesn't write to JSONL (for use during import)
+int memory_delete_by_ids_internal(
+    ethervox_memory_store_t* store,
+    const uint64_t* memory_ids,
+    uint32_t id_count,
+    bool persist_to_log,
+    uint32_t* items_deleted
+) {
+    if (!store || !store->is_initialized || !memory_ids || id_count == 0) {
+        return -1;
+    }
+    
+    uint32_t deleted = 0;
+    uint32_t write_idx = 0;
+    
+    // Compact array by removing entries with matching IDs
+    for (uint32_t i = 0; i < store->entry_count; i++) {
+        ethervox_memory_entry_t* entry = &store->entries[i];
+        bool should_delete = false;
+        
+        // Check if this entry's ID is in the delete list
+        for (uint32_t j = 0; j < id_count; j++) {
+            if (entry->memory_id == memory_ids[j]) {
+                should_delete = true;
+                break;
+            }
+        }
+        
+        if (!should_delete) {
+            if (write_idx != i) {
+                store->entries[write_idx] = *entry;
+            }
+            write_idx++;
+        } else {
+            deleted++;
+            
+            // Write DELETE record to JSONL file (only if persisting)
+            if (persist_to_log && store->append_log) {
+                fprintf(store->append_log, "{\"op\":\"delete\",\"id\":%llu}\n", 
+                        (unsigned long long)entry->memory_id);
+                fflush(store->append_log);
+            }
+        }
+    }
+    
+    store->entry_count = write_idx;
+    
+    // TODO: Rebuild tag index after deletion
+    
+    if (items_deleted) {
+        *items_deleted = deleted;
+    }
+    
+    ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
+                "Deleted %u memories by ID", deleted);
+    
+    return 0;
+}
+
+int ethervox_memory_delete_by_ids(
+    ethervox_memory_store_t* store,
+    const uint64_t* memory_ids,
+    uint32_t id_count,
+    uint32_t* items_deleted
+) {
+    return memory_delete_by_ids_internal(store, memory_ids, id_count, true, items_deleted);
+}

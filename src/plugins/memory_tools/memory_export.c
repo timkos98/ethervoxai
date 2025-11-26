@@ -27,6 +27,15 @@ extern int memory_store_add_internal(
     uint64_t* memory_id_out
 );
 
+// Internal function from memory_search.c for deleting without persisting to log
+extern int memory_delete_by_ids_internal(
+    ethervox_memory_store_t* store,
+    const uint64_t* memory_ids,
+    uint32_t id_count,
+    bool persist_to_log,
+    uint32_t* items_deleted
+);
+
 // Format timestamp for display
 static void format_timestamp(time_t timestamp, char* buf, size_t len) {
     struct tm* tm_info = localtime(&timestamp);
@@ -221,7 +230,73 @@ int ethervox_memory_import(
     uint32_t loaded = 0;
     
     while (fgets(line, sizeof(line), fp)) {
-        // Parse basic JSON fields (simplified parser)
+        // Check if this is a DELETE operation
+        char* delete_op = strstr(line, "\"op\":\"delete\"");
+        if (delete_op) {
+            // Handle DELETE record - remove memory by ID
+            char* id_ptr = strstr(line, "\"id\":");
+            if (!id_ptr) continue;
+            
+            uint64_t memory_id = strtoull(id_ptr + 5, NULL, 10);
+            
+            // Delete the memory entry without persisting (we're already reading from file)
+            uint32_t deleted = 0;
+            memory_delete_by_ids_internal(store, &memory_id, 1, false, &deleted);
+            
+            continue;  // Skip to next line
+        }
+        
+        // Check if this is an UPDATE operation
+        char* op_ptr = strstr(line, "\"op\":\"update\"");
+        if (op_ptr) {
+            // Handle UPDATE record - update tags for existing memory
+            char* id_ptr = strstr(line, "\"id\":");
+            if (!id_ptr) continue;
+            
+            uint64_t memory_id = strtoull(id_ptr + 5, NULL, 10);
+            
+            // Parse updated tags
+            const char* tag_array[ETHERVOX_MEMORY_MAX_TAGS];
+            uint32_t tag_count = 0;
+            char tag_storage[ETHERVOX_MEMORY_MAX_TAGS][ETHERVOX_MEMORY_TAG_LEN];
+            
+            char* tags_start = strstr(line, "\"tags\":[");
+            if (tags_start) {
+                tags_start += 8;  // Skip "tags":[
+                char* tags_end = strchr(tags_start, ']');
+                
+                if (tags_end) {
+                    char* tag_cursor = tags_start;
+                    while (tag_cursor < tags_end && tag_count < ETHERVOX_MEMORY_MAX_TAGS) {
+                        char* tag_open = strchr(tag_cursor, '"');
+                        if (!tag_open || tag_open >= tags_end) break;
+                        
+                        tag_open++;
+                        char* tag_close = strchr(tag_open, '"');
+                        if (!tag_close || tag_close >= tags_end) break;
+                        
+                        size_t tag_len = tag_close - tag_open;
+                        if (tag_len > 0 && tag_len < ETHERVOX_MEMORY_TAG_LEN) {
+                            strncpy(tag_storage[tag_count], tag_open, tag_len);
+                            tag_storage[tag_count][tag_len] = '\0';
+                            tag_array[tag_count] = tag_storage[tag_count];
+                            tag_count++;
+                        }
+                        
+                        tag_cursor = tag_close + 1;
+                    }
+                }
+            }
+            
+            // Apply the tag update to the memory entry
+            if (tag_count > 0) {
+                ethervox_memory_update_tags(store, memory_id, tag_array, tag_count);
+            }
+            
+            continue;  // Skip to next line
+        }
+        
+        // Parse basic JSON fields (simplified parser) for regular ADD records
         uint64_t id, turn_id;
         long timestamp;
         float importance;

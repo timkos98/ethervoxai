@@ -46,6 +46,13 @@ static bool g_debug_enabled = false;  // Debug logging disabled by default (opt-
 static bool g_quiet_mode = true;      // Quiet mode by default
 static char g_loaded_model_path[512] = {0};  // Track loaded model path for /reset
 
+// Default startup prompt text (used if no custom prompt file exists)
+static const char* DEFAULT_STARTUP_PROMPT = 
+    "Check for any pending reminders using memory_reminder_list. "
+    "Search for important recent memories using memory_search with min_importance=0.8 (or 0.9 for critical items). "
+    "Get the current date and time. "
+    "Then greet the user briefly and mention the date, time, and if there are any reminders to be completed or important items.";
+
 static void signal_handler(int sig) {
     (void)sig;
     g_running = false;
@@ -551,7 +558,7 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
             snprintf(cmd, sizeof(cmd), "%s %s", editor, prompt_file);
             
             printf("Opening startup prompt in %s...\n", editor);
-            printf("Default prompt: Check for reminders, review important memories, get current date/time.\n\n");
+            printf("Default prompt: %s\n\n", DEFAULT_STARTUP_PROMPT);
             
             int ret = system(cmd);
             if (ret == 0) {
@@ -572,7 +579,7 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
                 fclose(fp);
             } else {
                 printf("No custom startup prompt found.\n");
-                printf("Default: Check for reminders, review important memories, get current date/time.\n");
+                printf("Default: %s\n", DEFAULT_STARTUP_PROMPT);
             }
         } else if (strncmp(action, "reset", 5) == 0) {
             if (remove(prompt_file) == 0) {
@@ -772,9 +779,6 @@ int main(int argc, char** argv) {
     // Initialize platform
     ethervox_platform_t platform = {0};
     int result = ethervox_platform_register_hal(&platform);
-    if (result == 0) {
-        printf("Platform: %s\n", platform.info.platform_name);
-    }
     
     // Initialize memory store
     ethervox_memory_store_t memory;
@@ -1055,9 +1059,7 @@ int main(int argc, char** argv) {
         
         // Use default startup prompt if no custom one loaded
         if (!has_custom_prompt) {
-            snprintf(startup_prompt, sizeof(startup_prompt),
-                "Check for any pending reminders, review important recent memories, and get the current date and time. "
-                "Then greet the user briefly and mention the date, time, and if there are any reminders or important items.");
+            snprintf(startup_prompt, sizeof(startup_prompt), "%s", DEFAULT_STARTUP_PROMPT);
         }
         
         if (!quiet_mode) {

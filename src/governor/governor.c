@@ -173,7 +173,8 @@ static int execute_tool_call(
         // Memory tools
         "text", "content", "tags", "query", "limit", "window_size", "format",
         "importance", "min_importance", "max_age_hours", "is_user",
-        "memory_id", "filepath",
+        "memory_id", "memory_ids", "filepath",
+        "older_than_seconds", "importance_threshold",
         NULL
     };
     
