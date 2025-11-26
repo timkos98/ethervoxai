@@ -311,11 +311,13 @@ int ethervox_memory_store_add(
                                     timestamp, memory_id_out);
 }
 
-int ethervox_memory_update_tags(
+// Internal update_tags function with optional persistence (non-static for use in memory_export.c)
+int memory_update_tags_internal(
     ethervox_memory_store_t* store,
     uint64_t memory_id,
     const char* tags[],
-    uint32_t tag_count
+    uint32_t tag_count,
+    bool persist_to_log
 ) {
     if (!store || !store->is_initialized || !tags || tag_count == 0 || tag_count > ETHERVOX_MEMORY_MAX_TAGS) {
         return -1;
@@ -340,8 +342,8 @@ int ethervox_memory_update_tags(
     }
     entry->tag_count = tag_count;
     
-    // Persist the update to JSONL file as an UPDATE record
-    if (store->append_log) {
+    // Persist the update to JSONL file as an UPDATE record (if requested)
+    if (persist_to_log && store->append_log) {
         fprintf(store->append_log,
                 "{\"op\":\"update\",\"id\":%llu,\"tags\":[",
                 (unsigned long long)memory_id);
@@ -354,6 +356,15 @@ int ethervox_memory_update_tags(
     }
     
     return 0;
+}
+
+int ethervox_memory_update_tags(
+    ethervox_memory_store_t* store,
+    uint64_t memory_id,
+    const char* tags[],
+    uint32_t tag_count
+) {
+    return memory_update_tags_internal(store, memory_id, tags, tag_count, true);
 }
 
 int ethervox_memory_get_by_id(

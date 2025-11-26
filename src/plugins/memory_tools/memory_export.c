@@ -36,6 +36,15 @@ extern int memory_delete_by_ids_internal(
     uint32_t* items_deleted
 );
 
+// Internal function from memory_core.c for updating tags with optional persistence
+extern int memory_update_tags_internal(
+    ethervox_memory_store_t* store,
+    uint64_t memory_id,
+    const char* tags[],
+    uint32_t tag_count,
+    bool persist_to_log
+);
+
 // Format timestamp for display
 static void format_timestamp(time_t timestamp, char* buf, size_t len) {
     struct tm* tm_info = localtime(&timestamp);
@@ -243,6 +252,15 @@ int ethervox_memory_import(
             uint32_t deleted = 0;
             memory_delete_by_ids_internal(store, &memory_id, 1, false, &deleted);
             
+            // Write DELETE record to new session file to preserve operation history
+            // NOTE: This may be redundant - memories are already added with final state,
+            // so preserving operation history isn't strictly necessary for correctness.
+            // Kept for auditability and potential future replay/undo features.
+            if (store->append_log && deleted > 0) {
+                fprintf(store->append_log, "{\"op\":\"delete\",\"id\":%llu}\n", memory_id);
+                fflush(store->append_log);
+            }
+            
             continue;  // Skip to next line
         }
         
@@ -290,7 +308,24 @@ int ethervox_memory_import(
             
             // Apply the tag update to the memory entry
             if (tag_count > 0) {
-                ethervox_memory_update_tags(store, memory_id, tag_array, tag_count);
+                // Don't persist during update (we're reading from old file)
+                int update_result = memory_update_tags_internal(store, memory_id, tag_array, tag_count, false);
+                
+                // Write UPDATE record to new session file to preserve operation history
+                // NOTE: This may be redundant - when memories are later imported, they're
+                // added with their current tag state, so operation history isn't needed.
+                // Kept for auditability and potential future replay/undo features.
+                if (store->append_log && update_result == 0) {
+                    fprintf(store->append_log, "{\"op\":\"update\",\"id\":%llu,\"tags\":[", memory_id);
+                    for (uint32_t i = 0; i < tag_count; i++) {
+                        fprintf(store->append_log, "\"%s\"", tag_array[i]);
+                        if (i < tag_count - 1) {
+                            fprintf(store->append_log, ",");
+                        }
+                    }
+                    fprintf(store->append_log, "]}\n");
+                    fflush(store->append_log);
+                }
             }
             
             continue;  // Skip to next line
@@ -357,7 +392,7 @@ int ethervox_memory_import(
                         if (tags_end) {
                             // Parse each tag in the array
                             char* tag_cursor = tags_start;
-                            while (tag_cursor < tags_end && tag_count < ETHERVOX_MEMORY_MAX_TAGS - 1) {
+                            while (tag_cursor < tags_end && tag_count < ETHERVOX_MEMORY_MAX_TAGS) {
                                 // Find next quoted tag
                                 char* tag_open = strchr(tag_cursor, '"');
                                 if (!tag_open || tag_open >= tags_end) break;
@@ -380,7 +415,7 @@ int ethervox_memory_import(
                         }
                     }
                     
-                    // Add "imported" tag if not already present
+                    // Add "imported" tag if not already present AND if there's room
                     bool has_imported = false;
                     for (uint32_t i = 0; i < tag_count; i++) {
                         if (strcmp(tag_array[i], "imported") == 0) {

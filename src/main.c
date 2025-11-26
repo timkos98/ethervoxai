@@ -52,7 +52,7 @@ static const char* DEFAULT_STARTUP_PROMPT =
     "Check for any pending reminders using memory_reminder_list. "
     "Search for important recent memories using memory_search with min_importance=0.8 (or 0.9 for critical items). "
     "Get the current date and time. "
-    "Then greet the user briefly and mention the date, time, and if there are any reminders to be completed or important items.";
+    "Then greet the user briefly and mention the date, time, and if there are any reminders that are not yet completed or important items.";
 
 static void signal_handler(int sig) {
     (void)sig;
