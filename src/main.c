@@ -44,6 +44,7 @@
 static volatile bool g_running = true;
 static bool g_debug_enabled = false;  // Debug logging disabled by default (opt-in)
 static bool g_quiet_mode = true;      // Quiet mode by default
+static bool g_markdown_enabled = true; // Markdown formatting enabled by default
 static char g_loaded_model_path[512] = {0};  // Track loaded model path for /reset
 
 // Default startup prompt text (used if no custom prompt file exists)
@@ -97,6 +98,7 @@ static void print_help(void) {
     printf("  /stats             Show memory statistics\n");
     printf("  /startup <cmd>     Manage startup prompt (edit/show/reset)\n");
     printf("  /debug             Toggle debug logging on/off\n");
+    printf("  /markdown          Toggle markdown formatting on/off\n");
     printf("  /clear             Clear conversation memory\n");
     printf("  /reset             Reset conversation (reload model)\n");
     printf("  /paste             Enter paste mode for multi-line input\n");
@@ -402,6 +404,103 @@ static void store_message(ethervox_memory_store_t* memory, const char* text,
     ethervox_memory_store_add(memory, text, tags, 1, importance, is_user, &memory_id);
 }
 
+// Convert markdown formatting to ANSI escape codes for terminal display
+static char* markdown_to_ansi(const char* text) {
+    if (!text) return NULL;
+    
+    size_t len = strlen(text);
+    // Allocate generous buffer (3x original for escape codes)
+    char* output = malloc(len * 3 + 1);
+    if (!output) return strdup(text);
+    
+    const char* src = text;
+    char* dst = output;
+    bool in_bold = false;
+    bool in_italic = false;
+    bool in_code = false;
+    
+    while (*src) {
+        // Bold: **text**
+        if (src[0] == '*' && src[1] == '*') {
+            if (in_bold) {
+                // End bold - need to reapply other active styles
+                strcpy(dst, "\033[22m");  // Turn off bold specifically
+                dst += 5;
+                if (in_italic) {
+                    strcpy(dst, "\033[3m");  // Reapply italic
+                    dst += 4;
+                }
+                in_bold = false;
+            } else {
+                // Start bold
+                strcpy(dst, "\033[1m");
+                dst += 4;
+                in_bold = true;
+            }
+            src += 2;
+            continue;
+        }
+        
+        // Italic: *text* (but not if it's part of **)
+        if (*src == '*' && !(src > text && src[-1] == '*') && !(src[1] == '*')) {
+            if (in_italic) {
+                // End italic/underline
+                strcpy(dst, "\033[24m");  // Turn off underline
+                dst += 5;
+                if (in_bold) {
+                    strcpy(dst, "\033[1m");  // Reapply bold
+                    dst += 4;
+                }
+                in_italic = false;
+            } else {
+                // Start italic/underline (use underline for better compatibility)
+                strcpy(dst, "\033[4m");
+                dst += 4;
+                in_italic = true;
+            }
+            src++;
+            continue;
+        }
+        
+        // Code/monospace: `text`
+        if (*src == '`') {
+            if (in_code) {
+                // End code
+                strcpy(dst, "\033[22m\033[39m");  // Turn off dim and restore color
+                dst += 10;
+                // Reapply bold/italic if needed
+                if (in_bold) {
+                    strcpy(dst, "\033[1m");
+                    dst += 4;
+                }
+                if (in_italic) {
+                    strcpy(dst, "\033[3m");
+                    dst += 4;
+                }
+                in_code = false;
+            } else {
+                strcpy(dst, "\033[2m\033[90m");  // Dim + gray
+                dst += 9;
+                in_code = true;
+            }
+            src++;
+            continue;
+        }
+        
+        // Copy regular character
+        *dst++ = *src++;
+    }
+    
+    // Reset any remaining formatting
+    if (in_bold || in_italic || in_code) {
+        strcpy(dst, "\033[22m\033[24m\033[39m");  // Reset bold, underline, color
+        dst += 15;
+    }
+    
+    *dst = '\0';
+    return output;
+}
+
 static void print_tools(ethervox_governor_t* governor) {
     if (!governor) {
         printf("No Governor instance available\n");
@@ -483,6 +582,12 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
             ethervox_log_set_level(ETHERVOX_LOG_LEVEL_OFF);
             printf("Debug logging: DISABLED\n");
         }
+        return;
+    }
+    
+    if (strcmp(line, "/markdown") == 0) {
+        g_markdown_enabled = !g_markdown_enabled;
+        printf("Markdown formatting: %s\n", g_markdown_enabled ? "ENABLED" : "DISABLED");
         return;
     }
     
@@ -655,7 +760,18 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
     fflush(stdout);
     
     if (status == ETHERVOX_GOVERNOR_SUCCESS && response) {
-        printf("%s\033[0m\n\n", response);  // Print response in cyan, then reset color
+        // Apply markdown formatting if enabled
+        if (g_markdown_enabled) {
+            char* formatted = markdown_to_ansi(response);
+            if (formatted) {
+                printf("\033[36m%s\033[0m\n\n", formatted);
+                free(formatted);
+            } else {
+                printf("%s\033[0m\n\n", response);
+            }
+        } else {
+            printf("%s\033[0m\n\n", response);
+        }
         
         // Store assistant response
         store_message(memory, response, false, 0.8f);
