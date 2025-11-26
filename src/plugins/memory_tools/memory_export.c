@@ -13,6 +13,20 @@
 #include <string.h>
 #include <time.h>
 
+// Internal function from memory_core.c for importing with explicit ID/timestamp
+extern int memory_store_add_internal(
+    ethervox_memory_store_t* store,
+    const char* text,
+    const char* tags[],
+    uint32_t tag_count,
+    float importance,
+    bool is_user_message,
+    uint64_t memory_id,
+    uint64_t turn_id,
+    time_t timestamp,
+    uint64_t* memory_id_out
+);
+
 // Format timestamp for display
 static void format_timestamp(time_t timestamp, char* buf, size_t len) {
     struct tm* tm_info = localtime(&timestamp);
@@ -255,13 +269,72 @@ int ethervox_memory_import(
                     strncpy(text, text_start, len);
                     text[len] = '\0';
                     
-                    // Add to memory (simplified - doesn't parse tags)
-                    const char* tags[] = {"imported"};
-                    uint64_t memory_id;
+                    // Parse tags from JSON (format: "tags":["tag1","tag2"])
+                    const char* tag_array[ETHERVOX_MEMORY_MAX_TAGS];
+                    uint32_t tag_count = 0;
+                    char tag_storage[ETHERVOX_MEMORY_MAX_TAGS][ETHERVOX_MEMORY_TAG_LEN];
                     
-                    if (ethervox_memory_store_add(store, text, tags, 1,
-                                                 importance, is_user,
-                                                 &memory_id) == 0) {
+                    char* tags_start = strstr(line, "\"tags\":[");
+                    if (tags_start) {
+                        tags_start += 8;  // Skip "tags":[
+                        char* tags_end = strchr(tags_start, ']');
+                        
+                        if (tags_end) {
+                            // Parse each tag in the array
+                            char* tag_cursor = tags_start;
+                            while (tag_cursor < tags_end && tag_count < ETHERVOX_MEMORY_MAX_TAGS - 1) {
+                                // Find next quoted tag
+                                char* tag_open = strchr(tag_cursor, '"');
+                                if (!tag_open || tag_open >= tags_end) break;
+                                
+                                tag_open++;
+                                char* tag_close = strchr(tag_open, '"');
+                                if (!tag_close || tag_close >= tags_end) break;
+                                
+                                // Copy tag
+                                size_t tag_len = tag_close - tag_open;
+                                if (tag_len > 0 && tag_len < ETHERVOX_MEMORY_TAG_LEN) {
+                                    strncpy(tag_storage[tag_count], tag_open, tag_len);
+                                    tag_storage[tag_count][tag_len] = '\0';
+                                    tag_array[tag_count] = tag_storage[tag_count];
+                                    tag_count++;
+                                }
+                                
+                                tag_cursor = tag_close + 1;
+                            }
+                        }
+                    }
+                    
+                    // Add "imported" tag if not already present
+                    bool has_imported = false;
+                    for (uint32_t i = 0; i < tag_count; i++) {
+                        if (strcmp(tag_array[i], "imported") == 0) {
+                            has_imported = true;
+                            break;
+                        }
+                    }
+                    
+                    if (!has_imported && tag_count < ETHERVOX_MEMORY_MAX_TAGS) {
+                        strncpy(tag_storage[tag_count], "imported", ETHERVOX_MEMORY_TAG_LEN - 1);
+                        tag_storage[tag_count][ETHERVOX_MEMORY_TAG_LEN - 1] = '\0';
+                        tag_array[tag_count] = tag_storage[tag_count];
+                        tag_count++;
+                    }
+                    
+                    // If no tags were parsed, use just "imported"
+                    if (tag_count == 0) {
+                        strncpy(tag_storage[0], "imported", ETHERVOX_MEMORY_TAG_LEN - 1);
+                        tag_storage[0][ETHERVOX_MEMORY_TAG_LEN - 1] = '\0';
+                        tag_array[0] = tag_storage[0];
+                        tag_count = 1;
+                    }
+                    
+                    // Add to memory with original ID, timestamp, and tags + "imported"
+                    uint64_t memory_id_out;
+                    
+                    if (memory_store_add_internal(store, text, tag_array, tag_count,
+                                                 importance, is_user, id, turn_id,
+                                                 timestamp, &memory_id_out) == 0) {
                         loaded++;
                     }
                 }

@@ -179,13 +179,17 @@ static ethervox_memory_tag_index_t* get_tag_index(
     return idx;
 }
 
-int ethervox_memory_store_add(
+// Internal function to add memory with explicit ID and timestamp (for import)
+int memory_store_add_internal(
     ethervox_memory_store_t* store,
     const char* text,
     const char* tags[],
     uint32_t tag_count,
     float importance,
     bool is_user_message,
+    uint64_t memory_id,
+    uint64_t turn_id,
+    time_t timestamp,
     uint64_t* memory_id_out
 ) {
     if (!store || !store->is_initialized || !text) {
@@ -222,9 +226,9 @@ int ethervox_memory_store_add(
     ethervox_memory_entry_t* entry = &store->entries[store->entry_count];
     memset(entry, 0, sizeof(ethervox_memory_entry_t));
     
-    entry->memory_id = store->total_memories_stored++;
-    entry->turn_id = store->current_turn_id++;
-    entry->timestamp = time(NULL);
+    entry->memory_id = memory_id;
+    entry->turn_id = turn_id;
+    entry->timestamp = timestamp;
     entry->importance = importance;
     entry->is_user_message = is_user_message;
     
@@ -275,7 +279,36 @@ int ethervox_memory_store_add(
         *memory_id_out = entry->memory_id;
     }
     
+    // Update counters to ensure next auto-generated IDs don't collide
+    if (entry->memory_id >= store->total_memories_stored) {
+        store->total_memories_stored = entry->memory_id + 1;
+    }
+    if (entry->turn_id >= store->current_turn_id) {
+        store->current_turn_id = entry->turn_id + 1;
+    }
+    
     return 0;
+}
+
+int ethervox_memory_store_add(
+    ethervox_memory_store_t* store,
+    const char* text,
+    const char* tags[],
+    uint32_t tag_count,
+    float importance,
+    bool is_user_message,
+    uint64_t* memory_id_out
+) {
+    if (!store) return -1;
+    
+    // Generate new ID and timestamp
+    uint64_t memory_id = store->total_memories_stored;
+    uint64_t turn_id = store->current_turn_id;
+    time_t timestamp = time(NULL);
+    
+    return memory_store_add_internal(store, text, tags, tag_count, importance,
+                                    is_user_message, memory_id, turn_id,
+                                    timestamp, memory_id_out);
 }
 
 int ethervox_memory_get_by_id(

@@ -203,8 +203,9 @@ static int tool_memory_reminder_list_wrapper(
     for (uint32_t i = 0; i < result_count; i++) {
         const ethervox_memory_entry_t* e = &results[i].entry;
         pos += snprintf(res + pos, res_len - pos,
-            "%s{\"text\":\"%s\",\"tags\":[",
+            "%s{\"memory_id\":%llu,\"text\":\"%s\",\"tags\":[",
             i > 0 ? "," : "",
+            (unsigned long long)e->memory_id,
             e->text);
         for (uint32_t t = 0; t < e->tag_count; t++) {
             pos += snprintf(res + pos, res_len - pos, "%s\"%s\"", t > 0 ? "," : "", e->tags[t]);

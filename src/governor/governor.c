@@ -173,6 +173,7 @@ static int execute_tool_call(
         // Memory tools
         "text", "content", "tags", "query", "limit", "window_size", "format",
         "importance", "min_importance", "max_age_hours", "is_user",
+        "memory_id", "filepath",
         NULL
     };
     
@@ -182,23 +183,38 @@ static int execute_tool_call(
             if (!first) strcat(json_input, ", ");
             
             // Check if value is numeric (must have at least one digit)
+            // Exception: memory_id, file_path, filepath, tags should always be strings
+            bool force_string = (strcmp(attrs[i], "memory_id") == 0 ||
+                               strcmp(attrs[i], "file_path") == 0 ||
+                               strcmp(attrs[i], "filepath") == 0 ||
+                               strcmp(attrs[i], "tags") == 0 ||
+                               strcmp(attrs[i], "query") == 0 ||
+                               strcmp(attrs[i], "text") == 0 ||
+                               strcmp(attrs[i], "content") == 0 ||
+                               strcmp(attrs[i], "directory") == 0 ||
+                               strcmp(attrs[i], "pattern") == 0 ||
+                               strcmp(attrs[i], "format") == 0 ||
+                               strcmp(attrs[i], "label") == 0);
+            
             bool is_numeric = false;
-            bool has_digit = false;
-            const char* p = attr_value;
-            
-            if (*p == '-' || *p == '+') p++;
-            
-            while (*p) {
-                if (*p >= '0' && *p <= '9') {
-                    has_digit = true;
-                } else if (*p != '.') {
-                    has_digit = false;
-                    break;
+            if (!force_string) {
+                bool has_digit = false;
+                const char* p = attr_value;
+                
+                if (*p == '-' || *p == '+') p++;
+                
+                while (*p) {
+                    if (*p >= '0' && *p <= '9') {
+                        has_digit = true;
+                    } else if (*p != '.') {
+                        has_digit = false;
+                        break;
+                    }
+                    p++;
                 }
-                p++;
+                
+                is_numeric = has_digit && (p > attr_value);
             }
-            
-            is_numeric = has_digit && (p > attr_value);
             
             // Append field directly to json_input to avoid 256-byte truncation
             size_t current_len = strlen(json_input);
