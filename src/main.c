@@ -88,6 +88,7 @@ static void print_help(void) {
     printf("  /summary [n]       Summarize last n turns (default: 10)\n");
     printf("  /export <file>     Export memory to JSON file\n");
     printf("  /stats             Show memory statistics\n");
+    printf("  /startup <cmd>     Manage startup prompt (edit/show/reset)\n");
     printf("  /debug             Toggle debug logging on/off\n");
     printf("  /clear             Clear conversation memory\n");
     printf("  /reset             Reset conversation (reload model)\n");
@@ -529,6 +530,65 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         return;
     }
     
+    if (strncmp(line, "/startup ", 9) == 0) {
+        const char* action = line + 9;
+        
+        // Default startup prompt file location
+        const char* home_dir = getenv("HOME");
+        char prompt_file[512];
+        if (home_dir) {
+            snprintf(prompt_file, sizeof(prompt_file), "%s/.ethervox/startup_prompt.txt", home_dir);
+        } else {
+            snprintf(prompt_file, sizeof(prompt_file), "./.ethervox_startup_prompt.txt");
+        }
+        
+        if (strncmp(action, "edit", 4) == 0) {
+            // Get or create editor command
+            const char* editor = getenv("EDITOR");
+            if (!editor) editor = "nano";  // Default to nano
+            
+            char cmd[768];
+            snprintf(cmd, sizeof(cmd), "%s %s", editor, prompt_file);
+            
+            printf("Opening startup prompt in %s...\n", editor);
+            printf("Default prompt: Check for reminders, review important memories, get current date/time.\n\n");
+            
+            int ret = system(cmd);
+            if (ret == 0) {
+                printf("Startup prompt saved to: %s\n", prompt_file);
+            } else {
+                printf("Failed to open editor\n");
+            }
+        } else if (strncmp(action, "show", 4) == 0) {
+            FILE* fp = fopen(prompt_file, "r");
+            if (fp) {
+                printf("Current startup prompt:\n");
+                printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+                char buf[2048];
+                while (fgets(buf, sizeof(buf), fp)) {
+                    printf("%s", buf);
+                }
+                printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+                fclose(fp);
+            } else {
+                printf("No custom startup prompt found.\n");
+                printf("Default: Check for reminders, review important memories, get current date/time.\n");
+            }
+        } else if (strncmp(action, "reset", 5) == 0) {
+            if (remove(prompt_file) == 0) {
+                printf("Custom startup prompt removed. Will use default.\n");
+            } else {
+                printf("No custom startup prompt to remove.\n");
+            }
+        } else {
+            printf("Usage: /startup <edit|show|reset>\n");
+            printf("  edit  - Edit custom startup prompt (uses $EDITOR or nano)\n");
+            printf("  show  - Display current startup prompt\n");
+            printf("  reset - Remove custom prompt and use default\n");
+        }
+        return;
+    }
+    
     if (strcmp(line, "/paste") == 0) {
         printf("Entering paste mode...\n");
         char* pasted = read_paste_input();
@@ -624,11 +684,13 @@ int main(int argc, char** argv) {
     // Parse command-line arguments
     const char* model_path = NULL;
     const char* memory_dir = NULL;
+    const char* startup_prompt_file = NULL;
     bool interactive = true;
     
     bool run_tests = false;
     bool quiet_mode = true;  // Default to quiet mode
     bool no_persist = false;
+    bool skip_startup_prompt = false;
 
     // Dafualt to auto-load model unless --noautoload specified
     bool auto_load_model = true;
@@ -657,6 +719,10 @@ int main(int argc, char** argv) {
             quiet_mode = true;
             g_quiet_mode = true;  // Set global flag
             g_debug_enabled = false;
+        } else if (strcmp(argv[i], "--startup-prompt") == 0 && i + 1 < argc) {
+            startup_prompt_file = argv[++i];
+        } else if (strcmp(argv[i], "--no-startup-prompt") == 0) {
+            skip_startup_prompt = true;
         } else if (strcmp(argv[i], "--test") == 0) {
             run_tests = true;
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
@@ -666,6 +732,8 @@ int main(int argc, char** argv) {
             printf("  --noautoload       Suppress auto-loading default Governor model on startup\n");
             printf("  --memory <dir>     Directory for memory persistence\n");
             printf("  --no-persist       Run in memory-only mode (no files)\n");
+            printf("  --startup-prompt <file>  Custom startup prompt file\n");
+            printf("  --no-startup-prompt      Skip automatic startup prompt\n");
             printf("  --debug, -d        Enable debug logging (default: off)\n");
             printf("  --quiet, -q        Disable debug logging (explicit quiet)\n");
             printf("  --test             Run component tests before starting\n");
@@ -953,6 +1021,97 @@ int main(int argc, char** argv) {
     }
     
     print_help();
+    
+    // Execute startup prompt if model is loaded and not skipped
+    if (!skip_startup_prompt && g_loaded_model_path[0] != '\0') {
+        char startup_prompt[2048];
+        bool has_custom_prompt = false;
+        
+        // Determine startup prompt file location
+        const char* home_dir = getenv("HOME");
+        char default_prompt_file[512];
+        if (home_dir) {
+            snprintf(default_prompt_file, sizeof(default_prompt_file), "%s/.ethervox/startup_prompt.txt", home_dir);
+        } else {
+            snprintf(default_prompt_file, sizeof(default_prompt_file), "./.ethervox_startup_prompt.txt");
+        }
+        
+        const char* prompt_file_to_use = startup_prompt_file ? startup_prompt_file : default_prompt_file;
+        
+        // Try to load custom startup prompt from file
+        FILE* fp = fopen(prompt_file_to_use, "r");
+        if (fp) {
+            size_t len = fread(startup_prompt, 1, sizeof(startup_prompt) - 1, fp);
+            startup_prompt[len] = '\0';
+            fclose(fp);
+            has_custom_prompt = true;
+            if (!quiet_mode) {
+                printf("\n[INFO] Using custom startup prompt from: %s\n", prompt_file_to_use);
+            }
+        } else if (startup_prompt_file) {
+            // Only warn if a custom file was explicitly specified but not found
+            fprintf(stderr, "[WARN] Could not open startup prompt file: %s\n", startup_prompt_file);
+        }
+        
+        // Use default startup prompt if no custom one loaded
+        if (!has_custom_prompt) {
+            snprintf(startup_prompt, sizeof(startup_prompt),
+                "Check for any pending reminders, review important recent memories, and get the current date and time. "
+                "Then greet the user briefly and mention the date, time, and if there are any reminders or important items.");
+        }
+        
+        if (!quiet_mode) {
+            printf("\n[Executing startup prompt...]\n");
+        }
+        
+        // Redirect stderr to suppress llama.cpp Metal shader compilation logs
+        int stderr_backup = -1;
+        stderr_backup = dup(STDERR_FILENO);
+        int dev_null = open("/dev/null", O_WRONLY);
+        if (dev_null != -1) {
+            dup2(dev_null, STDERR_FILENO);
+            close(dev_null);
+        }
+        
+        // Execute the startup prompt silently
+        char* response = NULL;
+        char* error = NULL;
+        
+        int status = ethervox_governor_execute(
+            governor,
+            startup_prompt,
+            &response,
+            &error,
+            NULL,  // No metrics
+            NULL,  // No progress callback
+            NULL,  // No token callback
+            NULL   // No user data
+        );
+        
+        // Restore stderr
+        if (stderr_backup != -1) {
+            dup2(stderr_backup, STDERR_FILENO);
+            close(stderr_backup);
+        }
+        
+        if (status == 0 && response) {
+            // Display the startup response
+            printf("\n\033[36m%s\033[0m\n\n", response);
+            
+            // Store the startup exchange in memory
+            const char* tags[] = {"startup", "auto_generated"};
+            uint64_t user_id, assistant_id;
+            ethervox_memory_store_add(&memory, startup_prompt, tags, 2, 0.7f, true, &user_id);
+            ethervox_memory_store_add(&memory, response, tags, 2, 0.7f, false, &assistant_id);
+            
+            free(response);
+        } else if (error) {
+            if (!quiet_mode) {
+                fprintf(stderr, "[WARN] Startup prompt failed: %s\n\n", error);
+            }
+            free(error);
+        }
+    }
     
     // Main REPL loop
     bool quit = false;
