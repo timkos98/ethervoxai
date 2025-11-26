@@ -89,6 +89,7 @@ typedef enum {
     ETHERVOX_GOVERNOR_EVENT_THINKING,          // Generating response from LLM
     ETHERVOX_GOVERNOR_EVENT_TOOL_CALL,         // Calling a tool
     ETHERVOX_GOVERNOR_EVENT_TOOL_RESULT,       // Tool execution complete
+    ETHERVOX_GOVERNOR_EVENT_TOOL_ERROR,        // Tool execution failed
     ETHERVOX_GOVERNOR_EVENT_CONFIDENCE_UPDATE, // Confidence level changed
     ETHERVOX_GOVERNOR_EVENT_COMPLETE           // Final answer ready
 } ethervox_governor_event_type_t;
@@ -115,6 +116,7 @@ typedef struct {
     uint32_t max_iterations;            // Max tool execution loops (default: 5)
     uint32_t max_tool_calls_per_iteration; // Max tool calls per iteration (default: 10)
     uint32_t timeout_seconds;           // Total execution timeout (default: 30)
+    uint32_t max_tokens_per_response;   // Max tokens to generate per LLM response (default: 2048)
 } ethervox_governor_config_t;
 
 /**
@@ -230,7 +232,8 @@ static inline ethervox_governor_config_t ethervox_governor_default_config(void) 
         .confidence_threshold = 0.85f,
         .max_iterations = 5,
         .max_tool_calls_per_iteration = 10,
-        .timeout_seconds = 30
+        .timeout_seconds = 30,
+        .max_tokens_per_response = 2048
     };
     return config;
 }

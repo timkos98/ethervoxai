@@ -157,7 +157,8 @@ static int execute_tool_call(
     // For now, support simple attribute -> JSON key mapping
     // TODO: More sophisticated JSON building for complex tools
     
-    char json_input[1024] = "{";
+    // Increased buffer to 64KB to accommodate large content parameters (e.g., file_write with large text)
+    char json_input[65536] = "{";
     bool first = true;
     
     // Common attributes to extract
@@ -199,14 +200,14 @@ static int execute_tool_call(
             
             is_numeric = has_digit && (p > attr_value);
             
+            // Append field directly to json_input to avoid 256-byte truncation
+            size_t current_len = strlen(json_input);
+            size_t remaining = sizeof(json_input) - current_len - 1;
+            
             if (is_numeric) {
-                char field[256];
-                snprintf(field, sizeof(field), "\"%s\": %s", attrs[i], attr_value);
-                strcat(json_input, field);
+                snprintf(json_input + current_len, remaining, "\"%s\": %s", attrs[i], attr_value);
             } else {
-                char field[256];
-                snprintf(field, sizeof(field), "\"%s\": \"%s\"", attrs[i], attr_value);
-                strcat(json_input, field);
+                snprintf(json_input + current_len, remaining, "\"%s\": \"%s\"", attrs[i], attr_value);
             }
             
             first = false;
@@ -219,6 +220,17 @@ static int execute_tool_call(
     GOV_LOG("Built JSON for tool '%s': %s", tool->name, json_input);
     
     free(tool_name);
+    
+    // Safety checks before execution
+    if (!tool->execute) {
+        *error = strdup("Tool has NULL execute pointer");
+        return -1;
+    }
+    
+    if (!result || !error) {
+        GOV_ERROR("Invalid result or error pointers passed to execute_tool_call");
+        return -1;
+    }
     
     // Execute tool
     int ret = tool->execute(json_input, result, error);
@@ -318,7 +330,8 @@ int ethervox_governor_load_model(ethervox_governor_t* governor, const char* mode
     GOV_LOG("Context created successfully");
     
     // Build system prompt from tool registry
-    char system_prompt[4096];
+    // Increased to 16KB to accommodate all tools and examples
+    char system_prompt[16384];
     if (ethervox_tool_registry_build_system_prompt(governor->tool_registry, 
                                                    system_prompt, sizeof(system_prompt)) != 0) {
         GOV_ERROR("Failed to build system prompt");
@@ -457,6 +470,7 @@ int ethervox_governor_init(
         gov->config.max_iterations = ETHERVOX_GOVERNOR_MAX_ITERATIONS;
         gov->config.max_tool_calls_per_iteration = 10;
         gov->config.timeout_seconds = ETHERVOX_GOVERNOR_TIMEOUT_SECONDS;
+        gov->config.max_tokens_per_response = 2048;  // Default limit for response generation
     }
     
     gov->tool_registry = tool_registry;
@@ -554,7 +568,8 @@ ethervox_governor_status_t ethervox_governor_execute(
         }
         
         // Generate LLM response
-        char llm_response_buffer[4096] = {0};
+        // Increased to 64KB to accommodate large tool calls (e.g., file_write with substantial content)
+        char llm_response_buffer[65536] = {0};
         
         // Only tokenize and decode the NEW part of the conversation (what hasn't been processed yet)
         const char* new_content = conversation + processed_length;
@@ -657,10 +672,10 @@ ethervox_governor_status_t ethervox_governor_execute(
         llama_sampler_chain_add(sampler, llama_sampler_init_dist(0));
         
         int generated_count = 0;
-        const int max_tokens_safety = 512;  // Safety limit to prevent infinite generation
+        const int max_tokens = governor->config.max_tokens_per_response;  // Use configured limit
         bool inside_tool_call = false;  // Track if we're inside a tool call
         
-        while (generated_count < max_tokens_safety) {
+        while (generated_count < max_tokens) {
             llama_token next_token = llama_sampler_sample(sampler, governor->llm_ctx, -1);
             
             // Check for EOG token (proper way)
@@ -972,11 +987,105 @@ ethervox_governor_status_t ethervox_governor_execute(
                     
                     free(tool_result);
                 } else if (tool_error) {
-                    char tool_err[512];
-                    snprintf(tool_err, sizeof(tool_err),
-                        "<tool_error>%s</tool_error>\n", tool_error);
-                    strncat(conversation, tool_err,
-                        sizeof(conversation) - strlen(conversation) - 1);
+                    // Format and add tool error to LLM context
+                    char error_msg[512];
+                    snprintf(error_msg, sizeof(error_msg),
+                        "<tool_error>%s</tool_error>", tool_error);
+                    
+                    GOV_LOG("Tool error: %s", tool_error);
+                    
+                    // Notify error
+                    if (progress_callback) {
+                        progress_callback(ETHERVOX_GOVERNOR_EVENT_TOOL_ERROR, error_msg, user_data);
+                    }
+                    
+                    // Add error tokens to LLM context using same approach as tool_result
+                    // Decode prefix: "<|im_start|>user\n" (error is treated like a tool_result for format purposes)
+                    const char* error_prefix = "<|im_start|>user\n";
+                    int prefix_n_tokens = -llama_tokenize(vocab, error_prefix, strlen(error_prefix), NULL, 0, false, false);
+                    if (prefix_n_tokens > 0) {
+                        llama_token* prefix_tokens = malloc(prefix_n_tokens * sizeof(llama_token));
+                        if (prefix_tokens) {
+                            llama_tokenize(vocab, error_prefix, strlen(error_prefix), prefix_tokens, prefix_n_tokens, false, false);
+                            llama_batch prefix_batch = llama_batch_init(prefix_n_tokens, 0, 1);
+                            prefix_batch.n_tokens = prefix_n_tokens;
+                            for (int j = 0; j < prefix_n_tokens; j++) {
+                                prefix_batch.token[j] = prefix_tokens[j];
+                                prefix_batch.pos[j] = governor->current_kv_pos + j;
+                                prefix_batch.n_seq_id[j] = 1;
+                                prefix_batch.seq_id[j][0] = 0;
+                                prefix_batch.logits[j] = false;
+                            }
+                            llama_decode(governor->llm_ctx, prefix_batch);
+                            llama_batch_free(prefix_batch);
+                            governor->current_kv_pos += prefix_n_tokens;
+                            free(prefix_tokens);
+                        }
+                    }
+                    
+                    // Add error message tokens
+                    int error_n_tokens = -llama_tokenize(vocab, error_msg, strlen(error_msg), NULL, 0, false, false);
+                    if (error_n_tokens > 0) {
+                        int n_ctx = llama_n_ctx(governor->llm_ctx);
+                        if (governor->current_kv_pos + error_n_tokens > n_ctx) {
+                            error_n_tokens = n_ctx - governor->current_kv_pos;
+                            if (error_n_tokens <= 0) {
+                                GOV_ERROR("No context space for tool error");
+                                free(tool_error);
+                                if (tool_name) free(tool_name);
+                                free(tool_calls[i]);
+                                continue;
+                            }
+                        }
+                        
+                        llama_token* error_tokens = malloc(error_n_tokens * sizeof(llama_token));
+                        if (error_tokens) {
+                            llama_tokenize(vocab, error_msg, strlen(error_msg), error_tokens, error_n_tokens, false, false);
+                            
+                            const int n_batch = 1024;
+                            int tokens_processed = 0;
+                            while (tokens_processed < error_n_tokens) {
+                                int batch_size = (error_n_tokens - tokens_processed > n_batch) ? n_batch : (error_n_tokens - tokens_processed);
+                                llama_batch error_batch = llama_batch_init(batch_size, 0, 1);
+                                error_batch.n_tokens = batch_size;
+                                for (int j = 0; j < batch_size; j++) {
+                                    error_batch.token[j] = error_tokens[tokens_processed + j];
+                                    error_batch.pos[j] = governor->current_kv_pos + j;
+                                    error_batch.n_seq_id[j] = 1;
+                                    error_batch.seq_id[j][0] = 0;
+                                    error_batch.logits[j] = false;
+                                }
+                                llama_decode(governor->llm_ctx, error_batch);
+                                llama_batch_free(error_batch);
+                                governor->current_kv_pos += batch_size;
+                                tokens_processed += batch_size;
+                            }
+                            free(error_tokens);
+                        }
+                    }
+                    
+                    // Add suffix: "<|im_end|>\n<|im_start|>assistant\n"
+                    const char* error_suffix = "<|im_end|>\n<|im_start|>assistant\n";
+                    int suffix_n_tokens = -llama_tokenize(vocab, error_suffix, strlen(error_suffix), NULL, 0, false, false);
+                    if (suffix_n_tokens > 0) {
+                        llama_token* suffix_tokens = malloc(suffix_n_tokens * sizeof(llama_token));
+                        if (suffix_tokens) {
+                            llama_tokenize(vocab, error_suffix, strlen(error_suffix), suffix_tokens, suffix_n_tokens, false, false);
+                            llama_batch suffix_batch = llama_batch_init(suffix_n_tokens, 0, 1);
+                            suffix_batch.n_tokens = suffix_n_tokens;
+                            for (int j = 0; j < suffix_n_tokens; j++) {
+                                suffix_batch.token[j] = suffix_tokens[j];
+                                suffix_batch.pos[j] = governor->current_kv_pos + j;
+                                suffix_batch.n_seq_id[j] = 1;
+                                suffix_batch.seq_id[j][0] = 0;
+                                suffix_batch.logits[j] = (j == suffix_n_tokens - 1);
+                            }
+                            llama_decode(governor->llm_ctx, suffix_batch);
+                            llama_batch_free(suffix_batch);
+                            governor->current_kv_pos += suffix_n_tokens;
+                            free(suffix_tokens);
+                        }
+                    }
                     
                     free(tool_error);
                 }

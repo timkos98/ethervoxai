@@ -525,12 +525,12 @@ int ethervox_memory_tools_register(
     ret |= ethervox_tool_registry_add(registry, &tool_reminder_list);
     ethervox_tool_t tool_export = {
         .name = "memory_export",
-        .description = "Export conversation to JSON or Markdown file",
+        .description = "Export the entire conversation history to a file. Requires both filepath and format. Example: export to './notes.md' as markdown",
         .parameters_json_schema =
             "{\"type\":\"object\",\"properties\":{"
-            "\"filepath\":{\"type\":\"string\"},"
-            "\"format\":{\"type\":\"string\",\"enum\":[\"json\",\"markdown\"]}"
-            "},\"required\":[\"filepath\"]}",
+            "\"filepath\":{\"type\":\"string\",\"description\":\"Path where to save the file (required). Example: './conversation.md' or './notes.json'\"},"
+            "\"format\":{\"type\":\"string\",\"enum\":[\"json\",\"markdown\"],\"description\":\"File format: 'json' or 'markdown' (required)\"}"
+            "},\"required\":[\"filepath\",\"format\"]}",
         .execute = tool_memory_export_wrapper,
         .is_deterministic = true,
         .requires_confirmation = true,

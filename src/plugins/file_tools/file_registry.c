@@ -225,22 +225,114 @@ static int tool_file_write_wrapper(
     ethervox_file_tools_config_t* config = g_file_config;
     
     char file_path[ETHERVOX_FILE_MAX_PATH];
-    char content[ETHERVOX_FILE_MAX_SIZE];
+    
+    if (!config) {
+        *error = strdup("File tools not initialized");
+        return -1;
+    }
     
     if (parse_json_string(args_json, "file_path", file_path, sizeof(file_path)) != 0) {
         *error = strdup("Missing 'file_path' parameter");
         return -1;
     }
     
-    if (parse_json_string(args_json, "content", content, sizeof(content)) != 0) {
-        *error = strdup("Missing 'content' parameter");
+    // Extract content - need custom parsing for large content (can't use fixed-size buffer)
+    // Find the content value in JSON: "content":"..."
+    const char* content_key = "\"content\":\"";
+    const char* content_start = strstr(args_json, content_key);
+    if (!content_start) {
+        // Try with space: "content": "..."
+        content_key = "\"content\": \"";
+        content_start = strstr(args_json, content_key);
+        if (!content_start) {
+            *error = strdup("Missing 'content' parameter");
+            return -1;
+        }
+    }
+    
+    content_start += strlen(content_key);
+    
+    // Find the closing quote by tracking escape sequences
+    const char* content_end = content_start;
+    while (*content_end) {
+        if (*content_end == '\\') {
+            // Skip escaped character
+            content_end++;
+            if (*content_end) content_end++;
+        } else if (*content_end == '"') {
+            // Found unescaped closing quote
+            break;
+        } else {
+            content_end++;
+        }
+    }
+    
+    if (*content_end != '"' || content_end <= content_start) {
+        *error = strdup("Invalid content format - missing closing quote");
         return -1;
     }
     
-    if (ethervox_file_write(config, file_path, content) != 0) {
+    // Allocate buffer for content (heap, not stack)
+    size_t content_len = content_end - content_start;
+    char* content = malloc(content_len + 1);
+    if (!content) {
+        *error = strdup("Memory allocation failed for content");
+        return -1;
+    }
+    
+    strncpy(content, content_start, content_len);
+    content[content_len] = '\0';
+    
+    // Unescape JSON escape sequences in-place
+    char* unescaped = malloc(content_len + 1);
+    if (!unescaped) {
+        free(content);
+        *error = strdup("Memory allocation failed for unescaped content");
+        return -1;
+    }
+    
+    size_t out_pos = 0;
+    for (size_t i = 0; i < content_len; i++) {
+        if (content[i] == '\\' && i + 1 < content_len) {
+            switch (content[i + 1]) {
+                case 'n':
+                    unescaped[out_pos++] = '\n';
+                    i++;
+                    break;
+                case 'r':
+                    unescaped[out_pos++] = '\r';
+                    i++;
+                    break;
+                case 't':
+                    unescaped[out_pos++] = '\t';
+                    i++;
+                    break;
+                case '"':
+                    unescaped[out_pos++] = '"';
+                    i++;
+                    break;
+                case '\\':
+                    unescaped[out_pos++] = '\\';
+                    i++;
+                    break;
+                default:
+                    unescaped[out_pos++] = content[i];
+            }
+        } else {
+            unescaped[out_pos++] = content[i];
+        }
+    }
+    unescaped[out_pos] = '\0';
+    
+    if (ethervox_file_write(config, file_path, unescaped) != 0) {
+        free(content);
+        free(unescaped);
         *error = strdup("Write failed (check permissions and access mode)");
         return -1;
     }
+    
+    free(content);
+    free(unescaped);
     
     char* res = malloc(64);
     snprintf(res, 64, "{\"success\":true}");
@@ -320,11 +412,11 @@ int ethervox_file_tools_register(
     if (config->access_mode == ETHERVOX_FILE_ACCESS_READ_WRITE) {
         ethervox_tool_t tool_write = {
             .name = "file_write",
-            .description = "Write content to a file. WRITE ACCESS ENABLED - use with caution.",
+            .description = "Create or overwrite a file with specified content. Useful for saving notes, documentation, or generated text. Always provide both file_path and content.",
             .parameters_json_schema =
                 "{\"type\":\"object\",\"properties\":{"
-                "\"file_path\":{\"type\":\"string\",\"description\":\"Path to file to write\"},"
-                "\"content\":{\"type\":\"string\",\"description\":\"Content to write\"}"
+                "\"file_path\":{\"type\":\"string\",\"description\":\"Path to file to write. Use relative paths like './notes.md' or './output.txt'. File must have an allowed extension (.txt, .md, .org, .c, .cpp, .h, .sh)\"},"
+                "\"content\":{\"type\":\"string\",\"description\":\"The complete text content to write to the file. Can be markdown, code, plain text, or any supported format.\"}"
                 "},\"required\":[\"file_path\",\"content\"]}",
             .execute = tool_file_write_wrapper,
             .is_deterministic = false,

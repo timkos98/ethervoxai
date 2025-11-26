@@ -238,7 +238,150 @@ Navigate to `http://localhost:3000` to access the EtherVoxAI control panel.
 # Windows
 
 ethervoxai.exe
-```text
+```
+
+## Desktop CLI Usage (macOS/Linux/Windows)
+
+EtherVoxAI includes a powerful command-line interface with an LLM-powered Governor for intelligent tool orchestration and conversation memory.
+
+### Build the Desktop CLI
+
+```bash
+# Install dependencies
+npm install
+
+# Build core and examples
+npm run build
+
+# Or build just the core
+npm run build:core
+```
+
+### Running the Governor CLI
+
+```bash
+# Navigate to build directory
+cd build
+
+# Run with default settings
+./ethervoxai
+
+# Auto-load a model on startup
+./ethervoxai --model path/to/model.gguf --auto-load
+
+# Quiet mode (suppress model loading logs)
+./ethervoxai --model path/to/model.gguf --auto-load --quiet
+```
+
+### CLI Commands
+
+Once running, the Governor CLI supports the following commands:
+
+**Conversation & Memory:**
+- Just type naturally to chat with the AI
+- `/paste` - Enter multi-line paste mode (end with `/end` or Ctrl+D)
+- `/stats` - Show memory statistics (total entries, disk usage)
+- `/search <query>` - Search conversation memory
+- `/summary [window_size]` - Generate summary of recent conversation
+- `/export <filepath>` - Export memory to file (markdown/json)
+
+**Memory Management:**
+- `/reminders` - List active reminders
+- `/forget <memory_id>` - Delete a specific memory entry
+
+**Model Control:**
+- `/load <model_path>` - Load or switch LLM model
+- `/help` - Show available commands
+- `/quit` or `/exit` - Exit the application
+
+### Available Tools
+
+The Governor has access to the following tools for enhanced functionality:
+
+**Memory Tools:**
+- `memory_store` - Save facts, events, and reminders to conversation memory
+- `memory_search` - Search through stored memories by query
+- `memory_reminder_list` - List all active reminders
+- `memory_complete_reminder` - Mark a reminder as done
+- `memory_export` - Export conversation history to file
+- `memory_forget` - Delete specific memories
+
+**File Tools (Read-Write Enabled):**
+- `file_list` - List files in a directory
+- `file_read` - Read text file contents (.txt, .md, .org, .c, .cpp, .h, .sh)
+- `file_search` - Search for text patterns in files
+- `file_write` - Create or overwrite files with content (max 10MB)
+
+**Compute Tools:**
+- `calculator_compute` - Evaluate mathematical expressions
+- `percentage_calculate` - Calculate percentages
+- `time_get_current` - Get current time and date
+- `timer_set` - Set countdown timers
+
+### Example Usage
+
+```bash
+# Start the CLI
+./build/ethervoxai --model qwen2.5-3b-instruct-q4_k_m.gguf --auto-load
+
+# Chat naturally
+> Hello, my name is Alice
+Assistant: Nice to meet you, Alice! How can I help you today?
+
+# Ask it to remember things
+> Remember that I prefer dark mode for my IDE
+Assistant: Got it, I'll remember that you prefer dark mode for your IDE.
+
+# Search memories
+> What do you remember about my preferences?
+Assistant: You prefer dark mode for your IDE.
+
+# File operations
+> Write a markdown note about chickens to ./chickens.md
+Assistant: Done! I've created chickens.md with information about chickens.
+
+# Read files
+> What's in ./chickens.md?
+Assistant: The file contains information about chickens including...
+
+# Calculations
+> What's 17 divided by 12?
+Assistant: 17 divided by 12 is approximately 1.42.
+
+# Multi-line input
+> /paste
+(paste mode - type or paste multiple lines, then type /end or press Ctrl+D)
+This is line 1
+This is line 2
+This is line 3
+/end
+Assistant: I received your multi-line message...
+```
+
+### Features
+
+**Intelligent Tool Orchestration:**
+- The Governor automatically selects and chains appropriate tools
+- Supports parallel tool execution when possible
+- Handles tool errors gracefully with helpful suggestions
+
+**Conversation Memory:**
+- Persistent memory across sessions (stored in `~/.ethervox/memory.json`)
+- Automatic importance scoring for memories
+- Tag-based organization (personal, preferences, reminders, etc.)
+- Search by relevance and recency
+
+**File Access:**
+- Sandboxed to specific directories (current directory, home, Documents)
+- Extension filtering for security (.txt, .md, .org, .c, .cpp, .h, .sh)
+- Path validation and permissions checking
+
+**Performance:**
+- Token-efficient tool calls
+- Streaming responses for real-time feedback
+- Configurable response length (default: 2048 tokens)
+- Context window management
+
 
 ## 6. Flashing ESP32 build to device
 

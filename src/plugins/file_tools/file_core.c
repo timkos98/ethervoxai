@@ -36,7 +36,28 @@ static bool is_path_allowed(
     // Resolve to absolute path
     char resolved[ETHERVOX_FILE_MAX_PATH];
     if (!realpath(path, resolved)) {
-        return false;
+        // If realpath fails (e.g., file doesn't exist yet), try resolving the directory
+        char path_copy[ETHERVOX_FILE_MAX_PATH];
+        strncpy(path_copy, path, sizeof(path_copy) - 1);
+        path_copy[sizeof(path_copy) - 1] = '\0';
+        
+        char* dir = dirname(path_copy);
+        if (!realpath(dir, resolved)) {
+            ethervox_log(ETHERVOX_LOG_LEVEL_WARN, __FILE__, __LINE__, __func__,
+                        "Cannot resolve path: %s", path);
+            return false;
+        }
+        
+        // Append the filename back
+        const char* filename = strrchr(path, '/');
+        if (!filename) filename = strrchr(path, '\\');
+        if (filename) {
+            strncat(resolved, filename, sizeof(resolved) - strlen(resolved) - 1);
+        } else {
+            // No directory separator, just append the whole path
+            strncat(resolved, "/", sizeof(resolved) - strlen(resolved) - 1);
+            strncat(resolved, path, sizeof(resolved) - strlen(resolved) - 1);
+        }
     }
     
     // Check against each allowed base path
@@ -48,7 +69,7 @@ static bool is_path_allowed(
     }
     
     ethervox_log(ETHERVOX_LOG_LEVEL_WARN, __FILE__, __LINE__, __func__,
-                "Path access denied (not in allowed base paths): %s", path);
+                "Path access denied (not in allowed base paths): %s (resolved: %s)", path, resolved);
     
     return false;
 }

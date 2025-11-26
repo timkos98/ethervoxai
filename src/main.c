@@ -820,7 +820,7 @@ int main(int argc, char** argv) {
         base_paths[path_count++] = strdup(cwd);  // Needs to persist
     }
     
-    if (ethervox_file_tools_init(&file_config, base_paths, ETHERVOX_FILE_ACCESS_READ_WRITE) == 1) {
+    if (ethervox_file_tools_init(&file_config, base_paths, ETHERVOX_FILE_ACCESS_READ_WRITE) == 0) {
         // Add allowed file extensions
         ethervox_file_tools_add_filter(&file_config, ".txt");
         ethervox_file_tools_add_filter(&file_config, ".md");
