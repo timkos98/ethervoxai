@@ -178,7 +178,7 @@ int ethervox_tool_registry_build_system_prompt(
           "RULES:\n"
           "1. Keep responses brief (1-2 sentences max)\n"
           "2. Use tools for math/dates/time\n"
-          "3. Voice-friendly formatting<|im_end|>\n"
+          "3. Voice-friendly formatting\n"
         
         // Desktop: Comprehensive with memory/file context
         : "\n\nTOOL USAGE:\n"
@@ -219,7 +219,7 @@ int ethervox_tool_registry_build_system_prompt(
           "<tool_result>{\"success\":true,\"bytes_written\":1024}</tool_result>\n"
           "I've saved our conversation to conversation.md.\n\n"
           "User: Write a markdown note about chickens\n"
-          "Assistant: <tool_call name=\"file_write\" file_path=\"./chickens.md\" content=\"# Chickens\\n\\nChickens are domesticated birds commonly raised for eggs and meat.\\n\\n## Characteristics\\n- Comes in many colors\\n- Typical lifespan: 3-7 years\\n- Social animals\\n\\n## Care\\n- Clean, dry housing\\n- Balanced feed\\n- Regular health checks\\n\" />\n"
+          "Assistant: <tool_call name=\"file_write\" file_path=\"./chickens.md\" content=\"# Chickens\\n\\nChickens are domesticated birds commonly raised for eggs and meat.\" />\n"
           "<tool_result>{\"success\":true}</tool_result>\n"
           "Assistant: Done! I've created chickens.md with information about chickens.\n\n"
           "User: Save my file\n"
@@ -235,11 +235,11 @@ int ethervox_tool_registry_build_system_prompt(
           "6. Use time tools when user asks about date/time\n"
           "7. Use file tools for document access\n"
           "8. Do NOT use tools for simple greetings or conversational responses\n"
-          "9. Store importance: 0.95 personal facts, 0.9 urgent reminders, 0.8 preferences\n\n"
+          "9. Store importance: 0.95 personal facts, 0.9 urgent reminders, 0.8 preferences. Simple conversation does not require high importance values. \n\n"
           "RESPONSE STYLE:\n"
           "1. Respond conversationally - NO role labels\n"
           "2. Be helpful and contextual\n"
-          "3. Only use tools when they directly help answer the user<|im_end|>\n";
+          "3. Only use tools when they directly help answer the user.\n";
     
     int instr_written = snprintf(ptr, remaining, "%s", usage_section);
     

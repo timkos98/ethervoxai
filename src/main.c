@@ -56,7 +56,8 @@ static const char* DEFAULT_STARTUP_PROMPT =
     "Get the current week number"
     "look for notes or memos stored in memory."
     "Greet the user tell them the week number, the date, and time in 24hr format"
-    "List reminders if they exist, do not make up any reminders. If the tool finds no reminders, just say that there are no reminders.";
+    "List reminders if they exist, do not make up any reminders. If the tool finds no reminders, just say that there are no reminders."
+    "ONLY return reminders that came from a memory_reminder_list tool call.";
 
 static void signal_handler(int sig) {
     (void)sig;
