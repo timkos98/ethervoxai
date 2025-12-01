@@ -9,6 +9,7 @@
 #include "ethervox/memory_tools.h"
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 void test_init_cleanup(void) {

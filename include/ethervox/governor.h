@@ -16,6 +16,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <time.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -59,6 +60,48 @@ typedef struct {
     uint32_t tool_count;                // Number of registered tools
     uint32_t capacity;                  // Allocated capacity
 } ethervox_tool_registry_t;
+
+/**
+ * Context health status
+ */
+typedef enum {
+    CTX_HEALTH_OK,           // 0-60% full - normal operation
+    CTX_HEALTH_WARNING,      // 60-80% full - start planning
+    CTX_HEALTH_CRITICAL,     // 80-95% full - must act now
+    CTX_HEALTH_OVERFLOW      // >95% full - emergency fallback
+} context_health_t;
+
+/**
+ * Context manager state
+ */
+typedef struct {
+    context_health_t current_health;
+    uint32_t overflow_event_count;
+    int32_t last_gc_position;
+    bool management_in_progress;
+} context_manager_state_t;
+
+/**
+ * Conversation turn tracking
+ */
+typedef struct {
+    uint32_t turn_number;      // Sequence number
+    int32_t kv_start;          // First token position
+    int32_t kv_end;            // Last token position
+    time_t timestamp;          // When this turn occurred
+    float importance;          // Estimated importance (0.0-1.0)
+    bool is_user;              // User vs assistant turn
+    char preview[128];         // First 128 chars for debugging
+} conversation_turn_t;
+
+/**
+ * Conversation history
+ */
+typedef struct {
+    conversation_turn_t* turns;
+    uint32_t turn_count;
+    uint32_t capacity;
+} conversation_history_t;
 
 /**
  * Governor execution status

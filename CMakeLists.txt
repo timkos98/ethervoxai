@@ -241,6 +241,11 @@ file(GLOB FILE_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/file_tools
 list(APPEND ETHERVOXAI_CORE_SOURCES ${FILE_TOOLS_SOURCES})
 message(STATUS "File tools plugin sources included")
 
+# Add context tools plugin sources
+file(GLOB CONTEXT_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/context_tools/*.c")
+list(APPEND ETHERVOXAI_CORE_SOURCES ${CONTEXT_TOOLS_SOURCES})
+message(STATUS "Context tools plugin sources included")
+
 # Shared audio core implementation (excluding platform-specific files)
 list(APPEND ETHERVOXAI_CORE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/audio/audio_core.c")
 

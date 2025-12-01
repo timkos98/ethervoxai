@@ -58,6 +58,11 @@ struct ethervox_governor {
     uint32_t last_iteration_count;
     bool initialized;
     bool llm_loaded;
+    
+    // Context management
+    context_manager_state_t context_manager;
+    conversation_history_t conversation_history;
+    uint32_t turn_counter;
 };
 
 /**
@@ -95,6 +100,71 @@ static int extract_tool_calls(const char* response, char** tool_calls, int max_c
     }
     
     return count;
+}
+
+// ============================================================================
+// Context Management Helper Functions
+// ============================================================================
+
+/**
+ * Check context health status based on current KV cache usage
+ */
+static context_health_t check_context_health(ethervox_governor_t* gov) {
+#if defined(ETHERVOX_WITH_LLAMA) && LLAMA_HEADER_AVAILABLE
+    int n_ctx = llama_n_ctx(gov->llm_ctx);
+    int current_pos = gov->current_kv_pos;
+    float usage = (float)current_pos / n_ctx;
+    
+    if (usage < 0.60f) return CTX_HEALTH_OK;
+    if (usage < 0.80f) return CTX_HEALTH_WARNING;
+    if (usage < 0.95f) return CTX_HEALTH_CRITICAL;
+    return CTX_HEALTH_OVERFLOW;
+#else
+    return CTX_HEALTH_OK;  // No monitoring without llama.cpp
+#endif
+}
+
+/**
+ * Initialize conversation history
+ */
+static int init_conversation_history(conversation_history_t* history, uint32_t initial_capacity) {
+    history->turns = malloc(initial_capacity * sizeof(conversation_turn_t));
+    if (!history->turns) return -1;
+    
+    history->turn_count = 0;
+    history->capacity = initial_capacity;
+    return 0;
+}
+
+/**
+ * Append a turn to conversation history
+ */
+static int append_turn(conversation_history_t* history, const conversation_turn_t* turn) {
+    // Resize if needed
+    if (history->turn_count >= history->capacity) {
+        uint32_t new_capacity = history->capacity * 2;
+        conversation_turn_t* new_turns = realloc(history->turns, 
+                                                 new_capacity * sizeof(conversation_turn_t));
+        if (!new_turns) return -1;
+        
+        history->turns = new_turns;
+        history->capacity = new_capacity;
+    }
+    
+    history->turns[history->turn_count++] = *turn;
+    return 0;
+}
+
+/**
+ * Cleanup conversation history
+ */
+static void cleanup_conversation_history(conversation_history_t* history) {
+    if (history->turns) {
+        free(history->turns);
+        history->turns = NULL;
+    }
+    history->turn_count = 0;
+    history->capacity = 0;
 }
 
 /**
@@ -495,6 +565,17 @@ int ethervox_governor_init(
     gov->initialized = true;
     gov->llm_loaded = false;
     
+    // Initialize context manager
+    memset(&gov->context_manager, 0, sizeof(context_manager_state_t));
+    gov->context_manager.current_health = CTX_HEALTH_OK;
+    gov->turn_counter = 0;
+    
+    // Initialize conversation history with capacity for 100 turns
+    if (init_conversation_history(&gov->conversation_history, 100) != 0) {
+        free(gov);
+        return -1;
+    }
+    
     *governor = gov;
     return 0;
 }
@@ -538,16 +619,30 @@ ethervox_governor_status_t ethervox_governor_execute(
     // Reset iteration counter
     governor->last_iteration_count = 0;
     
-    // Clear KV cache after system prompt to prepare for new query
-    // Keep sequence 0, remove positions from system_prompt_token_count onwards
+    // Only clear KV cache if we're running low on space or this is explicitly requested
+    // This allows conversation history to accumulate naturally
     llama_memory_t mem = llama_get_memory(governor->llm_ctx);
-    llama_memory_seq_rm(mem, 0, governor->system_prompt_token_count, -1);
+    int32_t max_pos = llama_memory_seq_pos_max(mem, 0);
+    int n_ctx = llama_n_ctx(governor->llm_ctx);
     
-    // Reset KV cache position to start after system prompt
-    governor->current_kv_pos = governor->system_prompt_token_count;
-    
-    GOV_LOG("KV cache cleared: keeping system prompt (%d tokens), current_pos reset to %d",
-            governor->system_prompt_token_count, governor->current_kv_pos);
+    // Clear if we're past system prompt and getting close to context limit (>50% full)
+    if (max_pos > governor->system_prompt_token_count && max_pos > (n_ctx / 2)) {
+        // Clear everything after system prompt to start fresh
+        llama_memory_seq_rm(mem, 0, governor->system_prompt_token_count, -1);
+        governor->current_kv_pos = governor->system_prompt_token_count;
+        GOV_LOG("KV cache cleared: removed positions %d to %d (was at %d%% capacity)", 
+                governor->system_prompt_token_count, max_pos, (max_pos * 100 / n_ctx));
+    } else if (max_pos >= governor->system_prompt_token_count) {
+        // Continue from where we left off
+        governor->current_kv_pos = max_pos + 1;
+        GOV_LOG("KV cache continuing: from position %d (%d%% full)",
+                governor->current_kv_pos, (governor->current_kv_pos * 100 / n_ctx));
+    } else {
+        // First query - start after system prompt
+        governor->current_kv_pos = governor->system_prompt_token_count;
+        GOV_LOG("KV cache initialized: starting at position %d",
+                governor->current_kv_pos);
+    }
     
     const struct llama_vocab* vocab = llama_model_get_vocab(governor->llm_model);
     
@@ -607,6 +702,67 @@ ethervox_governor_status_t ethervox_governor_execute(
             
             llama_tokenize(vocab, new_content, new_content_len, tokens, n_tokens, false, false);
             
+            // ========================================================================
+            // Context Health Monitoring - Check before decoding new tokens
+            // ========================================================================
+            context_health_t health = check_context_health(governor);
+            
+            // Update health state
+            if (health != governor->context_manager.current_health) {
+                GOV_LOG("[Context] Health changed: %d -> %d", 
+                        governor->context_manager.current_health, health);
+                governor->context_manager.current_health = health;
+            }
+            
+            // If critical and not already managing, inject warning to LLM
+            if (health == CTX_HEALTH_CRITICAL && !governor->context_manager.management_in_progress) {
+                int n_ctx = llama_n_ctx(governor->llm_ctx);
+                float usage_pct = (float)governor->current_kv_pos / n_ctx * 100.0f;
+                
+                GOV_LOG("[Context] CRITICAL: Usage at %.1f%%, injecting management warning", usage_pct);
+                
+                // Build warning message
+                char warning_msg[512];
+                snprintf(warning_msg, sizeof(warning_msg),
+                        "\n<system>CRITICAL: Context usage at %.0f%%. "
+                        "You MUST call context_manage tool before responding. "
+                        "Recommended: action='shift_window', keep_last_n_turns=10</system>\n",
+                        usage_pct);
+                
+                // Tokenize warning
+                int n_warning = -llama_tokenize(vocab, warning_msg, strlen(warning_msg), 
+                                                NULL, 0, false, false);
+                if (n_warning > 0) {
+                    llama_token* warning_tokens = malloc(n_warning * sizeof(llama_token));
+                    if (warning_tokens) {
+                        llama_tokenize(vocab, warning_msg, strlen(warning_msg), 
+                                     warning_tokens, n_warning, false, false);
+                        
+                        // Create batch for warning
+                        llama_batch warning_batch = llama_batch_init(n_warning, 0, 1);
+                        warning_batch.n_tokens = n_warning;
+                        for (int i = 0; i < n_warning; i++) {
+                            warning_batch.token[i] = warning_tokens[i];
+                            warning_batch.pos[i] = governor->current_kv_pos + i;
+                            warning_batch.n_seq_id[i] = 1;
+                            warning_batch.seq_id[i][0] = 0;
+                            warning_batch.logits[i] = false;
+                        }
+                        warning_batch.logits[n_warning - 1] = true;
+                        
+                        // Decode warning into KV cache
+                        if (llama_decode(governor->llm_ctx, warning_batch) == 0) {
+                            governor->current_kv_pos += n_warning;
+                            governor->context_manager.management_in_progress = true;
+                            GOV_LOG("[Context] Warning injected successfully (%d tokens)", n_warning);
+                        }
+                        
+                        llama_batch_free(warning_batch);
+                        free(warning_tokens);
+                    }
+                }
+            }
+            
             // Check if we have space in the context window
             int n_ctx = llama_n_ctx(governor->llm_ctx);
             if (governor->current_kv_pos + n_tokens > n_ctx) {
@@ -652,8 +808,32 @@ ethervox_governor_status_t ethervox_governor_execute(
             llama_batch_free(batch);
             free(tokens);
             
+            // ========================================================================
+            // Turn Tracking - Record user query turn
+            // ========================================================================
+            int user_turn_start = governor->current_kv_pos;
+            
             // Update KV cache position
             governor->current_kv_pos += n_tokens;
+            
+            int user_turn_end = governor->current_kv_pos - 1;
+            
+            // Create user turn record
+            conversation_turn_t user_turn = {
+                .turn_number = governor->conversation_history.turn_count,
+                .kv_start = user_turn_start,
+                .kv_end = user_turn_end,
+                .timestamp = time(NULL),
+                .importance = 0.5f,  // User queries have moderate importance
+                .is_user = true
+            };
+            
+            // Copy preview (first 120 chars of user query)
+            strncpy(user_turn.preview, new_content, sizeof(user_turn.preview) - 1);
+            user_turn.preview[sizeof(user_turn.preview) - 1] = '\0';
+            
+            // Append to history
+            append_turn(&governor->conversation_history, &user_turn);
             
             // Update processed length to include what we just processed
             processed_length = strlen(conversation);
@@ -839,6 +1019,29 @@ ethervox_governor_status_t ethervox_governor_execute(
         llama_sampler_free(sampler);
         
         GOV_LOG("Generation complete: %d tokens generated", generated_count);
+        
+        // ========================================================================
+        // Turn Tracking - Record assistant response turn
+        // ========================================================================
+        int assistant_turn_start = governor->current_kv_pos - generated_count;
+        int assistant_turn_end = governor->current_kv_pos - 1;
+        
+        // Create assistant turn record
+        conversation_turn_t assistant_turn = {
+            .turn_number = governor->conversation_history.turn_count,
+            .kv_start = assistant_turn_start,
+            .kv_end = assistant_turn_end,
+            .timestamp = time(NULL),
+            .importance = 0.7f,  // Assistant responses have higher importance
+            .is_user = false
+        };
+        
+        // Copy preview (first 120 chars of response)
+        strncpy(assistant_turn.preview, llm_response_buffer, sizeof(assistant_turn.preview) - 1);
+        assistant_turn.preview[sizeof(assistant_turn.preview) - 1] = '\0';
+        
+        // Append to history
+        append_turn(&governor->conversation_history, &assistant_turn);
         
         // Clean up any stop tokens that made it into the output
         // Check for all possible partial versions starting with <|im
@@ -1222,6 +1425,9 @@ void ethervox_governor_cleanup(ethervox_governor_t* governor) {
     
     llama_backend_free();
 #endif
+    
+    // Cleanup conversation history
+    cleanup_conversation_history(&governor->conversation_history);
     
     free(governor);
 }
