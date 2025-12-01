@@ -401,21 +401,6 @@ elseif(ANDROID)
             list(APPEND ETHERVOXAI_PLATFORM_LIBS ${AAUDIO_LIB})
             message(STATUS "AAudio library found: ${AAUDIO_LIB}")
         endif()
-    endforeach()
-
-elseif(ANDROID)
-    # Android libraries
-    find_library(LOG_LIB log)
-    find_library(ANDROID_LIB android)
-    set(ETHERVOXAI_PLATFORM_LIBS ${LOG_LIB} ${ANDROID_LIB} m)
-    
-    # Add AAudio for API 26+, OpenSL ES for API 24+
-    if(ANDROID_PLATFORM_LEVEL GREATER_EQUAL 26)
-        find_library(AAUDIO_LIB aaudio)
-        if(AAUDIO_LIB)
-            list(APPEND ETHERVOXAI_PLATFORM_LIBS ${AAUDIO_LIB})
-            message(STATUS "AAudio library found: ${AAUDIO_LIB}")
-        endif()
     endif()
     
     find_library(OPENSLES_LIB OpenSLES)

@@ -801,56 +801,22 @@ ethervox_governor_status_t ethervox_governor_execute(
             }
             batch.logits[n_tokens - 1] = true;  // Only need logits from last token
             
-            // Check if we're about to exceed context window
-            int n_ctx = llama_n_ctx(governor->llm_ctx);
-            if (governor->current_kv_pos + n_tokens > n_ctx) {
-                GOV_ERROR("Context window exceeded: current_pos=%d + new_tokens=%d > n_ctx=%d",
-                         governor->current_kv_pos, n_tokens, n_ctx);
+            GOV_LOG("Decoding batch: n_tokens=%d, pos_start=%d, pos_end=%d, n_ctx=%d", 
+                    n_tokens, governor->current_kv_pos, governor->current_kv_pos + n_tokens - 1,
+                    llama_n_ctx(governor->llm_ctx));
+            
+            // Decode tokens (append to KV cache)
+            if (llama_decode(governor->llm_ctx, batch) != 0) {
+                GOV_ERROR("Decode failed: n_tokens=%d, pos_start=%d, pos_end=%d", 
+                         n_tokens, governor->current_kv_pos, governor->current_kv_pos + n_tokens - 1);
+                llama_batch_free(batch);
                 free(tokens);
-                if (error) *error = strdup("Context window exceeded - conversation too long");
+                if (error) *error = strdup("Failed to decode conversation");
                 return ETHERVOX_GOVERNOR_ERROR;
             }
             
-            // Process tokens in chunks to respect batch size limit (n_batch = 1024)
-            const int n_batch = 1024;  // llama.cpp default batch size
-            int tokens_processed = 0;
-            
-            while (tokens_processed < n_tokens) {
-                int batch_size = (n_tokens - tokens_processed > n_batch) ? n_batch : (n_tokens - tokens_processed);
-                
-                llama_batch batch = llama_batch_init(batch_size, 0, 1);
-                batch.n_tokens = batch_size;
-                for (int i = 0; i < batch_size; i++) {
-                    batch.token[i] = tokens[tokens_processed + i];
-                    batch.pos[i] = governor->current_kv_pos + tokens_processed + i;
-                    batch.n_seq_id[i] = 1;
-                    batch.seq_id[i][0] = 0;
-                    batch.logits[i] = false;
-                }
-                // Only need logits from last token of final batch
-                if (tokens_processed + batch_size >= n_tokens) {
-                    batch.logits[batch_size - 1] = true;
-                }
-                
-                GOV_LOG("Decoding batch chunk: n_tokens=%d, pos_start=%d, pos_end=%d (chunk %d/%d)", 
-                        batch_size, governor->current_kv_pos + tokens_processed, 
-                        governor->current_kv_pos + tokens_processed + batch_size - 1,
-                        tokens_processed / n_batch + 1, (n_tokens + n_batch - 1) / n_batch);
-                
-                // Decode tokens (append to KV cache)
-                if (llama_decode(governor->llm_ctx, batch) != 0) {
-                    GOV_ERROR("Decode failed: n_tokens=%d, pos_start=%d, pos_end=%d", 
-                             batch_size, governor->current_kv_pos + tokens_processed, 
-                             governor->current_kv_pos + tokens_processed + batch_size - 1);
-                    llama_batch_free(batch);
-                    free(tokens);
-                    if (error) *error = strdup("Failed to decode conversation");
-                    return ETHERVOX_GOVERNOR_ERROR;
-                }
-                
-                llama_batch_free(batch);
-                tokens_processed += batch_size;
-            }            free(tokens);
+            llama_batch_free(batch);
+            free(tokens);
             
             // ========================================================================
             // Turn Tracking - Record user query turn

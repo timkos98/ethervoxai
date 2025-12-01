@@ -4,8 +4,10 @@
 #include <string.h>
 #include <stdio.h>
 
+// Global debug flag (referenced by config.h macros)
+int g_ethervox_debug_enabled = 0;
+
 static ethervox_log_level_t g_log_level = ETHERVOX_LOG_LEVEL_INFO;
-bool g_ethervox_debug_enabled = true;
 
 void ethervox_log_set_level(ethervox_log_level_t level) {
     g_log_level = level;

@@ -179,13 +179,17 @@ static ethervox_memory_tag_index_t* get_tag_index(
     return idx;
 }
 
-int ethervox_memory_store_add(
+// Internal function for adding memories with explicit IDs (used by import)
+int memory_store_add_internal(
     ethervox_memory_store_t* store,
     const char* text,
     const char* tags[],
     uint32_t tag_count,
     float importance,
     bool is_user_message,
+    uint64_t memory_id,
+    uint64_t turn_id,
+    time_t timestamp,
     uint64_t* memory_id_out
 ) {
     if (!store || !store->is_initialized || !text) {
@@ -218,13 +222,13 @@ int ethervox_memory_store_add(
         store->entry_capacity = new_capacity;
     }
     
-    // Create new entry
+    // Create new entry with explicit IDs and timestamp
     ethervox_memory_entry_t* entry = &store->entries[store->entry_count];
     memset(entry, 0, sizeof(ethervox_memory_entry_t));
     
-    entry->memory_id = store->total_memories_stored++;
-    entry->turn_id = store->current_turn_id++;
-    entry->timestamp = time(NULL);
+    entry->memory_id = memory_id;
+    entry->turn_id = turn_id;
+    entry->timestamp = timestamp;
     entry->importance = importance;
     entry->is_user_message = is_user_message;
     

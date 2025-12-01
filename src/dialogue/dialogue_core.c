@@ -802,20 +802,6 @@ int ethervox_dialogue_parse_intent(ethervox_dialogue_engine_t* engine,
     lang_normalized[i] = (char)tolower((unsigned char)lang_normalized[i]);
   }
 
-  // Normalize language code to just first 2 characters (en-US -> en)
-  char lang_normalized[8] = {0};
-  size_t lang_copy_len = strlen(language_code);
-  if (lang_copy_len > 2) {
-    lang_copy_len = 2;  // Only take first 2 chars
-  }
-  strncpy(lang_normalized, language_code, lang_copy_len);
-  lang_normalized[lang_copy_len] = '\0';
-
-  // Convert to lowercase
-  for (size_t i = 0; i < lang_copy_len; i++) {
-    lang_normalized[i] = (char)tolower((unsigned char)lang_normalized[i]);
-  }
-
   const char* text = request->text;
 
   memset(intent, 0, sizeof(ethervox_intent_t));
