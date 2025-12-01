@@ -416,6 +416,12 @@ int ethervox_governor_load_model(ethervox_governor_t* governor, const char* mode
     
     GOV_LOG("Context created successfully");
     
+    // Log tool registry state BEFORE building system prompt
+    GOV_LOG("Tool registry has %u tools registered", governor->tool_registry->tool_count);
+    for (uint32_t i = 0; i < governor->tool_registry->tool_count; i++) {
+        GOV_LOG("  Tool %u: %s", i, governor->tool_registry->tools[i].name);
+    }
+    
     // Build system prompt from tool registry
     // Increased to 16KB to accommodate all tools and examples
     char system_prompt[16384];

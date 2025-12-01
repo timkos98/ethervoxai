@@ -199,6 +199,10 @@ void ethervox_dialogue_set_external_llm_callback(ethervox_dialogue_engine_t* eng
                                                  ethervox_external_llm_callback_t callback,
                                                  void* user_data);
 
+// Memory store integration (forward declaration)
+struct ethervox_memory_store_t;
+void ethervox_dialogue_set_memory_store(struct ethervox_memory_store_t* store);
+
 // Utility functions
 ethervox_llm_config_t ethervox_dialogue_get_default_llm_config(void);
 const char* ethervox_dialogue_detect_system_language(void);

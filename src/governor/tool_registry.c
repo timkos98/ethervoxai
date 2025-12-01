@@ -116,9 +116,16 @@ int ethervox_tool_registry_build_system_prompt(
     
     // Qwen2.5 uses <|im_start|> and <|im_end|> format
     // Desktop: More detailed with memory/file tools emphasized
-    // Mobile: Concise, focused on voice interaction
+    // Mobile: Concise, focused on voice interaction, but MUST use tools
     const char* platform_context = is_mobile
-        ? "You are Ethervox, a concise voice assistant optimized for mobile. Keep responses brief and actionable."
+        ? "You are Ethervox, a voice assistant. YOU MUST USE TOOLS.\n\n"
+          "CRITICAL RULES:\n"
+          "1. When user shares info (name, preferences), use memory_store\n"
+          "2. When asked about past info, use memory_search first\n"
+          "3. For reminders, use memory_store with tags=\"reminder\"\n"
+          "4. For math, use calculator_compute\n"
+          "5. For time/date, use time_get_current\n"
+          "Keep responses brief (1-2 sentences)."
         : "You are Ethervox, an intelligent assistant. You MUST use tools - you cannot answer from memory alone.\n\n"
           "CRITICAL: When user asks about past information (name, preferences, previous topics), you MUST call memory_search tool. "
           "Do NOT try to answer without searching memory first.";
@@ -166,7 +173,7 @@ int ethervox_tool_registry_build_system_prompt(
     
     // Platform-specific usage instructions
     const char* usage_section = is_mobile
-        // Mobile: Ultra-concise, voice-focused
+        // Mobile: Concise but complete examples including memory tools
         ? "\nUSAGE: <tool_call name=\"TOOL\" param=\"value\" />\n"
           "EXAMPLES:\n"
           "Input: What time?\n"
@@ -177,10 +184,24 @@ int ethervox_tool_registry_build_system_prompt(
           "Output: <tool_call name=\"calculator_compute\" expression=\"17/12\" />\n"
           "Result: {\"result\": 1.42}\n"
           "Output: 1.42.\n\n"
+          "Input: My name is Tim\n"
+          "Output: <tool_call name=\"memory_store\" text=\"User's name is Tim\" tags=\"personal\" importance=\"0.95\" />\n"
+          "Result: {\"success\":true}\n"
+          "Output: Nice to meet you, Tim!\n\n"
+          "Input: What's my name?\n"
+          "Output: <tool_call name=\"memory_search\" query=\"name\" limit=\"5\" />\n"
+          "Result: {\"results\":[{\"text\":\"User's name is Tim\"}]}\n"
+          "Output: Your name is Tim!\n\n"
+          "Input: Remind me to call John in 10 minutes\n"
+          "Output: <tool_call name=\"memory_store\" text=\"Call John in 10 minutes\" tags=\"reminder\" importance=\"0.9\" />\n"
+          "Result: {\"success\":true}\n"
+          "Output: Reminder set!\n\n"
           "RULES:\n"
           "1. Keep responses brief (1-2 sentences max)\n"
-          "2. Use tools for math/dates/time\n"
-          "3. Voice-friendly formatting\n"
+          "2. Use memory_store when user shares info or wants a reminder\n"
+          "3. Use memory_search when asked about past info\n"
+          "4. Use tools for math/dates/time\n"
+          "5. Voice-friendly formatting\n"
         
         // Desktop: Comprehensive with memory/file context
         : "\n\nTOOL USAGE:\n"

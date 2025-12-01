@@ -21,6 +21,7 @@
 #include "ethervox/dialogue.h"
 #include "ethervox/governor.h"
 #include "ethervox/timer_tools.h"
+#include "ethervox/memory_tools.h"
 #include "ethervox/platform.h"
 #include "ethervox/config.h"
 
@@ -71,6 +72,7 @@ static ethervox_wake_runtime_t* g_wake_runtime = NULL;
 static ethervox_stt_runtime_t* g_stt_runtime = NULL;
 static ethervox_platform_t* g_platform = NULL;
 static ethervox_dialogue_engine_t* g_dialogue_engine = NULL;
+static ethervox_memory_store_t* g_memory_store = NULL;
 
 // ===========================================================================
 // Utility Functions
@@ -177,19 +179,43 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_platformInit(
         return -1;
     }
     
+    // Initialize memory store BEFORE dialogue engine so tools can register
+    g_memory_store = (ethervox_memory_store_t*)calloc(1, sizeof(ethervox_memory_store_t));
+    if (g_memory_store) {
+        // Initialize with NULL session_id (will be auto-generated)
+        // and NULL storage_dir for now (will be set via setMemoryStorageDir)
+        if (ethervox_memory_init(g_memory_store, NULL, NULL) != 0) {
+            LOGE("Failed to initialize memory store");
+            free(g_memory_store);
+            g_memory_store = NULL;
+        } else {
+            LOGI("Memory store initialized (in-memory mode until storage dir set)");
+            // Set memory store in dialogue engine BEFORE dialogue_init
+            ethervox_dialogue_set_memory_store(g_memory_store);
+        }
+    } else {
+        LOGE("Failed to allocate memory store");
+    }
+    
     ethervox_llm_config_t llm_config = ethervox_dialogue_get_default_llm_config();
     result = ethervox_dialogue_init(g_dialogue_engine, &llm_config);
     if (result != 0) {
         LOGE("Dialogue engine initialization failed");
         free(g_dialogue_engine);
         g_dialogue_engine = NULL;
+        if (g_memory_store) {
+            ethervox_memory_cleanup(g_memory_store);
+            free(g_memory_store);
+            g_memory_store = NULL;
+        }
         ethervox_platform_cleanup(g_platform);
         free(g_platform);
         g_platform = NULL;
         return -1;
     }
     
-    LOGI("Platform and dialogue engine initialized successfully");
+    LOGI("Platform, memory store, and dialogue engine initialized successfully");
+    
     return 0;
 }
 
@@ -199,6 +225,13 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_platformCleanup(
         jobject thiz) {
     (void)env;
     (void)thiz;
+    
+    if (g_memory_store) {
+        ethervox_memory_cleanup(g_memory_store);
+        free(g_memory_store);
+        g_memory_store = NULL;
+        LOGI("Memory store cleaned up");
+    }
     
     if (g_dialogue_engine) {
         ethervox_dialogue_cleanup(g_dialogue_engine);
@@ -843,6 +876,19 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_processDialogueStreamingN
     LOGI("Intent detected: %s (confidence: %.2f)", 
          ethervox_intent_type_to_string(intent.type), intent.confidence);
     
+    // Call onPunctuatedPrompt if the text was modified by smart punctuation
+    if (on_governor_progress && intent.raw_text && strcmp(text, intent.raw_text) != 0) {
+        jstring punctuated_text = create_jstring(env, intent.raw_text);
+        if (punctuated_text) {
+            // Get the onPunctuatedPrompt method
+            jmethodID on_punctuated = (*env)->GetMethodID(env, callback_class, "onPunctuatedPrompt", "(Ljava/lang/String;)V");
+            if (on_punctuated) {
+                (*env)->CallVoidMethod(env, callback, on_punctuated, punctuated_text);
+            }
+            (*env)->DeleteLocalRef(env, punctuated_text);
+        }
+    }
+    
     // Process with LLM using streaming
     result = ethervox_dialogue_process_llm_stream(g_dialogue_engine, &intent, NULL, 
                                                    native_token_callback, &stream_ctx,
@@ -1046,6 +1092,33 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getSupportedLanguages(
 // ===========================================================================
 // Debug Mode Control
 // ===========================================================================
+
+JNIEXPORT void JNICALL
+Java_com_droid_ethervox_1multiplatform_1core_NativeLib_setMemoryStorageDir(
+    JNIEnv* env, jobject thiz, jstring storage_dir) {
+    (void)thiz;
+    
+    if (!g_memory_store) {
+        LOGE("Memory store not initialized");
+        return;
+    }
+    
+    const char* dir_path = (*env)->GetStringUTFChars(env, storage_dir, NULL);
+    if (!dir_path) {
+        LOGE("Failed to get storage directory path");
+        return;
+    }
+    
+    // Re-initialize memory store with storage directory
+    // This will enable file persistence
+    if (ethervox_memory_init(g_memory_store, NULL, dir_path) != 0) {
+        LOGE("Failed to set memory storage directory: %s", dir_path);
+    } else {
+        LOGI("Memory storage directory set to: %s", dir_path);
+    }
+    
+    (*env)->ReleaseStringUTFChars(env, storage_dir, dir_path);
+}
 
 JNIEXPORT void JNICALL
 Java_com_droid_ethervox_1multiplatform_1core_NativeLib_setDebugMode(JNIEnv* env, jobject thiz, jboolean enabled) {

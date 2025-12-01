@@ -27,6 +27,7 @@
 
 #include "ethervox/compute_tools.h"  // Compute tools
 #include "ethervox/timer_tools.h"    // Timer tools
+#include "ethervox/memory_tools.h"   // Memory tools
 #include "ethervox/config.h"         // For version information
 #include "ethervox/dialogue.h"
 #include "ethervox/governor.h"  // Governor orchestration
@@ -50,6 +51,9 @@ static const uint32_t kEthervoxDefaultMaxHistory = 20U;
 static const float kEthervoxWakeConfidenceScale ETHERVOX_UNUSED = 2.0f;
 static const size_t kEthervoxLanguageMatchPrefix = 2U;
 static const size_t kEthervoxLanguageTrimIndex = 2U;
+
+// Global memory store (set via ethervox_dialogue_set_memory_store)
+static struct ethervox_memory_store_t* g_dialogue_memory_store = NULL;
 
 static void sanitize_language_code(const char* source, char* target, size_t target_len) {
   if (!target || target_len == 0) {
@@ -664,6 +668,27 @@ int ethervox_dialogue_init(ethervox_dialogue_engine_t* engine,
     ethervox_tool_registry_add(registry, ethervox_tool_timer_list());
     ethervox_tool_registry_add(registry, ethervox_tool_alarm_create());
     tool_count += 4;
+    
+    // Register memory tools if memory store is available
+    if (g_dialogue_memory_store) {
+      int memory_tools = ethervox_memory_tools_register(registry, g_dialogue_memory_store);
+      if (memory_tools == 0) {
+        tool_count += 6;  // 6 memory tools registered
+#ifdef ETHERVOX_PLATFORM_ANDROID
+        ETHERVOX_LOGI("Registered memory tools with Governor");
+#else
+        printf("Registered memory tools with Governor\n");
+#endif
+      } else {
+#ifdef ETHERVOX_PLATFORM_ANDROID
+        ETHERVOX_LOGE("Failed to register memory tools");
+#endif
+      }
+    } else {
+#ifdef ETHERVOX_PLATFORM_ANDROID
+      ETHERVOX_LOGW("Memory store not initialized - skipping memory tools registration");
+#endif
+    }
 
 #ifdef ETHERVOX_PLATFORM_ANDROID
     ETHERVOX_LOGI( "Registered %d tools total",
@@ -1809,9 +1834,9 @@ int ethervox_dialogue_process_llm_stream(ethervox_dialogue_engine_t* engine,
     return -1;
   }
 
-  // Route to Governor for questions and unknown intents if enabled
-  if (engine->use_governor && engine->governor && 
-      (intent->type == ETHERVOX_INTENT_QUESTION || intent->type == ETHERVOX_INTENT_UNKNOWN)) {
+  // Route to Governor for ALL intents if enabled (not just questions/unknown)
+  // This ensures tools like memory_store, timers, etc. are available
+  if (engine->use_governor && engine->governor) {
     
 #ifdef ETHERVOX_PLATFORM_ANDROID
     ETHERVOX_LOGI( 
@@ -2063,4 +2088,14 @@ void ethervox_dialogue_set_external_llm_callback(ethervox_dialogue_engine_t* eng
     engine->external_llm_callback = callback;
     engine->external_llm_user_data = user_data;
   }
+}
+
+// Set memory store for dialogue engine tools
+void ethervox_dialogue_set_memory_store(struct ethervox_memory_store_t* store) {
+  g_dialogue_memory_store = store;
+#ifdef ETHERVOX_PLATFORM_ANDROID
+  ETHERVOX_LOGI("Memory store set for dialogue engine");
+#else
+  printf("Memory store set for dialogue engine\n");
+#endif
 }
