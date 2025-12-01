@@ -25,6 +25,10 @@
 #include "ethervox/platform.h"
 #include "ethervox/config.h"
 
+#if ETHERVOX_WITH_LLAMA && LLAMA_CPP_AVAILABLE
+#include "llama.h"
+#endif
+
 #define LOGI(...) ETHERVOX_LOGI(__VA_ARGS__)
 #define LOGE(...) ETHERVOX_LOGE(__VA_ARGS__)
 
@@ -1213,4 +1217,81 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_setLogCallback(
     } else {
         LOGI("Log callback cleared");
     }
+}
+
+JNIEXPORT jobject JNICALL
+Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getLlamaPerformanceMetrics(
+    JNIEnv* env, jobject thiz) {
+    (void)thiz;
+    
+#if ETHERVOX_WITH_LLAMA && LLAMA_CPP_AVAILABLE
+    // Get Governor from dialogue engine
+    if (!g_dialogue_engine || !g_dialogue_engine->governor) {
+        return NULL;
+    }
+    
+    // Access the llama_context from Governor
+    // Note: This requires accessing the internal structure
+    // The governor structure has llm_ctx field
+    struct ethervox_governor {
+        ethervox_governor_config_t config;
+        ethervox_tool_registry_t* tool_registry;
+        struct llama_model* llm_model;
+        struct llama_context* llm_ctx;
+        // ... other fields we don't need
+    };
+    
+    struct ethervox_governor* governor = (struct ethervox_governor*)g_dialogue_engine->governor;
+    
+    if (!governor->llm_ctx) {
+        return NULL;
+    }
+    
+    // Get performance data from llama.cpp
+    struct llama_perf_context_data perf = llama_perf_context(governor->llm_ctx);
+    
+    // Only return metrics if there's actual data (model has been used)
+    // If no tokens have been processed yet, return NULL
+    if (perf.n_p_eval == 0 && perf.n_eval == 0) {
+        return NULL;
+    }
+    
+    // Create Java object to return metrics
+    jclass metricsClass = (*env)->FindClass(env, "com/droid/ethervox_multiplatform_core/LlamaPerformanceMetrics");
+    if (!metricsClass) {
+        LOGE("Failed to find LlamaPerformanceMetrics class");
+        return NULL;
+    }
+    
+    jmethodID constructor = (*env)->GetMethodID(env, metricsClass, "<init>", "(DDDDDIII)V");
+    if (!constructor) {
+        LOGE("Failed to find LlamaPerformanceMetrics constructor");
+        return NULL;
+    }
+    
+    // Calculate tokens per second
+    double prompt_tps = perf.n_p_eval > 0 && perf.t_p_eval_ms > 0 ? 
+        (perf.n_p_eval * 1000.0 / perf.t_p_eval_ms) : 0.0;
+    double gen_tps = perf.n_eval > 0 && perf.t_eval_ms > 0 ? 
+        (perf.n_eval * 1000.0 / perf.t_eval_ms) : 0.0;
+    
+    // Debug logging (commented out - too verbose)
+    // LOGI("llama_perf: n_eval=%d, t_eval_ms=%.2f, gen_tps=%.2f", 
+    //      (int)perf.n_eval, perf.t_eval_ms, gen_tps);
+    
+    jobject metrics = (*env)->NewObject(env, metricsClass, constructor,
+        perf.t_load_ms,
+        perf.t_p_eval_ms,
+        perf.t_eval_ms,
+        prompt_tps,
+        gen_tps,
+        (jint)perf.n_p_eval,
+        (jint)perf.n_eval,
+        (jint)perf.n_reused
+    );
+    
+    return metrics;
+#else
+    return NULL;
+#endif
 }

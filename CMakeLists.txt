@@ -171,6 +171,12 @@ if(WITH_LLAMA AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/llama.cpp")
         set(LLAMA_CLBLAST OFF CACHE BOOL "" FORCE)
         set(LLAMA_OPENBLAS OFF CACHE BOOL "" FORCE)
         set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
+        
+        # Vulkan GPU acceleration is complex on Android and requires device-specific setup
+        # Currently disabled - relying on ARM NEON optimizations instead
+        # Future: Enable with proper Android Vulkan SDK integration
+        set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
+        
         # Enable NEON for ARM processors
         if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm" OR CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR ANDROID_ABI STREQUAL "arm64-v8a")
             set(GGML_CPU_ARM_NEON ON CACHE BOOL "" FORCE)

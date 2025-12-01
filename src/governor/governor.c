@@ -412,6 +412,7 @@ int ethervox_governor_load_model(ethervox_governor_t* governor, const char* mode
     ctx_params.flash_attn_type = ETHERVOX_GOVERNOR_FLASH_ATTN_TYPE;  // Enable flash attention for speed and quantized KV cache
     ctx_params.type_k = ETHERVOX_GOVERNOR_KV_CACHE_TYPE;
     ctx_params.type_v = ETHERVOX_GOVERNOR_KV_CACHE_TYPE;
+    ctx_params.no_perf = false;  // Enable performance tracking for metrics
     
     // Create context
     governor->llm_ctx = llama_init_from_model(governor->llm_model, ctx_params);
@@ -949,15 +950,22 @@ ethervox_governor_status_t ethervox_governor_execute(
                     const char* buf_end = llm_response_buffer + buf_len;
                     
                     // Check if buffer ends with potential tool call start patterns
+                    // Be more specific - only hold back if we're building "<tool_call"
                     bool might_be_tool_start = false;
-                    if (buf_len >= 1 && strcmp(buf_end - 1, "<") == 0) {
-                        might_be_tool_start = true;  // Just added '<'
-                    } else if (buf_len >= 5 && strcmp(buf_end - 5, "<tool") == 0) {
+                    if (buf_len >= 1 && buf_end[-1] == '<' && token_text[0] == 't') {
+                        might_be_tool_start = true;  // '<' followed by 't' - might be '<tool_call'
+                    } else if (buf_len >= 2 && strncmp(buf_end - 2, "<t", 2) == 0) {
+                        might_be_tool_start = true;  // Building '<t'
+                    } else if (buf_len >= 3 && strncmp(buf_end - 3, "<to", 3) == 0) {
+                        might_be_tool_start = true;  // Building '<to'
+                    } else if (buf_len >= 4 && strncmp(buf_end - 4, "<too", 4) == 0) {
+                        might_be_tool_start = true;  // Building '<too'
+                    } else if (buf_len >= 5 && strncmp(buf_end - 5, "<tool", 5) == 0) {
                         might_be_tool_start = true;  // Building '<tool'
-                    } else if (buf_len >= 6 && strcmp(buf_end - 6, "<tool_") == 0) {
+                    } else if (buf_len >= 6 && strncmp(buf_end - 6, "<tool_", 6) == 0) {
                         might_be_tool_start = true;  // Building '<tool_'
-                    } else if (buf_len >= 11 && strcmp(buf_end - 11, "<tool_call") == 0) {
-                        might_be_tool_start = true;  // Just completed '<tool_call'
+                    } else if (buf_len >= 10 && strncmp(buf_end - 10, "<tool_call", 10) == 0) {
+                        might_be_tool_start = true;  // Building full '<tool_call'
                     }
                     
                     // Check if token itself contains stop sequence fragments
