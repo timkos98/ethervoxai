@@ -619,16 +619,30 @@ ethervox_governor_status_t ethervox_governor_execute(
     // Reset iteration counter
     governor->last_iteration_count = 0;
     
-    // Clear KV cache after system prompt to prepare for new query
-    // Keep sequence 0, remove positions from system_prompt_token_count onwards
+    // Only clear KV cache if we're running low on space or this is explicitly requested
+    // This allows conversation history to accumulate naturally
     llama_memory_t mem = llama_get_memory(governor->llm_ctx);
-    llama_memory_seq_rm(mem, 0, governor->system_prompt_token_count, -1);
+    int32_t max_pos = llama_memory_seq_pos_max(mem, 0);
+    int n_ctx = llama_n_ctx(governor->llm_ctx);
     
-    // Reset KV cache position to start after system prompt
-    governor->current_kv_pos = governor->system_prompt_token_count;
-    
-    GOV_LOG("KV cache cleared: keeping system prompt (%d tokens), current_pos reset to %d",
-            governor->system_prompt_token_count, governor->current_kv_pos);
+    // Clear if we're past system prompt and getting close to context limit (>50% full)
+    if (max_pos > governor->system_prompt_token_count && max_pos > (n_ctx / 2)) {
+        // Clear everything after system prompt to start fresh
+        llama_memory_seq_rm(mem, 0, governor->system_prompt_token_count, -1);
+        governor->current_kv_pos = governor->system_prompt_token_count;
+        GOV_LOG("KV cache cleared: removed positions %d to %d (was at %d%% capacity)", 
+                governor->system_prompt_token_count, max_pos, (max_pos * 100 / n_ctx));
+    } else if (max_pos >= governor->system_prompt_token_count) {
+        // Continue from where we left off
+        governor->current_kv_pos = max_pos + 1;
+        GOV_LOG("KV cache continuing: from position %d (%d%% full)",
+                governor->current_kv_pos, (governor->current_kv_pos * 100 / n_ctx));
+    } else {
+        // First query - start after system prompt
+        governor->current_kv_pos = governor->system_prompt_token_count;
+        GOV_LOG("KV cache initialized: starting at position %d",
+                governor->current_kv_pos);
+    }
     
     const struct llama_vocab* vocab = llama_model_get_vocab(governor->llm_model);
     
