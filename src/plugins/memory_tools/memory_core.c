@@ -179,7 +179,7 @@ static ethervox_memory_tag_index_t* get_tag_index(
     return idx;
 }
 
-// Internal function to add memory with explicit ID and timestamp (for import)
+// Internal function for adding memories with explicit IDs (used by import)
 int memory_store_add_internal(
     ethervox_memory_store_t* store,
     const char* text,
@@ -222,7 +222,7 @@ int memory_store_add_internal(
         store->entry_capacity = new_capacity;
     }
     
-    // Create new entry
+    // Create new entry with explicit IDs and timestamp
     ethervox_memory_entry_t* entry = &store->entries[store->entry_count];
     memset(entry, 0, sizeof(ethervox_memory_entry_t));
     

@@ -332,7 +332,6 @@ static int execute_tool_call(
     return ret;
 }
 
-
 int ethervox_governor_load_model(ethervox_governor_t* governor, const char* model_path) {
     if (!governor || !model_path) return -1;
     
@@ -647,8 +646,19 @@ ethervox_governor_status_t ethervox_governor_execute(
     const struct llama_vocab* vocab = llama_model_get_vocab(governor->llm_model);
     
     // Build conversation history in Qwen2.5 format
+    // Include recent context from memory if available
     char conversation[8192];
-    snprintf(conversation, sizeof(conversation), 
+    size_t conv_pos = 0;
+    
+    // Check if we have a memory store to get recent conversation turns
+    // We want the actual RECENT conversation, not a search result
+    // Access the memory store directly if possible through the tool registry
+    
+    // For now, just use the current user query without trying to inject old context
+    // The memory is better used explicitly via memory_search tool when needed
+    
+    // Add current user query
+    conv_pos += snprintf(conversation + conv_pos, sizeof(conversation) - conv_pos,
         "<|im_start|>user\n%s<|im_end|>\n<|im_start|>assistant\n", user_query);
     
     // Track how much of conversation has been processed to avoid re-processing

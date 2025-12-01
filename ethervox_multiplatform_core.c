@@ -27,6 +27,9 @@
 #define LOGI(...) ETHERVOX_LOGI(__VA_ARGS__)
 #define LOGE(...) ETHERVOX_LOGE(__VA_ARGS__)
 
+// Global debug mode flag (default to enabled, can be toggled at runtime)
+int g_ethervox_debug_enabled = 1;
+
 // Global log callback for sending C logs to Java/Kotlin debug window
 ethervox_log_callback_t g_ethervox_log_callback = NULL;
 
@@ -665,11 +668,10 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_processDialogue(
          response.text ? response.text : "(null)", response.confidence * 100.0f,
          response.conversation_ended ? "true" : "false");
     
-    // Format response with punctuated prompt, confidence and conversation_ended flag appended
-    char formatted_response[2048];
-    snprintf(formatted_response, sizeof(formatted_response), "%s|%s|%.0f|%s", 
-             response.text ? response.text : "No response",
-             response.user_prompt_punctuated ? response.user_prompt_punctuated : text,
+    // Format response with confidence and conversation_ended flag appended
+    char formatted_response[1024];
+    snprintf(formatted_response, sizeof(formatted_response), "%s|%.0f|%s", 
+             response.text ? response.text : "No response", 
              response.confidence * 100.0f,
              response.conversation_ended ? "true" : "false");
     
@@ -795,13 +797,12 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_processDialogueStreamingN
     
     // Get callback methods
     jclass callback_class = (*env)->GetObjectClass(env, callback);
-    jmethodID on_punctuated = (*env)->GetMethodID(env, callback_class, "onPunctuatedPrompt", "(Ljava/lang/String;)V");
     jmethodID on_token = (*env)->GetMethodID(env, callback_class, "onToken", "(Ljava/lang/String;)V");
     jmethodID on_complete = (*env)->GetMethodID(env, callback_class, "onComplete", "(Z)V");
     jmethodID on_error = (*env)->GetMethodID(env, callback_class, "onError", "(Ljava/lang/String;)V");
     jmethodID on_governor_progress = (*env)->GetMethodID(env, callback_class, "onGovernorProgress", "(Ljava/lang/String;Ljava/lang/String;)V");
     
-    if (!on_punctuated || !on_token || !on_complete || !on_error) {
+    if (!on_token || !on_complete || !on_error) {
         LOGE("Failed to get callback methods");
         (*env)->ReleaseStringUTFChars(env, user_text, text);
         (*env)->ReleaseStringUTFChars(env, language, lang);
@@ -841,13 +842,6 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_processDialogueStreamingN
     
     LOGI("Intent detected: %s (confidence: %.2f)", 
          ethervox_intent_type_to_string(intent.type), intent.confidence);
-    
-    // Send punctuated prompt back to caller
-    if (intent.raw_text) {
-        jstring punctuated = create_jstring(env, intent.raw_text);
-        (*env)->CallVoidMethod(env, callback, on_punctuated, punctuated);
-        (*env)->DeleteLocalRef(env, punctuated);
-    }
     
     // Process with LLM using streaming
     result = ethervox_dialogue_process_llm_stream(g_dialogue_engine, &intent, NULL, 

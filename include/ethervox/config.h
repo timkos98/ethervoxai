@@ -161,7 +161,7 @@ extern "C" {
 #endif
 
 // ===========================================================================
-// Governor (Qwen2.5-0.5B Tool Orchestration) Configuration
+// Governor (Qwen2.5-3B-Instruct Quantized Tool Orchestration) Configuration
 // ===========================================================================
 
 #ifndef ETHERVOX_GOVERNOR_CONFIDENCE_THRESHOLD
