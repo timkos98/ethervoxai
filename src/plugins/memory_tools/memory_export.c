@@ -12,6 +12,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <dirent.h>
+#include <sys/stat.h>
 
 // Internal function from memory_core.c for importing with explicit ID/timestamp
 extern int memory_store_add_internal(
@@ -514,5 +516,96 @@ int ethervox_memory_import(
     ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
                 "Imported %u entries from %s", loaded, filepath);
     
+    return 0;
+}
+
+int ethervox_memory_load_previous_session(
+    ethervox_memory_store_t* store,
+    uint32_t* turns_loaded
+) {
+    if (!store || !store->is_initialized) {
+        return -1;
+    }
+    
+    // If no storage directory is set, nothing to load
+    if (!store->storage_filepath[0]) {
+        ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
+                    "No storage directory set, skipping previous session load");
+        if (turns_loaded) *turns_loaded = 0;
+        return 0;
+    }
+    
+    // Extract directory path from current storage filepath
+    char storage_dir[512];
+    strncpy(storage_dir, store->storage_filepath, sizeof(storage_dir) - 1);
+    storage_dir[sizeof(storage_dir) - 1] = '\0';
+    
+    char* last_slash = strrchr(storage_dir, '/');
+    if (!last_slash) {
+        ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__,
+                    "Invalid storage filepath: %s", store->storage_filepath);
+        return -1;
+    }
+    *last_slash = '\0';  // Truncate to get directory
+    
+    // Get basename of current session for comparison
+    const char* current_basename = last_slash + 1;
+    
+    // Find most recent previous session file
+    DIR* dir = opendir(storage_dir);
+    if (!dir) {
+        ethervox_log(ETHERVOX_LOG_LEVEL_WARN, __FILE__, __LINE__, __func__,
+                    "Failed to open storage directory: %s", storage_dir);
+        if (turns_loaded) *turns_loaded = 0;
+        return 0;
+    }
+    
+    struct dirent* entry;
+    time_t latest_time = 0;
+    char latest_session[512] = {0};
+    
+    while ((entry = readdir(dir)) != NULL) {
+        // Look for .jsonl files
+        size_t len = strlen(entry->d_name);
+        if (len > 6 && strcmp(entry->d_name + len - 6, ".jsonl") == 0) {
+            // Skip current session file by name
+            if (strcmp(entry->d_name, current_basename) == 0) {
+                continue;
+            }
+            
+            char fullpath[512];
+            snprintf(fullpath, sizeof(fullpath), "%s/%s", storage_dir, entry->d_name);
+            
+            struct stat st;
+            if (stat(fullpath, &st) == 0 && st.st_mtime > latest_time) {
+                latest_time = st.st_mtime;
+                snprintf(latest_session, sizeof(latest_session), "%s", fullpath);
+            }
+        }
+    }
+    closedir(dir);
+    
+    // Load the latest previous session if found
+    if (latest_session[0] != '\0') {
+        uint32_t loaded = 0;
+        int result = ethervox_memory_import(store, latest_session, &loaded);
+        
+        if (result == 0 && loaded > 0) {
+            ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
+                        "Loaded %u previous memories from %s", loaded, latest_session);
+            if (turns_loaded) *turns_loaded = loaded;
+            return 0;
+        } else if (result != 0) {
+            ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__,
+                        "Failed to import previous session from %s", latest_session);
+            if (turns_loaded) *turns_loaded = 0;
+            return -1;
+        }
+    }
+    
+    // No previous session found
+    ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
+                "No previous session file found");
+    if (turns_loaded) *turns_loaded = 0;
     return 0;
 }

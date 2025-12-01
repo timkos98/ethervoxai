@@ -1113,8 +1113,18 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_setMemoryStorageDir(
     // This will enable file persistence
     if (ethervox_memory_init(g_memory_store, NULL, dir_path) != 0) {
         LOGE("Failed to set memory storage directory: %s", dir_path);
-    } else {
-        LOGI("Memory storage directory set to: %s", dir_path);
+        (*env)->ReleaseStringUTFChars(env, storage_dir, dir_path);
+        return;
+    }
+    
+    LOGI("Memory storage directory set to: %s", g_memory_store->storage_filepath);
+    
+    // Use platform-agnostic function to load previous session
+    // This handles all the complexity of finding the most recent file,
+    // preserving tags, IDs, and adding the "imported" tag
+    uint32_t turns_loaded = 0;
+    if (ethervox_memory_load_previous_session(g_memory_store, &turns_loaded) == 0 && turns_loaded > 0) {
+        LOGI("Memory: Loaded %u previous memories from last session", turns_loaded);
     }
     
     (*env)->ReleaseStringUTFChars(env, storage_dir, dir_path);

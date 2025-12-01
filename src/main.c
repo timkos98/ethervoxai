@@ -911,48 +911,13 @@ int main(int argc, char** argv) {
     if (memory_dir) {
         printf("Memory: Persistent storage at %s\n", memory.storage_filepath);
         
-        // Auto-load most recent session file (excluding current session)
-        // This allows continuing from previous conversations
-        char latest_session[512] = {0};
-        DIR* dir = opendir(memory_dir);
-        if (dir) {
-            struct dirent* entry;
-            time_t latest_time = 0;
-            
-            // Get basename of current session for comparison
-            const char* current_basename = strrchr(memory.storage_filepath, '/');
-            if (!current_basename) current_basename = memory.storage_filepath;
-            else current_basename++;  // Skip the /
-            
-            while ((entry = readdir(dir)) != NULL) {
-                // Look for .jsonl files
-                size_t len = strlen(entry->d_name);
-                if (len > 6 && strcmp(entry->d_name + len - 6, ".jsonl") == 0) {
-                    // Skip current session file by name
-                    if (strcmp(entry->d_name, current_basename) == 0) {
-                        continue;
-                    }
-                    
-                    char fullpath[512];
-                    snprintf(fullpath, sizeof(fullpath), "%s/%s", memory_dir, entry->d_name);
-                    
-                    struct stat st;
-                    if (stat(fullpath, &st) == 0 && st.st_mtime > latest_time) {
-                        latest_time = st.st_mtime;
-                        snprintf(latest_session, sizeof(latest_session), "%s", fullpath);
-                    }
-                }
-            }
-            closedir(dir);
-            
-            // Load the latest previous session if found
-            if (latest_session[0] != '\0') {
-                uint32_t turns_loaded = 0;
-                if (ethervox_memory_import(&memory, latest_session, &turns_loaded) == 0 && turns_loaded > 0) {
-                    if (!quiet_mode) {
-                        printf("Memory: Loaded %u previous memories from %s\n", turns_loaded, latest_session);
-                    }
-                }
+        // Use platform-agnostic function to load previous session
+        // This handles all the complexity of finding the most recent file,
+        // preserving tags, IDs, and adding the "imported" tag
+        uint32_t turns_loaded = 0;
+        if (ethervox_memory_load_previous_session(&memory, &turns_loaded) == 0 && turns_loaded > 0) {
+            if (!quiet_mode) {
+                printf("Memory: Loaded %u previous memories from last session\n", turns_loaded);
             }
         }
     } else {

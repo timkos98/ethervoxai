@@ -229,7 +229,10 @@ int ethervox_memory_export(
 );
 
 /**
- * TOOL: memory_import - Load previous session
+ * Import memories from a file (JSONL format)
+ * Handles all operations: ADD, DELETE, UPDATE, UPDATE_TEXT
+ * Automatically appends "imported" tag to all imported memories
+ * Preserves original memory IDs, timestamps, and all tags
  * 
  * @param store Memory store
  * @param filepath Input file path
@@ -239,6 +242,23 @@ int ethervox_memory_export(
 int ethervox_memory_import(
     ethervox_memory_store_t* store,
     const char* filepath,
+    uint32_t* turns_loaded
+);
+
+/**
+ * Platform-agnostic function to load the most recent previous session
+ * Automatically finds and imports the latest .jsonl file from the storage directory
+ * (excluding the current session file)
+ * 
+ * This ensures memory continuity across app restarts - important memories like
+ * user names, preferences, and high-importance items are preserved.
+ * 
+ * @param store Memory store (must be initialized with storage directory)
+ * @param turns_loaded Output: number of turns loaded (can be NULL)
+ * @return 0 on success, negative on error
+ */
+int ethervox_memory_load_previous_session(
+    ethervox_memory_store_t* store,
     uint32_t* turns_loaded
 );
 
