@@ -105,16 +105,16 @@ static bool is_mobile_platform(void) {
 
 int ethervox_tool_registry_build_system_prompt(
     const ethervox_tool_registry_t* registry,
+    const chat_template_t* chat_template,
     char* buffer,
     size_t buffer_size
 ) {
-    if (!registry || !buffer || buffer_size == 0) {
+    if (!registry || !chat_template || !buffer || buffer_size == 0) {
         return -1;
     }
     
     bool is_mobile = is_mobile_platform();
     
-    // Qwen2.5 uses <|im_start|> and <|im_end|> format
     // Desktop: More detailed with memory/file tools emphasized
     // Mobile: Concise, focused on voice interaction, but MUST use tools
     const char* platform_context = is_mobile
@@ -131,9 +131,10 @@ int ethervox_tool_registry_build_system_prompt(
           "Do NOT try to answer without searching memory first.";
     
     int written = snprintf(buffer, buffer_size,
-        "<|im_start|>system\n"
+        "%s"
         "%s\n\n"
         "Available tools:\n",
+        chat_template->system_start,
         platform_context
     );
     

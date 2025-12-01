@@ -1,6 +1,7 @@
 add_library(ethervox_governor STATIC
     governor.c
     tool_registry.c
+    chat_template.c
 )
 
 target_include_directories(ethervox_governor PRIVATE

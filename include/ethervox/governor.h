@@ -17,6 +17,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <time.h>
+#include "chat_template.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -194,6 +195,7 @@ const ethervox_tool_t* ethervox_tool_registry_find(
  */
 int ethervox_tool_registry_build_system_prompt(
     const ethervox_tool_registry_t* registry,
+    const chat_template_t* chat_template,
     char* buffer,
     size_t buffer_size
 );

@@ -11,6 +11,7 @@
  */
 
 #include "ethervox/governor.h"
+#include "ethervox/chat_template.h"
 #include "ethervox/config.h"
 #include <stdlib.h>
 #include <string.h>
@@ -41,10 +42,10 @@ struct ethervox_governor {
     llama_pos current_kv_pos;  // Track current position in KV cache
     char* model_path;
     
-    // Pre-tokenized static wrappers for speed optimization
-    llama_token* tool_result_prefix_tokens;  // "<|im_start|>user\n<tool_result>"
+    // Pre-tokenized static wrappers for speed optimization (from chat_template)
+    llama_token* tool_result_prefix_tokens;  // chat_template->tool_result_start
     int tool_result_prefix_len;
-    llama_token* tool_result_suffix_tokens;  // "</tool_result><|im_end|>\n<|im_start|>assistant\n"
+    llama_token* tool_result_suffix_tokens;  // chat_template->tool_result_end
     int tool_result_suffix_len;
 #else
     void* llm_model;  // Placeholder
@@ -63,6 +64,9 @@ struct ethervox_governor {
     context_manager_state_t context_manager;
     conversation_history_t conversation_history;
     uint32_t turn_counter;
+    
+    // Chat template for formatting
+    const chat_template_t* chat_template;
 };
 
 /**
@@ -377,6 +381,10 @@ int ethervox_governor_load_model(ethervox_governor_t* governor, const char* mode
     
     GOV_LOG("[Governor] Loading model: %s", model_path);
     
+    // Auto-detect chat template from model path
+    governor->chat_template = chat_template_get(CHAT_TEMPLATE_AUTO, model_path);
+    GOV_LOG("[Governor] Detected chat template type: %d", governor->chat_template->type);
+    
     // Initialize llama.cpp backend
     llama_backend_init();
     
@@ -425,7 +433,8 @@ int ethervox_governor_load_model(ethervox_governor_t* governor, const char* mode
     // Build system prompt from tool registry
     // Increased to 16KB to accommodate all tools and examples
     char system_prompt[16384];
-    if (ethervox_tool_registry_build_system_prompt(governor->tool_registry, 
+    if (ethervox_tool_registry_build_system_prompt(governor->tool_registry,
+                                                   governor->chat_template,
                                                    system_prompt, sizeof(system_prompt)) != 0) {
         GOV_ERROR("Failed to build system prompt");
         llama_free(governor->llm_ctx);
@@ -514,8 +523,8 @@ int ethervox_governor_load_model(ethervox_governor_t* governor, const char* mode
     governor->model_path = strdup(model_path);
     
     // Pre-tokenize static tool result wrappers for speed
-    const char* prefix = "<|im_start|>user\n<tool_result>";
-    const char* suffix = "</tool_result><|im_end|>\n<|im_start|>assistant\n";
+    const char* prefix = governor->chat_template->tool_result_start;
+    const char* suffix = governor->chat_template->tool_result_end;
     
     governor->tool_result_prefix_len = -llama_tokenize(vocab, prefix, strlen(prefix), NULL, 0, false, false);
     governor->tool_result_prefix_tokens = malloc(governor->tool_result_prefix_len * sizeof(llama_token));
@@ -663,9 +672,13 @@ ethervox_governor_status_t ethervox_governor_execute(
     // For now, just use the current user query without trying to inject old context
     // The memory is better used explicitly via memory_search tool when needed
     
-    // Add current user query
+    // Add current user query using chat template
     conv_pos += snprintf(conversation + conv_pos, sizeof(conversation) - conv_pos,
-        "<|im_start|>user\n%s<|im_end|>\n<|im_start|>assistant\n", user_query);
+        "%s%s%s%s", 
+        governor->chat_template->user_start,
+        user_query,
+        governor->chat_template->user_end,
+        governor->chat_template->assistant_start);
     
     // Track how much of conversation has been processed to avoid re-processing
     size_t processed_length = 0;
@@ -948,21 +961,14 @@ ethervox_governor_status_t ethervox_governor_execute(
                     }
                     
                     // Check if token itself contains stop sequence fragments
-                    bool is_stop_fragment = (
-                        strstr(token_text, "im_end") != NULL ||
-                        strstr(token_text, "im_start") != NULL ||
-                        strstr(token_text, "|>") != NULL ||
-                        strstr(token_text, "<|") != NULL ||
-                        strcmp(token_text, "<") == 0 ||
-                        strcmp(token_text, ">") == 0 ||
-                        strcmp(token_text, "|") == 0
-                    );
+                    bool is_stop_fragment = chat_template_has_stop_sequence(
+                        governor->chat_template, token_text);
                     
                     // Only stream if we're sure it's not a tool call, no STOP sequences, and not a stop fragment
                     should_stream = !might_be_tool_start && 
                                    !is_stop_fragment &&
                                    !strstr(llm_response_buffer, "STOP") && 
-                                   !strstr(llm_response_buffer, "<|im_end|>");
+                                   !chat_template_has_stop_sequence(governor->chat_template, llm_response_buffer);
                 }
                 
                 if (should_stream && token_callback) {
@@ -971,12 +977,14 @@ ethervox_governor_status_t ethervox_governor_execute(
             }
             
             // Check for stop sequences in the accumulated response
-            if (strstr(llm_response_buffer, "<|im_end|>") || 
+            if (chat_template_has_stop_sequence(governor->chat_template, llm_response_buffer) ||
                 strstr(llm_response_buffer, "STOP")) {
                 // Remove the stop sequence from output
-                char* stop_pos = strstr(llm_response_buffer, "<|im_end|>");
-                if (stop_pos) *stop_pos = '\0';
-                stop_pos = strstr(llm_response_buffer, "STOP");
+                for (int i = 0; governor->chat_template->stop_sequences[i] != NULL; i++) {
+                    char* stop_pos = strstr(llm_response_buffer, governor->chat_template->stop_sequences[i]);
+                    if (stop_pos) *stop_pos = '\0';
+                }
+                char* stop_pos = strstr(llm_response_buffer, "STOP");
                 if (stop_pos) *stop_pos = '\0';
                 GOV_LOG("Stop sequence detected, ending generation");
                 break;
@@ -1015,17 +1023,15 @@ ethervox_governor_status_t ethervox_governor_execute(
                 break;  // Tool call complete, stop immediately
             }
             
-            // 2. Stop if we see <|im_start|> or <tool_result> (model is hallucinating examples from system prompt)
-            if (strstr(llm_response_buffer, "<|im_start") || strstr(llm_response_buffer, "<tool_result")) {
+            // 2. Stop if we see role markers or <tool_result> (model is hallucinating examples from system prompt)
+            if (strstr(llm_response_buffer, governor->chat_template->user_start) || 
+                strstr(llm_response_buffer, governor->chat_template->system_start) ||
+                strstr(llm_response_buffer, "<tool_result")) {
                 // Truncate the buffer to remove the hallucinated content
-                char* hallucination_start = strstr(llm_response_buffer, "<|im_start");
+                char* hallucination_start = strstr(llm_response_buffer, governor->chat_template->user_start);
+                if (!hallucination_start) hallucination_start = strstr(llm_response_buffer, governor->chat_template->system_start);
                 if (!hallucination_start) hallucination_start = strstr(llm_response_buffer, "<tool_result");
                 if (hallucination_start) *hallucination_start = '\0';
-                
-                // Also remove any <|im variant before it
-                char* end_marker = strstr(llm_response_buffer, " <|im");
-                if (!end_marker) end_marker = strstr(llm_response_buffer, "<|im");
-                if (end_marker) *end_marker = '\0';
                 
                 GOV_LOG("Early stop: Hallucination detected and truncated (%d tokens)", generated_count);
                 break;
@@ -1118,7 +1124,7 @@ ethervox_governor_status_t ethervox_governor_execute(
                     // Instead of: concatenate string → tokenize → decode
                     // Do: decode prefix tokens → decode result tokens → decode suffix tokens
                     
-                    // Decode prefix: "<|im_start|>user\n<tool_result>"
+                    // Decode prefix: chat_template->tool_result_start
                     if (governor->tool_result_prefix_tokens && governor->tool_result_prefix_len > 0) {
                         // Check if prefix will fit in context
                         int n_ctx = llama_n_ctx(governor->llm_ctx);
@@ -1197,7 +1203,7 @@ ethervox_governor_status_t ethervox_governor_execute(
                         }
                     }
                     
-                    // Decode suffix: "</tool_result><|im_end|>\n<|im_start|>assistant\n"
+                    // Decode suffix: chat_template->tool_result_end
                     if (governor->tool_result_suffix_tokens && governor->tool_result_suffix_len > 0) {
                         // Check if suffix will fit in context
                         int n_ctx = llama_n_ctx(governor->llm_ctx);
@@ -1241,8 +1247,8 @@ ethervox_governor_status_t ethervox_governor_execute(
                     }
                     
                     // Add error tokens to LLM context using same approach as tool_result
-                    // Decode prefix: "<|im_start|>user\n" (error is treated like a tool_result for format purposes)
-                    const char* error_prefix = "<|im_start|>user\n";
+                    // Decode prefix (error is treated like a tool_result for format purposes)
+                    const char* error_prefix = governor->chat_template->user_start;
                     int prefix_n_tokens = -llama_tokenize(vocab, error_prefix, strlen(error_prefix), NULL, 0, false, false);
                     if (prefix_n_tokens > 0) {
                         int n_ctx = llama_n_ctx(governor->llm_ctx);
@@ -1318,8 +1324,8 @@ ethervox_governor_status_t ethervox_governor_execute(
                         }
                     }
                     
-                    // Add suffix: "<|im_end|>\n<|im_start|>assistant\n"
-                    const char* error_suffix = "<|im_end|>\n<|im_start|>assistant\n";
+                    // Add suffix to return to assistant context
+                    const char* error_suffix = governor->chat_template->assistant_start;
                     int suffix_n_tokens = -llama_tokenize(vocab, error_suffix, strlen(error_suffix), NULL, 0, false, false);
                     if (suffix_n_tokens > 0) {
                         int n_ctx = llama_n_ctx(governor->llm_ctx);
