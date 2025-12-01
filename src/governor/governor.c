@@ -546,6 +546,9 @@ ethervox_governor_status_t ethervox_governor_execute(
     // Reset KV cache position to start after system prompt
     governor->current_kv_pos = governor->system_prompt_token_count;
     
+    GOV_LOG("KV cache cleared: keeping system prompt (%d tokens), current_pos reset to %d",
+            governor->system_prompt_token_count, governor->current_kv_pos);
+    
     const struct llama_vocab* vocab = llama_model_get_vocab(governor->llm_model);
     
     // Build conversation history in Qwen2.5 format
@@ -603,6 +606,22 @@ ethervox_governor_status_t ethervox_governor_execute(
             }
             
             llama_tokenize(vocab, new_content, new_content_len, tokens, n_tokens, false, false);
+            
+            // Check if we have space in the context window
+            int n_ctx = llama_n_ctx(governor->llm_ctx);
+            if (governor->current_kv_pos + n_tokens > n_ctx) {
+                GOV_ERROR("Context window would be exceeded: current_pos=%d + n_tokens=%d > n_ctx=%d",
+                         governor->current_kv_pos, n_tokens, n_ctx);
+                free(tokens);
+                if (error) {
+                    char err_msg[256];
+                    snprintf(err_msg, sizeof(err_msg), 
+                            "Context window exceeded (%d + %d > %d). Try a shorter query.",
+                            governor->current_kv_pos, n_tokens, n_ctx);
+                    *error = strdup(err_msg);
+                }
+                return ETHERVOX_GOVERNOR_ERROR;
+            }
             
             // Create batch with explicit positions starting at current KV position
             llama_batch batch = llama_batch_init(n_tokens, 0, 1);
@@ -882,18 +901,28 @@ ethervox_governor_status_t ethervox_governor_execute(
                     
                     // Decode prefix: "<|im_start|>user\n<tool_result>"
                     if (governor->tool_result_prefix_tokens && governor->tool_result_prefix_len > 0) {
-                        llama_batch prefix_batch = llama_batch_init(governor->tool_result_prefix_len, 0, 1);
-                        prefix_batch.n_tokens = governor->tool_result_prefix_len;
-                        for (int j = 0; j < governor->tool_result_prefix_len; j++) {
-                            prefix_batch.token[j] = governor->tool_result_prefix_tokens[j];
-                            prefix_batch.pos[j] = governor->current_kv_pos + j;
-                            prefix_batch.n_seq_id[j] = 1;
-                            prefix_batch.seq_id[j][0] = 0;
-                            prefix_batch.logits[j] = false;
+                        // Check if prefix will fit in context
+                        int n_ctx = llama_n_ctx(governor->llm_ctx);
+                        if (governor->current_kv_pos + governor->tool_result_prefix_len > n_ctx) {
+                            GOV_ERROR("Cannot add tool result prefix: would exceed context (pos=%d, prefix=%d, ctx=%d)",
+                                     governor->current_kv_pos, governor->tool_result_prefix_len, n_ctx);
+                        } else {
+                            llama_batch prefix_batch = llama_batch_init(governor->tool_result_prefix_len, 0, 1);
+                            prefix_batch.n_tokens = governor->tool_result_prefix_len;
+                            for (int j = 0; j < governor->tool_result_prefix_len; j++) {
+                                prefix_batch.token[j] = governor->tool_result_prefix_tokens[j];
+                                prefix_batch.pos[j] = governor->current_kv_pos + j;
+                                prefix_batch.n_seq_id[j] = 1;
+                                prefix_batch.seq_id[j][0] = 0;
+                                prefix_batch.logits[j] = false;
+                            }
+                            if (llama_decode(governor->llm_ctx, prefix_batch) != 0) {
+                                GOV_ERROR("Failed to decode tool result prefix at pos %d", governor->current_kv_pos);
+                            } else {
+                                governor->current_kv_pos += governor->tool_result_prefix_len;
+                            }
+                            llama_batch_free(prefix_batch);
                         }
-                        llama_decode(governor->llm_ctx, prefix_batch);
-                        llama_batch_free(prefix_batch);
-                        governor->current_kv_pos += governor->tool_result_prefix_len;
                     }
                     
                     // Tokenize and decode actual tool result (in chunks if large)
@@ -951,18 +980,28 @@ ethervox_governor_status_t ethervox_governor_execute(
                     
                     // Decode suffix: "</tool_result><|im_end|>\n<|im_start|>assistant\n"
                     if (governor->tool_result_suffix_tokens && governor->tool_result_suffix_len > 0) {
-                        llama_batch suffix_batch = llama_batch_init(governor->tool_result_suffix_len, 0, 1);
-                        suffix_batch.n_tokens = governor->tool_result_suffix_len;
-                        for (int j = 0; j < governor->tool_result_suffix_len; j++) {
-                            suffix_batch.token[j] = governor->tool_result_suffix_tokens[j];
-                            suffix_batch.pos[j] = governor->current_kv_pos + j;
-                            suffix_batch.n_seq_id[j] = 1;
-                            suffix_batch.seq_id[j][0] = 0;
-                            suffix_batch.logits[j] = (j == governor->tool_result_suffix_len - 1);  // Only last needs logits
+                        // Check if suffix will fit in context
+                        int n_ctx = llama_n_ctx(governor->llm_ctx);
+                        if (governor->current_kv_pos + governor->tool_result_suffix_len > n_ctx) {
+                            GOV_ERROR("Cannot add tool result suffix: would exceed context (pos=%d, suffix=%d, ctx=%d)",
+                                     governor->current_kv_pos, governor->tool_result_suffix_len, n_ctx);
+                        } else {
+                            llama_batch suffix_batch = llama_batch_init(governor->tool_result_suffix_len, 0, 1);
+                            suffix_batch.n_tokens = governor->tool_result_suffix_len;
+                            for (int j = 0; j < governor->tool_result_suffix_len; j++) {
+                                suffix_batch.token[j] = governor->tool_result_suffix_tokens[j];
+                                suffix_batch.pos[j] = governor->current_kv_pos + j;
+                                suffix_batch.n_seq_id[j] = 1;
+                                suffix_batch.seq_id[j][0] = 0;
+                                suffix_batch.logits[j] = (j == governor->tool_result_suffix_len - 1);  // Only last needs logits
+                            }
+                            if (llama_decode(governor->llm_ctx, suffix_batch) != 0) {
+                                GOV_ERROR("Failed to decode tool result suffix at pos %d", governor->current_kv_pos);
+                            } else {
+                                governor->current_kv_pos += governor->tool_result_suffix_len;
+                            }
+                            llama_batch_free(suffix_batch);
                         }
-                        llama_decode(governor->llm_ctx, suffix_batch);
-                        llama_batch_free(suffix_batch);
-                        governor->current_kv_pos += governor->tool_result_suffix_len;
                     }
                     
                     // Update processed_length - no string concat needed
@@ -987,22 +1026,31 @@ ethervox_governor_status_t ethervox_governor_execute(
                     const char* error_prefix = "<|im_start|>user\n";
                     int prefix_n_tokens = -llama_tokenize(vocab, error_prefix, strlen(error_prefix), NULL, 0, false, false);
                     if (prefix_n_tokens > 0) {
-                        llama_token* prefix_tokens = malloc(prefix_n_tokens * sizeof(llama_token));
-                        if (prefix_tokens) {
-                            llama_tokenize(vocab, error_prefix, strlen(error_prefix), prefix_tokens, prefix_n_tokens, false, false);
-                            llama_batch prefix_batch = llama_batch_init(prefix_n_tokens, 0, 1);
-                            prefix_batch.n_tokens = prefix_n_tokens;
-                            for (int j = 0; j < prefix_n_tokens; j++) {
-                                prefix_batch.token[j] = prefix_tokens[j];
-                                prefix_batch.pos[j] = governor->current_kv_pos + j;
-                                prefix_batch.n_seq_id[j] = 1;
-                                prefix_batch.seq_id[j][0] = 0;
-                                prefix_batch.logits[j] = false;
+                        int n_ctx = llama_n_ctx(governor->llm_ctx);
+                        if (governor->current_kv_pos + prefix_n_tokens > n_ctx) {
+                            GOV_ERROR("Cannot add error prefix: would exceed context (pos=%d, prefix=%d, ctx=%d)",
+                                     governor->current_kv_pos, prefix_n_tokens, n_ctx);
+                        } else {
+                            llama_token* prefix_tokens = malloc(prefix_n_tokens * sizeof(llama_token));
+                            if (prefix_tokens) {
+                                llama_tokenize(vocab, error_prefix, strlen(error_prefix), prefix_tokens, prefix_n_tokens, false, false);
+                                llama_batch prefix_batch = llama_batch_init(prefix_n_tokens, 0, 1);
+                                prefix_batch.n_tokens = prefix_n_tokens;
+                                for (int j = 0; j < prefix_n_tokens; j++) {
+                                    prefix_batch.token[j] = prefix_tokens[j];
+                                    prefix_batch.pos[j] = governor->current_kv_pos + j;
+                                    prefix_batch.n_seq_id[j] = 1;
+                                    prefix_batch.seq_id[j][0] = 0;
+                                    prefix_batch.logits[j] = false;
+                                }
+                                if (llama_decode(governor->llm_ctx, prefix_batch) != 0) {
+                                    GOV_ERROR("Failed to decode error prefix at pos %d", governor->current_kv_pos);
+                                } else {
+                                    governor->current_kv_pos += prefix_n_tokens;
+                                }
+                                llama_batch_free(prefix_batch);
+                                free(prefix_tokens);
                             }
-                            llama_decode(governor->llm_ctx, prefix_batch);
-                            llama_batch_free(prefix_batch);
-                            governor->current_kv_pos += prefix_n_tokens;
-                            free(prefix_tokens);
                         }
                     }
                     
@@ -1038,7 +1086,11 @@ ethervox_governor_status_t ethervox_governor_execute(
                                     error_batch.seq_id[j][0] = 0;
                                     error_batch.logits[j] = false;
                                 }
-                                llama_decode(governor->llm_ctx, error_batch);
+                                if (llama_decode(governor->llm_ctx, error_batch) != 0) {
+                                    GOV_ERROR("Failed to decode error message chunk at pos %d", governor->current_kv_pos);
+                                    llama_batch_free(error_batch);
+                                    break;
+                                }
                                 llama_batch_free(error_batch);
                                 governor->current_kv_pos += batch_size;
                                 tokens_processed += batch_size;
@@ -1051,22 +1103,31 @@ ethervox_governor_status_t ethervox_governor_execute(
                     const char* error_suffix = "<|im_end|>\n<|im_start|>assistant\n";
                     int suffix_n_tokens = -llama_tokenize(vocab, error_suffix, strlen(error_suffix), NULL, 0, false, false);
                     if (suffix_n_tokens > 0) {
-                        llama_token* suffix_tokens = malloc(suffix_n_tokens * sizeof(llama_token));
-                        if (suffix_tokens) {
-                            llama_tokenize(vocab, error_suffix, strlen(error_suffix), suffix_tokens, suffix_n_tokens, false, false);
-                            llama_batch suffix_batch = llama_batch_init(suffix_n_tokens, 0, 1);
-                            suffix_batch.n_tokens = suffix_n_tokens;
-                            for (int j = 0; j < suffix_n_tokens; j++) {
-                                suffix_batch.token[j] = suffix_tokens[j];
-                                suffix_batch.pos[j] = governor->current_kv_pos + j;
-                                suffix_batch.n_seq_id[j] = 1;
-                                suffix_batch.seq_id[j][0] = 0;
-                                suffix_batch.logits[j] = (j == suffix_n_tokens - 1);
+                        int n_ctx = llama_n_ctx(governor->llm_ctx);
+                        if (governor->current_kv_pos + suffix_n_tokens > n_ctx) {
+                            GOV_ERROR("Cannot add error suffix: would exceed context (pos=%d, suffix=%d, ctx=%d)",
+                                     governor->current_kv_pos, suffix_n_tokens, n_ctx);
+                        } else {
+                            llama_token* suffix_tokens = malloc(suffix_n_tokens * sizeof(llama_token));
+                            if (suffix_tokens) {
+                                llama_tokenize(vocab, error_suffix, strlen(error_suffix), suffix_tokens, suffix_n_tokens, false, false);
+                                llama_batch suffix_batch = llama_batch_init(suffix_n_tokens, 0, 1);
+                                suffix_batch.n_tokens = suffix_n_tokens;
+                                for (int j = 0; j < suffix_n_tokens; j++) {
+                                    suffix_batch.token[j] = suffix_tokens[j];
+                                    suffix_batch.pos[j] = governor->current_kv_pos + j;
+                                    suffix_batch.n_seq_id[j] = 1;
+                                    suffix_batch.seq_id[j][0] = 0;
+                                    suffix_batch.logits[j] = (j == suffix_n_tokens - 1);
+                                }
+                                if (llama_decode(governor->llm_ctx, suffix_batch) != 0) {
+                                    GOV_ERROR("Failed to decode error suffix at pos %d", governor->current_kv_pos);
+                                } else {
+                                    governor->current_kv_pos += suffix_n_tokens;
+                                }
+                                llama_batch_free(suffix_batch);
+                                free(suffix_tokens);
                             }
-                            llama_decode(governor->llm_ctx, suffix_batch);
-                            llama_batch_free(suffix_batch);
-                            governor->current_kv_pos += suffix_n_tokens;
-                            free(suffix_tokens);
                         }
                     }
                     
@@ -1081,6 +1142,17 @@ ethervox_governor_status_t ethervox_governor_execute(
             // (unless we're at max iterations)
             if (iteration + 1 < governor->config.max_iterations) {
                 continue;
+            } else {
+                // Max iterations reached after tool execution - return what we have
+                GOV_LOG("Max iterations reached after tool execution, returning last response");
+                if (response) {
+                    *response = strdup(llm_response);
+                }
+                if (progress_callback) {
+                    progress_callback(ETHERVOX_GOVERNOR_EVENT_COMPLETE,
+                                    "Max iterations reached", user_data);
+                }
+                return ETHERVOX_GOVERNOR_TIMEOUT;
             }
         } else {
             // No tools executed - this is a final response
@@ -1102,11 +1174,11 @@ ethervox_governor_status_t ethervox_governor_execute(
         }
     }
     
-    // Reached max iterations
+    // Should not reach here, but handle gracefully
     if (error) {
-        *error = strdup("Maximum iterations reached without sufficient confidence");
+        *error = strdup("Unexpected loop termination");
     }
-    return ETHERVOX_GOVERNOR_TIMEOUT;
+    return ETHERVOX_GOVERNOR_ERROR;
     
 #endif  // ETHERVOX_WITH_LLAMA && LLAMA_HEADER_AVAILABLE
 }

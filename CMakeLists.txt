@@ -176,6 +176,10 @@ if(WITH_LLAMA AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/llama.cpp")
             set(GGML_CPU_ARM_NEON ON CACHE BOOL "" FORCE)
             message(STATUS "Enabled ARM NEON optimizations for llama.cpp")
         endif()
+        
+        # Android 15+ 16KB page size compatibility - apply to llama.cpp libraries
+        set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-z,max-page-size=16384")
+        message(STATUS "Applied 16KB page alignment to llama.cpp libraries for Android 15+ compatibility")
     endif()
     
     # Add llama.cpp as subdirectory
