@@ -60,6 +60,9 @@ static volatile sig_atomic_t g_crash_occurred = 0;
 static char g_crash_signal_name[64] = {0};
 static char g_current_test_name[128] = {0};
 
+// Test cancellation (Ctrl+C)
+static volatile sig_atomic_t g_test_cancelled = 0;
+
 // Long runtime test state
 static volatile sig_atomic_t g_runtime_test_running = 0;
 
@@ -101,8 +104,16 @@ static void report_test_fail(const char* msg) {
     write_to_report("  ✗ %s\n", msg);
 }
 
-static void report_test_info(const char* msg) {
-    write_to_report("  ℹ %s\n", msg);
+static void report_test_info(const char* format, ...) {
+    if (!g_test_report_file) return;
+    
+    va_list args;
+    va_start(args, format);
+    fprintf(g_test_report_file, "  ℹ ");
+    vfprintf(g_test_report_file, format, args);
+    fprintf(g_test_report_file, "\n");
+    va_end(args);
+    fflush(g_test_report_file);
 }
 
 // ============================================================================
@@ -174,12 +185,28 @@ static void crash_handler(int sig) {
     longjmp(g_crash_recovery_point, 1);
 }
 
+// Handle test cancellation (Ctrl+C)
+static void interrupt_handler(int sig) {
+    (void)sig;
+    g_test_cancelled = 1;
+    
+    // Write to console
+    printf("\n\n" COLOR_YELLOW "⚠ Test cancellation requested (Ctrl+C)..." COLOR_RESET "\n");
+    
+    // Write to report file if open
+    if (g_test_report_file) {
+        fprintf(g_test_report_file, "\n⚠ Test cancelled by user (SIGINT)\n");
+        fflush(g_test_report_file);
+    }
+}
+
 static void install_crash_handlers(void) {
     signal(SIGSEGV, crash_handler);
     signal(SIGABRT, crash_handler);
     signal(SIGFPE, crash_handler);
     signal(SIGILL, crash_handler);
     signal(SIGBUS, crash_handler);
+    signal(SIGINT, interrupt_handler);  // Ctrl+C handler
 }
 
 static void remove_crash_handlers(void) {
@@ -188,6 +215,7 @@ static void remove_crash_handlers(void) {
     signal(SIGFPE, SIG_DFL);
     signal(SIGILL, SIG_DFL);
     signal(SIGBUS, SIG_DFL);
+    signal(SIGINT, SIG_DFL);
 }
 
 // Reset tool call tracking
@@ -668,12 +696,21 @@ static void test_llm_long_runtime(ethervox_governor_t* governor) {
     
     report_test_header("Test 8: Long Runtime Stress Test");
     
+    // Verify governor is still valid
+    if (!governor) {
+        LLM_TEST_FAIL("Governor instance is NULL");
+        report_test_fail("No governor - test skipped");
+        g_llm_tests_skipped++;
+        return;
+    }
+    
     const int test_duration_seconds = 300;  // 5 minutes
     const int query_interval_seconds = 10;   // Query every 10 seconds
     
     LLM_TEST_INFO("Running stress test for %d seconds (%d minutes)", 
                   test_duration_seconds, test_duration_seconds / 60);
     LLM_TEST_INFO("Queries will be sent every %d seconds", query_interval_seconds);
+    LLM_TEST_INFO("Press Ctrl+C to cancel test early");
     report_test_info("Starting long runtime stress test");
     
     time_t start_time = time(NULL);
@@ -698,9 +735,17 @@ static void test_llm_long_runtime(ethervox_governor_t* governor) {
     int crashed_queries = 0;
     
     g_runtime_test_running = 1;
+    g_test_cancelled = 0;
     
-    while (time(NULL) < end_time && g_runtime_test_running) {
+    while (time(NULL) < end_time && g_runtime_test_running && !g_test_cancelled) {
         const char* query = test_queries[total_queries % num_queries];
+        
+        // Check for cancellation before query
+        if (g_test_cancelled) {
+            LLM_TEST_INFO("Test cancelled by user");
+            report_test_info("Test cancelled after %d queries", total_queries);
+            break;
+        }
         
         LLM_TEST_INFO("Query #%d: \"%s\"", total_queries + 1, query);
         report_test_info("Executing query");
@@ -786,7 +831,12 @@ static void test_llm_long_runtime(ethervox_governor_t* governor) {
     write_to_report("  Failed: %d\n", failed_queries);
     write_to_report("  Crashed: %d\n", crashed_queries);
     
-    if (crashed_queries > 0) {
+    // Handle cancellation or normal completion
+    if (g_test_cancelled) {
+        LLM_TEST_INFO("Test was cancelled by user - marked as skipped");
+        report_test_info("Test cancelled - partial results above");
+        g_llm_tests_skipped++;
+    } else if (crashed_queries > 0) {
         LLM_TEST_FAIL("CRITICAL: %d queries caused crashes!", crashed_queries);
         report_test_fail("Crashes detected during stress test");
         g_llm_tests_failed++;
@@ -859,14 +909,50 @@ void run_llm_tool_tests(ethervox_governor_t* governor,
     }
     
     // Check if model is loaded
-    // Note: We assume the model is already loaded via auto-load or /load command
-    LLM_TEST_HEADER("Using Active Governor");
+    LLM_TEST_HEADER("Checking LLM Availability");
     report_test_header("Initialization");
-    LLM_TEST_INFO("Using existing Governor instance (model should be auto-loaded)");
-    LLM_TEST_INFO("Default model: models/granite-4.0-h-tiny-Q4_K_M.gguf");
-    report_test_info("Using auto-loaded model");
     
-    LLM_TEST_PASS("Model loaded successfully");
+    // Access the internal structure to check if LLM is loaded
+    // Note: This assumes the governor has a public way to check model status
+    // If not, we'll need to add a getter function
+    bool model_loaded = false;
+    
+    // Try a simple test query to verify model is loaded
+    reset_tool_tracking();
+    const char* test_query = "test";
+    char* test_response = NULL;
+    char* test_error = NULL;
+    ethervox_governor_status_t test_status = ethervox_governor_execute(
+        governor, test_query, &test_response, &test_error, NULL,
+        track_tool_progress, NULL, NULL
+    );
+    
+    if (test_status == ETHERVOX_GOVERNOR_SUCCESS || test_status == ETHERVOX_GOVERNOR_NEED_CLARIFICATION) {
+        model_loaded = true;
+    }
+    
+    // Clean up test query results
+    if (test_response) free(test_response);
+    if (test_error) free(test_error);
+    
+    if (!model_loaded) {
+        LLM_TEST_FAIL("No LLM model is loaded");
+        LLM_TEST_INFO("Please load a model first using /load command");
+        LLM_TEST_INFO("Example: /load models/granite-4.0-h-tiny-Q4_K_M.gguf");
+        LLM_TEST_INFO("Skipping all LLM-dependent tests");
+        report_test_fail("No LLM model loaded");
+        report_test_info("All tests skipped - no model available");
+        
+        // Mark all 8 tests as skipped
+        g_llm_tests_skipped = 8;
+        
+        printf("\n");
+        goto cleanup;
+    }
+    
+    LLM_TEST_PASS("LLM model is loaded and responsive");
+    LLM_TEST_INFO("Model path: %s", model_path ? model_path : "auto-loaded");
+    report_test_info("LLM model available");
     report_test_pass("Model ready");
     
     time_t start_time = time(NULL);

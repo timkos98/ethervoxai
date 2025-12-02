@@ -101,7 +101,9 @@ test_export.json
 test_cli.txt
 
 # Downloaded model files (too large for git)
+# Note: models/.gitkeep is tracked to preserve the directory
 models/
+!models/.gitkeep
 *.gguf
 *.bin
 *.safetensors
