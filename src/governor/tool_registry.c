@@ -9,6 +9,7 @@
  */
 
 #include "ethervox/governor.h"
+#include "ethervox/tool_prompt_optimizer.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -116,15 +117,31 @@ int ethervox_tool_registry_build_system_prompt(
     
     bool is_mobile = is_mobile_platform();
     
-    // Optimized for IBM Granite models - they prefer:
-    // 1. Clear role definition
-    // 2. XML-style tool syntax (which we use)
-    // 3. Concise, structured instructions
-    // 4. Direct examples over verbose explanations
-    const char* platform_context = is_mobile
-        ? "You are Ethervox, a helpful assistant. Use tools via XML tags when needed.\n"
+    // Try to load model-specific optimized prompts first
+    char custom_instructions[2048] = {0};
+    char custom_examples[4096] = {0};
+    const char* model_path = NULL; // TODO: Pass model_path as parameter or get from context
+    bool has_custom_prompts = false;
+    
+    if (model_path && ethervox_load_optimized_prompts(
+        model_path,
+        custom_instructions,
+        sizeof(custom_instructions),
+        custom_examples,
+        sizeof(custom_examples)
+    ) == 0) {
+        has_custom_prompts = true;
+    }
+    
+    // Use custom prompts if available, otherwise use defaults
+    const char* platform_context = has_custom_prompts ? custom_instructions :
+        (is_mobile
+        ? "You are Ethervox. ALWAYS use tools - never answer from memory alone.\n"
+          "Tool syntax: <tool_call name=\"tool_name\" param=\"value\" />\n"
         : "You are Ethervox, a helpful AI assistant.\n"
-          "When tools can help, use: <tool_call name=\"tool_name\" param=\"value\" />\n";
+          "IMPORTANT: You MUST use tools for all calculations, time queries, and memory operations.\n"
+          "NEVER calculate mentally or guess - ALWAYS call the appropriate tool.\n"
+          "Tool call format: <tool_call name=\"tool_name\" param=\"value\" />\n");
     
     int written = snprintf(buffer, buffer_size,
         "%s"
@@ -169,24 +186,29 @@ int ethervox_tool_registry_build_system_prompt(
         remaining -= tool_written;
     }
     
-    // Granite-optimized instructions: concise with clear examples
-    const char* usage_section = is_mobile
-        ? "\nExamples:\n"
-          "Math: <tool_call name=\"calculator_compute\" expression=\"5+5\" />\n"
-          "Remember: <tool_call name=\"memory_store\" text=\"Call John\" tags=\"reminder\" />\n"
-        : "\nExamples:\n"
-          "User: Good morning, what's the date?\n"
-          "<tool_call name=\"time_get_current\" />\n"
-          "Good morning! It's December 2, 2025.\n\n"
+    // Use custom examples if available, otherwise defaults
+    const char* usage_section = has_custom_prompts ? custom_examples :
+        (is_mobile
+        ? "\nExamples (ALWAYS start with tool call):\n"
+          "Q: 5+5? A: <tool_call name=\"calculator_compute\" expression=\"5+5\" />\n"
+          "Q: Remember call John. A: <tool_call name=\"memory_store\" text=\"Call John\" tags=\"reminder\" />\n"
+        : "\nExamples - ALWAYS call tool first, then respond:\n\n"
+          "User: What's the date?\n"
+          "Assistant: <tool_call name=\"time_get_date\" />\n"
+          "Result: December 2, 2025\n"
+          "Assistant: It's December 2, 2025.\n\n"
           "User: What's 15 * 8?\n"
-          "<tool_call name=\"calculator_compute\" expression=\"15*8\" />\n"
-          "120\n\n"
+          "Assistant: <tool_call name=\"calculator_compute\" expression=\"15*8\" />\n"
+          "Result: 120\n"
+          "Assistant: 15 times 8 equals 120.\n\n"
           "User: Remember my name is Tim\n"
-          "<tool_call name=\"memory_store\" text=\"User's name is Tim\" tags=\"personal\" importance=\"0.9\" />\n"
-          "Got it, Tim!\n\n"
+          "Assistant: <tool_call name=\"memory_store\" text=\"User's name is Tim\" tags=\"personal\" importance=\"0.9\" />\n"
+          "Result: Stored\n"
+          "Assistant: Got it, Tim!\n\n"
           "User: What's my name?\n"
-          "<tool_call name=\"memory_search\" query=\"name\" limit=\"3\" />\n"
-          "Your name is Tim!\n";
+          "Assistant: <tool_call name=\"memory_search\" query=\"name\" limit=\"3\" />\n"
+          "Result: User's name is Tim\n"
+          "Assistant: Your name is Tim!\n");
     
     int instr_written = snprintf(ptr, remaining, "%s", usage_section);
     

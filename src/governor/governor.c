@@ -1463,6 +1463,64 @@ void ethervox_governor_cleanup(ethervox_governor_t* governor) {
     free(governor);
 }
 
+int ethervox_governor_reset_conversation(ethervox_governor_t* governor) {
+    if (!governor) {
+        return -1;
+    }
+    
+#if !defined(ETHERVOX_WITH_LLAMA) || !LLAMA_HEADER_AVAILABLE
+    return -1;
+#else
+    // Clear KV cache back to system prompt
+    if (!governor->llm_ctx || governor->system_prompt_token_count == 0) {
+        GOV_LOG("Cannot reset: model not loaded");
+        return -1;
+    }
+    
+    llama_memory_t mem = llama_get_memory(governor->llm_ctx);
+    int32_t max_pos = llama_memory_seq_pos_max(mem, 0);
+    
+    if (max_pos <= governor->system_prompt_token_count) {
+        GOV_LOG("Conversation already clean (at position %d, system prompt is %d tokens)",
+                max_pos, governor->system_prompt_token_count);
+        return 0;
+    }
+    
+    int n_ctx = llama_n_ctx(governor->llm_ctx);
+    GOV_LOG("Resetting conversation: max_pos=%d, system_prompt=%d (%d%% full)",
+            max_pos, governor->system_prompt_token_count, (max_pos * 100 / n_ctx));
+    
+    // The ONLY way to properly reset llama.cpp's position tracking is to clear
+    // the entire sequence and keep the system prompt in a separate sequence,
+    // OR clear everything and re-decode the system prompt.
+    // Since we don't have the system prompt tokens saved, we use sequence copy/remove
+    
+    // Strategy: Copy system prompt to sequence 1, clear sequence 0, copy back to sequence 0
+    llama_memory_seq_cp(mem, 0, 1, 0, governor->system_prompt_token_count);  // Copy sys prompt to seq 1
+    llama_memory_seq_rm(mem, 0, 0, -1);  // Clear all of sequence 0
+    llama_memory_seq_cp(mem, 1, 0, 0, governor->system_prompt_token_count);  // Copy back to seq 0
+    llama_memory_seq_rm(mem, 1, 0, -1);  // Clean up sequence 1
+    
+    // Now sequence 0 only has positions 0 to system_prompt_token_count-1
+    governor->current_kv_pos = governor->system_prompt_token_count;
+    
+    GOV_LOG("Conversation reset complete: KV cache now at position %d (system prompt only)",
+            governor->current_kv_pos);
+    
+    // Clear conversation history tracking
+    cleanup_conversation_history(&governor->conversation_history);
+    init_conversation_history(&governor->conversation_history, 32);
+    
+    // Reset context manager state (compatible with moving window system)
+    governor->context_manager.current_health = CTX_HEALTH_OK;
+    governor->context_manager.overflow_event_count = 0;
+    governor->context_manager.last_gc_position = governor->system_prompt_token_count;
+    governor->context_manager.management_in_progress = false;
+    
+    return 0;
+#endif
+}
+
 ethervox_tool_registry_t* ethervox_governor_get_registry(ethervox_governor_t* governor) {
     return governor ? governor->tool_registry : NULL;
 }

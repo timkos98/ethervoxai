@@ -271,6 +271,17 @@ ethervox_governor_status_t ethervox_governor_execute(
 uint32_t ethervox_governor_get_last_iteration_count(ethervox_governor_t* governor);
 
 /**
+ * Reset conversation history (clears KV cache back to system prompt)
+ * 
+ * This is useful for testing or when you want to start a fresh conversation
+ * while keeping the model loaded and system prompt intact.
+ * 
+ * @param governor Governor instance
+ * @return 0 on success, negative on error
+ */
+int ethervox_governor_reset_conversation(ethervox_governor_t* governor);
+
+/**
  * Cleanup Governor (frees resources)
  */
 void ethervox_governor_cleanup(ethervox_governor_t* governor);

@@ -57,6 +57,12 @@ typedef struct {
     const char* stop_sequences[8];
     int stop_sequence_count;
     
+    // Tool-calling instructions (model-specific)
+    const char* tool_system_instructions;   // Instructions for tool usage (goes before tool list)
+    const char* tool_usage_examples;        // Model-specific examples showing tool call patterns
+    bool requires_explicit_directives;      // If true, use MUST/ALWAYS/NEVER language
+    bool prefers_tool_first_response;       // If true, examples show tool call before explanation
+    
 } chat_template_t;
 
 /**

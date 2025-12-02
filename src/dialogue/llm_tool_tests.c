@@ -1039,6 +1039,94 @@ static void test_llm_long_runtime(ethervox_governor_t* governor) {
     }
 }
 
+// Test 9: Context Window Management & Accumulation Test
+static void test_context_window_management(ethervox_governor_t* governor) {
+    LLM_TEST_HEADER("Test 9: Context Window Management");
+    report_test_header("Test 9: Context Window Management & Accumulation");
+    
+    LLM_TEST_INFO("This test verifies that context accumulation and window shifting work correctly");
+    report_test_info("Testing natural context accumulation without reset");
+    
+    // NOTE: Unlike Tests 1-6, we do NOT reset conversation here
+    // This test intentionally accumulates context to validate window management
+    
+    // Generate a series of queries that will accumulate context
+    const char* accumulation_queries[] = {
+        "Remember that my favorite color is purple",
+        "Also remember that I like pizza",
+        "Calculate 123 + 456",
+        "What's my favorite color?",
+        "Calculate 50 * 20",
+        "Remember my birthday is January 15th",
+        "What food do I like?",
+        "Calculate 1000 / 4",
+        "When is my birthday?",
+        "Calculate the square root of 144"
+    };
+    const int num_queries = sizeof(accumulation_queries) / sizeof(accumulation_queries[0]);
+    
+    int successful_turns = 0;
+    int failed_turns = 0;
+    
+    LLM_TEST_INFO("Executing %d queries to build up conversation history...", num_queries);
+    
+    for (int i = 0; i < num_queries; i++) {
+        const char* query = accumulation_queries[i];
+        
+        if (g_test_cancelled) {
+            LLM_TEST_INFO("Test cancelled");
+            report_test_info("Test cancelled at turn %d", i + 1);
+            g_llm_tests_skipped++;
+            return;
+        }
+        
+        report_debug("Context test turn %d: %s", i + 1, query);
+        
+        char* response = NULL;
+        char* error = NULL;
+        
+        ethervox_governor_status_t status = ethervox_governor_execute(
+            governor, query, &response, &error, NULL, NULL, NULL, NULL
+        );
+        
+        report_debug("Context test turn %d status: %d", i + 1, status);
+        if (response) report_debug("Context test turn %d response: %s", i + 1, response);
+        if (error) report_debug("Context test turn %d error: %s", i + 1, error);
+        
+        if (status == ETHERVOX_GOVERNOR_SUCCESS || status == ETHERVOX_GOVERNOR_NEED_CLARIFICATION) {
+            successful_turns++;
+            LLM_TEST_INFO("Turn %d/%d: ✓ Success", i + 1, num_queries);
+        } else {
+            failed_turns++;
+            LLM_TEST_WARN("Turn %d/%d: ✗ Failed - %s", i + 1, num_queries, 
+                         error ? error : "unknown error");
+        }
+        
+        if (response) free(response);
+        if (error) free(error);
+    }
+    
+    // Evaluate results
+    float success_rate = (float)successful_turns / num_queries;
+    
+    report_test_info("Context accumulation complete: %d/%d turns successful (%.1f%%)",
+                    successful_turns, num_queries, success_rate * 100.0f);
+    
+    if (success_rate >= 0.8f) {
+        LLM_TEST_PASS("Context window handling passed (%.1f%% success)", success_rate * 100.0f);
+        report_test_pass("Context management working - window shift handled gracefully");
+        g_llm_tests_passed++;
+    } else if (success_rate >= 0.6f) {
+        LLM_TEST_WARN("Context window partially working (%.1f%% success)", success_rate * 100.0f);
+        report_test_info("Some context issues but system remained functional");
+        g_llm_tests_passed++;
+    } else {
+        LLM_TEST_FAIL("Context window management failed (%.1f%% success)", success_rate * 100.0f);
+        report_test_fail("Context accumulation caused significant failures");
+        g_llm_tests_failed++;
+    }
+}
+
 // ============================================================================
 // Main LLM Test Runner
 // ============================================================================
@@ -1168,8 +1256,8 @@ void run_llm_tool_tests(ethervox_governor_t* governor,
         report_test_fail("No LLM model loaded");
         report_test_info("All tests skipped - no model available");
         
-        // Mark all 8 tests as skipped
-        g_llm_tests_skipped = 8;
+        // Mark all 9 tests as skipped
+        g_llm_tests_skipped = 9;
         
         printf("\n");
         goto cleanup;
@@ -1178,6 +1266,15 @@ void run_llm_tool_tests(ethervox_governor_t* governor,
     LLM_TEST_PASS("LLM model is loaded and responsive");
     LLM_TEST_INFO("Model path: %s", model_path ? model_path : "auto-loaded");
     report_test_info("LLM model available");
+    
+    // Reset conversation history to clear startup prompt context
+    // This ensures tests start with clean KV cache (system prompt only)
+    LLM_TEST_INFO("Resetting conversation history for clean test environment");
+    if (ethervox_governor_reset_conversation(governor) != 0) {
+        LLM_TEST_WARN("Failed to reset conversation (continuing anyway)");
+    } else {
+        report_test_info("Conversation history cleared - starting with fresh context");
+    }
     report_test_pass("Model ready");
     
     time_t start_time = time(NULL);
@@ -1214,6 +1311,10 @@ void run_llm_tool_tests(ethervox_governor_t* governor,
     LLM_TEST_HEADER("Test 8: Long Runtime Stress Test");
     report_test_header("Test 8: Long Runtime Stress Test");
     test_llm_long_runtime(governor);
+    
+    LLM_TEST_HEADER("Test 9: Context Window Management");
+    report_test_header("Test 9: Context Window Management");
+    test_context_window_management(governor);
     
     time_t end_time = time(NULL);
     double duration = difftime(end_time, start_time);

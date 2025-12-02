@@ -38,6 +38,7 @@
 #include "ethervox/logging.h"
 #include "ethervox/integration_tests.h"
 #include "ethervox/llm_tool_tests.h"
+#include "ethervox/tool_prompt_optimizer.h"
 
 // External debug flag from logging.c (declared in config.h)
 // extern int g_ethervox_debug_enabled; // Already declared in config.h
@@ -47,6 +48,45 @@ static volatile bool g_running = true;
 static bool g_debug_enabled = false;  // Debug logging disabled by default (opt-in)
 static bool g_quiet_mode = true;      // Quiet mode by default
 static bool g_markdown_enabled = true; // Markdown formatting enabled by default
+
+#if defined(__APPLE__) || defined(__linux__)
+// Command completion for readline
+static const char* commands[] = {
+    "/help", "/test", "/testllm", "/optimize_tool_prompts", "/load", "/tools",
+    "/search", "/summary", "/export", "/stats", "/startup", "/debug",
+    "/markdown", "/clear", "/reset", "/paste", "/quit", NULL
+};
+
+static char* command_generator(const char* text, int state) {
+    static int list_index, len;
+    const char* name;
+    
+    if (!state) {
+        list_index = 0;
+        len = strlen(text);
+    }
+    
+    while ((name = commands[list_index++])) {
+        if (strncmp(name, text, len) == 0) {
+            return strdup(name);
+        }
+    }
+    
+    return NULL;
+}
+
+static char** command_completion(const char* text, int start, int end) {
+    (void)end;  // Unused
+    
+    // Only complete commands at the start of the line
+    if (start == 0) {
+        return rl_completion_matches(text, command_generator);
+    }
+    
+    // For file paths after /load, /export, /startup edit
+    return NULL;  // Use default filename completion
+}
+#endif
 static char g_loaded_model_path[512] = {0};  // Track loaded model path for /reset
 
 // Default startup prompt text (used if no custom prompt file exists)
@@ -91,6 +131,7 @@ static void print_help(void) {
     printf("  /help              Show this help message\n");
     printf("  /test              Run comprehensive integration tests\n");
     printf("  /testllm [-v]      Run LLM tool usage tests (-v for verbose debug output)\n");
+    printf("  /optimize_tool_prompts  Generate model-specific tool prompts (self-optimization)\n");
     printf("  /load <path>       Load Governor model\n");
     printf("  /tools             Show loaded Governor tools\n");
     printf("  /search <query>    Search conversation memory\n");
@@ -577,10 +618,11 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         g_debug_enabled = !g_debug_enabled;
         g_ethervox_debug_enabled = g_debug_enabled;  // Also control legacy debug flag
         if (g_debug_enabled) {
-            ethervox_log_set_level(ETHERVOX_LOG_LEVEL_INFO);
+            ethervox_log_set_level(ETHERVOX_LOG_LEVEL_DEBUG);
             printf("Debug logging: ENABLED\n");
         } else {
-            ethervox_log_set_level(ETHERVOX_LOG_LEVEL_OFF);
+            // Restore to INFO if not in quiet mode, OFF if in quiet mode
+            ethervox_log_set_level(g_quiet_mode ? ETHERVOX_LOG_LEVEL_OFF : ETHERVOX_LOG_LEVEL_INFO);
             printf("Debug logging: DISABLED\n");
         }
         return;
@@ -604,6 +646,23 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         // Check for verbose flag
         bool verbose = (strstr(line, "-v") != NULL || strstr(line, "--verbose") != NULL);
         run_llm_tool_tests(governor, memory, g_loaded_model_path, verbose);
+        printf("\n");
+        return;
+    }
+    
+    if (strcmp(line, "/optimize_tool_prompts") == 0) {
+        printf("\n");
+        if (strlen(g_loaded_model_path) == 0) {
+            printf("✗ No model loaded. Use /load <path> first.\n");
+            return;
+        }
+        printf("Running tool prompt optimization for model: %s\n", g_loaded_model_path);
+        int ret = ethervox_optimize_tool_prompts(governor, g_loaded_model_path);
+        if (ret == 0) {
+            printf("✓ Optimization complete! Restart to use new prompts.\n");
+        } else {
+            printf("✗ Optimization failed (code: %d)\n", ret);
+        }
         printf("\n");
         return;
     }
@@ -882,10 +941,11 @@ int main(int argc, char** argv) {
     if (!quiet_mode) {
         if (g_debug_enabled) {
             ethervox_log_set_level(ETHERVOX_LOG_LEVEL_DEBUG);
+            g_ethervox_debug_enabled = 1;
         } else {
             ethervox_log_set_level(ETHERVOX_LOG_LEVEL_INFO);
+            g_ethervox_debug_enabled = 0;
         }
-        g_ethervox_debug_enabled = 1;  // Also enable legacy debug flag
     } else {
         ethervox_log_set_level(ETHERVOX_LOG_LEVEL_OFF);
         g_ethervox_debug_enabled = 0;
@@ -1212,6 +1272,9 @@ int main(int argc, char** argv) {
     bool quit = false;
     
 #if defined(__APPLE__) || defined(__linux__)
+    // Set up tab completion for readline
+    rl_attempted_completion_function = command_completion;
+    
     // Use readline for command history on macOS/Linux
     while (g_running && !quit) {
         char* line = readline("> ");
