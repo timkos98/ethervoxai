@@ -28,10 +28,12 @@ extern "C" {
  * @param governor Active Governor instance (must have model loaded)
  * @param memory_store Active memory store instance
  * @param model_path Path to the loaded model (for lifecycle test)
+ * @param verbose Enable verbose debug output in test report
  */
 void run_llm_tool_tests(ethervox_governor_t* governor, 
                        ethervox_memory_store_t* memory_store,
-                       const char* model_path);
+                       const char* model_path,
+                       bool verbose);
 
 #ifdef __cplusplus
 }

@@ -50,16 +50,9 @@ static bool g_markdown_enabled = true; // Markdown formatting enabled by default
 static char g_loaded_model_path[512] = {0};  // Track loaded model path for /reset
 
 // Default startup prompt text (used if no custom prompt file exists)
+// Optimized for IBM Granite - show what to output, not just instructions
 static const char* DEFAULT_STARTUP_PROMPT = 
-    "Check for any pending reminders using memory_reminder_list. "
-    "Search for important recent memories using memory_search with min_importance=0.8 (or 0.9 for critical items). "
-    "Get the current date"
-    "Get the current time in 24hr format."
-    "Get the current week number"
-    "look for notes or memos stored in memory."
-    "Greet the user tell them the week number, the date, and time in 24hr format"
-    "List reminders if they exist, do not make up any reminders. If the tool finds no reminders, just say that there are no reminders."
-    "ONLY return reminders that came from a memory_reminder_list tool call.";
+    "Greet the user and show today's date/time and any reminders.";
 
 static void signal_handler(int sig) {
     (void)sig;
@@ -97,7 +90,7 @@ static void print_help(void) {
     printf("\nAvailable Commands:\n");
     printf("  /help              Show this help message\n");
     printf("  /test              Run comprehensive integration tests\n");
-    printf("  /testllm           Run LLM tool usage tests (validates prompts work)\n");
+    printf("  /testllm [-v]      Run LLM tool usage tests (-v for verbose debug output)\n");
     printf("  /load <path>       Load Governor model\n");
     printf("  /tools             Show loaded Governor tools\n");
     printf("  /search <query>    Search conversation memory\n");
@@ -608,7 +601,9 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
     
     if (strncmp(line, "/testllm", 8) == 0) {
         printf("\n");
-        run_llm_tool_tests(governor, memory, g_loaded_model_path);
+        // Check for verbose flag
+        bool verbose = (strstr(line, "-v") != NULL || strstr(line, "--verbose") != NULL);
+        run_llm_tool_tests(governor, memory, g_loaded_model_path, verbose);
         printf("\n");
         return;
     }

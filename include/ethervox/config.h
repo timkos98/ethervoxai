@@ -17,6 +17,8 @@
 #ifndef ETHERVOX_CONFIG_H
 #define ETHERVOX_CONFIG_H
 
+#include <time.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -257,10 +259,34 @@ void ethervox_log_with_callback(int level, const char* tag, const char* fmt, ...
   #define ETHERVOX_LOGE(...) ethervox_log_with_callback(ANDROID_LOG_ERROR, ETHERVOX_LOG_TAG, __VA_ARGS__)
 #else
   #include <stdio.h>
-  #define ETHERVOX_LOGD(...) do { if (g_ethervox_debug_enabled) { printf("[DEBUG] "); printf(__VA_ARGS__); printf("\n"); } } while(0)
-  #define ETHERVOX_LOGI(...) do { if (g_ethervox_debug_enabled) { printf("[INFO] "); printf(__VA_ARGS__); printf("\n"); } } while(0)
-  #define ETHERVOX_LOGW(...) do { if (g_ethervox_debug_enabled) { printf("[WARN] "); printf(__VA_ARGS__); printf("\n"); } } while(0)
-  #define ETHERVOX_LOGE(...) do { if (g_ethervox_debug_enabled) { printf("[ERROR] "); printf(__VA_ARGS__); printf("\n"); } } while(0)
+  // Helper to get timestamp for legacy logging (platform-agnostic)
+  static inline void ethervox_log_timestamp(char* buf, size_t size) {
+    time_t now = time(NULL);
+    struct tm tm_info;
+    #ifdef _WIN32
+      localtime_s(&tm_info, &now);
+    #else
+      localtime_r(&now, &tm_info);
+    #endif
+    strftime(buf, size, "%Y-%m-%d %H:%M:%S", &tm_info);
+  }
+  // Legacy logging macros - use stderr with timestamps to match new logging system
+  #define ETHERVOX_LOGD(...) do { if (g_ethervox_debug_enabled) { \
+    char ts[20]; ethervox_log_timestamp(ts, sizeof(ts)); \
+    fprintf(stderr, "[%s] [DEBUG] ", ts); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); fflush(stderr); \
+  } } while(0)
+  #define ETHERVOX_LOGI(...) do { if (g_ethervox_debug_enabled) { \
+    char ts[20]; ethervox_log_timestamp(ts, sizeof(ts)); \
+    fprintf(stderr, "[%s] [INFO ] ", ts); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); fflush(stderr); \
+  } } while(0)
+  #define ETHERVOX_LOGW(...) do { if (g_ethervox_debug_enabled) { \
+    char ts[20]; ethervox_log_timestamp(ts, sizeof(ts)); \
+    fprintf(stderr, "[%s] [WARN ] ", ts); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); fflush(stderr); \
+  } } while(0)
+  #define ETHERVOX_LOGE(...) do { if (g_ethervox_debug_enabled) { \
+    char ts[20]; ethervox_log_timestamp(ts, sizeof(ts)); \
+    fprintf(stderr, "[%s] [ERROR] ", ts); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); fflush(stderr); \
+  } } while(0)
 #endif
 
 // Version information (single source of truth)

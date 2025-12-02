@@ -27,7 +27,13 @@
 #include <signal.h>
 #include <setjmp.h>
 #include <sys/time.h>
+#include <sys/stat.h>
 #include <unistd.h>
+
+#ifdef _WIN32
+#include <direct.h>
+#define mkdir(path, mode) _mkdir(path)
+#endif
 
 // ANSI color codes
 #define COLOR_RESET   "\033[0m"
@@ -53,6 +59,19 @@ static int g_llm_tests_skipped = 0;
 // Test report file
 static FILE* g_test_report_file = NULL;
 static char g_test_report_path[512] = {0};
+
+// Verbose mode - captures debug output to report
+static bool g_verbose_mode = false;
+static ethervox_log_level_t g_saved_log_level = ETHERVOX_LOG_LEVEL_OFF;
+static int g_saved_debug_enabled = 0;
+
+// Stderr capture for verbose mode (logs to both console and file)
+static FILE* g_stderr_capture_file = NULL;
+static char g_stderr_capture_path[512] = {0};
+static int g_saved_stderr_fd = -1;
+
+// External debug flag (from logging.c)
+extern int g_ethervox_debug_enabled;
 
 // Crash detection
 static jmp_buf g_crash_recovery_point;
@@ -114,6 +133,107 @@ static void report_test_info(const char* format, ...) {
     fprintf(g_test_report_file, "\n");
     va_end(args);
     fflush(g_test_report_file);
+}
+
+// Verbose debug logging - captures to both console and report
+static void report_debug(const char* format, ...) {
+    if (!g_verbose_mode) return;
+    
+    va_list args, args_copy;
+    va_start(args, format);
+    
+    // Print to console
+    printf(COLOR_YELLOW "  [DEBUG] " COLOR_RESET);
+    va_copy(args_copy, args);
+    vprintf(format, args_copy);
+    printf("\n");
+    va_end(args_copy);
+    
+    // Write to report file
+    if (g_test_report_file) {
+        fprintf(g_test_report_file, "  [DEBUG] ");
+        vfprintf(g_test_report_file, format, args);
+        fprintf(g_test_report_file, "\n");
+        fflush(g_test_report_file);
+    }
+    
+    va_end(args);
+}
+
+// Start capturing stderr to a temporary file (without redirecting stderr)
+static void start_stderr_capture(void) {
+    if (!g_verbose_mode) return;
+    
+    // Create test_reports directory if it doesn't exist
+    const char* report_dir = "test_reports";
+    #ifdef _WIN32
+        _mkdir(report_dir);
+    #else
+        mkdir(report_dir, 0755);
+    #endif
+    
+    // Create temporary file for stderr capture in test_reports directory
+    snprintf(g_stderr_capture_path, sizeof(g_stderr_capture_path),
+             "%s/llm_stderr_capture_%ld.log", report_dir, time(NULL));
+    
+    g_stderr_capture_file = fopen(g_stderr_capture_path, "w");
+    if (!g_stderr_capture_file) {
+        fprintf(stderr, "Warning: Could not create stderr capture file\n");
+        return;
+    }
+    
+    // Duplicate stderr fd before redirecting
+    g_saved_stderr_fd = dup(fileno(stderr));
+    
+    // Redirect stderr to our capture file
+    if (dup2(fileno(g_stderr_capture_file), fileno(stderr)) == -1) {
+        // Restore stderr to report the error
+        dup2(g_saved_stderr_fd, fileno(stderr));
+        fprintf(stderr, "Warning: Could not redirect stderr\n");
+        fclose(g_stderr_capture_file);
+        g_stderr_capture_file = NULL;
+        return;
+    }
+}
+
+// Stop capturing stderr and merge captured output into test report
+static void stop_stderr_capture(void) {
+    if (!g_verbose_mode) return;
+    
+    // Flush stderr to ensure all output is written
+    fflush(stderr);
+    
+    // Restore original stderr FIRST (before closing capture file)
+    if (g_saved_stderr_fd != -1) {
+        dup2(g_saved_stderr_fd, fileno(stderr));
+        close(g_saved_stderr_fd);
+        g_saved_stderr_fd = -1;
+    }
+    
+    // NOW close the capture file (after stderr is restored)
+    if (g_stderr_capture_file) {
+        fclose(g_stderr_capture_file);
+        g_stderr_capture_file = NULL;
+    }
+    
+    // Read captured stderr and append to test report
+    if (g_test_report_file && g_stderr_capture_path[0]) {
+        FILE* capture = fopen(g_stderr_capture_path, "r");
+        if (capture) {
+            fprintf(g_test_report_file, "\n=== LLM Debug Output (stderr) ===\n");
+            
+            char line[1024];
+            while (fgets(line, sizeof(line), capture)) {
+                fprintf(g_test_report_file, "%s", line);
+            }
+            
+            fprintf(g_test_report_file, "\n=== End Debug Output ===\n\n");
+            fclose(capture);
+        }
+    }
+    
+    // Clean up temporary file
+    unlink(g_stderr_capture_path);
 }
 
 // ============================================================================
@@ -285,11 +405,20 @@ static void test_llm_memory_add(ethervox_governor_t* governor) {
     char* error = NULL;
     
     LLM_TEST_INFO("Prompting: \"%s\"", query);
+    report_debug("Executing query: %s", query);
     
     ethervox_governor_status_t status = ethervox_governor_execute(
         governor, query, &response, &error, NULL,
         track_tool_progress, NULL, NULL
     );
+    
+    report_debug("Governor status: %d", status);
+    if (response) {
+        report_debug("Response: %s", response);
+    }
+    if (error) {
+        report_debug("Error: %s", error);
+    }
     
     if (status == ETHERVOX_GOVERNOR_SUCCESS) {
         if (was_tool_called("memory_store_add")) {
@@ -298,8 +427,10 @@ static void test_llm_memory_add(ethervox_governor_t* governor) {
         } else {
             LLM_TEST_FAIL("LLM did not call memory_store_add (may have hallucinated storage)");
             LLM_TEST_INFO("Tools called: %u", g_tool_call_count);
+            report_debug("Total tools called: %u", g_tool_call_count);
             for (uint32_t i = 0; i < g_tool_call_count; i++) {
                 LLM_TEST_INFO("  - %s", g_tool_calls[i].tool_name);
+                report_debug("  Tool %u: %s(%s)", i, g_tool_calls[i].tool_name, g_tool_calls[i].args_json);
             }
             g_llm_tests_failed++;
         }
@@ -333,15 +464,23 @@ static void test_llm_memory_search(ethervox_governor_t* governor) {
     char* error = NULL;
     
     LLM_TEST_INFO("Prompting: \"%s\"", query);
+    report_debug("Executing query: %s", query);
     
     ethervox_governor_status_t status = ethervox_governor_execute(
         governor, query, &response, &error, NULL,
         track_tool_progress, NULL, NULL
     );
     
+    report_debug("Governor status: %d", status);
+    if (response) report_debug("Response: %s", response);
+    if (error) report_debug("Error: %s", error);
+    report_debug("Total tools called: %u", g_tool_call_count);
+    
     if (status == ETHERVOX_GOVERNOR_SUCCESS) {
         bool called_search = was_tool_called("memory_search_text") || 
                            was_tool_called("memory_search_by_tag");
+        
+        report_debug("Called memory_search: %s", called_search ? "yes" : "no");
         
         if (called_search) {
             LLM_TEST_PASS("LLM correctly used memory search tool");
@@ -381,14 +520,22 @@ static void test_llm_calculator(ethervox_governor_t* governor) {
     char* error = NULL;
     
     LLM_TEST_INFO("Prompting: \"%s\"", query);
+    report_debug("Executing query: %s", query);
     
     ethervox_governor_status_t status = ethervox_governor_execute(
         governor, query, &response, &error, NULL,
         track_tool_progress, NULL, NULL
     );
     
+    report_debug("Governor status: %d", status);
+    if (response) report_debug("Response: %s", response);
+    if (error) report_debug("Error: %s", error);
+    report_debug("Total tools called: %u", g_tool_call_count);
+    
     if (status == ETHERVOX_GOVERNOR_SUCCESS) {
         bool called_calc = was_tool_called("calculator_compute");
+        
+        report_debug("Called calculator_compute: %s", called_calc ? "yes" : "no");
         
         if (called_calc) {
             LLM_TEST_PASS("LLM correctly called calculator_compute");
@@ -431,15 +578,23 @@ static void test_llm_memory_correction(ethervox_governor_t* governor) {
     char* error = NULL;
     
     LLM_TEST_INFO("Prompting: \"%s\"", query);
+    report_debug("Executing query: %s", query);
     
     ethervox_governor_status_t status = ethervox_governor_execute(
         governor, query, &response, &error, NULL,
         track_tool_progress, NULL, NULL
     );
     
+    report_debug("Governor status: %d", status);
+    if (response) report_debug("Response: %s", response);
+    if (error) report_debug("Error: %s", error);
+    report_debug("Total tools called: %u", g_tool_call_count);
+    
     if (status == ETHERVOX_GOVERNOR_SUCCESS) {
         bool called_correction = was_tool_called("memory_store_correction");
         bool called_update = was_tool_called("memory_update_tags");
+        
+        report_debug("Called correction/update: %s", (called_correction || called_update) ? "yes" : "no");
         
         if (called_correction || called_update) {
             LLM_TEST_PASS("LLM used correction/update tool appropriately");
@@ -490,14 +645,22 @@ static void test_llm_memory_tags(ethervox_governor_t* governor) {
     error = NULL;
     
     LLM_TEST_INFO("Query: \"%s\"", query);
+    report_debug("Executing query: %s", query);
     
     ethervox_governor_status_t status = ethervox_governor_execute(
         governor, query, &response, &error, NULL,
         track_tool_progress, NULL, NULL
     );
     
+    report_debug("Governor status: %d", status);
+    if (response) report_debug("Response: %s", response);
+    if (error) report_debug("Error: %s", error);
+    report_debug("Total tools called: %u", g_tool_call_count);
+    
     if (status == ETHERVOX_GOVERNOR_SUCCESS) {
         bool used_tag_search = was_tool_called("memory_search_by_tag");
+        
+        report_debug("Used tag-based search: %s", used_tag_search ? "yes" : "no");
         
         if (used_tag_search) {
             LLM_TEST_PASS("LLM correctly used tag-based search");
@@ -536,15 +699,24 @@ static void test_llm_multi_tool(ethervox_governor_t* governor) {
     char* error = NULL;
     
     LLM_TEST_INFO("Prompting: \"%s\"", query);
+    report_debug("Executing query: %s", query);
     
     ethervox_governor_status_t status = ethervox_governor_execute(
         governor, query, &response, &error, NULL,
         track_tool_progress, NULL, NULL
     );
     
+    report_debug("Governor status: %d", status);
+    if (response) report_debug("Response: %s", response);
+    if (error) report_debug("Error: %s", error);
+    report_debug("Total tools called: %u", g_tool_call_count);
+    
     if (status == ETHERVOX_GOVERNOR_SUCCESS) {
         bool called_calc = was_tool_called("calculator_compute");
         bool called_memory = was_tool_called("memory_store_add");
+        
+        report_debug("Called calculator: %s, Called memory: %s", 
+                    called_calc ? "yes" : "no", called_memory ? "yes" : "no");
         
         if (called_calc && called_memory) {
             LLM_TEST_PASS("LLM orchestrated multiple tools correctly");
@@ -640,9 +812,15 @@ static void test_llm_model_lifecycle(const char* model_path) {
     char* error = NULL;
     
     LLM_TEST_INFO("Testing inference: \"%s\"", test_query);
+    report_debug("Executing lifecycle test query: %s", test_query);
+    
     ethervox_governor_status_t status = ethervox_governor_execute(
         test_governor, test_query, &response, &error, NULL, NULL, NULL, NULL
     );
+    
+    report_debug("Lifecycle test status: %d", status);
+    if (response) report_debug("Lifecycle test response: %s", response);
+    if (error) report_debug("Lifecycle test error: %s", error);
     
     if (status == ETHERVOX_GOVERNOR_SUCCESS && response) {
         LLM_TEST_PASS("Model inference successful");
@@ -750,6 +928,7 @@ static void test_llm_long_runtime(ethervox_governor_t* governor) {
         LLM_TEST_INFO("Query #%d: \"%s\"", total_queries + 1, query);
         report_test_info("Executing query");
         write_to_report("    Query #%d: \"%s\"\n", total_queries + 1, query);
+        report_debug("Stress test query #%d: %s", total_queries + 1, query);
         
         char* response = NULL;
         char* error = NULL;
@@ -761,6 +940,7 @@ static void test_llm_long_runtime(ethervox_governor_t* governor) {
             LLM_TEST_FAIL("Query #%d CRASHED: %s", total_queries + 1, g_crash_signal_name);
             report_test_fail("Query crashed");
             write_to_report("    CRASH: %s\n", g_crash_signal_name);
+            report_debug("Stress test query #%d crashed: %s", total_queries + 1, g_crash_signal_name);
             
             if (response) free(response);
             if (error) free(error);
@@ -775,6 +955,10 @@ static void test_llm_long_runtime(ethervox_governor_t* governor) {
         ethervox_governor_status_t status = ethervox_governor_execute(
             governor, query, &response, &error, NULL, NULL, NULL, NULL
         );
+        
+        report_debug("Stress test query #%d status: %d", total_queries + 1, status);
+        if (response) report_debug("Stress test query #%d response: %s", total_queries + 1, response);
+        if (error) report_debug("Stress test query #%d error: %s", total_queries + 1, error);
         
         if (status == ETHERVOX_GOVERNOR_SUCCESS && response) {
             successful_queries++;
@@ -860,7 +1044,21 @@ static void test_llm_long_runtime(ethervox_governor_t* governor) {
 // ============================================================================
 void run_llm_tool_tests(ethervox_governor_t* governor, 
                        ethervox_memory_store_t* memory_store,
-                       const char* model_path) {
+                       const char* model_path,
+                       bool verbose) {
+    // Set verbose mode and enable debug logging if requested
+    g_verbose_mode = verbose;
+    
+    if (verbose) {
+        // Save current log level and debug flag state
+        g_saved_log_level = ethervox_log_get_level();
+        g_saved_debug_enabled = g_ethervox_debug_enabled;
+        
+        // Enable debug logging (both new and legacy systems)
+        ethervox_log_set_level(ETHERVOX_LOG_LEVEL_DEBUG);
+        g_ethervox_debug_enabled = 1;
+    }
+    
     printf("\n");
     printf(COLOR_BOLD COLOR_MAGENTA);
     printf("╔═══════════════════════════════════════════════════════════════╗\n");
@@ -871,10 +1069,32 @@ void run_llm_tool_tests(ethervox_governor_t* governor,
     printf("╚═══════════════════════════════════════════════════════════════╝\n");
     printf(COLOR_RESET);
     
+    if (verbose) {
+        printf(COLOR_YELLOW "  [Verbose Mode Enabled]\n" COLOR_RESET);
+        printf(COLOR_YELLOW "  - Custom debug messages logged to report\n" COLOR_RESET);
+        printf(COLOR_YELLOW "  - Internal LLM debug logging enabled (stderr)\n" COLOR_RESET);
+        printf(COLOR_YELLOW "  - Token sampling, generation details will appear below\n" COLOR_RESET);
+        printf(COLOR_YELLOW "  - All debug output will be saved to test report\n" COLOR_RESET);
+    }
+    
+    // Start capturing stderr if in verbose mode
+    if (verbose) {
+        start_stderr_capture();
+    }
+    
     // Initialize test report file
     time_t report_time = time(NULL);
+    
+    // Create test_reports directory if it doesn't exist
+    const char* report_dir = "test_reports";
+    #ifdef _WIN32
+        _mkdir(report_dir);
+    #else
+        mkdir(report_dir, 0755);
+    #endif
+    
     snprintf(g_test_report_path, sizeof(g_test_report_path),
-             "llm_test_report_%ld.log", report_time);
+             "%s/llm_test_report_%ld.log", report_dir, report_time);
     
     g_test_report_file = fopen(g_test_report_path, "w");
     if (g_test_report_file) {
@@ -882,6 +1102,11 @@ void run_llm_tool_tests(ethervox_governor_t* governor,
         fprintf(g_test_report_file, "======================================\n\n");
         fprintf(g_test_report_file, "Timestamp: %s", ctime(&report_time));
         fprintf(g_test_report_file, "Model Path: %s\n", model_path ? model_path : "N/A");
+        fprintf(g_test_report_file, "Verbose Mode: %s\n", verbose ? "Enabled" : "Disabled");
+        if (verbose) {
+            fprintf(g_test_report_file, "Debug Logging: Enabled (level: DEBUG)\n");
+            fprintf(g_test_report_file, "Note: Internal LLM debug output appears on stderr\n");
+        }
         fprintf(g_test_report_file, "\n");
         fflush(g_test_report_file);
         
@@ -1052,13 +1277,25 @@ void run_llm_tool_tests(ethervox_governor_t* governor,
         fprintf(g_test_report_file, "Pass Rate:     %.1f%%\n", pass_rate);
         fprintf(g_test_report_file, "Duration:      %.0f seconds\n", duration);
         fprintf(g_test_report_file, "\n");
-        fclose(g_test_report_file);
-        g_test_report_file = NULL;
+        fflush(g_test_report_file);  // Flush but don't close yet - cleanup will merge stderr
         
-        LLM_TEST_INFO("Test report saved to: %s", g_test_report_path);
+        LLM_TEST_INFO("Test report will be saved to: %s", g_test_report_path);
+    }
+    
+    // Restore original log level and debug flag if verbose mode was enabled
+    if (g_verbose_mode) {
+        ethervox_log_set_level(g_saved_log_level);
+        g_ethervox_debug_enabled = g_saved_debug_enabled;
+        printf(COLOR_CYAN "  ℹ Debug logging restored to previous level\n" COLOR_RESET);
     }
     
 cleanup:
+    // Stop stderr capture and merge into report (before closing report file)
+    // This must happen even on cancellation to preserve debug output
+    if (g_verbose_mode) {
+        stop_stderr_capture();
+    }
+    
     // Remove crash handlers
     remove_crash_handlers();
     
