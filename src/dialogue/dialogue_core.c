@@ -1829,7 +1829,9 @@ int ethervox_dialogue_process_llm_stream(ethervox_dialogue_engine_t* engine,
                                          const ethervox_intent_t* intent,
                                          const ethervox_dialogue_context_t* context,
                                          void (*token_callback)(const char* token, void* user_data),
-                                         void* user_data, bool* conversation_ended) {
+                                         void* user_data,
+                                         bool* conversation_ended,
+                                         ethervox_governor_progress_callback governor_progress_callback) {
   if (!engine || !intent || !token_callback) {
     return -1;
   }
@@ -1847,15 +1849,14 @@ int ethervox_dialogue_process_llm_stream(ethervox_dialogue_engine_t* engine,
     char* gov_error = NULL;
     ethervox_confidence_metrics_t metrics = {0};
     
-    // Progress callback will be added via JNI layer
-    // For now, just pass NULL (progress won't be visible)
+    // Use the provided governor progress callback (from JNI layer)
     ethervox_governor_status_t status = ethervox_governor_execute(
         (ethervox_governor_t*)engine->governor,
         intent->raw_text,
         &gov_response,
         &gov_error,
         &metrics,
-        NULL,  // Progress callback (will be wired through JNI)
+        governor_progress_callback,  // Now properly wired from JNI!
         token_callback,  // Token callback for streaming
         user_data
     );

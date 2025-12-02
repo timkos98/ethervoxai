@@ -21,6 +21,7 @@
 #include <stdint.h>
 
 #include "ethervox/config.h"
+#include "ethervox/governor.h"  // For ethervox_governor_progress_callback type
 
 #ifdef __cplusplus
 extern "C" {
@@ -181,7 +182,8 @@ int ethervox_dialogue_process_llm_stream(ethervox_dialogue_engine_t* engine,
                                          const ethervox_dialogue_context_t* context,
                                          void (*token_callback)(const char* token, void* user_data),
                                          void* user_data,
-                                         bool* conversation_ended);
+                                         bool* conversation_ended,
+                                         ethervox_governor_progress_callback governor_progress_callback);
 
 // Context management
 int ethervox_dialogue_create_context(ethervox_dialogue_engine_t* engine,

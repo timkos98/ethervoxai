@@ -665,7 +665,7 @@ int ethervox_memory_tools_register(
     // Register memory_store tool (single definition)
     ethervox_tool_t tool_store = {
         .name = "memory_store",
-        .description = "Save a fact, event, or reminder to conversation memory. For reminders, include 'reminder' tag and deadline info in text (e.g., 'Call John at 2:30 PM today' or 'Team meeting in 5 mins'). Use importance 0.0-1.0 where 1.0 is critical.",
+        .description = "Save facts, reminders, or events to memory. For reminders, use 'reminder' tag and include time/deadline in text. Importance: 0.9+ for reminders, 0.95 for personal facts, 0.8 for preferences.",
         .parameters_json_schema =
             "{"
             "  \"type\": \"object\","

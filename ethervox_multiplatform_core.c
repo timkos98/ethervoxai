@@ -896,7 +896,8 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_processDialogueStreamingN
     // Process with LLM using streaming
     result = ethervox_dialogue_process_llm_stream(g_dialogue_engine, &intent, NULL, 
                                                    native_token_callback, &stream_ctx,
-                                                   &stream_ctx.conversation_ended);
+                                                   &stream_ctx.conversation_ended,
+                                                   native_governor_progress_callback);
     
     if (result != 0) {
         LOGE("Failed to process LLM stream");
