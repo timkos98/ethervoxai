@@ -443,3 +443,118 @@ int ethervox_memory_get_by_id(
     
     return -1;  // Not found
 }
+
+int ethervox_memory_store_correction(
+    ethervox_memory_store_t* store,
+    const char* correction_text,
+    const char* context,
+    uint64_t* memory_id_out
+) {
+    if (!store || !correction_text) {
+        return -1;
+    }
+    
+    // Build complete text with context
+    char full_text[ETHERVOX_MEMORY_MAX_TEXT_LEN];
+    if (context && context[0]) {
+        snprintf(full_text, sizeof(full_text), 
+                "CORRECTION: %s (Context: %s)", correction_text, context);
+    } else {
+        snprintf(full_text, sizeof(full_text), 
+                "CORRECTION: %s", correction_text);
+    }
+    
+    // Corrections are tagged as high-priority with importance=0.99
+    const char* correction_tags[] = {"correction", "high_priority"};
+    
+    ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
+                "Storing correction for adaptive learning: %s", correction_text);
+    
+    return ethervox_memory_store_add(
+        store,
+        full_text,
+        correction_tags,
+        2,  // 2 tags
+        0.99f,  // High importance
+        true,  // User message
+        memory_id_out
+    );
+}
+
+int ethervox_memory_store_pattern(
+    ethervox_memory_store_t* store,
+    const char* pattern_description,
+    uint64_t* memory_id_out
+) {
+    if (!store || !pattern_description) {
+        return -1;
+    }
+    
+    // Build pattern text
+    char pattern_text[ETHERVOX_MEMORY_MAX_TEXT_LEN];
+    snprintf(pattern_text, sizeof(pattern_text), 
+            "SUCCESS PATTERN: %s", pattern_description);
+    
+    // Patterns are tagged with success indicators and importance=0.90
+    const char* pattern_tags[] = {"pattern", "success"};
+    
+    ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
+                "Storing success pattern: %s", pattern_description);
+    
+    return ethervox_memory_store_add(
+        store,
+        pattern_text,
+        pattern_tags,
+        2,  // 2 tags
+        0.90f,  // High importance (slightly lower than corrections)
+        false,  // Assistant message
+        memory_id_out
+    );
+}
+
+int ethervox_memory_get_corrections(
+    ethervox_memory_store_t* store,
+    ethervox_memory_search_result_t** results,
+    uint32_t* result_count,
+    uint32_t limit
+) {
+    if (!store || !results || !result_count) {
+        return -1;
+    }
+    
+    // Search for correction tag
+    const char* correction_tag = "correction";
+    return ethervox_memory_search(
+        store,
+        NULL,  // No text query, just tag filter
+        &correction_tag,
+        1,  // 1 tag
+        limit,
+        results,
+        result_count
+    );
+}
+
+int ethervox_memory_get_patterns(
+    ethervox_memory_store_t* store,
+    ethervox_memory_search_result_t** results,
+    uint32_t* result_count,
+    uint32_t limit
+) {
+    if (!store || !results || !result_count) {
+        return -1;
+    }
+    
+    // Search for pattern tag
+    const char* pattern_tag = "pattern";
+    return ethervox_memory_search(
+        store,
+        NULL,  // No text query, just tag filter
+        &pattern_tag,
+        1,  // 1 tag
+        limit,
+        results,
+        result_count
+    );
+}
+

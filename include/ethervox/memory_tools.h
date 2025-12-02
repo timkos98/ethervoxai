@@ -27,6 +27,16 @@ extern "C" {
 #define ETHERVOX_MEMORY_TAG_LEN 64
 #define ETHERVOX_MEMORY_MAX_ENTRIES 10000
 #define ETHERVOX_MEMORY_INDEX_BUCKETS 256
+#define ETHERVOX_MEMORY_HASH_BUCKETS 128
+#define ETHERVOX_MEMORY_MAX_BUCKET_SIZE 64
+
+/**
+ * Hash table bucket for fast lookups
+ */
+typedef struct {
+    uint32_t entry_indices[ETHERVOX_MEMORY_MAX_BUCKET_SIZE];  // Indices into entries array
+    uint32_t count;                                           // Number of entries in bucket
+} ethervox_memory_hash_bucket_t;
 
 /**
  * Memory entry representing a single conversational fact/event
@@ -76,10 +86,14 @@ typedef struct {
     uint32_t entry_count;
     uint32_t entry_capacity;
     
-    // Tag-based index for fast retrieval
+    // Tag-based index for fast retrieval (legacy)
     ethervox_memory_tag_index_t* tag_index;
     uint32_t tag_index_count;
     uint32_t tag_index_capacity;
+    
+    // Hash table indices for O(1) lookups
+    ethervox_memory_hash_bucket_t* tag_hash;      // Tag -> entry indices
+    ethervox_memory_hash_bucket_t* id_hash;       // ID -> entry index
     
     // Statistics
     uint64_t total_memories_stored;
@@ -306,6 +320,74 @@ int ethervox_memory_get_by_id(
     ethervox_memory_store_t* store,
     uint64_t memory_id,
     const ethervox_memory_entry_t** entry_out
+);
+
+/**
+ * TOOL: memory_store_correction - Store user corrections as high-priority learning
+ * 
+ * Corrections are tagged with ["correction", "high_priority"] and importance=0.99
+ * These are prioritized in adaptive system prompts to "teach" the model.
+ * 
+ * @param store Memory store
+ * @param correction_text What the user corrected
+ * @param context Optional context about what was wrong (can be NULL)
+ * @param memory_id_out Output: assigned memory ID
+ * @return 0 on success, negative on error
+ */
+int ethervox_memory_store_correction(
+    ethervox_memory_store_t* store,
+    const char* correction_text,
+    const char* context,
+    uint64_t* memory_id_out
+);
+
+/**
+ * TOOL: memory_store_pattern - Store successful interaction pattern
+ * 
+ * Patterns are tagged with ["pattern", "success"] and importance=0.90
+ * These are used to reinforce successful behaviors in adaptive system prompts.
+ * 
+ * @param store Memory store
+ * @param pattern_description What worked well
+ * @param memory_id_out Output: assigned memory ID
+ * @return 0 on success, negative on error
+ */
+int ethervox_memory_store_pattern(
+    ethervox_memory_store_t* store,
+    const char* pattern_description,
+    uint64_t* memory_id_out
+);
+
+/**
+ * Get user corrections for adaptive system prompt
+ * 
+ * @param store Memory store
+ * @param results Output: array of correction results (caller must free)
+ * @param result_count Output: number of results
+ * @param limit Maximum results to return
+ * @return 0 on success, negative on error
+ */
+int ethervox_memory_get_corrections(
+    ethervox_memory_store_t* store,
+    ethervox_memory_search_result_t** results,
+    uint32_t* result_count,
+    uint32_t limit
+);
+
+/**
+ * Get successful patterns for adaptive system prompt
+ * 
+ * @param store Memory store
+ * @param results Output: array of pattern results (caller must free)
+ * @param result_count Output: number of results
+ * @param limit Maximum results to return
+ * @return 0 on success, negative on error
+ */
+int ethervox_memory_get_patterns(
+    ethervox_memory_store_t* store,
+    ethervox_memory_search_result_t** results,
+    uint32_t* result_count,
+    uint32_t limit
 );
 
 /**

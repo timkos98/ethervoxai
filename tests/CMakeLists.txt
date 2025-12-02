@@ -35,6 +35,13 @@ target_include_directories(test_memory_tools PRIVATE ${CMAKE_SOURCE_DIR}/include
 add_test(NAME MemoryTools COMMAND test_memory_tools)
 set_tests_properties(MemoryTools PROPERTIES TIMEOUT 30 LABELS "unit")
 
+# Adaptive memory tests (corrections and patterns)
+add_executable(test_adaptive_memory unit/test_adaptive_memory.c)
+target_link_libraries(test_adaptive_memory ethervoxai)
+target_include_directories(test_adaptive_memory PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME AdaptiveMemory COMMAND test_adaptive_memory)
+set_tests_properties(AdaptiveMemory PROPERTIES TIMEOUT 30 LABELS "unit")
+
 # Plugin manager tests
 add_executable(test_plugin_manager unit/test_plugin_manager.c)
 target_link_libraries(test_plugin_manager ethervoxai)

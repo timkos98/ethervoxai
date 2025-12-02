@@ -99,6 +99,9 @@ static void test_registry(void) {
         return;
     }
     
+    // Create a minimal chat template for testing
+    const chat_template_t* template = chat_template_get(CHAT_TEMPLATE_CHATML, NULL);
+    
     int count = ethervox_compute_tools_register_all(&registry);
     printf("✓ Registered %d compute tools\n", count);
     
@@ -119,7 +122,7 @@ static void test_registry(void) {
     
     // Test system prompt building
     char system_prompt[4096];
-    if (ethervox_tool_registry_build_system_prompt(&registry, system_prompt, sizeof(system_prompt)) == 0) {
+    if (ethervox_tool_registry_build_system_prompt(&registry, &template, system_prompt, sizeof(system_prompt), NULL) == 0) {
         printf("✓ Built system prompt (%zu chars)\n", strlen(system_prompt));
         printf("\nSystem Prompt Preview:\n%s\n", system_prompt);
     } else {

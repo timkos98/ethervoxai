@@ -436,7 +436,8 @@ int ethervox_governor_load_model(ethervox_governor_t* governor, const char* mode
     char system_prompt[16384];
     if (ethervox_tool_registry_build_system_prompt(governor->tool_registry,
                                                    governor->chat_template,
-                                                   system_prompt, sizeof(system_prompt)) != 0) {
+                                                   system_prompt, sizeof(system_prompt),
+                                                   NULL) != 0) {  // TODO: Wire memory_store for adaptive learning
         GOV_ERROR("Failed to build system prompt");
         llama_free(governor->llm_ctx);
         llama_model_free(governor->llm_model);

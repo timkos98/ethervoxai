@@ -107,7 +107,8 @@ int ethervox_tool_registry_build_system_prompt(
     const ethervox_tool_registry_t* registry,
     const chat_template_t* chat_template,
     char* buffer,
-    size_t buffer_size
+    size_t buffer_size,
+    void* memory_store
 ) {
     if (!registry || !chat_template || !buffer || buffer_size == 0) {
         return -1;
@@ -131,8 +132,7 @@ int ethervox_tool_registry_build_system_prompt(
     
     int written = snprintf(buffer, buffer_size,
         "%s"
-        "%s\n\n"
-        "Available tools:\n",
+        "%s\n\n",
         chat_template->system_start,
         platform_context
     );
@@ -143,6 +143,109 @@ int ethervox_tool_registry_build_system_prompt(
     
     size_t remaining = buffer_size - written;
     char* ptr = buffer + written;
+    
+    // ADAPTIVE LEARNING: Inject user corrections and successful patterns
+    if (memory_store != NULL && !is_mobile) {
+        // Include memory_tools.h for the getter functions
+        // Forward declare the functions to avoid circular dependency
+        extern int ethervox_memory_get_corrections(void*, void**, uint32_t*, uint32_t);
+        extern int ethervox_memory_get_patterns(void*, void**, uint32_t*, uint32_t);
+        
+        // Get recent corrections (high priority: importance=0.99)
+        void* correction_results = NULL;
+        uint32_t correction_count = 0;
+        if (ethervox_memory_get_corrections(memory_store, &correction_results, &correction_count, 5) == 0 && correction_count > 0) {
+            int corr_written = snprintf(ptr, remaining, "USER CORRECTIONS (learn from these):\n");
+            if (corr_written > 0 && (size_t)corr_written < remaining) {
+                ptr += corr_written;
+                remaining -= corr_written;
+                
+                // Type-cast to access results (requires memory_tools.h structure)
+                typedef struct { 
+                    struct {
+                        uint64_t memory_id;
+                        uint64_t turn_id;
+                        time_t timestamp;
+                        char text[8192];
+                        char tags[16][64];
+                        uint32_t tag_count;
+                        float importance;
+                        bool is_user_message;
+                        uint32_t tools_called_count;
+                        char tools_called[16][64];
+                    } entry;
+                    float relevance;
+                } mem_search_result_t;
+                
+                mem_search_result_t* results = (mem_search_result_t*)correction_results;
+                for (uint32_t i = 0; i < correction_count && remaining > 100; i++) {
+                    int item_written = snprintf(ptr, remaining, "  - %s\n", results[i].entry.text);
+                    if (item_written > 0 && (size_t)item_written < remaining) {
+                        ptr += item_written;
+                        remaining -= item_written;
+                    }
+                }
+                
+                int newline = snprintf(ptr, remaining, "\n");
+                if (newline > 0 && (size_t)newline < remaining) {
+                    ptr += newline;
+                    remaining -= newline;
+                }
+            }
+            free(correction_results);
+        }
+        
+        // Get successful patterns (importance=0.90)
+        void* pattern_results = NULL;
+        uint32_t pattern_count = 0;
+        if (ethervox_memory_get_patterns(memory_store, &pattern_results, &pattern_count, 10) == 0 && pattern_count > 0) {
+            int pat_written = snprintf(ptr, remaining, "SUCCESSFUL PATTERNS (reinforce these behaviors):\n");
+            if (pat_written > 0 && (size_t)pat_written < remaining) {
+                ptr += pat_written;
+                remaining -= pat_written;
+                
+                typedef struct { 
+                    struct {
+                        uint64_t memory_id;
+                        uint64_t turn_id;
+                        time_t timestamp;
+                        char text[8192];
+                        char tags[16][64];
+                        uint32_t tag_count;
+                        float importance;
+                        bool is_user_message;
+                        uint32_t tools_called_count;
+                        char tools_called[16][64];
+                    } entry;
+                    float relevance;
+                } mem_search_result_t;
+                
+                mem_search_result_t* results = (mem_search_result_t*)pattern_results;
+                for (uint32_t i = 0; i < pattern_count && remaining > 100; i++) {
+                    int item_written = snprintf(ptr, remaining, "  - %s\n", results[i].entry.text);
+                    if (item_written > 0 && (size_t)item_written < remaining) {
+                        ptr += item_written;
+                        remaining -= item_written;
+                    }
+                }
+                
+                int newline = snprintf(ptr, remaining, "\n");
+                if (newline > 0 && (size_t)newline < remaining) {
+                    ptr += newline;
+                    remaining -= newline;
+                }
+            }
+            free(pattern_results);
+        }
+    }
+    
+    // Continue with tool list
+    int tools_header = snprintf(ptr, remaining, "Available tools:\n");
+    if (tools_header < 0 || (size_t)tools_header >= remaining) {
+        return -1;
+    }
+    ptr += tools_header;
+    remaining -= tools_header;
     
     // Add each tool with enhanced descriptions for desktop
     for (uint32_t i = 0; i < registry->tool_count; i++) {
@@ -179,17 +282,67 @@ int ethervox_tool_registry_build_system_prompt(
           "Ex: 5+5? → <tool_call name=\"calculator_compute\" expression=\"5+5\" />\n"
           "Ex: Remind me to call John → <tool_call name=\"memory_store\" text=\"Call John\" tags=\"reminder\" importance=\"0.9\" />\n"
         
-        // Desktop: More examples but still concise
-        : "\nUSAGE: <tool_call name=\"tool_name\" param=\"value\" />\n\n"
-          "Examples:\n"
-          "User: What time is it?\n"
-          "Assistant: <tool_call name=\"time_get_current\" />\n"
-          "User: Calculate 17/12\n"
-          "Assistant: <tool_call name=\"calculator_compute\" expression=\"17/12\" />\n"
+
+         // Desktop: Comprehensive with memory/file context
+        : "\n\nTOOL USAGE:\n"
+          "Use tools when they help answer the user's specific request. Tools are optional.\n"
+          "When you use a tool, output: <tool_call name=\"tool_name\" param=\"value\" />\n"
+          "After tool execution, you'll receive either:\n"
+          "  - Success: <tool_result>JSON data</tool_result> (respond naturally using that data)\n"
+          "  - Error: <tool_error>error message</tool_error> (acknowledge the error and offer alternative help)\n\n"
+          "EXAMPLES:\n"
+          "User: Hi\n"
+          "Assistant: Hi there! How can I help you?\n\n"
+          "User: What did we talk about last time?\n"
+          "Assistant: <tool_call name=\"memory_search\" query=\"\" limit=\"5\" />\n"
+          "<tool_result>{\"results\":[{\"text\":\"Discussed project timeline\"}]}</tool_result>\n"
+          "Assistant: We were discussing the project timeline. How's that progressing?\n\n"
           "User: My name is Tim\n"
           "Assistant: <tool_call name=\"memory_store\" text=\"User's name is Tim\" tags=\"personal\" importance=\"0.95\" />\n"
-          "User: Remind me to call mom\n"
-          "Assistant: <tool_call name=\"memory_store\" text=\"Call mom\" tags=\"reminder\" importance=\"0.9\" />\n";
+          "<tool_result>{\"success\":true}</tool_result>\n"
+          "Assistant: Nice to meet you, Tim!\n\n"
+          "User: What's my name?\n"
+          "Assistant: <tool_call name=\"memory_search\" query=\"name\" limit=\"5\" />\n"
+          "<tool_result>{\"results\":[{\"text\":\"User's name is Tim\"}]}</tool_result>\n"
+          "Assistant: Your name is Tim!\n\n"
+          "User: What time is it?\n"
+          "Assistant: <tool_call name=\"time_get_current\" />\n"
+          "<tool_result>{\"time_12hr\": \"3:45 PM\"}</tool_result>\n"
+          "The current time is 3:45 PM.\n\n"
+          "User: Calculate 17 divided by 12\n"
+          "Assistant: <tool_call name=\"calculator_compute\" expression=\"17/12\" />\n"
+          "<tool_result>{\"result\": 1.42}</tool_result>\n"
+          "17 divided by 12 is approximately 1.42.\n\n"
+          "User: Set a reminder in 5 minutes\n"
+          "Assistant: <tool_call name=\"memory_store\" text=\"Reminder set for 5 minutes from now\" tags=\"reminder\" importance=\"0.9\" />\n"
+          "<tool_result>{\"success\":true}</tool_result>\n"
+          "Done! I've set a reminder for 5 minutes from now.\n\n"
+          "User: Save our conversation to a file\n"
+          "Assistant: <tool_call name=\"memory_export\" filepath=\"./conversation.md\" format=\"markdown\" />\n"
+          "<tool_result>{\"success\":true,\"bytes_written\":1024}</tool_result>\n"
+          "I've saved our conversation to conversation.md.\n\n"
+          "User: Write a markdown note about chickens\n"
+          "Assistant: <tool_call name=\"file_write\" file_path=\"./chickens.md\" content=\"# Chickens\\n\\nChickens are domesticated birds commonly raised for eggs and meat.\" />\n"
+          "<tool_result>{\"success\":true}</tool_result>\n"
+          "Assistant: Done! I've created chickens.md with information about chickens.\n\n"
+          "User: Save my file\n"
+          "Assistant: <tool_call name=\"file_write\" file_path=\"test.md\" />\n"
+          "<tool_error>Missing 'content' parameter</tool_error>\n"
+          "Assistant: I need both the file path and the content to write. What would you like the file to contain?\n\n"
+          "TOOL SELECTION RULES:\n"
+          "1. Use memory_search ONLY when user asks about past information/context\n"
+          "2. Use memory_store when user shares personal info or creates reminders\n"
+          "3. Use memory_export when user asks to save/export conversation (requires BOTH filepath and format)\n"
+          "4. Use file_write when user asks to create/write a file (requires BOTH file_path and content - always provide full text)\n"
+          "5. Use calculator_compute for math/numeric operations\n"
+          "6. Use time tools when user asks about date/time\n"
+          "7. Use file tools for document access\n"
+          "8. Do NOT use tools for simple greetings or conversational responses\n"
+          "9. Store importance: 0.95 personal facts, 0.9 urgent reminders, 0.8 preferences. Simple conversation does not require high importance values. \n\n"
+          "RESPONSE STYLE:\n"
+          "1. Respond conversationally - NO role labels\n"
+          "2. Be helpful and contextual\n"
+          "3. Only use tools when they directly help answer the user.\n";
     
     int instr_written = snprintf(ptr, remaining, "%s", usage_section);
     

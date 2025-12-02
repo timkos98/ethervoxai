@@ -607,6 +607,80 @@ static int tool_memory_update_reminder_wrapper(
     return 0;
 }
 
+// Tool: memory_store_correction - store user correction as high-priority learning
+static int tool_memory_store_correction_wrapper(
+    const char* args_json,
+    char** result,
+    char** error
+) {
+    ethervox_memory_store_t* store = g_memory_store;
+    if (!store) {
+        *error = strdup("Memory store not initialized");
+        return -1;
+    }
+    
+    char correction_text[ETHERVOX_MEMORY_MAX_TEXT_LEN];
+    char context[ETHERVOX_MEMORY_MAX_TEXT_LEN] = {0};
+    
+    if (parse_json_string(args_json, "correction", correction_text, sizeof(correction_text)) != 0) {
+        *error = strdup("Missing 'correction' parameter");
+        return -1;
+    }
+    
+    // Context is optional
+    parse_json_string(args_json, "context", context, sizeof(context));
+    
+    uint64_t memory_id;
+    if (ethervox_memory_store_correction(store, correction_text, 
+                                         context[0] ? context : NULL, 
+                                         &memory_id) != 0) {
+        *error = strdup("Failed to store correction");
+        return -1;
+    }
+    
+    char* res = malloc(256);
+    snprintf(res, 256, 
+             "{\"success\":true,\"memory_id\":%llu,\"message\":\"Correction stored for adaptive learning\"}",
+             (unsigned long long)memory_id);
+    *result = res;
+    
+    return 0;
+}
+
+// Tool: memory_store_pattern - store successful interaction pattern
+static int tool_memory_store_pattern_wrapper(
+    const char* args_json,
+    char** result,
+    char** error
+) {
+    ethervox_memory_store_t* store = g_memory_store;
+    if (!store) {
+        *error = strdup("Memory store not initialized");
+        return -1;
+    }
+    
+    char pattern_description[ETHERVOX_MEMORY_MAX_TEXT_LEN];
+    
+    if (parse_json_string(args_json, "pattern", pattern_description, sizeof(pattern_description)) != 0) {
+        *error = strdup("Missing 'pattern' parameter");
+        return -1;
+    }
+    
+    uint64_t memory_id;
+    if (ethervox_memory_store_pattern(store, pattern_description, &memory_id) != 0) {
+        *error = strdup("Failed to store pattern");
+        return -1;
+    }
+    
+    char* res = malloc(256);
+    snprintf(res, 256, 
+             "{\"success\":true,\"memory_id\":%llu,\"message\":\"Success pattern recorded\"}",
+             (unsigned long long)memory_id);
+    *result = res;
+    
+    return 0;
+}
+
 int ethervox_memory_tools_register(
     void* registry_ptr,
     ethervox_memory_store_t* store
@@ -772,9 +846,44 @@ int ethervox_memory_tools_register(
     
     ret |= ethervox_tool_registry_add(registry, &tool_delete);
     
+    // Register memory_store_correction tool
+    ethervox_tool_t tool_correction = {
+        .name = "memory_store_correction",
+        .description = "Store user corrections as high-priority learning. Use when the user corrects your understanding, preferences, or mistakes. These corrections will be prioritized in future responses to 'teach' the model.",
+        .parameters_json_schema =
+            "{\"type\":\"object\",\"properties\":{"
+            "\"correction\":{\"type\":\"string\",\"description\":\"What the user corrected (required)\"},"
+            "\"context\":{\"type\":\"string\",\"description\":\"Optional: What was wrong or what this relates to\"}"
+            "},\"required\":[\"correction\"]}",
+        .execute = tool_memory_store_correction_wrapper,
+        .is_deterministic = false,
+        .requires_confirmation = false,
+        .is_stateful = true,
+        .estimated_latency_ms = 10.0f
+    };
+    
+    ret |= ethervox_tool_registry_add(registry, &tool_correction);
+    
+    // Register memory_store_pattern tool
+    ethervox_tool_t tool_pattern = {
+        .name = "memory_store_pattern",
+        .description = "Store successful interaction patterns. Use when an approach works well or the user explicitly approves a method. These patterns reinforce successful behaviors.",
+        .parameters_json_schema =
+            "{\"type\":\"object\",\"properties\":{"
+            "\"pattern\":{\"type\":\"string\",\"description\":\"Description of what worked well (required)\"}"
+            "},\"required\":[\"pattern\"]}",
+        .execute = tool_memory_store_pattern_wrapper,
+        .is_deterministic = false,
+        .requires_confirmation = false,
+        .is_stateful = true,
+        .estimated_latency_ms = 10.0f
+    };
+    
+    ret |= ethervox_tool_registry_add(registry, &tool_pattern);
+    
     if (ret == 0) {
         ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
-                    "Registered 6 memory tools with Governor");
+                    "Registered 8 memory tools with Governor (including correction and pattern learning)");
     }
     
     return ret;
