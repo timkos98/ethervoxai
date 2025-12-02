@@ -220,6 +220,174 @@ int ethervox_memory_export(
     return 0;
 }
 
+// Helper function to process a single JSON entry (used by both structured JSON and JSONL import)
+static bool process_json_entry(ethervox_memory_store_t* store, const char* line) {
+    // Check for special operations first
+    if (strstr(line, "\"op\":\"delete\"") || strstr(line, "\"op\":\"update\"") || 
+        strstr(line, "\"op\":\"update_text\"")) {
+        // These operations are only relevant for JSONL session logs, not for JSON exports
+        // JSON exports contain only the final state of memories, not operation history
+        return false;
+    }
+    
+    // Parse memory entry fields
+    uint64_t id = 0, turn_id = 0;
+    long timestamp = 0;
+    float importance = 0.5f;
+    bool is_user = false;
+    char text[ETHERVOX_MEMORY_MAX_TEXT_LEN] = {0};
+    
+    // Extract numeric fields
+    char* id_ptr = strstr(line, "\"memory_id\":");
+    if (!id_ptr) id_ptr = strstr(line, "\"id\":");  // Fallback for JSONL format
+    
+    char* turn_ptr = strstr(line, "\"turn_id\":");
+    if (!turn_ptr) turn_ptr = strstr(line, "\"turn\":");  // Fallback
+    
+    char* ts_ptr = strstr(line, "\"timestamp\":");
+    if (!ts_ptr) ts_ptr = strstr(line, "\"ts\":");  // Fallback
+    
+    char* imp_ptr = strstr(line, "\"importance\":");
+    if (!imp_ptr) imp_ptr = strstr(line, "\"imp\":");  // Fallback
+    
+    char* user_ptr = strstr(line, "\"is_user\":");
+    if (!user_ptr) user_ptr = strstr(line, "\"user\":");  // Fallback
+    
+    if (!id_ptr || !turn_ptr || !ts_ptr || !imp_ptr || !user_ptr) {
+        return false;  // Missing required fields
+    }
+    
+    // Parse values
+    id = strtoull(strchr(id_ptr, ':') + 1, NULL, 10);
+    turn_id = strtoull(strchr(turn_ptr, ':') + 1, NULL, 10);
+    timestamp = strtol(strchr(ts_ptr, ':') + 1, NULL, 10);
+    importance = strtof(strchr(imp_ptr, ':') + 1, NULL);
+    
+    // Check is_user boolean
+    if (strstr(user_ptr, "true")) {
+        is_user = true;
+    }
+    
+    // Extract text field
+    char* text_start = strstr(line, "\"text\":");
+    if (!text_start) return false;
+    
+    text_start = strchr(text_start, '"');
+    if (!text_start) return false;
+    text_start = strchr(text_start + 1, '"');  // Find opening quote of value
+    if (!text_start) return false;
+    text_start++;
+    
+    // Find closing quote (handle escaped quotes)
+    char* text_end = text_start;
+    while (*text_end) {
+        if (*text_end == '"' && (text_end == text_start || *(text_end - 1) != '\\')) {
+            break;
+        }
+        text_end++;
+    }
+    
+    if (*text_end != '"') return false;
+    
+    // Copy and unescape text
+    size_t text_len = text_end - text_start;
+    if (text_len >= sizeof(text)) text_len = sizeof(text) - 1;
+    
+    size_t out_idx = 0;
+    for (size_t i = 0; i < text_len && out_idx < sizeof(text) - 1; i++) {
+        if (text_start[i] == '\\' && i + 1 < text_len) {
+            i++;
+            if (text_start[i] == 'n') text[out_idx++] = '\n';
+            else if (text_start[i] == 'r') text[out_idx++] = '\r';
+            else if (text_start[i] == 't') text[out_idx++] = '\t';
+            else if (text_start[i] == '"') text[out_idx++] = '"';
+            else if (text_start[i] == '\\') text[out_idx++] = '\\';
+            else text[out_idx++] = text_start[i];
+        } else {
+            text[out_idx++] = text_start[i];
+        }
+    }
+    text[out_idx] = '\0';
+    
+    // Parse tags array
+    const char* tag_array[ETHERVOX_MEMORY_MAX_TAGS];
+    uint32_t tag_count = 0;
+    char tag_storage[ETHERVOX_MEMORY_MAX_TAGS][ETHERVOX_MEMORY_TAG_LEN];
+    
+    char* tags_start = strstr(line, "\"tags\":");
+    if (tags_start) {
+        tags_start = strchr(tags_start, '[');
+        if (tags_start) {
+            tags_start++;  // Skip '['
+            char* tags_end = strchr(tags_start, ']');
+            
+            if (tags_end) {
+                char* tag_cursor = tags_start;
+                while (tag_cursor < tags_end && tag_count < ETHERVOX_MEMORY_MAX_TAGS) {
+                    // Skip whitespace and commas
+                    while (tag_cursor < tags_end && (*tag_cursor == ' ' || *tag_cursor == ',' || 
+                           *tag_cursor == '\n' || *tag_cursor == '\r' || *tag_cursor == '\t')) {
+                        tag_cursor++;
+                    }
+                    
+                    if (*tag_cursor == '"') {
+                        tag_cursor++;  // Skip opening quote
+                        char* tag_end = tag_cursor;
+                        
+                        // Find closing quote
+                        while (tag_end < tags_end && *tag_end != '"') {
+                            tag_end++;
+                        }
+                        
+                        if (tag_end < tags_end && *tag_end == '"') {
+                            size_t tag_len = tag_end - tag_cursor;
+                            if (tag_len > 0 && tag_len < ETHERVOX_MEMORY_TAG_LEN) {
+                                memcpy(tag_storage[tag_count], tag_cursor, tag_len);
+                                tag_storage[tag_count][tag_len] = '\0';
+                                tag_array[tag_count] = tag_storage[tag_count];
+                                tag_count++;
+                            }
+                            tag_cursor = tag_end + 1;
+                        } else {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    
+    // Add "imported" tag if not already present
+    bool has_imported = false;
+    for (uint32_t i = 0; i < tag_count; i++) {
+        if (strcmp(tag_array[i], "imported") == 0) {
+            has_imported = true;
+            break;
+        }
+    }
+    
+    if (!has_imported && tag_count < ETHERVOX_MEMORY_MAX_TAGS) {
+        strcpy(tag_storage[tag_count], "imported");
+        tag_array[tag_count] = tag_storage[tag_count];
+        tag_count++;
+    }
+    
+    // Ensure at least one tag
+    if (tag_count == 0) {
+        strcpy(tag_storage[0], "imported");
+        tag_array[0] = tag_storage[0];
+        tag_count = 1;
+    }
+    
+    // Add memory with original metadata
+    uint64_t memory_id_out;
+    return (memory_store_add_internal(store, text, tag_array, tag_count,
+                                     importance, is_user, id, turn_id,
+                                     timestamp, &memory_id_out) == 0);
+}
+
 int ethervox_memory_import(
     ethervox_memory_store_t* store,
     const char* filepath,
@@ -236,7 +404,99 @@ int ethervox_memory_import(
         return -1;
     }
     
-    // Simple JSONL import (one entry per line)
+    // Detect format: check first line for structured JSON vs JSONL
+    char first_line[256];
+    if (fgets(first_line, sizeof(first_line), fp)) {
+        // Rewind after reading first line
+        fseek(fp, 0, SEEK_SET);
+        
+        // If first line contains "entries":[, it's a structured JSON export
+        if (strstr(first_line, "\"entries\"") || strstr(first_line, "{")) {
+            // Read entire file for structured JSON parsing
+            fseek(fp, 0, SEEK_END);
+            long file_size = ftell(fp);
+            fseek(fp, 0, SEEK_SET);
+            
+            char* json_data = malloc(file_size + 1);
+            if (!json_data) {
+                fclose(fp);
+                return -1;
+            }
+            
+            fread(json_data, 1, file_size, fp);
+            json_data[file_size] = '\0';
+            fclose(fp);
+            
+            // Parse structured JSON and extract entries array
+            uint32_t loaded = 0;
+            char* entries_start = strstr(json_data, "\"entries\"");
+            if (entries_start) {
+                entries_start = strchr(entries_start, '[');
+                if (entries_start) {
+                    entries_start++;  // Skip '['
+                    
+                    // Find each entry object within the array
+                    char* entry_cursor = entries_start;
+                    while (*entry_cursor && *entry_cursor != ']') {
+                        // Skip whitespace
+                        while (*entry_cursor == ' ' || *entry_cursor == '\n' || *entry_cursor == '\r' || *entry_cursor == '\t') {
+                            entry_cursor++;
+                        }
+                        
+                        if (*entry_cursor == '{') {
+                            // Found entry object start
+                            char* entry_end = entry_cursor + 1;
+                            int brace_depth = 1;
+                            
+                            // Find matching closing brace
+                            while (*entry_end && brace_depth > 0) {
+                                if (*entry_end == '{') brace_depth++;
+                                else if (*entry_end == '}') brace_depth--;
+                                entry_end++;
+                            }
+                            
+                            if (brace_depth == 0) {
+                                // Extract this entry as a line and process it
+                                size_t entry_len = entry_end - entry_cursor;
+                                char entry_line[ETHERVOX_MEMORY_MAX_TEXT_LEN + 512];
+                                
+                                if (entry_len < sizeof(entry_line)) {
+                                    memcpy(entry_line, entry_cursor, entry_len);
+                                    entry_line[entry_len] = '\0';
+                                    
+                                    // Process this entry using the same logic as JSONL
+                                    if (process_json_entry(store, entry_line)) {
+                                        loaded++;
+                                    }
+                                }
+                                
+                                entry_cursor = entry_end;
+                            } else {
+                                break;  // Malformed JSON
+                            }
+                        } else if (*entry_cursor == ',') {
+                            entry_cursor++;  // Skip comma between entries
+                        } else {
+                            break;  // Unexpected character
+                        }
+                    }
+                }
+            }
+            
+            free(json_data);
+            
+            if (turns_loaded) {
+                *turns_loaded = loaded;
+            }
+            
+            ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
+                        "Imported %u entries from structured JSON: %s", loaded, filepath);
+            
+            return 0;
+        }
+    }
+    
+    // JSONL format: one entry per line
     char line[ETHERVOX_MEMORY_MAX_TEXT_LEN + 512];
     uint32_t loaded = 0;
     
@@ -386,124 +646,9 @@ int ethervox_memory_import(
             continue;  // Skip to next line
         }
         
-        // Parse basic JSON fields (simplified parser) for regular ADD records
-        uint64_t id, turn_id;
-        long timestamp;
-        float importance;
-        char text[ETHERVOX_MEMORY_MAX_TEXT_LEN];
-        bool is_user = false;
-        
-        // Parse numeric fields
-        char* id_ptr = strstr(line, "\"id\":");
-        char* turn_ptr = strstr(line, "\"turn\":");
-        char* ts_ptr = strstr(line, "\"ts\":");
-        char* imp_ptr = strstr(line, "\"imp\":");
-        char* user_ptr = strstr(line, "\"user\":");
-        
-        if (!id_ptr || !turn_ptr || !ts_ptr || !imp_ptr || !user_ptr) {
-            continue;  // Skip malformed lines
-        }
-        
-        id = strtoull(id_ptr + 5, NULL, 10);
-        turn_id = strtoull(turn_ptr + 7, NULL, 10);
-        timestamp = strtol(ts_ptr + 5, NULL, 10);
-        importance = strtof(imp_ptr + 6, NULL);
-        
-        // Check if user:true or user:false
-        if (strstr(user_ptr, "true")) {
-            is_user = true;
-        }
-        
-        // Extract text field (between "text":" and next ",)
-        char* text_start = strstr(line, "\"text\":\"");
-        if (text_start) {
-            text_start += 8;  // Skip "text":"
-            char* text_end = text_start;
-            
-            // Find the closing quote, handling escaped quotes
-            while (*text_end) {
-                if (*text_end == '\"' && (text_end == text_start || *(text_end - 1) != '\\')) {
-                    break;
-                }
-                text_end++;
-            }
-            
-            if (*text_end == '\"') {
-                size_t len = text_end - text_start;
-                if (len > 0 && len < sizeof(text)) {
-                    strncpy(text, text_start, len);
-                    text[len] = '\0';
-                    
-                    // Parse tags from JSON (format: "tags":["tag1","tag2"])
-                    const char* tag_array[ETHERVOX_MEMORY_MAX_TAGS];
-                    uint32_t tag_count = 0;
-                    char tag_storage[ETHERVOX_MEMORY_MAX_TAGS][ETHERVOX_MEMORY_TAG_LEN];
-                    
-                    char* tags_start = strstr(line, "\"tags\":[");
-                    if (tags_start) {
-                        tags_start += 8;  // Skip "tags":[
-                        char* tags_end = strchr(tags_start, ']');
-                        
-                        if (tags_end) {
-                            // Parse each tag in the array
-                            char* tag_cursor = tags_start;
-                            while (tag_cursor < tags_end && tag_count < ETHERVOX_MEMORY_MAX_TAGS) {
-                                // Find next quoted tag
-                                char* tag_open = strchr(tag_cursor, '"');
-                                if (!tag_open || tag_open >= tags_end) break;
-                                
-                                tag_open++;
-                                char* tag_close = strchr(tag_open, '"');
-                                if (!tag_close || tag_close >= tags_end) break;
-                                
-                                // Copy tag
-                                size_t tag_len = tag_close - tag_open;
-                                if (tag_len > 0 && tag_len < ETHERVOX_MEMORY_TAG_LEN) {
-                                    strncpy(tag_storage[tag_count], tag_open, tag_len);
-                                    tag_storage[tag_count][tag_len] = '\0';
-                                    tag_array[tag_count] = tag_storage[tag_count];
-                                    tag_count++;
-                                }
-                                
-                                tag_cursor = tag_close + 1;
-                            }
-                        }
-                    }
-                    
-                    // Add "imported" tag if not already present AND if there's room
-                    bool has_imported = false;
-                    for (uint32_t i = 0; i < tag_count; i++) {
-                        if (strcmp(tag_array[i], "imported") == 0) {
-                            has_imported = true;
-                            break;
-                        }
-                    }
-                    
-                    if (!has_imported && tag_count < ETHERVOX_MEMORY_MAX_TAGS) {
-                        strncpy(tag_storage[tag_count], "imported", ETHERVOX_MEMORY_TAG_LEN - 1);
-                        tag_storage[tag_count][ETHERVOX_MEMORY_TAG_LEN - 1] = '\0';
-                        tag_array[tag_count] = tag_storage[tag_count];
-                        tag_count++;
-                    }
-                    
-                    // If no tags were parsed, use just "imported"
-                    if (tag_count == 0) {
-                        strncpy(tag_storage[0], "imported", ETHERVOX_MEMORY_TAG_LEN - 1);
-                        tag_storage[0][ETHERVOX_MEMORY_TAG_LEN - 1] = '\0';
-                        tag_array[0] = tag_storage[0];
-                        tag_count = 1;
-                    }
-                    
-                    // Add to memory with original ID, timestamp, and tags + "imported"
-                    uint64_t memory_id_out;
-                    
-                    if (memory_store_add_internal(store, text, tag_array, tag_count,
-                                                 importance, is_user, id, turn_id,
-                                                 timestamp, &memory_id_out) == 0) {
-                        loaded++;
-                    }
-                }
-            }
+        // For regular ADD records or entries, use the helper function
+        if (process_json_entry(store, line)) {
+            loaded++;
         }
     }
     

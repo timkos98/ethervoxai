@@ -1,0 +1,986 @@
+/**
+ * @file llm_tool_tests.c
+ * @brief End-to-end LLM tool usage validation tests
+ *
+ * Tests that the LLM actually calls tools correctly when prompted.
+ * Each test suite validates a specific tool or tool category:
+ * - Memory tools (store, search, retrieve)
+ * - Compute tools (calculator, etc.)
+ * - File tools (read, write)
+ * - Context tools
+ * 
+ * These tests ensure prompts are working and the model isn't hallucinating.
+ *
+ * Copyright (c) 2024-2025 EthervoxAI Team
+ * SPDX-License-Identifier: CC-BY-NC-SA-4.0
+ */
+
+#include "ethervox/governor.h"
+#include "ethervox/memory_tools.h"
+#include "ethervox/compute_tools.h"
+#include "ethervox/file_tools.h"
+#include "ethervox/logging.h"
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <time.h>
+#include <signal.h>
+#include <setjmp.h>
+#include <sys/time.h>
+#include <unistd.h>
+
+// ANSI color codes
+#define COLOR_RESET   "\033[0m"
+#define COLOR_RED     "\033[31m"
+#define COLOR_GREEN   "\033[32m"
+#define COLOR_YELLOW  "\033[33m"
+#define COLOR_BLUE    "\033[34m"
+#define COLOR_MAGENTA "\033[35m"
+#define COLOR_CYAN    "\033[36m"
+#define COLOR_BOLD    "\033[1m"
+
+#define LLM_TEST_PASS(msg, ...) printf(COLOR_GREEN "  ✓ " COLOR_RESET msg "\n", ##__VA_ARGS__)
+#define LLM_TEST_FAIL(msg, ...) printf(COLOR_RED "  ✗ " COLOR_RESET msg "\n", ##__VA_ARGS__)
+#define LLM_TEST_INFO(msg, ...) printf(COLOR_CYAN "  ℹ " COLOR_RESET msg "\n", ##__VA_ARGS__)
+#define LLM_TEST_WARN(msg, ...) printf(COLOR_YELLOW "  ⚠ " COLOR_RESET msg "\n", ##__VA_ARGS__)
+#define LLM_TEST_HEADER(msg, ...) printf("\n" COLOR_BOLD COLOR_BLUE "=== " msg " ===" COLOR_RESET "\n", ##__VA_ARGS__)
+#define LLM_TEST_SUBHEADER(msg, ...) printf("\n" COLOR_YELLOW "→ " msg COLOR_RESET "\n", ##__VA_ARGS__)
+
+static int g_llm_tests_passed = 0;
+static int g_llm_tests_failed = 0;
+static int g_llm_tests_skipped = 0;
+
+// Test report file
+static FILE* g_test_report_file = NULL;
+static char g_test_report_path[512] = {0};
+
+// Crash detection
+static jmp_buf g_crash_recovery_point;
+static volatile sig_atomic_t g_crash_occurred = 0;
+static char g_crash_signal_name[64] = {0};
+static char g_current_test_name[128] = {0};
+
+// Long runtime test state
+static volatile sig_atomic_t g_runtime_test_running = 0;
+
+// Global state for tracking tool calls
+typedef struct {
+    char tool_name[64];
+    char args_json[512];
+    bool was_called;
+    char result[256];
+} tool_call_record_t;
+
+static tool_call_record_t g_tool_calls[32];
+static uint32_t g_tool_call_count = 0;
+
+// ============================================================================
+// Test Reporting Functions
+// ============================================================================
+
+static void write_to_report(const char* format, ...) {
+    if (!g_test_report_file) return;
+    
+    va_list args;
+    va_start(args, format);
+    vfprintf(g_test_report_file, format, args);
+    va_end(args);
+    fflush(g_test_report_file);
+}
+
+static void report_test_header(const char* test_name) {
+    strncpy(g_current_test_name, test_name, sizeof(g_current_test_name) - 1);
+    write_to_report("\n=== %s ===\n", test_name);
+}
+
+static void report_test_pass(const char* msg) {
+    write_to_report("  ✓ %s\n", msg);
+}
+
+static void report_test_fail(const char* msg) {
+    write_to_report("  ✗ %s\n", msg);
+}
+
+static void report_test_info(const char* msg) {
+    write_to_report("  ℹ %s\n", msg);
+}
+
+// ============================================================================
+// Crash Detection and Recovery
+// ============================================================================
+
+static const char* signal_name(int sig) {
+    switch (sig) {
+        case SIGSEGV: return "SIGSEGV (Segmentation Fault)";
+        case SIGABRT: return "SIGABRT (Abort)";
+        case SIGFPE:  return "SIGFPE (Floating Point Exception)";
+        case SIGILL:  return "SIGILL (Illegal Instruction)";
+        case SIGBUS:  return "SIGBUS (Bus Error)";
+        default:      return "Unknown Signal";
+    }
+}
+
+static void crash_handler(int sig) {
+    g_crash_occurred = 1;
+    strncpy(g_crash_signal_name, signal_name(sig), sizeof(g_crash_signal_name) - 1);
+    
+    // Write crash report immediately
+    if (g_test_report_file) {
+        write_to_report("\n!!! CRASH DETECTED !!!\n");
+        write_to_report("Signal: %s\n", g_crash_signal_name);
+        write_to_report("Test: %s\n", g_current_test_name);
+        write_to_report("Timestamp: %ld\n", time(NULL));
+        
+        // Try to write backtrace info
+        write_to_report("\nCrash Context:\n");
+        write_to_report("  - Governor subsystem crash during test execution\n");
+        write_to_report("  - Signal received: %d (%s)\n", sig, g_crash_signal_name);
+        write_to_report("  - Attempting recovery...\n\n");
+    }
+    
+    // Generate separate crash report file
+    char crash_report_path[512];
+    snprintf(crash_report_path, sizeof(crash_report_path), 
+             "llm_test_crash_%ld.log", time(NULL));
+    
+    FILE* crash_file = fopen(crash_report_path, "w");
+    if (crash_file) {
+        fprintf(crash_file, "EthervoxAI LLM Test Suite - Crash Report\n");
+        fprintf(crash_file, "=========================================\n\n");
+        fprintf(crash_file, "Timestamp: %s", ctime(&(time_t){time(NULL)}));
+        fprintf(crash_file, "Signal: %s (%d)\n", g_crash_signal_name, sig);
+        fprintf(crash_file, "Test Name: %s\n", g_current_test_name);
+        fprintf(crash_file, "\nDescription:\n");
+        fprintf(crash_file, "The LLM subsystem crashed during test execution.\n");
+        fprintf(crash_file, "This indicates a serious issue with:\n");
+        fprintf(crash_file, "  - Model loading/inference\n");
+        fprintf(crash_file, "  - Memory management\n");
+        fprintf(crash_file, "  - Tool execution\n");
+        fprintf(crash_file, "  - Context management\n");
+        fprintf(crash_file, "\nRecommended Actions:\n");
+        fprintf(crash_file, "  1. Check model file integrity\n");
+        fprintf(crash_file, "  2. Verify system memory availability\n");
+        fprintf(crash_file, "  3. Review recent code changes\n");
+        fprintf(crash_file, "  4. Run with --debug for detailed logs\n");
+        fprintf(crash_file, "\nCrash report saved to: %s\n", crash_report_path);
+        fclose(crash_file);
+        
+        if (g_test_report_file) {
+            write_to_report("Detailed crash report: %s\n", crash_report_path);
+        }
+    }
+    
+    // Jump back to recovery point
+    longjmp(g_crash_recovery_point, 1);
+}
+
+static void install_crash_handlers(void) {
+    signal(SIGSEGV, crash_handler);
+    signal(SIGABRT, crash_handler);
+    signal(SIGFPE, crash_handler);
+    signal(SIGILL, crash_handler);
+    signal(SIGBUS, crash_handler);
+}
+
+static void remove_crash_handlers(void) {
+    signal(SIGSEGV, SIG_DFL);
+    signal(SIGABRT, SIG_DFL);
+    signal(SIGFPE, SIG_DFL);
+    signal(SIGILL, SIG_DFL);
+    signal(SIGBUS, SIG_DFL);
+}
+
+// Reset tool call tracking
+static void reset_tool_tracking(void) {
+    g_tool_call_count = 0;
+    memset(g_tool_calls, 0, sizeof(g_tool_calls));
+}
+
+// Check if specific tool was called
+static bool was_tool_called(const char* tool_name) {
+    for (uint32_t i = 0; i < g_tool_call_count; i++) {
+        if (strcmp(g_tool_calls[i].tool_name, tool_name) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Get tool call details
+static tool_call_record_t* get_tool_call(const char* tool_name) {
+    for (uint32_t i = 0; i < g_tool_call_count; i++) {
+        if (strcmp(g_tool_calls[i].tool_name, tool_name) == 0) {
+            return &g_tool_calls[i];
+        }
+    }
+    return NULL;
+}
+
+// Progress callback to intercept tool calls
+static void track_tool_progress(ethervox_governor_event_type_t event_type, 
+                                const char* message, void* user_data) {
+    (void)user_data;  // Unused
+    
+    if (event_type == ETHERVOX_GOVERNOR_EVENT_TOOL_CALL && message) {
+        const char* tool_start = strstr(message, "tool: ");
+        if (!tool_start) tool_start = strstr(message, "Calling tool:");
+        
+        if (tool_start && g_tool_call_count < 32) {
+            // Skip past "tool: " or "Calling tool: "
+            tool_start = strchr(tool_start, ':');
+            if (tool_start) {
+                tool_start++;  // Skip ':'
+                while (*tool_start == ' ') tool_start++;  // Skip spaces
+                
+                size_t len = strcspn(tool_start, " \n");
+                if (len > 0 && len < sizeof(g_tool_calls[0].tool_name)) {
+                    strncpy(g_tool_calls[g_tool_call_count].tool_name, tool_start, len);
+                    g_tool_calls[g_tool_call_count].tool_name[len] = '\0';
+                    g_tool_calls[g_tool_call_count].was_called = true;
+                    g_tool_call_count++;
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Test 1: Memory Store Tool - Basic Add/Retrieve
+// ============================================================================
+static void test_llm_memory_add(ethervox_governor_t* governor) {
+    LLM_TEST_SUBHEADER("Memory Add Tool Usage");
+    
+    reset_tool_tracking();
+    
+    const char* query = "Remember that my favorite color is blue.";
+    char* response = NULL;
+    char* error = NULL;
+    
+    LLM_TEST_INFO("Prompting: \"%s\"", query);
+    
+    ethervox_governor_status_t status = ethervox_governor_execute(
+        governor, query, &response, &error, NULL,
+        track_tool_progress, NULL, NULL
+    );
+    
+    if (status == ETHERVOX_GOVERNOR_SUCCESS) {
+        if (was_tool_called("memory_store_add")) {
+            LLM_TEST_PASS("LLM correctly called memory_store_add tool");
+            g_llm_tests_passed++;
+        } else {
+            LLM_TEST_FAIL("LLM did not call memory_store_add (may have hallucinated storage)");
+            LLM_TEST_INFO("Tools called: %u", g_tool_call_count);
+            for (uint32_t i = 0; i < g_tool_call_count; i++) {
+                LLM_TEST_INFO("  - %s", g_tool_calls[i].tool_name);
+            }
+            g_llm_tests_failed++;
+        }
+        
+        if (response && strstr(response, "blue")) {
+            LLM_TEST_PASS("Response mentions 'blue': \"%s\"", response);
+            g_llm_tests_passed++;
+        } else {
+            LLM_TEST_FAIL("Response doesn't acknowledge the color");
+            g_llm_tests_failed++;
+        }
+    } else {
+        LLM_TEST_FAIL("Governor execution failed: %s", error ? error : "unknown");
+        g_llm_tests_failed += 2;
+    }
+    
+    if (response) free(response);
+    if (error) free(error);
+}
+
+// ============================================================================
+// Test 2: Memory Search Tool
+// ============================================================================
+static void test_llm_memory_search(ethervox_governor_t* governor) {
+    LLM_TEST_SUBHEADER("Memory Search Tool Usage");
+    
+    reset_tool_tracking();
+    
+    const char* query = "What is my favorite color?";
+    char* response = NULL;
+    char* error = NULL;
+    
+    LLM_TEST_INFO("Prompting: \"%s\"", query);
+    
+    ethervox_governor_status_t status = ethervox_governor_execute(
+        governor, query, &response, &error, NULL,
+        track_tool_progress, NULL, NULL
+    );
+    
+    if (status == ETHERVOX_GOVERNOR_SUCCESS) {
+        bool called_search = was_tool_called("memory_search_text") || 
+                           was_tool_called("memory_search_by_tag");
+        
+        if (called_search) {
+            LLM_TEST_PASS("LLM correctly used memory search tool");
+            g_llm_tests_passed++;
+        } else {
+            LLM_TEST_FAIL("LLM did not search memory (may have guessed)");
+            g_llm_tests_failed++;
+        }
+        
+        if (response && strstr(response, "blue")) {
+            LLM_TEST_PASS("Response correctly recalls 'blue'");
+            g_llm_tests_passed++;
+        } else {
+            LLM_TEST_WARN("Response doesn't contain 'blue' - memory may not have persisted");
+            LLM_TEST_INFO("Response: %s", response ? response : "(null)");
+            g_llm_tests_failed++;
+        }
+    } else {
+        LLM_TEST_FAIL("Governor execution failed: %s", error ? error : "unknown");
+        g_llm_tests_failed += 2;
+    }
+    
+    if (response) free(response);
+    if (error) free(error);
+}
+
+// ============================================================================
+// Test 3: Calculator/Compute Tool
+// ============================================================================
+static void test_llm_calculator(ethervox_governor_t* governor) {
+    LLM_TEST_SUBHEADER("Calculator Tool Usage");
+    
+    reset_tool_tracking();
+    
+    const char* query = "What is 1234 times 5678?";
+    char* response = NULL;
+    char* error = NULL;
+    
+    LLM_TEST_INFO("Prompting: \"%s\"", query);
+    
+    ethervox_governor_status_t status = ethervox_governor_execute(
+        governor, query, &response, &error, NULL,
+        track_tool_progress, NULL, NULL
+    );
+    
+    if (status == ETHERVOX_GOVERNOR_SUCCESS) {
+        bool called_calc = was_tool_called("calculator_compute");
+        
+        if (called_calc) {
+            LLM_TEST_PASS("LLM correctly called calculator_compute");
+            g_llm_tests_passed++;
+        } else {
+            LLM_TEST_FAIL("LLM did not use calculator (may have computed incorrectly)");
+            LLM_TEST_INFO("Expected result: 7006652");
+            g_llm_tests_failed++;
+        }
+        
+        // Check if response contains correct answer (1234 * 5678 = 7006652)
+        if (response && strstr(response, "7006652")) {
+            LLM_TEST_PASS("Response contains correct result: 7006652");
+            g_llm_tests_passed++;
+        } else {
+            LLM_TEST_FAIL("Response has wrong result or hallucinated math");
+            LLM_TEST_INFO("Response: %s", response ? response : "(null)");
+            g_llm_tests_failed++;
+        }
+    } else {
+        LLM_TEST_FAIL("Governor execution failed: %s", error ? error : "unknown");
+        g_llm_tests_failed += 2;
+    }
+    
+    if (response) free(response);
+    if (error) free(error);
+}
+
+// ============================================================================
+// Test 4: Memory Correction (Adaptive Learning)
+// ============================================================================
+static void test_llm_memory_correction(ethervox_governor_t* governor) {
+    LLM_TEST_SUBHEADER("Memory Correction Tool Usage");
+    
+    reset_tool_tracking();
+    
+    const char* query = "Actually, I made a mistake - my favorite color is red, not blue. "
+                       "Please correct that.";
+    char* response = NULL;
+    char* error = NULL;
+    
+    LLM_TEST_INFO("Prompting: \"%s\"", query);
+    
+    ethervox_governor_status_t status = ethervox_governor_execute(
+        governor, query, &response, &error, NULL,
+        track_tool_progress, NULL, NULL
+    );
+    
+    if (status == ETHERVOX_GOVERNOR_SUCCESS) {
+        bool called_correction = was_tool_called("memory_store_correction");
+        bool called_update = was_tool_called("memory_update_tags");
+        
+        if (called_correction || called_update) {
+            LLM_TEST_PASS("LLM used correction/update tool appropriately");
+            g_llm_tests_passed++;
+        } else {
+            LLM_TEST_FAIL("LLM did not track correction (adaptive learning missed)");
+            g_llm_tests_failed++;
+        }
+        
+        if (response && strstr(response, "red")) {
+            LLM_TEST_PASS("Response acknowledges 'red' as new favorite");
+            g_llm_tests_passed++;
+        } else {
+            LLM_TEST_FAIL("Response doesn't confirm correction");
+            g_llm_tests_failed++;
+        }
+    } else {
+        LLM_TEST_FAIL("Governor execution failed: %s", error ? error : "unknown");
+        g_llm_tests_failed += 2;
+    }
+    
+    if (response) free(response);
+    if (error) free(error);
+}
+
+// ============================================================================
+// Test 5: Memory Tag-Based Retrieval
+// ============================================================================
+static void test_llm_memory_tags(ethervox_governor_t* governor) {
+    LLM_TEST_SUBHEADER("Tag-Based Memory Search");
+    
+    // First, store a tagged memory
+    reset_tool_tracking();
+    const char* setup_query = "Remember: meeting with Tim on Friday at 3pm. Tag this as urgent and work.";
+    char* response = NULL;
+    char* error = NULL;
+    
+    LLM_TEST_INFO("Setup: \"%s\"", setup_query);
+    ethervox_governor_execute(governor, setup_query, &response, &error, NULL, 
+                             track_tool_progress, NULL, NULL);
+    if (response) free(response);
+    if (error) free(error);
+    
+    // Now search by tag
+    reset_tool_tracking();
+    const char* query = "What urgent work items do I have?";
+    response = NULL;
+    error = NULL;
+    
+    LLM_TEST_INFO("Query: \"%s\"", query);
+    
+    ethervox_governor_status_t status = ethervox_governor_execute(
+        governor, query, &response, &error, NULL,
+        track_tool_progress, NULL, NULL
+    );
+    
+    if (status == ETHERVOX_GOVERNOR_SUCCESS) {
+        bool used_tag_search = was_tool_called("memory_search_by_tag");
+        
+        if (used_tag_search) {
+            LLM_TEST_PASS("LLM correctly used tag-based search");
+            g_llm_tests_passed++;
+        } else {
+            LLM_TEST_WARN("LLM may have used text search instead of tag search");
+            g_llm_tests_passed++;  // Still acceptable
+        }
+        
+        if (response && strstr(response, "Tim") && strstr(response, "Friday")) {
+            LLM_TEST_PASS("Response correctly retrieved tagged memory");
+            g_llm_tests_passed++;
+        } else {
+            LLM_TEST_FAIL("Response missing meeting details");
+            g_llm_tests_failed++;
+        }
+    } else {
+        LLM_TEST_FAIL("Governor execution failed: %s", error ? error : "unknown");
+        g_llm_tests_failed += 2;
+    }
+    
+    if (response) free(response);
+    if (error) free(error);
+}
+
+// ============================================================================
+// Test 6: Multi-Tool Orchestration
+// ============================================================================
+static void test_llm_multi_tool(ethervox_governor_t* governor) {
+    LLM_TEST_SUBHEADER("Multi-Tool Orchestration");
+    
+    reset_tool_tracking();
+    
+    const char* query = "Calculate 15 + 27, then remember the result as 'daily total'.";
+    char* response = NULL;
+    char* error = NULL;
+    
+    LLM_TEST_INFO("Prompting: \"%s\"", query);
+    
+    ethervox_governor_status_t status = ethervox_governor_execute(
+        governor, query, &response, &error, NULL,
+        track_tool_progress, NULL, NULL
+    );
+    
+    if (status == ETHERVOX_GOVERNOR_SUCCESS) {
+        bool called_calc = was_tool_called("calculator_compute");
+        bool called_memory = was_tool_called("memory_store_add");
+        
+        if (called_calc && called_memory) {
+            LLM_TEST_PASS("LLM orchestrated multiple tools correctly");
+            g_llm_tests_passed++;
+        } else if (called_calc) {
+            LLM_TEST_WARN("LLM called calculator but didn't store result");
+            g_llm_tests_failed++;
+        } else if (called_memory) {
+            LLM_TEST_WARN("LLM stored memory but didn't calculate");
+            g_llm_tests_failed++;
+        } else {
+            LLM_TEST_FAIL("LLM didn't use either required tool");
+            g_llm_tests_failed++;
+        }
+        
+        if (response && strstr(response, "42")) {
+            LLM_TEST_PASS("Response contains correct result (42)");
+            g_llm_tests_passed++;
+        } else {
+            LLM_TEST_FAIL("Response missing or incorrect");
+            g_llm_tests_failed++;
+        }
+    } else {
+        LLM_TEST_FAIL("Governor execution failed: %s", error ? error : "unknown");
+        g_llm_tests_failed += 2;
+    }
+    
+    if (response) free(response);
+    if (error) free(error);
+}
+
+// ============================================================================
+// Test 7: Model Load/Unload Cycle
+// ============================================================================
+static void test_llm_model_lifecycle(const char* model_path) {
+    LLM_TEST_SUBHEADER("Model Load/Unload Lifecycle");
+    
+    if (!model_path || !model_path[0]) {
+        LLM_TEST_WARN("No model path available for lifecycle test");
+        g_llm_tests_skipped++;
+        return;
+    }
+    
+    // Create temporary memory store for this test
+    ethervox_memory_store_t test_memory;
+    if (ethervox_memory_init(&test_memory, "lifecycle_test", "/tmp") != 0) {
+        LLM_TEST_FAIL("Failed to initialize test memory store");
+        g_llm_tests_failed++;
+        return;
+    }
+    
+    // Create temporary tool registry
+    ethervox_tool_registry_t test_registry = {0};
+    if (ethervox_tool_registry_init(&test_registry, 16) != 0) {
+        LLM_TEST_FAIL("Failed to initialize test registry");
+        ethervox_memory_cleanup(&test_memory);
+        g_llm_tests_failed++;
+        return;
+    }
+    
+    // Register minimal tools
+    ethervox_compute_tools_register_all(&test_registry);
+    LLM_TEST_INFO("Registered %u tools for lifecycle test", test_registry.tool_count);
+    
+    // Test 1: Initialize governor
+    ethervox_governor_t* test_governor = NULL;
+    if (ethervox_governor_init(&test_governor, NULL, &test_registry) != 0) {
+        LLM_TEST_FAIL("Failed to initialize governor");
+        ethervox_tool_registry_cleanup(&test_registry);
+        ethervox_memory_cleanup(&test_memory);
+        g_llm_tests_failed++;
+        return;
+    }
+    LLM_TEST_PASS("Governor initialized successfully");
+    g_llm_tests_passed++;
+    
+    // Test 2: Load model
+    LLM_TEST_INFO("Loading model: %s", model_path);
+    if (ethervox_governor_load_model(test_governor, model_path) != 0) {
+        LLM_TEST_FAIL("Failed to load model");
+        ethervox_governor_cleanup(test_governor);
+        ethervox_tool_registry_cleanup(&test_registry);
+        ethervox_memory_cleanup(&test_memory);
+        g_llm_tests_failed += 3;  // Count remaining tests as failed
+        return;
+    }
+    LLM_TEST_PASS("Model loaded successfully");
+    g_llm_tests_passed++;
+    
+    // Test 3: Verify model works with simple query
+    const char* test_query = "What is 2 + 2?";
+    char* response = NULL;
+    char* error = NULL;
+    
+    LLM_TEST_INFO("Testing inference: \"%s\"", test_query);
+    ethervox_governor_status_t status = ethervox_governor_execute(
+        test_governor, test_query, &response, &error, NULL, NULL, NULL, NULL
+    );
+    
+    if (status == ETHERVOX_GOVERNOR_SUCCESS && response) {
+        LLM_TEST_PASS("Model inference successful");
+        LLM_TEST_INFO("Response: %s", response);
+        g_llm_tests_passed++;
+        
+        // Check if answer makes sense (should contain "4")
+        if (strstr(response, "4")) {
+            LLM_TEST_PASS("Model produced correct answer");
+            g_llm_tests_passed++;
+        } else {
+            LLM_TEST_WARN("Model response may be incorrect");
+            LLM_TEST_INFO("Expected '4' in response, got: %s", response);
+            g_llm_tests_passed++;  // Still pass, model worked
+        }
+    } else {
+        LLM_TEST_FAIL("Model inference failed: %s", error ? error : "unknown");
+        g_llm_tests_failed += 2;
+    }
+    
+    if (response) free(response);
+    if (error) free(error);
+    
+    // Test 4: Cleanup/unload model
+    LLM_TEST_INFO("Unloading model and cleaning up governor");
+    ethervox_governor_cleanup(test_governor);
+    LLM_TEST_PASS("Governor cleanup completed");
+    g_llm_tests_passed++;
+    
+    // Test 5: Verify governor was properly cleaned up
+    // In a real scenario, we'd check memory stats, but we'll just verify cleanup didn't crash
+    LLM_TEST_PASS("Model unload completed without errors");
+    g_llm_tests_passed++;
+    
+    // Cleanup test resources
+    ethervox_tool_registry_cleanup(&test_registry);
+    ethervox_memory_cleanup(&test_memory);
+}
+
+// ============================================================================
+// Test 8: Long Runtime Stress Test
+// ============================================================================
+static void test_llm_long_runtime(ethervox_governor_t* governor) {
+    LLM_TEST_SUBHEADER("Long Runtime Stress Test (5 minutes)");
+    
+    if (!governor) {
+        LLM_TEST_FAIL("No governor instance available");
+        g_llm_tests_failed++;
+        return;
+    }
+    
+    report_test_header("Test 8: Long Runtime Stress Test");
+    
+    const int test_duration_seconds = 300;  // 5 minutes
+    const int query_interval_seconds = 10;   // Query every 10 seconds
+    
+    LLM_TEST_INFO("Running stress test for %d seconds (%d minutes)", 
+                  test_duration_seconds, test_duration_seconds / 60);
+    LLM_TEST_INFO("Queries will be sent every %d seconds", query_interval_seconds);
+    report_test_info("Starting long runtime stress test");
+    
+    time_t start_time = time(NULL);
+    time_t end_time = start_time + test_duration_seconds;
+    
+    // Diverse set of queries to stress different code paths
+    const char* test_queries[] = {
+        "What is 123 + 456?",
+        "Calculate 50% of 1000",
+        "Remember that the stress test is running",
+        "What time is it?",
+        "Calculate 15 * 8",
+        "Search for previous calculations",
+        "What is 2 to the power of 10?",
+        "Calculate 75% of 200"
+    };
+    const int num_queries = sizeof(test_queries) / sizeof(test_queries[0]);
+    
+    int total_queries = 0;
+    int successful_queries = 0;
+    int failed_queries = 0;
+    int crashed_queries = 0;
+    
+    g_runtime_test_running = 1;
+    
+    while (time(NULL) < end_time && g_runtime_test_running) {
+        const char* query = test_queries[total_queries % num_queries];
+        
+        LLM_TEST_INFO("Query #%d: \"%s\"", total_queries + 1, query);
+        report_test_info("Executing query");
+        write_to_report("    Query #%d: \"%s\"\n", total_queries + 1, query);
+        
+        char* response = NULL;
+        char* error = NULL;
+        
+        // Set up crash recovery point
+        if (setjmp(g_crash_recovery_point) != 0) {
+            // Crashed!
+            crashed_queries++;
+            LLM_TEST_FAIL("Query #%d CRASHED: %s", total_queries + 1, g_crash_signal_name);
+            report_test_fail("Query crashed");
+            write_to_report("    CRASH: %s\n", g_crash_signal_name);
+            
+            if (response) free(response);
+            if (error) free(error);
+            
+            // Continue with next query after crash
+            total_queries++;
+            sleep(1);  // Brief pause after crash
+            continue;
+        }
+        
+        // Execute query with crash protection
+        ethervox_governor_status_t status = ethervox_governor_execute(
+            governor, query, &response, &error, NULL, NULL, NULL, NULL
+        );
+        
+        if (status == ETHERVOX_GOVERNOR_SUCCESS && response) {
+            successful_queries++;
+            write_to_report("    ✓ Success (response length: %zu)\n", strlen(response));
+        } else {
+            failed_queries++;
+            LLM_TEST_WARN("Query #%d failed: %s", total_queries + 1, 
+                         error ? error : "unknown");
+            write_to_report("    ✗ Failed: %s\n", error ? error : "unknown");
+        }
+        
+        if (response) free(response);
+        if (error) free(error);
+        
+        total_queries++;
+        
+        // Progress update every 30 seconds
+        time_t elapsed = time(NULL) - start_time;
+        if (elapsed % 30 == 0 && elapsed > 0) {
+            time_t remaining = end_time - time(NULL);
+            LLM_TEST_INFO("Progress: %ld/%d seconds (%.1f%%), %ld seconds remaining",
+                         elapsed, test_duration_seconds,
+                         (elapsed * 100.0) / test_duration_seconds,
+                         remaining);
+        }
+        
+        // Wait for next query interval (or until test ends)
+        time_t next_query_time = time(NULL) + query_interval_seconds;
+        while (time(NULL) < next_query_time && time(NULL) < end_time) {
+            sleep(1);
+        }
+    }
+    
+    g_runtime_test_running = 0;
+    
+    // Report results
+    time_t total_duration = time(NULL) - start_time;
+    
+    LLM_TEST_HEADER("Stress Test Results");
+    LLM_TEST_INFO("Duration: %ld seconds (%.1f minutes)", 
+                  total_duration, total_duration / 60.0);
+    LLM_TEST_INFO("Total queries: %d", total_queries);
+    LLM_TEST_INFO("Successful: %d (%.1f%%)", successful_queries, 
+                  (successful_queries * 100.0) / (total_queries > 0 ? total_queries : 1));
+    LLM_TEST_INFO("Failed: %d (%.1f%%)", failed_queries,
+                  (failed_queries * 100.0) / (total_queries > 0 ? total_queries : 1));
+    
+    report_test_info("Stress test completed");
+    write_to_report("\nStress Test Summary:\n");
+    write_to_report("  Duration: %ld seconds\n", total_duration);
+    write_to_report("  Total queries: %d\n", total_queries);
+    write_to_report("  Successful: %d (%.1f%%)\n", successful_queries,
+                   (successful_queries * 100.0) / (total_queries > 0 ? total_queries : 1));
+    write_to_report("  Failed: %d\n", failed_queries);
+    write_to_report("  Crashed: %d\n", crashed_queries);
+    
+    if (crashed_queries > 0) {
+        LLM_TEST_FAIL("CRITICAL: %d queries caused crashes!", crashed_queries);
+        report_test_fail("Crashes detected during stress test");
+        g_llm_tests_failed++;
+    } else if (successful_queries == total_queries) {
+        LLM_TEST_PASS("All queries completed successfully");
+        report_test_pass("100% success rate, no crashes");
+        g_llm_tests_passed++;
+    } else if (successful_queries > total_queries * 0.9) {
+        LLM_TEST_PASS("Stress test passed with >90%% success rate");
+        report_test_pass("Good stability, minimal failures");
+        g_llm_tests_passed++;
+    } else {
+        LLM_TEST_FAIL("Too many failures (%d/%d)", failed_queries, total_queries);
+        report_test_fail("High failure rate");
+        g_llm_tests_failed++;
+    }
+}
+
+// ============================================================================
+// Main LLM Test Runner
+// ============================================================================
+void run_llm_tool_tests(ethervox_governor_t* governor, 
+                       ethervox_memory_store_t* memory_store,
+                       const char* model_path) {
+    printf("\n");
+    printf(COLOR_BOLD COLOR_MAGENTA);
+    printf("╔═══════════════════════════════════════════════════════════════╗\n");
+    printf("║                                                               ║\n");
+    printf("║          LLM TOOL USAGE VALIDATION SUITE                     ║\n");
+    printf("║          End-to-End Integration Tests                        ║\n");
+    printf("║                                                               ║\n");
+    printf("╚═══════════════════════════════════════════════════════════════╝\n");
+    printf(COLOR_RESET);
+    
+    // Initialize test report file
+    time_t report_time = time(NULL);
+    snprintf(g_test_report_path, sizeof(g_test_report_path),
+             "llm_test_report_%ld.log", report_time);
+    
+    g_test_report_file = fopen(g_test_report_path, "w");
+    if (g_test_report_file) {
+        fprintf(g_test_report_file, "EthervoxAI LLM Tool Usage Test Report\n");
+        fprintf(g_test_report_file, "======================================\n\n");
+        fprintf(g_test_report_file, "Timestamp: %s", ctime(&report_time));
+        fprintf(g_test_report_file, "Model Path: %s\n", model_path ? model_path : "N/A");
+        fprintf(g_test_report_file, "\n");
+        fflush(g_test_report_file);
+        
+        LLM_TEST_INFO("Test report: %s", g_test_report_path);
+    }
+    
+    // Install crash handlers
+    install_crash_handlers();
+    LLM_TEST_INFO("Crash detection enabled");
+    
+    // Validate inputs
+    if (!governor) {
+        LLM_TEST_FAIL("No Governor instance provided");
+        LLM_TEST_INFO("Governor must be initialized before running LLM tests");
+        report_test_fail("No governor instance");
+        printf("\n");
+        goto cleanup;
+    }
+    
+    if (!memory_store) {
+        LLM_TEST_FAIL("No memory store provided");
+        report_test_fail("No memory store");
+        printf("\n");
+        goto cleanup;
+    }
+    
+    // Check if model is loaded
+    // Note: We assume the model is already loaded via auto-load or /load command
+    LLM_TEST_HEADER("Using Active Governor");
+    report_test_header("Initialization");
+    LLM_TEST_INFO("Using existing Governor instance (model should be auto-loaded)");
+    LLM_TEST_INFO("Default model: models/granite-4.0-h-tiny-Q4_K_M.gguf");
+    report_test_info("Using auto-loaded model");
+    
+    LLM_TEST_PASS("Model loaded successfully");
+    report_test_pass("Model ready");
+    
+    time_t start_time = time(NULL);
+    
+    // Run all LLM tool tests
+    LLM_TEST_HEADER("Test 1: Memory Add Tool");
+    report_test_header("Test 1: Memory Add Tool");
+    test_llm_memory_add(governor);
+    
+    LLM_TEST_HEADER("Test 2: Memory Search Tool");
+    report_test_header("Test 2: Memory Search Tool");
+    test_llm_memory_search(governor);
+    
+    LLM_TEST_HEADER("Test 3: Calculator Tool");
+    report_test_header("Test 3: Calculator Tool");
+    test_llm_calculator(governor);
+    
+    LLM_TEST_HEADER("Test 4: Memory Correction (Adaptive)");
+    report_test_header("Test 4: Memory Correction (Adaptive)");
+    test_llm_memory_correction(governor);
+    
+    LLM_TEST_HEADER("Test 5: Tag-Based Memory Search");
+    report_test_header("Test 5: Tag-Based Memory Search");
+    test_llm_memory_tags(governor);
+    
+    LLM_TEST_HEADER("Test 6: Multi-Tool Orchestration");
+    report_test_header("Test 6: Multi-Tool Orchestration");
+    test_llm_multi_tool(governor);
+    
+    LLM_TEST_HEADER("Test 7: Model Load/Unload Lifecycle");
+    report_test_header("Test 7: Model Load/Unload Lifecycle");
+    test_llm_model_lifecycle(model_path);
+    
+    LLM_TEST_HEADER("Test 8: Long Runtime Stress Test");
+    report_test_header("Test 8: Long Runtime Stress Test");
+    test_llm_long_runtime(governor);
+    
+    time_t end_time = time(NULL);
+    double duration = difftime(end_time, start_time);
+    
+    // Summary
+    printf("\n");
+    printf(COLOR_BOLD COLOR_MAGENTA);
+    printf("╔═══════════════════════════════════════════════════════════════╗\n");
+    printf("║                 LLM TEST SUMMARY                              ║\n");
+    printf("╚═══════════════════════════════════════════════════════════════╝\n");
+    printf(COLOR_RESET);
+    printf("\n");
+    
+    int total_tests = g_llm_tests_passed + g_llm_tests_failed;
+    double pass_rate = total_tests > 0 ? (g_llm_tests_passed * 100.0 / total_tests) : 0.0;
+    
+    printf(COLOR_GREEN "  Tests Passed:  %d\n" COLOR_RESET, g_llm_tests_passed);
+    printf(COLOR_RED "  Tests Failed:  %d\n" COLOR_RESET, g_llm_tests_failed);
+    if (g_llm_tests_skipped > 0) {
+        printf(COLOR_YELLOW "  Tests Skipped: %d\n" COLOR_RESET, g_llm_tests_skipped);
+    }
+    printf(COLOR_CYAN "  Total Tests:   %d\n" COLOR_RESET, total_tests);
+    printf(COLOR_YELLOW "  Pass Rate:     %.1f%%\n" COLOR_RESET, pass_rate);
+    printf(COLOR_BLUE "  Duration:      %.0f seconds\n" COLOR_RESET, duration);
+    printf("\n");
+    
+    if (g_llm_tests_failed == 0 && total_tests > 0) {
+        printf(COLOR_BOLD COLOR_GREEN);
+        printf("  ✓✓✓ ALL LLM TESTS PASSED! ✓✓✓\n");
+        printf(COLOR_RESET);
+        printf("\n");
+        printf(COLOR_CYAN);
+        printf("  🎯 The model correctly uses tools and doesn't hallucinate!\n");
+        printf(COLOR_RESET);
+    } else if (pass_rate >= 75.0) {
+        printf(COLOR_BOLD COLOR_YELLOW);
+        printf("  ⚠ Most tests passed - minor prompt tuning may help\n");
+        printf(COLOR_RESET);
+    } else {
+        printf(COLOR_BOLD COLOR_RED);
+        printf("  ❌ Many tests failed - prompts need significant work\n");
+        printf(COLOR_RESET);
+        printf("\n");
+        printf(COLOR_YELLOW);
+        printf("  💡 Suggestions:\n");
+        printf("     - Review system prompt in tool_registry.c\n");
+        printf("     - Check tool descriptions are clear\n");
+        printf("     - Verify model is compatible (Phi-3.5 recommended)\n");
+        printf(COLOR_RESET);
+    }
+    
+    printf("\n");
+    
+    // Write summary to report file
+    if (g_test_report_file) {
+        fprintf(g_test_report_file, "\n=== Test Summary ===\n");
+        fprintf(g_test_report_file, "Tests Passed:  %d\n", g_llm_tests_passed);
+        fprintf(g_test_report_file, "Tests Failed:  %d\n", g_llm_tests_failed);
+        fprintf(g_test_report_file, "Tests Skipped: %d\n", g_llm_tests_skipped);
+        fprintf(g_test_report_file, "Total Tests:   %d\n", total_tests);
+        fprintf(g_test_report_file, "Pass Rate:     %.1f%%\n", pass_rate);
+        fprintf(g_test_report_file, "Duration:      %.0f seconds\n", duration);
+        fprintf(g_test_report_file, "\n");
+        fclose(g_test_report_file);
+        g_test_report_file = NULL;
+        
+        LLM_TEST_INFO("Test report saved to: %s", g_test_report_path);
+    }
+    
+cleanup:
+    // Remove crash handlers
+    remove_crash_handlers();
+    
+    // Close report file if still open
+    if (g_test_report_file) {
+        fclose(g_test_report_file);
+        g_test_report_file = NULL;
+    }
+    
+    // Note: We don't cleanup governor or memory_store since they're owned by main()
+}

@@ -36,6 +36,8 @@
 #include "ethervox/memory_tools.h"
 #include "ethervox/file_tools.h"
 #include "ethervox/logging.h"
+#include "ethervox/integration_tests.h"
+#include "ethervox/llm_tool_tests.h"
 
 // External debug flag from logging.c (declared in config.h)
 // extern int g_ethervox_debug_enabled; // Already declared in config.h
@@ -94,7 +96,8 @@ static void print_banner(void) {
 static void print_help(void) {
     printf("\nAvailable Commands:\n");
     printf("  /help              Show this help message\n");
-    printf("  /test              Run component tests\n");
+    printf("  /test              Run comprehensive integration tests\n");
+    printf("  /testllm           Run LLM tool usage tests (validates prompts work)\n");
     printf("  /load <path>       Load Governor model\n");
     printf("  /tools             Show loaded Governor tools\n");
     printf("  /search <query>    Search conversation memory\n");
@@ -597,7 +600,16 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
     }
     
     if (strcmp(line, "/test") == 0) {
-        run_component_tests(memory->storage_filepath[0] ? "./memory_data" : "/tmp");
+        printf("\n");
+        run_integration_tests();
+        printf("\n");
+        return;
+    }
+    
+    if (strncmp(line, "/testllm", 8) == 0) {
+        printf("\n");
+        run_llm_tool_tests(governor, memory, g_loaded_model_path);
+        printf("\n");
         return;
     }
     

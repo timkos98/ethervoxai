@@ -252,6 +252,12 @@ file(GLOB CONTEXT_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/context
 list(APPEND ETHERVOXAI_CORE_SOURCES ${CONTEXT_TOOLS_SOURCES})
 message(STATUS "Context tools plugin sources included")
 
+# Add dialogue sources (including integration tests)
+file(GLOB DIALOGUE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/dialogue/*.c")
+list(FILTER DIALOGUE_SOURCES EXCLUDE REGEX ".*test_.*\\.c$")  # Exclude test_ files
+list(APPEND ETHERVOXAI_CORE_SOURCES ${DIALOGUE_SOURCES})
+message(STATUS "Dialogue sources included: ${DIALOGUE_SOURCES}")
+
 # Shared audio core implementation (excluding platform-specific files)
 list(APPEND ETHERVOXAI_CORE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/audio/audio_core.c")
 
