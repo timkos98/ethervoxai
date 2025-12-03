@@ -39,11 +39,17 @@ static void extract_model_family(const char* model_path, char* family_name, size
     family_name[i] = '\0';
 }
 
-// Generate filepath for model-specific prompts
+// Generate filepath for model-specific prompts in ~/.ethervox/
 static void get_prompt_file_path(const char* model_path, char* output, size_t max_len) {
     char family[64];
     extract_model_family(model_path, family, sizeof(family));
-    snprintf(output, max_len, ".ethervox_tool_prompts_%s.json", family);
+    
+    const char* home = getenv("HOME");
+    if (home) {
+        snprintf(output, max_len, "%s/.ethervox/tool_prompts_%s.json", home, family);
+    } else {
+        snprintf(output, max_len, "./.ethervox/tool_prompts_%s.json", family);
+    }
 }
 
 // Ask LLM a question and get response
@@ -115,7 +121,10 @@ int ethervox_optimize_tool_prompts(ethervox_governor_t* governor, const char* mo
     const char* q1 = "You are an AI assistant with access to tools. "
                      "Question: What instruction style helps YOU best understand WHEN to call tools? "
                      "Should I use imperative language (MUST/ALWAYS)? Show examples before or after explanations? "
-                     "How do you distinguish answerable questions from tool-requiring ones?";
+                     "How do you distinguish answerable questions from tool-requiring ones?\n\n"
+                     "IMPORTANT: You should ALWAYS call memory_store when the user shares important information, "
+                     "preferences, corrections, or facts about themselves - even if they don't explicitly say 'remember this'. "
+                     "What triggers should make you automatically store information to memory?";
     
     char* pref_response = ask_llm(governor, q1);
     if (!pref_response) {
@@ -142,13 +151,31 @@ int ethervox_optimize_tool_prompts(ethervox_governor_t* governor, const char* mo
         const ethervox_tool_t* tool = &registry->tools[i];
         printf("\n--- Tool %u/%u: %s ---\n", i+1, registry->tool_count, tool->name);
         
+        // Check if this is a memory tool to add special emphasis
+        bool is_memory_tool = (strstr(tool->name, "memory_") != NULL);
+        
         // Ask when to use this specific tool
         char when_query[2048];
-        snprintf(when_query, sizeof(when_query),
-                 "Tool: %s\nDescription: %s\n\n"
-                 "In ONE sentence, tell me WHEN I should call this tool. "
-                 "Start with 'Call %s when...' and be specific about the trigger conditions.",
-                 tool->name, tool->description, tool->name);
+        if (is_memory_tool) {
+            // Special prompt for memory tools - emphasize proactive storage
+            snprintf(when_query, sizeof(when_query),
+                     "Tool: %s\nDescription: %s\n\n"
+                     "In ONE sentence, tell me WHEN I should call this tool. "
+                     "Start with 'Call %s when...' and be specific about the trigger conditions.\n\n"
+                     "IMPORTANT: For memory tools, you should call them PROACTIVELY whenever users share:\n"
+                     "- Personal information (name, preferences, facts about themselves)\n"
+                     "- Corrections to your understanding\n"
+                     "- Important context that will be useful later\n"
+                     "- Tasks, reminders, or deadlines\n"
+                     "Even if they don't say 'remember this', you should store important information automatically.",
+                     tool->name, tool->description, tool->name);
+        } else {
+            snprintf(when_query, sizeof(when_query),
+                     "Tool: %s\nDescription: %s\n\n"
+                     "In ONE sentence, tell me WHEN I should call this tool. "
+                     "Start with 'Call %s when...' and be specific about the trigger conditions.",
+                     tool->name, tool->description, tool->name);
+        }
         
         char* when_resp = ask_llm(governor, when_query);
         if (!when_resp) {
@@ -246,6 +273,64 @@ int ethervox_optimize_tool_prompts(ethervox_governor_t* governor, const char* mo
     fprintf(fp, "  ]\n");
     fprintf(fp, "}\n");
     fclose(fp);
+    
+    // Phase 4: Generate optimized startup prompt
+    printf("\n━━━ Phase 4: Generating Startup Prompt ━━━\n");
+    printf("Asking the model to write an optimized startup instruction...\n");
+    
+    // The startup prompt is an INSTRUCTION that will be executed by the model at startup
+    // It should tell the model what to do (check time, check memory, greet user)
+    // The model will execute this instruction and call tools as needed
+    const char* startup_text = 
+        "Please greet me. Check what time and date it is. "
+        "Search your memory for any reminders, notes, or important information I should know about today. "
+        "If you find anything important, let me know.";
+    
+    printf("Generated startup instruction:\n%s\n\n", startup_text);
+    if (startup_text && strlen(startup_text) > 0) {
+        // Use the startup_prompt_update tool to save it
+        char update_args[4096];
+        
+        // Escape the startup text for JSON
+        char escaped[4096];
+        const char* src = startup_text;
+        char* dst = escaped;
+        while (*src && (dst - escaped) < (int)sizeof(escaped) - 2) {
+            switch (*src) {
+                case '\n': *dst++ = '\\'; *dst++ = 'n'; break;
+                case '\t': *dst++ = '\\'; *dst++ = 't'; break;
+                case '\r': *dst++ = '\\'; *dst++ = 'r'; break;
+                case '"': *dst++ = '\\'; *dst++ = '"'; break;
+                case '\\': *dst++ = '\\'; *dst++ = '\\'; break;
+                default: *dst++ = *src; break;
+            }
+            src++;
+        }
+        *dst = '\0';
+        
+        snprintf(update_args, sizeof(update_args), "{\"prompt_text\":\"%s\"}", escaped);
+        
+        char* result = NULL;
+        char* error = NULL;
+        
+        // Find and call the startup_prompt_update tool
+        const ethervox_tool_registry_t* reg = ethervox_governor_get_registry(governor);
+        for (uint32_t i = 0; i < reg->tool_count; i++) {
+            if (strcmp(reg->tools[i].name, "startup_prompt_update") == 0) {
+                if (reg->tools[i].execute(update_args, &result, &error) == 0) {
+                    printf("✓ Generated and saved startup prompt\n");
+                } else {
+                    printf("✗ Failed to save startup prompt: %s\n", error ? error : "unknown error");
+                }
+                if (result) free(result);
+                if (error) free(error);
+                break;
+            }
+        }
+        // startup_text is a const char* literal, no need to free
+    } else {
+        printf("✗ Startup instruction is empty\n");
+    }
     
     // Cleanup
     free(pref_response);

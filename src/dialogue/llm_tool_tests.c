@@ -269,10 +269,23 @@ static void crash_handler(int sig) {
         write_to_report("  - Attempting recovery...\n\n");
     }
     
-    // Generate separate crash report file
+    // Generate separate crash report file in ~/.ethervox/tests/
+    const char* home = getenv("HOME");
     char crash_report_path[512];
-    snprintf(crash_report_path, sizeof(crash_report_path), 
-             "llm_test_crash_%ld.log", time(NULL));
+    if (home) {
+        char test_dir[512];
+        snprintf(test_dir, sizeof(test_dir), "%s/.ethervox/tests", home);
+        #ifdef _WIN32
+        _mkdir(test_dir);
+        #else
+        mkdir(test_dir, 0755);
+        #endif
+        snprintf(crash_report_path, sizeof(crash_report_path), 
+                 "%s/llm_test_crash_%ld.log", test_dir, time(NULL));
+    } else {
+        snprintf(crash_report_path, sizeof(crash_report_path), 
+                 "./.ethervox/tests/llm_test_crash_%ld.log", time(NULL));
+    }
     
     FILE* crash_file = fopen(crash_report_path, "w");
     if (crash_file) {
@@ -421,11 +434,11 @@ static void test_llm_memory_add(ethervox_governor_t* governor) {
     }
     
     if (status == ETHERVOX_GOVERNOR_SUCCESS) {
-        if (was_tool_called("memory_store_add")) {
-            LLM_TEST_PASS("LLM correctly called memory_store_add tool");
+        if (was_tool_called("memory_store")) {
+            LLM_TEST_PASS("LLM correctly called memory_store tool");
             g_llm_tests_passed++;
         } else {
-            LLM_TEST_FAIL("LLM did not call memory_store_add (may have hallucinated storage)");
+            LLM_TEST_FAIL("LLM did not call memory_store (may have hallucinated storage)");
             LLM_TEST_INFO("Tools called: %u", g_tool_call_count);
             report_debug("Total tools called: %u", g_tool_call_count);
             for (uint32_t i = 0; i < g_tool_call_count; i++) {
@@ -477,8 +490,7 @@ static void test_llm_memory_search(ethervox_governor_t* governor) {
     report_debug("Total tools called: %u", g_tool_call_count);
     
     if (status == ETHERVOX_GOVERNOR_SUCCESS) {
-        bool called_search = was_tool_called("memory_search_text") || 
-                           was_tool_called("memory_search_by_tag");
+        bool called_search = was_tool_called("memory_search");
         
         report_debug("Called memory_search: %s", called_search ? "yes" : "no");
         
@@ -592,7 +604,7 @@ static void test_llm_memory_correction(ethervox_governor_t* governor) {
     
     if (status == ETHERVOX_GOVERNOR_SUCCESS) {
         bool called_correction = was_tool_called("memory_store_correction");
-        bool called_update = was_tool_called("memory_update_tags");
+        bool called_update = was_tool_called("memory_store");
         
         report_debug("Called correction/update: %s", (called_correction || called_update) ? "yes" : "no");
         
@@ -658,7 +670,7 @@ static void test_llm_memory_tags(ethervox_governor_t* governor) {
     report_debug("Total tools called: %u", g_tool_call_count);
     
     if (status == ETHERVOX_GOVERNOR_SUCCESS) {
-        bool used_tag_search = was_tool_called("memory_search_by_tag");
+        bool used_tag_search = was_tool_called("memory_search");
         
         report_debug("Used tag-based search: %s", used_tag_search ? "yes" : "no");
         
@@ -713,7 +725,7 @@ static void test_llm_multi_tool(ethervox_governor_t* governor) {
     
     if (status == ETHERVOX_GOVERNOR_SUCCESS) {
         bool called_calc = was_tool_called("calculator_compute");
-        bool called_memory = was_tool_called("memory_store_add");
+        bool called_memory = was_tool_called("memory_store");
         
         report_debug("Called calculator: %s, Called memory: %s", 
                     called_calc ? "yes" : "no", called_memory ? "yes" : "no");
@@ -1128,6 +1140,167 @@ static void test_context_window_management(ethervox_governor_t* governor) {
 }
 
 // ============================================================================
+// Test 10: Startup Prompt Tools (Read/Write)
+// ============================================================================
+static void test_llm_startup_prompt_tools(ethervox_governor_t* governor) {
+    LLM_TEST_SUBHEADER("Startup Prompt Self-Modification");
+    
+    // Save original startup prompt for restoration
+    reset_tool_tracking();
+    char* original_prompt = NULL;
+    char* response = NULL;
+    char* error = NULL;
+    
+    // Read current startup prompt
+    const char* read_query = "Read the current startup prompt using the appropriate tool.";
+    LLM_TEST_INFO("Setup: \"%s\"", read_query);
+    
+    ethervox_governor_status_t status = ethervox_governor_execute(
+        governor, read_query, &response, &error, NULL,
+        track_tool_progress, NULL, NULL
+    );
+    
+    if (status == ETHERVOX_GOVERNOR_SUCCESS) {
+        if (was_tool_called("startup_prompt_read")) {
+            LLM_TEST_PASS("LLM correctly used startup_prompt_read tool");
+            g_llm_tests_passed++;
+            
+            // Save original for later restoration
+            if (response) {
+                original_prompt = strdup(response);
+            }
+        } else {
+            LLM_TEST_FAIL("LLM did not call startup_prompt_read");
+            g_llm_tests_failed++;
+        }
+    }
+    
+    if (response) free(response);
+    if (error) free(error);
+    response = NULL;
+    error = NULL;
+    
+    // Test writing a new startup prompt
+    reset_tool_tracking();
+    const char* write_query = "Update the startup prompt to say: 'Hello! I am EthervoxAI Test Assistant, ready to help with calculations and memory.'";
+    LLM_TEST_INFO("Query: \"%s\"", write_query);
+    report_debug("Executing query: %s", write_query);
+    
+    status = ethervox_governor_execute(
+        governor, write_query, &response, &error, NULL,
+        track_tool_progress, NULL, NULL
+    );
+    
+    report_debug("Governor status: %d", status);
+    if (response) report_debug("Response: %s", response);
+    if (error) report_debug("Error: %s", error);
+    report_debug("Total tools called: %u", g_tool_call_count);
+    
+    if (status == ETHERVOX_GOVERNOR_SUCCESS) {
+        bool used_update = was_tool_called("startup_prompt_update");
+        
+        report_debug("Used startup_prompt_update: %s", used_update ? "yes" : "no");
+        
+        if (used_update) {
+            LLM_TEST_PASS("LLM correctly used startup_prompt_update tool");
+            g_llm_tests_passed++;
+        } else {
+            LLM_TEST_FAIL("LLM did not call startup_prompt_update");
+            g_llm_tests_failed++;
+        }
+        
+        if (response && (strstr(response, "updated") || strstr(response, "saved"))) {
+            LLM_TEST_PASS("Response acknowledges prompt update");
+            g_llm_tests_passed++;
+        } else {
+            LLM_TEST_WARN("Response doesn't clearly confirm update");
+            g_llm_tests_passed++;  // Still acceptable
+        }
+    } else {
+        LLM_TEST_FAIL("Governor execution failed: %s", error ? error : "unknown");
+        g_llm_tests_failed += 2;
+    }
+    
+    if (response) free(response);
+    if (error) free(error);
+    
+    // Verify the change by reading it back
+    reset_tool_tracking();
+    response = NULL;
+    error = NULL;
+    
+    const char* verify_query = "What is the current startup prompt?";
+    LLM_TEST_INFO("Verify: \"%s\"", verify_query);
+    
+    status = ethervox_governor_execute(
+        governor, verify_query, &response, &error, NULL,
+        track_tool_progress, NULL, NULL
+    );
+    
+    if (status == ETHERVOX_GOVERNOR_SUCCESS) {
+        if (response && strstr(response, "EthervoxAI Test Assistant")) {
+            LLM_TEST_PASS("Startup prompt was successfully updated and retrieved");
+            g_llm_tests_passed++;
+        } else {
+            LLM_TEST_FAIL("Updated prompt not reflected in read-back");
+            g_llm_tests_failed++;
+        }
+    } else {
+        LLM_TEST_FAIL("Failed to verify updated prompt");
+        g_llm_tests_failed++;
+    }
+    
+    if (response) free(response);
+    if (error) free(error);
+    
+    // CRITICAL: Restore original startup prompt
+    LLM_TEST_INFO("Restoring original startup prompt...");
+    reset_tool_tracking();
+    response = NULL;
+    error = NULL;
+    
+    if (original_prompt) {
+        // Build restoration query
+        char restore_query[2048];
+        snprintf(restore_query, sizeof(restore_query),
+                 "Restore the startup prompt to: %s", original_prompt);
+        
+        status = ethervox_governor_execute(
+            governor, restore_query, &response, &error, NULL,
+            track_tool_progress, NULL, NULL
+        );
+        
+        if (status == ETHERVOX_GOVERNOR_SUCCESS && was_tool_called("startup_prompt_update")) {
+            LLM_TEST_PASS("Original startup prompt restored");
+        } else {
+            LLM_TEST_WARN("Failed to restore original prompt - may need manual reset");
+        }
+        
+        free(original_prompt);
+    } else {
+        // No original prompt - delete custom prompt file to use default
+        LLM_TEST_INFO("No original prompt found, removing custom prompt file");
+        
+        const char* home_dir = getenv("HOME");
+        if (home_dir) {
+            char prompt_file[512];
+            snprintf(prompt_file, sizeof(prompt_file), "%s/.ethervox/startup_prompt.txt", home_dir);
+            if (unlink(prompt_file) == 0) {
+                LLM_TEST_PASS("Removed custom startup prompt (will use default)");
+            } else {
+                // Also try local fallback
+                if (unlink("./.ethervox_startup_prompt.txt") == 0) {
+                    LLM_TEST_PASS("Removed local custom startup prompt");
+                }
+            }
+        }
+    }
+    
+    if (response) free(response);
+    if (error) free(error);
+}
+
+// ============================================================================
 // Main LLM Test Runner
 // ============================================================================
 void run_llm_tool_tests(ethervox_governor_t* governor, 
@@ -1173,8 +1346,15 @@ void run_llm_tool_tests(ethervox_governor_t* governor,
     // Initialize test report file
     time_t report_time = time(NULL);
     
-    // Create test_reports directory if it doesn't exist
-    const char* report_dir = "test_reports";
+    // Use ~/.ethervox/tests/ directory
+    const char* home = getenv("HOME");
+    char report_dir[512];
+    if (home) {
+        snprintf(report_dir, sizeof(report_dir), "%s/.ethervox/tests", home);
+    } else {
+        snprintf(report_dir, sizeof(report_dir), "./.ethervox/tests");
+    }
+    
     #ifdef _WIN32
         _mkdir(report_dir);
     #else
@@ -1315,6 +1495,10 @@ void run_llm_tool_tests(ethervox_governor_t* governor,
     LLM_TEST_HEADER("Test 9: Context Window Management");
     report_test_header("Test 9: Context Window Management");
     test_context_window_management(governor);
+    
+    LLM_TEST_HEADER("Test 10: Startup Prompt Tools");
+    report_test_header("Test 10: Startup Prompt Tools (Read/Write)");
+    test_llm_startup_prompt_tools(governor);
     
     time_t end_time = time(NULL);
     double duration = difftime(end_time, start_time);

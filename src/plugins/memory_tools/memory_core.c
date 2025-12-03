@@ -86,7 +86,7 @@ int ethervox_memory_init(
     } else {
         // No storage dir = in-memory only mode
         // Caller must provide platform-appropriate path for persistence:
-        // - Desktop/macOS: /tmp or ~/.ethervoxai/memory
+        // - Desktop/macOS: ~/.ethervox/memory (recommended)
         // - Android: context.getFilesDir() + "/memory"
         // - ESP32: /spiffs/memory or disabled
         store->storage_filepath[0] = '\0';

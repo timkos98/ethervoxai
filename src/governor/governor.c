@@ -645,9 +645,14 @@ ethervox_governor_status_t ethervox_governor_execute(
     if (max_pos > governor->system_prompt_token_count && max_pos > (n_ctx / 2)) {
         // Clear everything after system prompt to start fresh
         llama_memory_seq_rm(mem, 0, governor->system_prompt_token_count, -1);
-        governor->current_kv_pos = governor->system_prompt_token_count;
-        GOV_LOG("KV cache cleared: removed positions %d to %d (was at %d%% capacity)", 
-                governor->system_prompt_token_count, max_pos, (max_pos * 100 / n_ctx));
+        
+        // After clearing, get the actual max position in the sequence
+        // This should now be system_prompt_token_count - 1 (last token of system prompt)
+        int32_t actual_max = llama_memory_seq_pos_max(mem, 0);
+        governor->current_kv_pos = actual_max + 1;  // Next position after system prompt
+        
+        GOV_LOG("KV cache cleared: removed positions %d to %d (was at %d%% capacity), resuming at %d", 
+                governor->system_prompt_token_count, max_pos, (max_pos * 100 / n_ctx), governor->current_kv_pos);
     } else if (max_pos >= governor->system_prompt_token_count) {
         // Continue from where we left off
         governor->current_kv_pos = max_pos + 1;

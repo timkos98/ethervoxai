@@ -247,6 +247,11 @@ file(GLOB FILE_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/file_tools
 list(APPEND ETHERVOXAI_CORE_SOURCES ${FILE_TOOLS_SOURCES})
 message(STATUS "File tools plugin sources included")
 
+# Add startup prompt tools plugin sources
+file(GLOB STARTUP_PROMPT_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/startup_prompt_tools/*.c")
+list(APPEND ETHERVOXAI_CORE_SOURCES ${STARTUP_PROMPT_TOOLS_SOURCES})
+message(STATUS "Startup prompt tools plugin sources included")
+
 # Add context tools plugin sources
 file(GLOB CONTEXT_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/context_tools/*.c")
 list(APPEND ETHERVOXAI_CORE_SOURCES ${CONTEXT_TOOLS_SOURCES})

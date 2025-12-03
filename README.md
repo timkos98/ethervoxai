@@ -366,7 +366,7 @@ Assistant: I received your multi-line message...
 - Handles tool errors gracefully with helpful suggestions
 
 **Conversation Memory:**
-- Persistent memory across sessions (stored in `~/.ethervox/memory.json`)
+- Persistent memory across sessions (stored in `~/.ethervox/memory/`)
 - Automatic importance scoring for memories
 - Tag-based organization (personal, preferences, reminders, etc.)
 - Search by relevance and recency

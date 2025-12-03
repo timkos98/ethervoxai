@@ -35,6 +35,7 @@
 #include "ethervox/compute_tools.h"
 #include "ethervox/memory_tools.h"
 #include "ethervox/file_tools.h"
+#include "ethervox/startup_prompt_tools.h"
 #include "ethervox/logging.h"
 #include "ethervox/integration_tests.h"
 #include "ethervox/llm_tool_tests.h"
@@ -145,10 +146,59 @@ static void print_help(void) {
     printf("  /reset             Reset conversation (reload model)\n");
     printf("  /paste             Enter paste mode for multi-line input\n");
     printf("  /quit              Exit the program\n");
+    printf("\nRuntime Directory: ~/.ethervox/\n");
+    printf("  models/            Recommended location for GGUF model files\n");
+    printf("  memory/            Conversation memory (persistent .jsonl files)\n");
+    printf("  tests/             Test reports and crash logs\n");
+    printf("  startup_prompt.txt Custom startup instruction\n");
+    printf("  tool_prompts_*.json Optimized per-model tool descriptions\n");
     printf("\nPaste Mode: Type /paste to enter, then paste multi-line text.\n");
     printf("Exit with /end on its own line or Ctrl+D.\n");
     printf("\nOr just type a message to chat with the Governor.\n\n");
 }
+
+// Ensure ~/.ethervox directory structure exists
+static void ensure_ethervox_directories(void) {
+    const char* home = getenv("HOME");
+    if (!home) {
+        return; // Can't create home-based directories
+    }
+    
+    char path[512];
+    
+    // Create ~/.ethervox/
+    snprintf(path, sizeof(path), "%s/.ethervox", home);
+    #ifdef _WIN32
+    _mkdir(path);
+    #else
+    mkdir(path, 0755);
+    #endif
+    
+    // Create ~/.ethervox/models/
+    snprintf(path, sizeof(path), "%s/.ethervox/models", home);
+    #ifdef _WIN32
+    _mkdir(path);
+    #else
+    mkdir(path, 0755);
+    #endif
+    
+    // Create ~/.ethervox/memory/
+    snprintf(path, sizeof(path), "%s/.ethervox/memory", home);
+    #ifdef _WIN32
+    _mkdir(path);
+    #else
+    mkdir(path, 0755);
+    #endif
+    
+    // Create ~/.ethervox/tests/
+    snprintf(path, sizeof(path), "%s/.ethervox/tests", home);
+    #ifdef _WIN32
+    _mkdir(path);
+    #else
+    mkdir(path, 0755);
+    #endif
+}
+
 
 // Component test functions
 static bool test_platform(ethervox_platform_t* platform) {
@@ -589,10 +639,25 @@ static void print_tools(ethervox_governor_t* governor) {
 
 static void process_command(const char* line, ethervox_memory_store_t* memory,
                            ethervox_governor_t* governor, bool* quit_flag) {
-    // Trim leading/trailing whitespace
+    // Trim leading whitespace
     while (*line == ' ' || *line == '\t') line++;
     
     if (line[0] == '\0') return;
+    
+    // Trim trailing whitespace by creating a copy
+    char trimmed[2048];
+    strncpy(trimmed, line, sizeof(trimmed) - 1);
+    trimmed[sizeof(trimmed) - 1] = '\0';
+    size_t len = strlen(trimmed);
+    while (len > 0 && (trimmed[len - 1] == ' ' || trimmed[len - 1] == '\t')) {
+        trimmed[--len] = '\0';
+    }
+    line = trimmed;
+    
+    // Debug: Log what we're processing (but not /debug itself to avoid confusion)
+    if (g_debug_enabled && line[0] == '/' && strcmp(line, "/debug") != 0) {
+        fprintf(stderr, "[DEBUG] Processing slash command: '%s' (len=%zu)\n", line, strlen(line));
+    }
     
     if (strcmp(line, "/quit") == 0 || strcmp(line, "/exit") == 0) {
         *quit_flag = true;
@@ -713,6 +778,15 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         return;
     }
     
+    // Debug: If we got here and line starts with /, something's wrong
+    if (line[0] == '/') {
+        fprintf(stderr, "[WARN] Unrecognized slash command: '%s' (len=%zu, bytes:", line, strlen(line));
+        for (size_t i = 0; i < strlen(line) && i < 20; i++) {
+            fprintf(stderr, " %02X", (unsigned char)line[i]);
+        }
+        fprintf(stderr, ")\n");
+    }
+    
     if (strncmp(line, "/startup ", 9) == 0) {
         const char* action = line + 9;
         
@@ -787,6 +861,9 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
     }
     
     // Not a command - treat as user message
+    if (g_debug_enabled) {
+        fprintf(stderr, "[DEBUG] Not a slash command, sending to LLM: '%s'\n", line);
+    }
     printf("\n");
     
     // Store user message
@@ -868,6 +945,9 @@ int main(int argc, char** argv) {
     // Setup signal handlers
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
+    
+    // Ensure ~/.ethervox directory structure exists
+    ensure_ethervox_directories();
     
     // Set default log level to OFF (quiet mode by default)
     g_ethervox_debug_enabled = 0;
@@ -951,9 +1031,16 @@ int main(int argc, char** argv) {
         g_ethervox_debug_enabled = 0;
     }
     
-    // Default memory directory
+    // Default memory directory - use ~/.ethervox/memory
     if (memory_dir == NULL && interactive && !no_persist) {
-        memory_dir = "./memory_data";
+        const char* home = getenv("HOME");
+        static char ethervox_memory[512];
+        if (home) {
+            snprintf(ethervox_memory, sizeof(ethervox_memory), "%s/.ethervox/memory", home);
+            memory_dir = ethervox_memory;
+        } else {
+            memory_dir = "./.ethervox/memory";
+        }
     }
     
     // Run component tests if requested
@@ -1059,6 +1146,11 @@ int main(int argc, char** argv) {
         if (ethervox_file_tools_register(&registry, &file_config) == 0) {
             printf("File Tools: Registered with Governor (read-write: .txt/.md/.org/.c/.cpp/.h/.sh)\n");
         }
+    }
+    
+    // Register startup prompt tools
+    if (ethervox_startup_prompt_tools_register(&registry) == 0) {
+        printf("Startup Prompt Tools: Registered with Governor\n");
     }
     
     // Auto-load model if requested
