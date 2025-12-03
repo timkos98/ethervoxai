@@ -36,6 +36,7 @@
 #include "ethervox/memory_tools.h"
 #include "ethervox/file_tools.h"
 #include "ethervox/startup_prompt_tools.h"
+#include "ethervox/system_info_tools.h"
 #include "ethervox/logging.h"
 #include "ethervox/integration_tests.h"
 #include "ethervox/llm_tool_tests.h"
@@ -969,7 +970,8 @@ int main(int argc, char** argv) {
     // Dafualt to auto-load model unless --noautoload specified
     bool auto_load_model = true;
     if (!model_path) {
-        model_path = "models/granite-4.0-h-tiny-Q4_K_M.gguf";  // Default model path
+        // Default model filename - will be searched in ~/.ethervox/models/ first
+        model_path = "granite-4.0-h-tiny-Q4_K_M.gguf";
     }
     
     for (int i = 1; i < argc; i++) {
@@ -1064,15 +1066,45 @@ int main(int argc, char** argv) {
     
     if (memory_dir) {
         printf("Memory: Persistent storage at %s\n", memory.storage_filepath);
+        printf("Memory: Current entry count before load: %u\n", memory.entry_count);
         
         // Use platform-agnostic function to load previous session
         // This handles all the complexity of finding the most recent file,
         // preserving tags, IDs, and adding the "imported" tag
         uint32_t turns_loaded = 0;
-        if (ethervox_memory_load_previous_session(&memory, &turns_loaded) == 0 && turns_loaded > 0) {
-            if (!quiet_mode) {
-                printf("Memory: Loaded %u previous memories from last session\n", turns_loaded);
+        int load_result = ethervox_memory_load_previous_session(&memory, &turns_loaded);
+        
+        printf("Memory: Load result = %d, turns_loaded = %u\n", load_result, turns_loaded);
+        printf("Memory: Current entry count after load: %u\n", memory.entry_count);
+        
+        if (load_result == 0 && turns_loaded > 0) {
+            printf("Memory: Successfully loaded %u previous memories from last session\n", turns_loaded);
+            
+            // Show a sample of what was loaded (first 10 entries)
+            uint32_t show_count = memory.entry_count < 10 ? memory.entry_count : 10;
+            for (uint32_t i = 0; i < show_count; i++) {
+                printf("  Entry %u (id=%llu): [", i, (unsigned long long)memory.entries[i].memory_id);
+                for (uint32_t t = 0; t < memory.entries[i].tag_count; t++) {
+                    printf("%s%s", t > 0 ? "," : "", memory.entries[i].tags[t]);
+                }
+                // Replace newlines with spaces for display
+                printf("] \"");
+                for (const char* p = memory.entries[i].text; *p && (p - memory.entries[i].text) < 100; p++) {
+                    if (*p == '\n') printf("\\n");
+                    else if (*p == '\r') printf("\\r");
+                    else if (*p == '\t') printf("\\t");
+                    else putchar(*p);
+                }
+                if (strlen(memory.entries[i].text) > 100) printf("...");
+                printf("\"\n");
             }
+            if (memory.entry_count > 10) {
+                printf("  ... and %u more entries\n", memory.entry_count - 10);
+            }
+        } else if (load_result != 0) {
+            printf("Memory: Failed to load previous session (error %d)\n", load_result);
+        } else {
+            printf("Memory: No previous session to load\n");
         }
     } else {
         printf("Memory: In-memory only (no persistence)\n");
@@ -1153,6 +1185,11 @@ int main(int argc, char** argv) {
         printf("Startup Prompt Tools: Registered with Governor\n");
     }
     
+    // Register system info tools
+    if (ethervox_system_info_tools_register(&registry) == 0) {
+        printf("System Info Tools: Registered with Governor\n");
+    }
+    
     // Auto-load model if requested
     if (auto_load_model && model_path) {
         if (!quiet_mode) {
@@ -1174,13 +1211,30 @@ int main(int argc, char** argv) {
         char resolved_path[1024];
         if (model_path[0] != '/') {
             // Relative path - try multiple locations in order:
-            // 1. Same directory as executable
-            // 2. One level up from executable (if in build/)
-            // 3. Current working directory
+            // 1. ~/.ethervox/models/ (standard location)
+            // 2. Same directory as executable
+            // 3. One level up from executable (if in build/)
+            // 4. Current working directory
             
+            bool path_found = false;
+            
+            // Try 1: ~/.ethervox/models/
+            char ethervox_model_path[512];
+            if (ethervox_get_runtime_path(ETHERVOX_MODELS_SUBDIR, ethervox_model_path, sizeof(ethervox_model_path)) == 0) {
+                snprintf(resolved_path, sizeof(resolved_path), "%s/%s", ethervox_model_path, model_path);
+                if (access(resolved_path, R_OK) == 0) {
+                    path_found = true;
+                    if (!quiet_mode) {
+                        printf("[INFO] Found model in standard location: %s\n", resolved_path);
+                    }
+                }
+            }
+            
+            // Try 2-4: Other locations
+            
+            // Try 2-4: Other locations
             char exe_path[512];
             char exe_dir[512];
-            bool path_found = false;
             ssize_t len = -1;
             
 #ifdef __APPLE__
@@ -1201,13 +1255,15 @@ int main(int argc, char** argv) {
                     strncpy(exe_dir, exe_path, dir_len);
                     exe_dir[dir_len] = '\0';
                     
-                    // Try 1: Same directory as executable
-                    snprintf(resolved_path, sizeof(resolved_path), "%s/%s", exe_dir, model_path);
-                    if (access(resolved_path, R_OK) == 0) {
-                        path_found = true;
+                    // Try 2: Same directory as executable
+                    if (!path_found) {
+                        snprintf(resolved_path, sizeof(resolved_path), "%s/%s", exe_dir, model_path);
+                        if (access(resolved_path, R_OK) == 0) {
+                            path_found = true;
+                        }
                     }
                     
-                    // Try 2: One level up (project root from build/)
+                    // Try 3: One level up (project root from build/)
                     if (!path_found) {
                         char parent_dir[512];
                         strncpy(parent_dir, exe_dir, sizeof(parent_dir) - 1);
@@ -1225,7 +1281,7 @@ int main(int argc, char** argv) {
                 }
             }
             
-            // Try 3: Current working directory
+            // Try 4: Current working directory
             if (!path_found) {
                 char cwd[512];
                 if (getcwd(cwd, sizeof(cwd))) {
@@ -1266,7 +1322,7 @@ int main(int argc, char** argv) {
         printf("Use /load %s to load it, or restart with --load <path>\n\n", model_path);
     } else {
         printf("\nNo model specified. Use /load <path> or --load <path> flag.\n");
-        printf("Recommended: models/granite-4.0-h-tiny-Q4_K_M.gguf\n\n");
+        printf("Recommended: granite-4.0-h-tiny-Q4_K_M.gguf (will search in ~/.ethervox/models/)\n\n");
     }
     
     print_help();

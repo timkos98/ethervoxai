@@ -272,11 +272,24 @@ static bool process_json_entry(ethervox_memory_store_t* store, const char* line)
     char* text_start = strstr(line, "\"text\":");
     if (!text_start) return false;
     
-    text_start = strchr(text_start, '"');
+    // Find the colon after "text"
+    text_start = strchr(text_start, ':');
     if (!text_start) return false;
-    text_start = strchr(text_start + 1, '"');  // Find opening quote of value
-    if (!text_start) return false;
-    text_start++;
+    text_start++;  // Skip ':'
+    
+    // Skip whitespace
+    while (*text_start == ' ' || *text_start == '\t') text_start++;
+    
+    // Find opening quote of the value
+    if (*text_start != '"') {
+        ethervox_log(ETHERVOX_LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__,
+                    "Expected quote after 'text:', found: '%c' (0x%02x)", *text_start, (unsigned char)*text_start);
+        return false;
+    }
+    text_start++;  // Skip opening quote
+    
+    ethervox_log(ETHERVOX_LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__,
+                "Parsing text field, first 50 chars: '%.50s'", text_start);
     
     // Find closing quote (handle escaped quotes)
     char* text_end = text_start;
@@ -411,7 +424,8 @@ int ethervox_memory_import(
         fseek(fp, 0, SEEK_SET);
         
         // If first line contains "entries":[, it's a structured JSON export
-        if (strstr(first_line, "\"entries\"") || strstr(first_line, "{")) {
+        // JSONL files also start with '{' but don't have "entries" key
+        if (strstr(first_line, "\"entries\"")) {
             // Read entire file for structured JSON parsing
             fseek(fp, 0, SEEK_END);
             long file_size = ftell(fp);
@@ -705,16 +719,25 @@ int ethervox_memory_load_previous_session(
         return 0;
     }
     
+    ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
+                "Searching for previous sessions in %s (current: %s)", storage_dir, current_basename);
+    
     struct dirent* entry;
     time_t latest_time = 0;
     char latest_session[512] = {0};
+    int files_checked = 0, files_skipped = 0;
     
     while ((entry = readdir(dir)) != NULL) {
         // Look for .jsonl files
         size_t len = strlen(entry->d_name);
         if (len > 6 && strcmp(entry->d_name + len - 6, ".jsonl") == 0) {
+            files_checked++;
+            
             // Skip current session file by name
             if (strcmp(entry->d_name, current_basename) == 0) {
+                ethervox_log(ETHERVOX_LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__,
+                            "Skipping current session: %s", entry->d_name);
+                files_skipped++;
                 continue;
             }
             
@@ -722,13 +745,23 @@ int ethervox_memory_load_previous_session(
             snprintf(fullpath, sizeof(fullpath), "%s/%s", storage_dir, entry->d_name);
             
             struct stat st;
-            if (stat(fullpath, &st) == 0 && st.st_mtime > latest_time) {
-                latest_time = st.st_mtime;
-                snprintf(latest_session, sizeof(latest_session), "%s", fullpath);
+            if (stat(fullpath, &st) == 0) {
+                ethervox_log(ETHERVOX_LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__,
+                            "Found candidate: %s (mtime=%ld, size=%lld)", 
+                            entry->d_name, st.st_mtime, (long long)st.st_size);
+                            
+                if (st.st_mtime > latest_time) {
+                    latest_time = st.st_mtime;
+                    snprintf(latest_session, sizeof(latest_session), "%s", fullpath);
+                }
             }
         }
     }
     closedir(dir);
+    
+    ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
+                "Checked %d .jsonl files, skipped %d, selected: %s", 
+                files_checked, files_skipped, latest_session[0] ? latest_session : "(none)");
     
     // Load the latest previous session if found
     if (latest_session[0] != '\0') {

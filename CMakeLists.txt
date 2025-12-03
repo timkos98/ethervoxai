@@ -120,6 +120,39 @@ if(DEFINED ETHERVOX_PLATFORM_MOBILE)
     message(STATUS "ETHERVOX_PLATFORM_MOBILE is DEFINED")
 endif()
 
+# Define runtime directory paths based on platform
+if(TARGET_PLATFORM STREQUAL "WINDOWS")
+    # Windows: %USERPROFILE%\.ethervox
+    add_definitions(-DETHERVOX_RUNTIME_DIR_BASE="%USERPROFILE%\\\\.ethervox")
+elseif(TARGET_PLATFORM STREQUAL "ANDROID")
+    # Android: app-specific internal storage (handled at runtime via Java)
+    add_definitions(-DETHERVOX_RUNTIME_DIR_BASE=NULL)
+elseif(TARGET_PLATFORM STREQUAL "ESP32")
+    # ESP32: SPIFFS or SD card
+    add_definitions(-DETHERVOX_RUNTIME_DIR_BASE="/spiffs/ethervox")
+else()
+    # Unix-like (macOS, Linux, RPI): ~/.ethervox
+    add_definitions(-DETHERVOX_RUNTIME_DIR_BASE="~/.ethervox")
+endif()
+
+message(STATUS "Runtime directory base configured for ${TARGET_PLATFORM}")
+
+# Get Git commit hash
+execute_process(
+    COMMAND git rev-parse --short HEAD
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    OUTPUT_VARIABLE GIT_COMMIT_HASH
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+
+if(NOT GIT_COMMIT_HASH)
+    set(GIT_COMMIT_HASH "unknown")
+endif()
+
+message(STATUS "Git commit hash: ${GIT_COMMIT_HASH}")
+add_definitions(-DETHERVOX_GIT_COMMIT_HASH="${GIT_COMMIT_HASH}")
+
 # Build configuration
 option(BUILD_TESTS "Build test suite" ON)
 option(BUILD_EXAMPLES "Build example applications" ON)
@@ -250,6 +283,10 @@ message(STATUS "File tools plugin sources included")
 # Add startup prompt tools plugin sources
 file(GLOB STARTUP_PROMPT_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/startup_prompt_tools/*.c")
 list(APPEND ETHERVOXAI_CORE_SOURCES ${STARTUP_PROMPT_TOOLS_SOURCES})
+
+# System info tools
+file(GLOB SYSTEM_INFO_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/system_info_tools/*.c")
+list(APPEND ETHERVOXAI_CORE_SOURCES ${SYSTEM_INFO_TOOLS_SOURCES})
 message(STATUS "Startup prompt tools plugin sources included")
 
 # Add context tools plugin sources

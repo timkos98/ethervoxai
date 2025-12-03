@@ -18,6 +18,8 @@
 #define ETHERVOX_CONFIG_H
 
 #include <time.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -40,6 +42,32 @@ extern "C" {
 #define ETHERVOX_PLATFORM_MACOS 1
 #define ETHERVOX_PLATFORM_DESKTOP 1
 #endif
+
+// Runtime directory structure
+// Base directory is defined by CMake as ETHERVOX_RUNTIME_DIR_BASE
+// Subdirectories are defined here
+
+#ifndef ETHERVOX_RUNTIME_DIR_BASE
+// Fallback if not defined by CMake
+#if defined(ETHERVOX_PLATFORM_WINDOWS)
+#define ETHERVOX_RUNTIME_DIR_BASE "%USERPROFILE%\\.ethervox"
+#elif defined(ETHERVOX_PLATFORM_ANDROID)
+#define ETHERVOX_RUNTIME_DIR_BASE NULL  // Handled at runtime via Java
+#elif defined(ETHERVOX_PLATFORM_ESP32)
+#define ETHERVOX_RUNTIME_DIR_BASE "/spiffs/ethervox"
+#else
+#define ETHERVOX_RUNTIME_DIR_BASE "~/.ethervox"
+#endif
+#endif
+
+// Subdirectory paths (appended to ETHERVOX_RUNTIME_DIR_BASE)
+#define ETHERVOX_MODELS_SUBDIR "/models"
+#define ETHERVOX_MEMORY_SUBDIR "/memory"
+#define ETHERVOX_TESTS_SUBDIR "/tests"
+#define ETHERVOX_STARTUP_PROMPT_FILE "/startup_prompt.txt"
+
+// Helper to construct full paths at runtime
+// Example: get_ethervox_path(ETHERVOX_MODELS_SUBDIR) -> "~/.ethervox/models"
 
 // Feature configuration
 #define ETHERVOX_LANG_CODE_LEN 8
@@ -302,6 +330,54 @@ void ethervox_log_with_callback(int level, const char* tag, const char* fmt, ...
   ETHERVOX_TOSTRING(ETHERVOX_VERSION_MAJOR) "." \
   ETHERVOX_TOSTRING(ETHERVOX_VERSION_MINOR) "." \
   ETHERVOX_TOSTRING(ETHERVOX_VERSION_PATCH)
+
+/**
+ * @brief Get runtime directory path
+ * @param subdir Subdirectory constant (e.g., ETHERVOX_MODELS_SUBDIR) or NULL for base
+ * @param out Output buffer
+ * @param out_size Size of output buffer
+ * @return 0 on success, -1 on failure
+ * 
+ * Example:
+ *   char path[512];
+ *   ethervox_get_runtime_path(ETHERVOX_MODELS_SUBDIR, path, sizeof(path));
+ *   // Result: "~/.ethervox/models" or "$HOME/.ethervox/models" (expanded)
+ */
+static inline int ethervox_get_runtime_path(const char* subdir, char* out, size_t out_size);
+
+static inline int ethervox_get_runtime_path(const char* subdir, char* out, size_t out_size) {
+    if (!out || out_size == 0) { return -1; }
+    
+    const char* base = ETHERVOX_RUNTIME_DIR_BASE;
+    
+#if defined(ETHERVOX_PLATFORM_ANDROID)
+    // Android: should be set at runtime, not compile time
+    return -1;  // Caller must handle Android paths via JNI
+#else
+    // Expand ~ or %USERPROFILE% if needed
+    if (base && base[0] == '~') {
+        const char* home = getenv("HOME");
+        if (home) {
+            if (subdir) {
+                snprintf(out, out_size, "%s%s%s", home, base + 1, subdir);
+            } else {
+                snprintf(out, out_size, "%s%s", home, base + 1);
+            }
+        } else {
+            return -1;
+        }
+    } else if (base) {
+        if (subdir) {
+            snprintf(out, out_size, "%s%s", base, subdir);
+        } else {
+            snprintf(out, out_size, "%s", base);
+        }
+    } else {
+        return -1;
+    }
+    return 0;
+#endif
+}
 
 #ifdef __cplusplus
 }
