@@ -251,3 +251,30 @@ void ethervox_stt_cleanup(ethervox_stt_runtime_t* runtime) {
   runtime->is_initialized = false;
   printf("STT engine cleaned up\n");
 }
+/**
+ * Set language (hot-switch without re-init)
+ */
+int ethervox_stt_set_language(ethervox_stt_runtime_t* runtime, const char* language) {
+  if (!runtime || !runtime->is_initialized) {
+    fprintf(stderr, "STT runtime not initialized\n");
+    return -1;
+  }
+  
+  if (!language) {
+    fprintf(stderr, "Language is NULL\n");
+    return -1;
+  }
+  
+  // Update config
+  runtime->config.language = language;
+  
+  // Delegate to backend
+  if (runtime->config.backend == ETHERVOX_STT_BACKEND_WHISPER) {
+    extern int ethervox_stt_whisper_set_language(ethervox_stt_runtime_t* runtime, const char* language);
+    return ethervox_stt_whisper_set_language(runtime, language);
+  }
+  
+  // Other backends don't support hot-switching yet
+  fprintf(stderr, "Language hot-switching not supported for backend %d\n", runtime->config.backend);
+  return -1;
+}

@@ -58,7 +58,7 @@ static const char* commands[] = {
     "/help", "/test", "/testllm", "/optimize_tool_prompts", "/load", "/tools",
     "/search", "/summary", "/export", "/archive", "/stats", "/startup", "/debug",
     "/markdown", "/clear", "/reset", "/paste", "/paths", "/setpath", "/safemode",
-    "/listen", "/stoplisten", "/quit", NULL
+    "/transcribe", "/stoptranscribe", "/setlang", "/quit", NULL
 };
 
 static char* command_generator(const char* text, int state) {
@@ -145,8 +145,9 @@ static void print_help(void) {
     printf("  /paths             List configured user paths\n");
     printf("  /setpath <label> <path>  Set a user path (e.g., /setpath Notes ~/Notes)\n");
     printf("  /safemode          Toggle file write permissions (safe mode on/off)\n");
-    printf("  /listen            Start voice recording with Whisper STT\n");
-    printf("  /stoplisten        Stop recording and get transcript (saves to ~/.ethervox/transcripts/)\n");
+    printf("  /transcribe        Start voice recording with Whisper STT\n");
+    printf("  /stoptranscribe    Stop recording and get transcript (saves to ~/.ethervox/transcripts/)\n");
+    printf("  /setlang <code>    Set STT language (e.g., en, es, zh, auto for detection)\n");
     printf("  /stats             Show memory statistics\n");
     printf("  /startup <cmd>     Manage startup prompt (edit/show/reset)\n");
     printf("  /debug             Toggle debug logging on/off\n");
@@ -158,7 +159,7 @@ static void print_help(void) {
     printf("\nRuntime Directory: ~/.ethervox/\n");
     printf("  models/            Recommended location for GGUF model files\n");
     printf("  memory/            Conversation memory (persistent .jsonl files)\n");
-    printf("  transcripts/       Voice recordings (saved by /stoplisten command)\n");
+    printf("  transcripts/       Voice recordings (saved by /stoptranscribe command)\n");
     printf("  tests/             Test reports and crash logs\n");
     printf("  startup_prompt.txt Custom startup instruction\n");
     printf("  tool_prompts_*.json Optimized per-model tool descriptions\n");
@@ -869,12 +870,12 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         }
         
         if (ethervox_voice_tools_is_recording(voice_session)) {
-            printf("⚠️  Already recording! Use /stoplisten to finish.\n");
+            printf("⚠️  Already recording! Use /stoptranscribe to finish.\n");
             return;
         }
         
         printf("🎤 Starting voice recording with Whisper STT...\n");
-        printf("   Speak now. Use /stoplisten when finished.\n");
+        printf("   Speak now. Use /stoptranscribe when finished.\n");
         printf("   (Speaker detection enabled - pauses and energy shifts tracked)\n\n");
         
         if (ethervox_voice_tools_start_listen(voice_session) != 0) {
@@ -883,7 +884,47 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         return;
     }
     
-    if (strcmp(line, "/stoplisten") == 0) {
+    // Set language
+    if (strncmp(line, "/setlang", 8) == 0) {
+        if (!voice_session) {
+            printf("⚠️  Voice tools not initialized\n");
+            return;
+        }
+        
+        const char* lang = line + 8;
+        // Skip whitespace
+        while (*lang == ' ' || *lang == '\t') lang++;
+        
+        if (*lang == '\0') {
+            printf("Usage: /setlang <language>\n");
+            printf("Examples:\n");
+            printf("  /setlang auto    - Auto-detect language\n");
+            printf("  /setlang en      - English\n");
+            printf("  /setlang es      - Spanish\n");
+            printf("  /setlang zh      - Chinese\n");
+            printf("  /setlang fr      - French\n");
+            printf("  /setlang de      - German\n");
+            printf("  /setlang ja      - Japanese\n");
+            printf("  /setlang ko      - Korean\n");
+            printf("  /setlang ar      - Arabic\n");
+            printf("  /setlang hi      - Hindi\n");
+            return;
+        }
+        
+        ethervox_voice_session_t* session = (ethervox_voice_session_t*)voice_session;
+        if (ethervox_stt_set_language(&session->stt_runtime, lang) == 0) {
+            if (strcmp(lang, "auto") == 0) {
+                printf("🌍 Language detection: AUTO (will detect language automatically)\n");
+            } else {
+                printf("🌍 Language set to: %s\n", lang);
+            }
+        } else {
+            printf("❌ Failed to set language to: %s\n", lang);
+        }
+        return;
+    }
+    
+    if (strcmp(line, "/stoptranscribe") == 0) {
         if (!voice_session) {
             printf("✗ Voice tools not initialized\n");
             return;
@@ -1455,7 +1496,7 @@ int main(int argc, char** argv) {
         if (ethervox_voice_tools_register(&registry, &voice_state) == 0) {
             voice_session = &voice_state;
             printf("Voice Tools: Registered with Governor (Whisper STT with speaker detection)\n");
-            printf("             Use /listen and /stoplisten commands\n");
+            printf("             Use /transcribe and /stoptranscribe commands\n");
         } else {
             printf("⚠️  Voice Tools: Failed to register with Governor\n");
         }

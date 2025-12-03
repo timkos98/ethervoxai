@@ -125,6 +125,15 @@ void ethervox_stt_stop(ethervox_stt_runtime_t* runtime);
 void ethervox_stt_result_free(ethervox_stt_result_t* result);
 
 /**
+ * Set language for transcription (hot-switch without re-init)
+ * 
+ * @param runtime STT runtime
+ * @param language Language code ("en", "es", "zh", etc.) or "auto" for detection
+ * @return 0 on success, -1 on error
+ */
+int ethervox_stt_set_language(ethervox_stt_runtime_t* runtime, const char* language);
+
+/**
  * Cleanup STT engine
  */
 void ethervox_stt_cleanup(ethervox_stt_runtime_t* runtime);

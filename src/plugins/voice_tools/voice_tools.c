@@ -138,7 +138,7 @@ int ethervox_voice_tools_init(ethervox_voice_session_t* session, void* memory) {
     ethervox_stt_config_t stt_config = {
         .backend = ETHERVOX_STT_BACKEND_WHISPER,  // Use Whisper!
         .model_path = model_path,
-        .language = "en-US",
+        .language = "auto",  // Auto-detect language by default
         .sample_rate = 16000,
         .enable_partial_results = true,
         .enable_punctuation = true,
@@ -475,9 +475,9 @@ static int tool_listen_and_summarize_wrapper(
 static ethervox_tool_t listen_tool = {
     .name = "listen_and_summarize",
     .description = "Start or stop voice recording with Whisper STT transcription and speaker detection. "
-                  "Call with {\"action\":\"start\"} to begin recording (user will use /stoplisten command to end), "
-                  "or {\"action\":\"stop\"} to get the final transcript with speaker labels. "
-                  "Transcript will be automatically stored in memory.",
+                   "Call with {\"action\":\"start\"} to begin recording (user will use /stoptranscribe command to end), "
+                   "or {\"action\":\"stop\"} to get the final transcript with speaker labels. "
+                   "Transcript will be automatically stored in memory.",
     .parameters_json_schema = "{\"type\":\"object\","
         "\"properties\":{"
         "\"action\":{\"type\":\"string\",\"enum\":[\"start\",\"stop\",\"status\"],"

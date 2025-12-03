@@ -120,8 +120,31 @@ int ethervox_stt_whisper_init(ethervox_stt_runtime_t* runtime) {
   ctx->params.print_realtime = false;
   ctx->params.print_timestamps = false;
   ctx->params.translate = false;
-  ctx->params.language = "en";
-  ctx->params.detect_language = false;
+  
+  // Set language from config (supports hot-switching)
+  // Parse language code: "en-US" -> "en", "zh-CN" -> "zh", etc.
+  const char* lang = runtime->config.language;
+  if (lang && strlen(lang) >= 2) {
+    // Extract first 2 chars as language code
+    static char lang_code[3];
+    lang_code[0] = lang[0];
+    lang_code[1] = lang[1];
+    lang_code[2] = '\0';
+    ctx->params.language = lang_code;
+    LOG_INFO( "whisper_backend", "Language set to: %s (from %s)", lang_code, lang);
+  } else {
+    ctx->params.language = "en";
+    LOG_INFO( "whisper_backend", "Language defaulted to: en");
+  }
+  
+  // Enable auto-detection if language is "auto"
+  if (lang && (strcmp(lang, "auto") == 0 || strcmp(lang, "AUTO") == 0)) {
+    ctx->params.detect_language = true;
+    ctx->params.language = NULL;
+    LOG_INFO( "whisper_backend", "Auto language detection enabled");
+  } else {
+    ctx->params.detect_language = false;
+  }
   
   // Enable token-level timestamps for better segmentation
   ctx->params.token_timestamps = true;
@@ -415,6 +438,43 @@ void ethervox_stt_whisper_cleanup(ethervox_stt_runtime_t* runtime) {
   runtime->backend_context = NULL;
   
   LOG_INFO( "whisper_backend", "Whisper backend cleaned up");
+}
+
+/**
+ * Set language for Whisper (hot-switch)
+ */
+int ethervox_stt_whisper_set_language(ethervox_stt_runtime_t* runtime, const char* language) {
+  if (!runtime || !runtime->backend_context) {
+    LOG_ERROR( "whisper_backend", "Invalid runtime for language switch");
+    return -1;
+  }
+  
+  whisper_backend_context_t* ctx = (whisper_backend_context_t*)runtime->backend_context;
+  
+  if (!language) {
+    LOG_ERROR( "whisper_backend", "Language is NULL");
+    return -1;
+  }
+  
+  // Handle auto-detection
+  if (strcmp(language, "auto") == 0 || strcmp(language, "AUTO") == 0) {
+    ctx->params.detect_language = true;
+    ctx->params.language = NULL;
+    LOG_INFO( "whisper_backend", "Switched to auto language detection");
+    return 0;
+  }
+  
+  // Extract language code (first 2 chars)
+  static char lang_code[3];
+  lang_code[0] = language[0];
+  lang_code[1] = language[1];
+  lang_code[2] = '\0';
+  
+  ctx->params.language = lang_code;
+  ctx->params.detect_language = false;
+  
+  LOG_INFO( "whisper_backend", "Language switched to: %s", lang_code);
+  return 0;
 }
 
 #else
