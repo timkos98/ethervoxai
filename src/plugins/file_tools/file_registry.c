@@ -15,6 +15,7 @@
 
 // Global file config pointer for tool wrappers
 static ethervox_file_tools_config_t* g_file_config = NULL;
+static ethervox_path_config_t* g_path_config = NULL;
 
 // JSON parsing helpers (same as memory_registry.c)
 static int parse_json_string(const char* json, const char* key, char* value, size_t value_len) {
@@ -341,6 +342,237 @@ static int tool_file_write_wrapper(
     return 0;
 }
 
+// Tool wrapper: path_list
+static int tool_path_list_wrapper(
+    const char* args_json,
+    char** result,
+    char** error
+) {
+    (void)args_json;  // No parameters needed
+    
+    ethervox_path_config_t* config = g_path_config;
+    if (!config) {
+        *error = strdup("Path configuration not initialized");
+        return -1;
+    }
+    
+    ethervox_user_path_t* paths = NULL;
+    uint32_t count = 0;
+    
+    if (ethervox_path_config_list(config, &paths, &count) != 0) {
+        *error = strdup("Failed to list paths");
+        return -1;
+    }
+    
+    // Build JSON response
+    size_t res_len = count * 512 + 256;
+    char* res = malloc(res_len);
+    int pos = snprintf(res, res_len, "{\"paths\":[");
+    
+    for (uint32_t i = 0; i < count; i++) {
+        pos += snprintf(res + pos, res_len - pos,
+                       "%s{\"label\":\"%s\",\"path\":\"%s\",\"description\":\"%s\",\"verified\":%s}",
+                       i > 0 ? "," : "",
+                       paths[i].label,
+                       paths[i].path,
+                       paths[i].description,
+                       paths[i].verified ? "true" : "false");
+    }
+    
+    snprintf(res + pos, res_len - pos, "],\"count\":%u}", count);
+    
+    free(paths);
+    *result = res;
+    return 0;
+}
+
+// Tool wrapper: path_get
+static int tool_path_get_wrapper(
+    const char* args_json,
+    char** result,
+    char** error
+) {
+    ethervox_path_config_t* config = g_path_config;
+    if (!config) {
+        *error = strdup("Path configuration not initialized");
+        return -1;
+    }
+    
+    char label[64];
+    if (parse_json_string(args_json, "label", label, sizeof(label)) != 0) {
+        *error = strdup("Missing 'label' parameter");
+        return -1;
+    }
+    
+    char path[ETHERVOX_FILE_MAX_PATH];
+    int ret = ethervox_path_config_get(config, label, path, sizeof(path));
+    
+    if (ret == 0) {
+        size_t res_len = strlen(path) + 128;
+        char* res = malloc(res_len);
+        snprintf(res, res_len, "{\"label\":\"%s\",\"path\":\"%s\",\"status\":\"verified\"}", label, path);
+        *result = res;
+        return 0;
+    } else if (ret == -2) {
+        *error = strdup("Path exists in configuration but is not verified (directory may not exist)");
+        return -1;
+    } else {
+        size_t err_len = strlen(label) + 64;
+        char* err = malloc(err_len);
+        snprintf(err, err_len, "Path label '%s' not found. Use path_list to see available paths.", label);
+        *error = err;
+        return -1;
+    }
+}
+
+// Tool wrapper: path_set
+static int tool_path_set_wrapper(
+    const char* args_json,
+    char** result,
+    char** error
+) {
+    ethervox_path_config_t* config = g_path_config;
+    if (!config) {
+        *error = strdup("Path configuration not initialized");
+        return -1;
+    }
+    
+    char label[64];
+    char path[ETHERVOX_FILE_MAX_PATH];
+    char description[256] = {0};
+    
+    if (parse_json_string(args_json, "label", label, sizeof(label)) != 0) {
+        *error = strdup("Missing 'label' parameter");
+        return -1;
+    }
+    
+    if (parse_json_string(args_json, "path", path, sizeof(path)) != 0) {
+        *error = strdup("Missing 'path' parameter");
+        return -1;
+    }
+    
+    // Description is optional
+    parse_json_string(args_json, "description", description, sizeof(description));
+    
+    int ret = ethervox_path_config_set(config, label, path,
+                                        description[0] ? description : NULL);
+    
+    if (ret == 0) {
+        size_t res_len = strlen(label) + strlen(path) + 128;
+        char* res = malloc(res_len);
+        snprintf(res, res_len,
+                "{\"label\":\"%s\",\"path\":\"%s\",\"status\":\"configured\",\"message\":\"Path successfully configured and will be remembered across sessions\"}",
+                label, path);
+        *result = res;
+        return 0;
+    } else if (ret == -2) {
+        size_t err_len = strlen(path) + 256;
+        char* err = malloc(err_len);
+        snprintf(err, err_len,
+                "Path does not exist or is not accessible: %s. Please create the directory first or check the path.", path);
+        *error = err;
+        return -1;
+    } else if (ret == -3) {
+        *error = strdup("Maximum number of paths reached. Cannot add more paths.");
+        return -1;
+    } else {
+        *error = strdup("Failed to configure path");
+        return -1;
+    }
+}
+
+// Tool wrapper: path_check_unverified
+static int tool_path_check_unverified_wrapper(
+    const char* args_json,
+    char** result,
+    char** error
+) {
+    (void)args_json;  // No parameters needed
+    
+    ethervox_path_config_t* config = g_path_config;
+    if (!config) {
+        *error = strdup("Path configuration not initialized");
+        return -1;
+    }
+    
+    ethervox_user_path_t* paths = NULL;
+    uint32_t count = 0;
+    
+    if (ethervox_path_config_get_unverified(config, &paths, &count) != 0) {
+        *error = strdup("Failed to check unverified paths");
+        return -1;
+    }
+    
+    if (count == 0) {
+        *result = strdup("{\"unverified\":[],\"count\":0,\"message\":\"All configured paths are verified and accessible\"}");
+        return 0;
+    }
+    
+    // Build JSON response with suggestions
+    size_t res_len = count * 512 + 512;
+    char* res = malloc(res_len);
+    int pos = snprintf(res, res_len,
+                      "{\"unverified\":[");
+    
+    for (uint32_t i = 0; i < count; i++) {
+        pos += snprintf(res + pos, res_len - pos,
+                       "%s{\"label\":\"%s\",\"expected_path\":\"%s\",\"description\":\"%s\"}",
+                       i > 0 ? "," : "",
+                       paths[i].label,
+                       paths[i].path,
+                       paths[i].description);
+    }
+    
+    snprintf(res + pos, res_len - pos,
+            "],\"count\":%u,\"message\":\"Some default paths don't exist. Consider asking the user for the correct locations using path_set.\"}",
+            count);
+    
+    free(paths);
+    *result = res;
+    return 0;
+}
+
+// Tool wrapper: file_set_safe_mode
+static int tool_file_set_safe_mode_wrapper(
+    const char* args_json,
+    char** result,
+    char** error
+) {
+    ethervox_file_tools_config_t* config = g_file_config;
+    if (!config) {
+        *error = strdup("File tools not configured");
+        return -1;
+    }
+    
+    bool enable = false;
+    if (parse_json_bool(args_json, "enable", &enable) != 0) {
+        *error = strdup("Missing 'enable' parameter");
+        return -1;
+    }
+    
+    // Set access mode
+    ethervox_file_access_mode_t old_mode = config->access_mode;
+    config->access_mode = enable ? ETHERVOX_FILE_ACCESS_READ_ONLY : ETHERVOX_FILE_ACCESS_READ_WRITE;
+    
+    ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
+                "File access mode changed: %s -> %s (LLM self-restriction)",
+                old_mode == ETHERVOX_FILE_ACCESS_READ_ONLY ? "READ_ONLY" : "READ_WRITE",
+                config->access_mode == ETHERVOX_FILE_ACCESS_READ_ONLY ? "READ_ONLY" : "READ_WRITE");
+    
+    // Build response
+    char res[512];
+    snprintf(res, sizeof(res),
+            "{\"safe_mode\":%s,\"access_mode\":\"%s\",\"message\":\"File access is now %s. %s\"}",
+            enable ? "true" : "false",
+            enable ? "read_only" : "read_write",
+            enable ? "restricted to read-only (safe mode)" : "read-write enabled",
+            enable ? "I can explore and read files but cannot modify them." : 
+                     "I can now write and modify files when needed.");
+    
+    *result = strdup(res);
+    return 0;
+}
+
 int ethervox_file_tools_register(
     void* registry_ptr,
     ethervox_file_tools_config_t* config
@@ -433,6 +665,107 @@ int ethervox_file_tools_register(
         ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
                     "Registered 3 file tools (read-only mode)");
     }
+    
+    return ret;
+}
+
+int ethervox_path_config_register(
+    void* registry_ptr,
+    ethervox_path_config_t* config
+) {
+    ethervox_tool_registry_t* registry = (ethervox_tool_registry_t*)registry_ptr;
+    if (!registry || !config) {
+        return -1;
+    }
+    
+    // Set global config for tool wrappers
+    g_path_config = config;
+    
+    int ret = 0;
+    
+    // Register path_list tool
+    ethervox_tool_t tool_path_list = {
+        .name = "path_list",
+        .description = "List all configured user paths (Documents, Notes, etc.). Shows which paths are verified and accessible. Use this to discover where the user keeps important files.",
+        .parameters_json_schema = "{\"type\":\"object\",\"properties\":{}}",
+        .execute = tool_path_list_wrapper,
+        .is_deterministic = true,
+        .requires_confirmation = false,
+        .is_stateful = false,
+        .estimated_latency_ms = 10.0f
+    };
+    
+    ret |= ethervox_tool_registry_add(registry, &tool_path_list);
+    
+    // Register path_get tool
+    ethervox_tool_t tool_path_get = {
+        .name = "path_get",
+        .description = "Get the absolute path for a specific label (e.g., 'Notes', 'Documents', 'Downloads'). Use this to get the exact path before reading or listing files.",
+        .parameters_json_schema =
+            "{\"type\":\"object\",\"properties\":{"
+            "\"label\":{\"type\":\"string\",\"description\":\"Path label to retrieve (e.g., 'Notes', 'Documents')\"}"
+            "},\"required\":[\"label\"]}",
+        .execute = tool_path_get_wrapper,
+        .is_deterministic = true,
+        .requires_confirmation = false,
+        .is_stateful = false,
+        .estimated_latency_ms = 5.0f
+    };
+    
+    ret |= ethervox_tool_registry_add(registry, &tool_path_get);
+    
+    // Register path_set tool
+    ethervox_tool_t tool_path_set = {
+        .name = "path_set",
+        .description = "Configure or update a user path. Use this to remember important directories the user mentions. Paths are persisted across sessions. Ask the user for the actual path if defaults don't exist.",
+        .parameters_json_schema =
+            "{\"type\":\"object\",\"properties\":{"
+            "\"label\":{\"type\":\"string\",\"description\":\"Human-friendly label (e.g., 'Notes', 'Projects', 'Documents')\"},"
+            "\"path\":{\"type\":\"string\",\"description\":\"Absolute directory path\"},"
+            "\"description\":{\"type\":\"string\",\"description\":\"Optional description of what this path contains\"}"
+            "},\"required\":[\"label\",\"path\"]}",
+        .execute = tool_path_set_wrapper,
+        .is_deterministic = false,
+        .requires_confirmation = false,
+        .is_stateful = true,
+        .estimated_latency_ms = 20.0f
+    };
+    
+    ret |= ethervox_tool_registry_add(registry, &tool_path_set);
+    
+    // Register path_check_unverified tool
+    ethervox_tool_t tool_path_check = {
+        .name = "path_check_unverified",
+        .description = "Check for unverified paths (default paths that don't exist on this system). Use this to discover which paths need configuration and proactively ask the user for the correct locations.",
+        .parameters_json_schema = "{\"type\":\"object\",\"properties\":{}}",
+        .execute = tool_path_check_unverified_wrapper,
+        .is_deterministic = true,
+        .requires_confirmation = false,
+        .is_stateful = false,
+        .estimated_latency_ms = 10.0f
+    };
+    
+    ret |= ethervox_tool_registry_add(registry, &tool_path_check);
+    
+    // Register file_set_safe_mode tool (allows LLM to restrict itself)
+    ethervox_tool_t tool_safe_mode = {
+        .name = "file_set_safe_mode",
+        .description = "Enable or disable safe mode to restrict file write access. Use this like 'plan mode' - enable safe mode before exploring user files, disable only when user explicitly asks to write/modify files. Returns current mode status.",
+        .parameters_json_schema =
+            "{\"type\":\"object\",\"properties\":{"
+            "\"enable\":{\"type\":\"boolean\",\"description\":\"true to enable read-only safe mode, false to allow writes\"}"
+            "},\"required\":[\"enable\"]}",
+        .execute = tool_file_set_safe_mode_wrapper,
+        .is_deterministic = false,
+        .requires_confirmation = false,
+        .is_stateful = true,
+        .estimated_latency_ms = 5.0f
+    };
+    
+    ret |= ethervox_tool_registry_add(registry, &tool_safe_mode);
+    
+    ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
+                "Registered 4 path configuration tools and 1 permission control tool");
     
     return ret;
 }

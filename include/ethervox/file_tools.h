@@ -24,6 +24,7 @@ extern "C" {
 #define ETHERVOX_FILE_MAX_PATH 1024
 #define ETHERVOX_FILE_MAX_SIZE (10 * 1024 * 1024)  // 10MB max file size
 #define ETHERVOX_FILE_MAX_ENTRIES 1000
+#define ETHERVOX_MAX_USER_PATHS 32
 
 /**
  * File access permissions
@@ -32,6 +33,17 @@ typedef enum {
     ETHERVOX_FILE_ACCESS_READ_ONLY = 0,
     ETHERVOX_FILE_ACCESS_READ_WRITE = 1
 } ethervox_file_access_mode_t;
+
+/**
+ * User-defined path configuration
+ */
+typedef struct {
+    char label[64];                           // Human-friendly name (e.g., "Notes", "Documents")
+    char path[ETHERVOX_FILE_MAX_PATH];       // Absolute path
+    char description[256];                    // Purpose/content description
+    bool verified;                            // Path exists and is accessible
+    uint64_t memory_id;                       // Memory entry ID for persistence
+} ethervox_user_path_t;
 
 /**
  * File type filter
@@ -59,6 +71,18 @@ typedef struct {
     
     bool is_initialized;
 } ethervox_file_tools_config_t;
+
+/**
+ * Path configuration manager
+ */
+typedef struct {
+    ethervox_user_path_t paths[ETHERVOX_MAX_USER_PATHS];
+    uint32_t path_count;
+    
+    void* memory;  // ethervox_memory_store_t* (to avoid circular dependency)
+    
+    bool is_initialized;
+} ethervox_path_config_t;
 
 /**
  * Directory entry
@@ -181,6 +205,114 @@ int ethervox_file_tools_register(
     void* registry,
     ethervox_file_tools_config_t* config
 );
+
+/**
+ * Register path configuration tools with Governor tool registry
+ * 
+ * @param registry Governor tool registry
+ * @param config Path configuration instance
+ * @return 0 on success, negative on error
+ */
+int ethervox_path_config_register(
+    void* registry,
+    ethervox_path_config_t* config
+);
+
+// ============================================================================
+// Path Configuration API
+// ============================================================================
+
+/**
+ * Initialize path configuration system
+ * 
+ * Loads default paths (Documents, Downloads, etc.) and any previously saved
+ * user paths from memory. Verifies which paths actually exist.
+ * 
+ * @param config Path configuration structure
+ * @param memory Memory store for persistence (can be NULL)
+ * @return 0 on success, negative on error
+ */
+int ethervox_path_config_init(
+    ethervox_path_config_t* config,
+    void* memory
+);
+
+/**
+ * TOOL: path_set - Set or update a user path
+ * 
+ * Allows LLM to remember important user directories. Paths are validated
+ * and persisted to memory for future sessions.
+ * 
+ * @param config Path configuration
+ * @param label Human-friendly name (e.g., "Notes", "Projects")
+ * @param path Absolute directory path
+ * @param description Optional purpose description
+ * @return 0 on success, -2 if path doesn't exist, -3 if max paths reached
+ */
+int ethervox_path_config_set(
+    ethervox_path_config_t* config,
+    const char* label,
+    const char* path,
+    const char* description
+);
+
+/**
+ * TOOL: path_get - Retrieve a configured path by label
+ * 
+ * Allows LLM to look up user's configured directories.
+ * 
+ * @param config Path configuration
+ * @param label Path label to find
+ * @param path_out Output buffer for path
+ * @param path_size Size of output buffer
+ * @return 0 on success, -2 if unverified, -3 if not found
+ */
+int ethervox_path_config_get(
+    ethervox_path_config_t* config,
+    const char* label,
+    char* path_out,
+    size_t path_size
+);
+
+/**
+ * TOOL: path_list - List all configured paths
+ * 
+ * Returns all user paths known to the system.
+ * 
+ * @param config Path configuration
+ * @param paths_out Output: array of paths (caller must free)
+ * @param count_out Output: number of paths
+ * @return 0 on success, negative on error
+ */
+int ethervox_path_config_list(
+    ethervox_path_config_t* config,
+    ethervox_user_path_t** paths_out,
+    uint32_t* count_out
+);
+
+/**
+ * Get unverified paths (for prompting user to configure)
+ * 
+ * Returns paths that are in defaults but don't exist on the system.
+ * LLM can use this to ask user for actual locations.
+ * 
+ * @param config Path configuration
+ * @param paths_out Output: array of unverified paths (caller must free)
+ * @param count_out Output: number of unverified paths
+ * @return 0 on success, negative on error
+ */
+int ethervox_path_config_get_unverified(
+    ethervox_path_config_t* config,
+    ethervox_user_path_t** paths_out,
+    uint32_t* count_out
+);
+
+/**
+ * Cleanup path configuration
+ * 
+ * @param config Path configuration to cleanup
+ */
+void ethervox_path_config_cleanup(ethervox_path_config_t* config);
 
 #ifdef __cplusplus
 }

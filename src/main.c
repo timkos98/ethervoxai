@@ -55,8 +55,8 @@ static bool g_markdown_enabled = true; // Markdown formatting enabled by default
 // Command completion for readline
 static const char* commands[] = {
     "/help", "/test", "/testllm", "/optimize_tool_prompts", "/load", "/tools",
-    "/search", "/summary", "/export", "/stats", "/startup", "/debug",
-    "/markdown", "/clear", "/reset", "/paste", "/quit", NULL
+    "/search", "/summary", "/export", "/archive", "/stats", "/startup", "/debug",
+    "/markdown", "/clear", "/reset", "/paste", "/paths", "/setpath", "/safemode", "/quit", NULL
 };
 
 static char* command_generator(const char* text, int state) {
@@ -139,6 +139,10 @@ static void print_help(void) {
     printf("  /search <query>    Search conversation memory\n");
     printf("  /summary [n]       Summarize last n turns (default: 10)\n");
     printf("  /export <file>     Export memory to JSON file\n");
+    printf("  /archive           Move old session files to archive/\n");
+    printf("  /paths             List configured user paths\n");
+    printf("  /setpath <label> <path>  Set a user path (e.g., /setpath Notes ~/Notes)\n");
+    printf("  /safemode          Toggle file write permissions (safe mode on/off)\n");
     printf("  /stats             Show memory statistics\n");
     printf("  /startup <cmd>     Manage startup prompt (edit/show/reset)\n");
     printf("  /debug             Toggle debug logging on/off\n");
@@ -639,7 +643,8 @@ static void print_tools(ethervox_governor_t* governor) {
 }
 
 static void process_command(const char* line, ethervox_memory_store_t* memory,
-                           ethervox_governor_t* governor, bool* quit_flag) {
+                           ethervox_governor_t* governor, ethervox_path_config_t* path_config,
+                           ethervox_file_tools_config_t* file_config, bool* quit_flag) {
     // Trim leading whitespace
     while (*line == ' ' || *line == '\t') line++;
     
@@ -670,6 +675,134 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         return;
     }
     
+    if (strcmp(line, "/archive") == 0) {
+        uint32_t archived = 0;
+        if (ethervox_memory_archive_sessions(memory, &archived) == 0) {
+            printf("✓ Archived %u session file(s) to archive/ subdirectory\n", archived);
+        } else {
+            printf("✗ Failed to archive sessions\n");
+        }
+        return;
+    }
+    
+    if (strcmp(line, "/paths") == 0) {
+        ethervox_user_path_t* paths = NULL;
+        uint32_t count = 0;
+        
+        if (ethervox_path_config_list(path_config, &paths, &count) == 0) {
+            if (count == 0) {
+                printf("No paths configured. Use /setpath to add paths.\n");
+            } else {
+                printf("\n╭─────────────────────────────────────────────╮\n");
+                printf("│          Configured User Paths              │\n");
+                printf("├─────────────────────────────────────────────┤\n");
+                for (uint32_t i = 0; i < count; i++) {
+                    const char* status = paths[i].verified ? "✓" : "✗";
+                    printf("│ %s %-15s │\n", status, paths[i].label);
+                    printf("│   %s\n", paths[i].path);
+                    if (paths[i].description[0] != '\0') {
+                        printf("│   %s\n", paths[i].description);
+                    }
+                    if (i < count - 1) {
+                        printf("├─────────────────────────────────────────────┤\n");
+                    }
+                }
+                printf("╰─────────────────────────────────────────────╯\n\n");
+                
+                // Check for unverified paths and suggest configuration
+                uint32_t unverified = 0;
+                for (uint32_t i = 0; i < count; i++) {
+                    if (!paths[i].verified) unverified++;
+                }
+                if (unverified > 0) {
+                    printf("Note: %u path(s) marked ✗ don't exist. Use /setpath to configure.\n", unverified);
+                }
+            }
+            free(paths);
+        } else {
+            printf("✗ Failed to list paths\n");
+        }
+        return;
+    }
+    
+    if (strncmp(line, "/setpath ", 9) == 0) {
+        const char* args = line + 9;
+        
+        // Parse: /setpath <label> <path> [description]
+        char label[64] = {0};
+        char path[ETHERVOX_FILE_MAX_PATH] = {0};
+        char description[256] = {0};
+        
+        // Find first space (after label)
+        const char* space1 = strchr(args, ' ');
+        if (!space1) {
+            printf("Usage: /setpath <label> <path> [description]\n");
+            printf("Example: /setpath Notes /Users/tim/Notes \"My personal notes\"\n");
+            return;
+        }
+        
+        size_t label_len = space1 - args;
+        if (label_len >= sizeof(label)) label_len = sizeof(label) - 1;
+        strncpy(label, args, label_len);
+        
+        // Skip whitespace
+        const char* path_start = space1 + 1;
+        while (*path_start == ' ') path_start++;
+        
+        // Check if path is quoted
+        const char* path_end;
+        if (*path_start == '"') {
+            path_start++;
+            path_end = strchr(path_start, '"');
+            if (!path_end) {
+                printf("Error: Unmatched quote in path\n");
+                return;
+            }
+        } else {
+            // Find next space or end of string
+            path_end = strchr(path_start, ' ');
+            if (!path_end) path_end = path_start + strlen(path_start);
+        }
+        
+        size_t path_len = path_end - path_start;
+        if (path_len >= sizeof(path)) path_len = sizeof(path) - 1;
+        strncpy(path, path_start, path_len);
+        
+        // Check for optional description
+        const char* desc_start = path_end;
+        if (*desc_start == '"') desc_start++;  // Skip closing quote
+        while (*desc_start == ' ') desc_start++;
+        
+        if (*desc_start != '\0') {
+            // Remove surrounding quotes if present
+            if (*desc_start == '"') {
+                desc_start++;
+                const char* desc_end = strrchr(desc_start, '"');
+                if (desc_end) {
+                    size_t desc_len = desc_end - desc_start;
+                    if (desc_len >= sizeof(description)) desc_len = sizeof(description) - 1;
+                    strncpy(description, desc_start, desc_len);
+                }
+            } else {
+                strncpy(description, desc_start, sizeof(description) - 1);
+            }
+        }
+        
+        int result = ethervox_path_config_set(path_config, label, path,
+                                               description[0] ? description : NULL);
+        if (result == 0) {
+            printf("✓ Path configured: %s -> %s\n", label, path);
+        } else if (result == -2) {
+            printf("✗ Path does not exist or is not accessible: %s\n", path);
+            printf("  Please create the directory first or check permissions.\n");
+        } else if (result == -3) {
+            printf("✗ Maximum paths (%d) reached\n", ETHERVOX_MAX_USER_PATHS);
+        } else {
+            printf("✗ Failed to set path\n");
+        }
+        return;
+    }
+    
     if (strcmp(line, "/stats") == 0) {
         print_stats(memory);
         return;
@@ -697,6 +830,28 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
     if (strcmp(line, "/markdown") == 0) {
         g_markdown_enabled = !g_markdown_enabled;
         printf("Markdown formatting: %s\n", g_markdown_enabled ? "ENABLED" : "DISABLED");
+        return;
+    }
+    
+    if (strcmp(line, "/safemode") == 0) {
+        if (!file_config) {
+            printf("✗ File tools not initialized\n");
+            return;
+        }
+        
+        // Toggle safe mode
+        bool was_safe = (file_config->access_mode == ETHERVOX_FILE_ACCESS_READ_ONLY);
+        file_config->access_mode = was_safe ? ETHERVOX_FILE_ACCESS_READ_WRITE : ETHERVOX_FILE_ACCESS_READ_ONLY;
+        
+        if (file_config->access_mode == ETHERVOX_FILE_ACCESS_READ_ONLY) {
+            printf("🔒 Safe Mode: ENABLED (read-only)\n");
+            printf("   LLM can explore and read files but cannot modify them.\n");
+            printf("   This is similar to 'plan mode' - use for safe exploration.\n");
+        } else {
+            printf("🔓 Safe Mode: DISABLED (read-write)\n");
+            printf("   LLM can read and write files when needed.\n");
+            printf("   ⚠️  Exercise caution with file modifications.\n");
+        }
         return;
     }
     
@@ -856,7 +1011,7 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
             return;
         }
         // Recursively process the pasted content as a command
-        process_command(pasted, memory, governor, quit_flag);
+        process_command(pasted, memory, governor, path_config, file_config, quit_flag);
         free(pasted);
         return;
     }
@@ -1064,6 +1219,28 @@ int main(int argc, char** argv) {
         return 1;
     }
     
+    // Initialize path configuration
+    ethervox_path_config_t path_config;
+    if (ethervox_path_config_init(&path_config, &memory) != 0) {
+        fprintf(stderr, "Failed to initialize path configuration\n");
+        return 1;
+    }
+    
+    // Check for unverified paths and prompt user
+    ethervox_user_path_t* unverified = NULL;
+    uint32_t unverified_count = 0;
+    if (ethervox_path_config_get_unverified(&path_config, &unverified, &unverified_count) == 0) {
+        if (unverified_count > 0) {
+            printf("\n⚠️  Some default paths don't exist on your system:\n");
+            for (uint32_t i = 0; i < unverified_count; i++) {
+                printf("  • %s: %s\n", unverified[i].label, unverified[i].path);
+            }
+            printf("Use /setpath to configure these if needed.\n");
+            printf("Example: /setpath Notes /path/to/your/notes\n\n");
+        }
+        free(unverified);
+    }
+    
     if (memory_dir) {
         printf("Memory: Persistent storage at %s\n", memory.storage_filepath);
         printf("Memory: Current entry count before load: %u\n", memory.entry_count);
@@ -1176,8 +1353,18 @@ int main(int argc, char** argv) {
         
         // Register with Governor
         if (ethervox_file_tools_register(&registry, &file_config) == 0) {
-            printf("File Tools: Registered with Governor (read-write: .txt/.md/.org/.c/.cpp/.h/.sh)\n");
+            const char* mode_icon = (file_config.access_mode == ETHERVOX_FILE_ACCESS_READ_ONLY) ? "🔒" : "🔓";
+            const char* mode_str = (file_config.access_mode == ETHERVOX_FILE_ACCESS_READ_ONLY) ? "read-only (safe mode)" : "read-write";
+            printf("File Tools: Registered with Governor (%s %s: .txt/.md/.org/.c/.cpp/.h/.sh)\n", mode_icon, mode_str);
+            if (file_config.access_mode == ETHERVOX_FILE_ACCESS_READ_ONLY) {
+                printf("            LLM can use file_set_safe_mode tool to enable writes when needed\n");
+            }
         }
+    }
+    
+    // Register path configuration tools
+    if (ethervox_path_config_register(&registry, &path_config) == 0) {
+        printf("Path Config Tools: Registered with Governor\n");
     }
     
     // Register startup prompt tools
@@ -1436,7 +1623,7 @@ int main(int argc, char** argv) {
             add_history(line);
         }
         
-        process_command(line, &memory, governor, &quit);
+        process_command(line, &memory, governor, &path_config, &file_config, &quit);
         free(line);
     }
 #else
@@ -1456,7 +1643,7 @@ int main(int argc, char** argv) {
             line[len - 1] = '\0';
         }
         
-        process_command(line, &memory, governor, &quit);
+        process_command(line, &memory, governor, &path_config, &file_config, &quit);
     }
 #endif
     
@@ -1514,6 +1701,7 @@ int main(int argc, char** argv) {
     
     ethervox_governor_cleanup(governor);
     ethervox_tool_registry_cleanup(&registry);
+    ethervox_path_config_cleanup(&path_config);
     ethervox_memory_cleanup(&memory);
     
     // Restore stderr if we redirected it

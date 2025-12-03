@@ -509,6 +509,68 @@ static void test_hash_table_performance(void) {
     ethervox_memory_cleanup(&store);
 }
 
+// Test 7: Memory archiving
+static void test_memory_archive(void) {
+    TEST_HEADER("Test 7: Memory Archiving");
+    
+    // Create a temporary test directory
+    const char* test_dir = "/tmp/ethervox_archive_test";
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s && mkdir -p %s", test_dir, test_dir);
+    system(cmd);
+    
+    // Create some fake old session files
+    char filepath[512];
+    for (int i = 1; i <= 3; i++) {
+        snprintf(filepath, sizeof(filepath), "%s/session_old_%d.jsonl", test_dir, i);
+        FILE* f = fopen(filepath, "w");
+        if (f) {
+            fprintf(f, "{\"id\":%d,\"text\":\"old session %d\"}\n", i, i);
+            fclose(f);
+        }
+    }
+    
+    // Initialize memory store
+    ethervox_memory_store_t archive_store;
+    if (ethervox_memory_init(&archive_store, NULL, test_dir) == 0) {
+        // Archive the old sessions
+        uint32_t archived = 0;
+        if (ethervox_memory_archive_sessions(&archive_store, &archived) == 0) {
+            if (archived == 3) {
+                TEST_PASS("Archived 3 session files");
+                g_tests_passed++;
+            } else {
+                TEST_FAIL("Expected 3 archived files, got %u", archived);
+                g_tests_failed++;
+            }
+            
+            // Verify archive directory exists using standard C library
+            snprintf(filepath, sizeof(filepath), "%s/archive/session_old_1.jsonl", test_dir);
+            FILE* test_file = fopen(filepath, "r");
+            if (test_file) {
+                fclose(test_file);
+                TEST_PASS("Archive directory created and files moved");
+                g_tests_passed++;
+            } else {
+                TEST_FAIL("Archived files not found in archive directory");
+                g_tests_failed++;
+            }
+        } else {
+            TEST_FAIL("Archive operation failed");
+            g_tests_failed++;
+        }
+        
+        ethervox_memory_cleanup(&archive_store);
+    } else {
+        TEST_FAIL("Failed to initialize archive test store");
+        g_tests_failed++;
+    }
+    
+    // Cleanup
+    snprintf(cmd, sizeof(cmd), "rm -rf %s", test_dir);
+    system(cmd);
+}
+
 // Main test runner
 void run_integration_tests(void) {
     printf("\n");
@@ -531,6 +593,7 @@ void run_integration_tests(void) {
     test_system_prompt_generation();
     test_memory_export_import();
     test_hash_table_performance();
+    test_memory_archive();
     
     time_t end_time = time(NULL);
     double duration = difftime(end_time, start_time);

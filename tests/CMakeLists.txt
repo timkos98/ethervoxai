@@ -48,3 +48,10 @@ target_link_libraries(test_plugin_manager ethervoxai)
 target_include_directories(test_plugin_manager PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME PluginManager COMMAND test_plugin_manager)
 set_tests_properties(PluginManager PROPERTIES TIMEOUT 30 LABELS "unit")
+
+# Memory archive tests
+add_executable(test_memory_archive unit/test_memory_archive.c)
+target_link_libraries(test_memory_archive ethervoxai)
+target_include_directories(test_memory_archive PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME MemoryArchive COMMAND test_memory_archive)
+set_tests_properties(MemoryArchive PROPERTIES TIMEOUT 30 LABELS "unit")

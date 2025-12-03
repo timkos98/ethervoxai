@@ -277,6 +277,27 @@ int ethervox_memory_load_previous_session(
 );
 
 /**
+ * Archive all previous session files
+ * 
+ * Moves all .jsonl session files (except current session) to an archive subdirectory.
+ * Useful for cleanup while preserving history. The archive directory is created
+ * at <storage_dir>/archive/ if it doesn't exist.
+ * 
+ * Platform support:
+ * - Desktop (macOS/Linux/Windows): Full support
+ * - Android: Supported in app internal storage
+ * - ESP32: May fail if filesystem doesn't support subdirectories
+ * 
+ * @param store Memory store (must be initialized with storage directory)
+ * @param files_archived Output: number of files archived (can be NULL)
+ * @return 0 on success, negative on error
+ */
+int ethervox_memory_archive_sessions(
+    ethervox_memory_store_t* store,
+    uint32_t* files_archived
+);
+
+/**
  * TOOL: memory_forget - Prune old/irrelevant memories
  * 
  * @param store Memory store
