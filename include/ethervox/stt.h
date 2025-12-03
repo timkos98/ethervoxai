@@ -129,6 +129,16 @@ void ethervox_stt_result_free(ethervox_stt_result_t* result);
  */
 void ethervox_stt_cleanup(ethervox_stt_runtime_t* runtime);
 
+// Backend-specific functions (internal)
+int ethervox_stt_whisper_init(ethervox_stt_runtime_t* runtime);
+int ethervox_stt_whisper_start(ethervox_stt_runtime_t* runtime);
+int ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
+                                  const ethervox_audio_buffer_t* audio_buffer,
+                                  ethervox_stt_result_t* result);
+int ethervox_stt_whisper_finalize(ethervox_stt_runtime_t* runtime, ethervox_stt_result_t* result);
+void ethervox_stt_whisper_stop(ethervox_stt_runtime_t* runtime);
+void ethervox_stt_whisper_cleanup(ethervox_stt_runtime_t* runtime);
+
 #ifdef __cplusplus
 }
 #endif

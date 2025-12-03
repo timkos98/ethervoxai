@@ -233,6 +233,52 @@ else()
     add_definitions(-DLLAMA_CPP_AVAILABLE=0)
 endif()
 
+# whisper.cpp integration for speech-to-text
+option(WITH_WHISPER "Enable whisper.cpp for speech-to-text" ON)
+
+if(WITH_WHISPER AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/whisper.cpp")
+    message(STATUS "Adding whisper.cpp from external/whisper.cpp")
+    
+    # whisper.cpp build options
+    set(WHISPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(WHISPER_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+    set(BUILD_SHARED_LIBS ON CACHE BOOL "" FORCE)
+    
+    # Match llama.cpp settings for consistency
+    set(GGML_CPU ON CACHE BOOL "" FORCE)
+    set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
+    
+    # Android-specific settings
+    if(ANDROID)
+        set(WHISPER_METAL OFF CACHE BOOL "" FORCE)
+        set(WHISPER_CUBLAS OFF CACHE BOOL "" FORCE)
+        set(WHISPER_CLBLAST OFF CACHE BOOL "" FORCE)
+        set(WHISPER_OPENBLAS OFF CACHE BOOL "" FORCE)
+        
+        # Enable NEON for ARM processors
+        if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm" OR CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR ANDROID_ABI STREQUAL "arm64-v8a")
+            set(GGML_CPU_ARM_NEON ON CACHE BOOL "" FORCE)
+            message(STATUS "Enabled ARM NEON optimizations for whisper.cpp")
+        endif()
+        
+        # Android 15+ 16KB page size compatibility
+        set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-z,max-page-size=16384")
+        message(STATUS "Applied 16KB page alignment to whisper.cpp libraries for Android 15+ compatibility")
+    endif()
+    
+    # Add whisper.cpp as subdirectory
+    add_subdirectory(external/whisper.cpp)
+    
+    add_definitions(-DWHISPER_CPP_AVAILABLE=1)
+    message(STATUS "whisper.cpp successfully configured")
+elseif(WITH_WHISPER)
+    message(WARNING "whisper.cpp not found in external/whisper.cpp - Voice features will be disabled")
+    add_definitions(-DWHISPER_CPP_AVAILABLE=0)
+else()
+    add_definitions(-DWHISPER_CPP_AVAILABLE=0)
+endif()
+
 # Include directories
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -293,6 +339,11 @@ message(STATUS "Startup prompt tools plugin sources included")
 file(GLOB CONTEXT_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/context_tools/*.c")
 list(APPEND ETHERVOXAI_CORE_SOURCES ${CONTEXT_TOOLS_SOURCES})
 message(STATUS "Context tools plugin sources included")
+
+# Add voice tools plugin sources
+file(GLOB VOICE_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/voice_tools/*.c")
+list(APPEND ETHERVOXAI_CORE_SOURCES ${VOICE_TOOLS_SOURCES})
+message(STATUS "Voice tools plugin sources included")
 
 # Add dialogue sources (including integration tests)
 file(GLOB DIALOGUE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/dialogue/*.c")
@@ -410,6 +461,20 @@ if(WITH_LLAMA)
     endif()
 endif()
 
+# Link whisper.cpp if available
+if(WITH_WHISPER)
+    if(TARGET whisper)
+        target_include_directories(ethervoxai PRIVATE 
+            ${CMAKE_CURRENT_SOURCE_DIR}/external/whisper.cpp/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/external/whisper.cpp/src
+        )
+        target_link_libraries(ethervoxai PUBLIC whisper)
+        message(STATUS "Linked whisper.cpp library to ethervoxai")
+    else()
+        message(WARNING "whisper target not found - Voice features will be limited")
+    endif()
+endif()
+
 # Platform-specific linking for library consumers
 set(ETHERVOXAI_PLATFORM_LIBS "")
 
@@ -466,7 +531,7 @@ elseif(ANDROID)
 elseif(UNIX AND NOT APPLE)
     set(ETHERVOXAI_PLATFORM_LIBS asound pthread curl ssl crypto m)
 elseif(APPLE)
-    set(ETHERVOXAI_PLATFORM_LIBS "-framework CoreAudio" "-framework AudioUnit" "-framework CoreFoundation" pthread curl)
+    set(ETHERVOXAI_PLATFORM_LIBS "-framework CoreAudio" "-framework AudioToolbox" "-framework AudioUnit" "-framework CoreFoundation" pthread curl)
 endif()
 
 if(ETHERVOXAI_PLATFORM_LIBS)

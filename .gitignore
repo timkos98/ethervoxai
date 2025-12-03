@@ -70,7 +70,9 @@ bin/
 lib/
 
 # External dependencies (cloned at build time)
-external/
+external/*
+!external/llama.cpp
+!external/whisper.cpp
 
 # OS generated files
 .DS_Store
@@ -136,6 +138,9 @@ esp32-project/dependencies.lock
 # CI/CD artifacts
 run-artifacts/
 *.md.bak
+*.bak
+*.bak[0-9]
+*.bak[0-9][0-9]
 bin/act
 dashboard/package-lock.json
 semester_project_TUM.org

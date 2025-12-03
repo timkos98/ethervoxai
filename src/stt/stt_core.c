@@ -79,9 +79,11 @@ int ethervox_stt_init(ethervox_stt_runtime_t* runtime, const ethervox_stt_config
     }
 
     case ETHERVOX_STT_BACKEND_WHISPER:
-      printf("Whisper.cpp backend not yet implemented\n");
-      free(runtime->audio_accumulator);
-      return -1;
+      if (ethervox_stt_whisper_init(runtime) != 0) {
+        free(runtime->audio_accumulator);
+        return -1;
+      }
+      break;
 
     default:
       free(runtime->audio_accumulator);
@@ -101,6 +103,11 @@ int ethervox_stt_start(ethervox_stt_runtime_t* runtime) {
   runtime->is_processing = true;
   runtime->accumulator_write_pos = 0;
 
+  // Delegate to backend-specific start
+  if (runtime->config.backend == ETHERVOX_STT_BACKEND_WHISPER) {
+    return ethervox_stt_whisper_start(runtime);
+  }
+
   printf("STT: Processing started\n");
   return 0;
 }
@@ -115,7 +122,12 @@ int ethervox_stt_process(ethervox_stt_runtime_t* runtime,
 
   memset(result, 0, sizeof(ethervox_stt_result_t));
 
-  // Convert and accumulate audio
+  // Delegate to backend-specific processing
+  if (runtime->config.backend == ETHERVOX_STT_BACKEND_WHISPER) {
+    return ethervox_stt_whisper_process(runtime, audio_buffer, result);
+  }
+
+  // Convert and accumulate audio (for Vosk or other backends)
   const int16_t* samples = (const int16_t*)audio_buffer->data;
   uint32_t sample_count = audio_buffer->size / sizeof(int16_t);
 
@@ -153,7 +165,12 @@ int ethervox_stt_finalize(ethervox_stt_runtime_t* runtime, ethervox_stt_result_t
 
   memset(result, 0, sizeof(ethervox_stt_result_t));
 
-  // TODO: Get final result from Vosk/Whisper
+  // Delegate to backend-specific finalize
+  if (runtime->config.backend == ETHERVOX_STT_BACKEND_WHISPER) {
+    return ethervox_stt_whisper_finalize(runtime, result);
+  }
+
+  // TODO: Get final result from Vosk
   result->text = strdup("[Placeholder STT] Final transcription");
   result->confidence = 0.90f;
   result->is_partial = false;
@@ -173,6 +190,11 @@ void ethervox_stt_stop(ethervox_stt_runtime_t* runtime) {
 
   runtime->is_processing = false;
   runtime->accumulator_write_pos = 0;
+
+  // Delegate to backend-specific stop
+  if (runtime->config.backend == ETHERVOX_STT_BACKEND_WHISPER) {
+    ethervox_stt_whisper_stop(runtime);
+  }
 
   printf("STT: Processing stopped\n");
 }
@@ -197,6 +219,15 @@ void ethervox_stt_cleanup(ethervox_stt_runtime_t* runtime) {
 
   if (runtime->audio_accumulator) {
     free(runtime->audio_accumulator);
+  }
+
+  // Delegate to backend-specific cleanup
+  if (runtime->config.backend == ETHERVOX_STT_BACKEND_WHISPER) {
+    ethervox_stt_whisper_cleanup(runtime);
+  } else if (runtime->backend_context) {
+    // Vosk or other backend cleanup
+    free(runtime->backend_context);
+    runtime->backend_context = NULL;
   }
 
   if (runtime->config.model_path) {
