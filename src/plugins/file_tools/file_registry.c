@@ -358,10 +358,10 @@ int ethervox_file_tools_register(
     // Register file_list tool
     ethervox_tool_t tool_list = {
         .name = "file_list",
-        .description = "List files and directories in a given path.",
+        .description = "List files and directories in a given path. Use '.' for current directory, '..' for parent, or provide an absolute path.",
         .parameters_json_schema =
             "{\"type\":\"object\",\"properties\":{"
-            "\"directory\":{\"type\":\"string\",\"description\":\"Directory path to list\"},"
+            "\"directory\":{\"type\":\"string\",\"description\":\"Directory path to list (use '.' for current directory)\"},"
             "\"recursive\":{\"type\":\"boolean\",\"description\":\"Recurse into subdirectories\"}"
             "},\"required\":[\"directory\"]}",
         .execute = tool_file_list_wrapper,

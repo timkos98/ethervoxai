@@ -18,6 +18,14 @@
 #include <time.h>
 #include <ctype.h>
 
+#ifdef _WIN32
+#include <direct.h>
+#define mkdir(path, mode) _mkdir(path)
+#else
+#include <sys/stat.h>
+#include <sys/types.h>
+#endif
+
 #define OPT_LOG(...) ETHERVOX_LOGI(__VA_ARGS__)
 #define OPT_ERROR(...) ETHERVOX_LOGE(__VA_ARGS__)
 
@@ -87,6 +95,18 @@ int ethervox_optimize_tool_prompts(ethervox_governor_t* governor, const char* mo
     
     char prompt_file[512];
     get_prompt_file_path(model_path, prompt_file, sizeof(prompt_file));
+    
+    // Ensure ~/.ethervox directory exists
+    const char* home = getenv("HOME");
+    if (home) {
+        char ethervox_dir[512];
+        snprintf(ethervox_dir, sizeof(ethervox_dir), "%s/.ethervox", home);
+        #ifdef _WIN32
+        _mkdir(ethervox_dir);
+        #else
+        mkdir(ethervox_dir, 0755);
+        #endif
+    }
     
     printf("\n");
     printf("╔═══════════════════════════════════════════════════════════════╗\n");
