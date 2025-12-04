@@ -13,6 +13,7 @@
 
 #include "ethervox/stt.h"
 #include "ethervox/logging.h"
+#include "ethervox/config.h"
 
 #ifdef WHISPER_CPP_AVAILABLE
 #include "whisper.h"
@@ -53,6 +54,12 @@ typedef struct {
   // Speaker tracking across entire session
   int current_speaker;         // Current active speaker ID (0, 1, 2, ...)
   bool show_speaker_labels;    // Always show speaker labels (not just on turns)
+  
+  // Acoustic feature tracking for speaker change detection
+  float last_segment_energy;   // RMS energy of last segment
+  float last_segment_pitch;    // Estimated pitch of last segment
+  int64_t last_segment_end_time; // End time of last segment (for pause detection)
+  bool first_segment;          // Is this the first segment?
 } whisper_backend_context_t;
 
 static void log_audio_stats(const float* data, size_t sample_count, const char* label) {
@@ -73,6 +80,109 @@ static void log_audio_stats(const float* data, size_t sample_count, const char* 
 }
 
 /**
+ * Calculate RMS energy of audio segment
+ */
+static float calculate_energy(const float* data, size_t start, size_t end) {
+  if (!data || start >= end) return 0.0f;
+  double sum_sq = 0.0;
+  for (size_t i = start; i < end; i++) {
+    float s = data[i];
+    sum_sq += (double)s * (double)s;
+  }
+  return (float)sqrt(sum_sq / (double)(end - start));
+}
+
+/**
+ * Estimate fundamental frequency (pitch) using zero-crossing rate
+ * Simple pitch proxy: higher ZCR = higher pitch
+ */
+static float estimate_pitch(const float* data, size_t start, size_t end) {
+  if (!data || start >= end || (end - start) < 100) return 0.0f;
+  
+  int zero_crossings = 0;
+  for (size_t i = start + 1; i < end; i++) {
+    if ((data[i] >= 0.0f && data[i-1] < 0.0f) || (data[i] < 0.0f && data[i-1] >= 0.0f)) {
+      zero_crossings++;
+    }
+  }
+  
+  // Normalize by duration to get zero-crossing rate
+  return (float)zero_crossings / (float)(end - start);
+}
+
+/**
+ * Detect speaker change using multi-factor analysis:
+ * 1. Significant energy change (volume shift)
+ * 2. Pitch change (voice characteristic)
+ * 3. Pause duration (silence between speakers)
+ */
+static bool detect_speaker_change(whisper_backend_context_t* ctx,
+                                   const float* audio_data,
+                                   size_t segment_start,
+                                   size_t segment_end,
+                                   int64_t segment_t0,
+                                   int64_t segment_t1) {
+  if (ctx->first_segment) {
+    return false; // No change on first segment
+  }
+  
+  // Calculate current segment features
+  float energy = calculate_energy(audio_data, segment_start, segment_end);
+  float pitch = estimate_pitch(audio_data, segment_start, segment_end);
+  
+  // Calculate pause duration (in 10ms units, same as timestamps)
+  int64_t pause_duration = segment_t0 - ctx->last_segment_end_time;
+  
+  // Thresholds for speaker change detection (from config)
+  const float ENERGY_CHANGE_THRESHOLD = ETHERVOX_SPEAKER_ENERGY_CHANGE_THRESHOLD;
+  const float PITCH_CHANGE_THRESHOLD = ETHERVOX_SPEAKER_PITCH_CHANGE_THRESHOLD;
+  const int64_t PAUSE_THRESHOLD = ETHERVOX_SPEAKER_PAUSE_THRESHOLD;
+  
+  bool speaker_change = false;
+  int change_factors = 0;
+  
+  // Factor 1: Energy change (different volume = different speaker or distance)
+  if (ctx->last_segment_energy > 0.01f && energy > 0.01f) {
+    float energy_ratio = fabsf(energy - ctx->last_segment_energy) / ctx->last_segment_energy;
+    if (energy_ratio > ENERGY_CHANGE_THRESHOLD) {
+      change_factors++;
+      LOG_DEBUG("Energy change detected: %.4f -> %.4f (ratio: %.2f)",
+                ctx->last_segment_energy, energy, energy_ratio);
+    }
+  }
+  
+  // Factor 2: Pitch change (different voice fundamental frequency)
+  if (ctx->last_segment_pitch > 0.001f && pitch > 0.001f) {
+    float pitch_ratio = fabsf(pitch - ctx->last_segment_pitch) / ctx->last_segment_pitch;
+    if (pitch_ratio > PITCH_CHANGE_THRESHOLD) {
+      change_factors++;
+      LOG_DEBUG("Pitch change detected: %.4f -> %.4f (ratio: %.2f)",
+                ctx->last_segment_pitch, pitch, pitch_ratio);
+    }
+  }
+  
+  // Factor 3: Significant pause (typical of turn-taking)
+  if (pause_duration > PAUSE_THRESHOLD) {
+    change_factors++;
+    LOG_DEBUG("Pause detected: %lldms", pause_duration * 10);
+  }
+  
+  // Require minimum factors to confirm speaker change (reduce false positives)
+  if (change_factors >= ETHERVOX_SPEAKER_CHANGE_MIN_FACTORS) {
+    speaker_change = true;
+    LOG_INFO("🎙️ Speaker change detected (%d factors)",
+             change_factors);
+  }
+  
+  // Update context for next comparison
+  ctx->last_segment_energy = energy;
+  ctx->last_segment_pitch = pitch;
+  ctx->last_segment_end_time = segment_t1;
+  
+  return speaker_change;
+}
+
+/**
  * Suppress whisper.cpp internal logs
  */
 static void whisper_log_suppress(enum ggml_log_level level, const char* text, void* user_data) {
@@ -85,8 +195,7 @@ static void whisper_log_suppress(enum ggml_log_level level, const char* text, vo
 int ethervox_stt_whisper_init(ethervox_stt_runtime_t* runtime) {
   if (!runtime) return -1;
   
-  // DON'T suppress Whisper logs - we want to see what it's doing
-  // whisper_log_set(whisper_log_suppress, NULL);
+  whisper_log_set(whisper_log_suppress, NULL);
   
   whisper_backend_context_t* ctx = (whisper_backend_context_t*)calloc(1, sizeof(whisper_backend_context_t));
   if (!ctx) return -1;
@@ -102,8 +211,8 @@ int ethervox_stt_whisper_init(ethervox_stt_runtime_t* runtime) {
   
   LOG_INFO("Loaded Whisper model: %s", runtime->config.model_path);
   
-  // Get default params
-  ctx->params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+  // Get default params with BEAM_SEARCH strategy for better accuracy
+  ctx->params = whisper_full_default_params(WHISPER_SAMPLING_BEAM_SEARCH);
   
   // Language configuration for multilingual model
   const char* lang = runtime->config.language;
@@ -167,21 +276,27 @@ int ethervox_stt_whisper_init(ethervox_stt_runtime_t* runtime) {
   ctx->params.suppress_blank = true;    // Filter blank/noise segments
   ctx->params.suppress_nst = true;      // Suppress non-speech tokens
   
-  // Quality thresholds - balanced for good speech detection
-  ctx->params.no_speech_thold = 0.4f;   // Moderate filtering (0.2-0.6 range)
-  ctx->params.logprob_thold = -1.0f;    // Default confidence threshold
-  ctx->params.entropy_thold = 2.4f;     // Default entropy threshold
+  // Quality thresholds - tuned for accuracy and avoiding false positives
+  ctx->params.no_speech_thold = ETHERVOX_WHISPER_NO_SPEECH_THRESHOLD;
+  ctx->params.logprob_thold = ETHERVOX_WHISPER_LOGPROB_THRESHOLD;
+  ctx->params.entropy_thold = ETHERVOX_WHISPER_ENTROPY_THRESHOLD;
   LOG_INFO("Whisper speech thresholds: no_speech=%.2f logprob=%.2f entropy=%.2f",
            ctx->params.no_speech_thold,
            ctx->params.logprob_thold,
            ctx->params.entropy_thold);
   
   // Temperature fallback for better decoding
-  ctx->params.temperature = 0.0f;       // Start greedy (deterministic)
-  ctx->params.temperature_inc = 0.2f;   // Increase if needed
+  ctx->params.temperature = ETHERVOX_WHISPER_TEMPERATURE_START;
+  ctx->params.temperature_inc = ETHERVOX_WHISPER_TEMPERATURE_INCREMENT;
+  
+  // Beam search parameters (in nested struct)
+  ctx->params.beam_search.beam_size = ETHERVOX_WHISPER_BEAM_SIZE;
+  ctx->params.greedy.best_of = 1;         // Not used in beam search mode
+  LOG_INFO("Using beam search (size=%d) to improve accuracy and avoid loops",
+           ctx->params.beam_search.beam_size);
   
   // Streaming optimization (based on stream.cpp example)
-  ctx->params.no_context = false;       // Keep context between chunks for better accuracy
+  ctx->params.no_context = true;        // Reset context each chunk to avoid loops
   ctx->params.single_segment = false;   // Allow multiple segments per chunk
   ctx->params.max_tokens = 0;           // No token limit - process full chunk
   
@@ -221,9 +336,13 @@ int ethervox_stt_whisper_init(ethervox_stt_runtime_t* runtime) {
   // Initialize speaker tracking
   ctx->current_speaker = 0;
   ctx->show_speaker_labels = true;  // Always show speaker labels for better transcript clarity
+  ctx->last_segment_energy = 0.0f;
+  ctx->last_segment_pitch = 0.0f;
+  ctx->last_segment_end_time = 0;
+  ctx->first_segment = true;
   
   runtime->backend_context = ctx;
-  LOG_INFO("Whisper backend initialized with multi-language, timestamps, and speaker detection");
+  LOG_INFO("Whisper backend initialized with multi-language, timestamps, and acoustic speaker detection");
   return 0;
 }
 
@@ -237,6 +356,10 @@ int ethervox_stt_whisper_start(ethervox_stt_runtime_t* runtime) {
   ctx->audio_buffer_size = 0;
   ctx->overlap_size = 0;
   ctx->current_speaker = 0;  // Reset to Speaker 0 at session start
+  ctx->first_segment = true; // Reset first segment flag
+  ctx->last_segment_energy = 0.0f;
+  ctx->last_segment_pitch = 0.0f;
+  ctx->last_segment_end_time = 0;
   
   LOG_INFO("Whisper session started (streaming mode with 200ms overlap)");
   return 0;
@@ -401,11 +524,58 @@ int ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
   int64_t last_t1 = 0;
   bool has_speaker_change = false;
   
+  // Calculate overlap threshold in timestamp units (10ms)
+  // Only process segments that start AFTER the overlap portion
+  const int64_t overlap_time_threshold = (int64_t)(ctx->overlap_size * 100.0f / 16000.0f);
+  
+  // Store speaker turn flags for each segment
+  bool* speaker_turns = (bool*)calloc(n_segments, sizeof(bool));
+  if (!speaker_turns) {
+    free(process_buffer);
+    ctx->audio_buffer_size = 0;
+    return -1;
+  }
+  
+  // Calculate audio segment boundaries for each text segment
+  const float sample_rate = 16000.0f;
+  
   for (int i = 0; i < n_segments; i++) {
     const char* text = whisper_full_get_segment_text(ctx->ctx, i);
     int64_t t0 = whisper_full_get_segment_t0(ctx->ctx, i);
     int64_t t1 = whisper_full_get_segment_t1(ctx->ctx, i);
-    bool speaker_turn = whisper_full_get_segment_speaker_turn_next(ctx->ctx, i);
+    
+    // Skip segments that are entirely within the overlap region (duplicates)
+    if (ctx->overlap_size > 0 && t1 <= overlap_time_threshold) {
+      LOG_DEBUG("Skipping overlap segment %d: [%.2fs -> %.2fs] < overlap threshold %.2fs",
+                i, t0/100.0f, t1/100.0f, overlap_time_threshold/100.0f);
+      continue;
+    }
+    
+    // Detect speaker change using acoustic analysis
+    bool speaker_turn = false;
+    if (!ctx->first_segment) {
+      // Convert timestamps (10ms units) to sample indices
+      size_t seg_start = (size_t)(t0 * sample_rate / 100.0f);
+      size_t seg_end = (size_t)(t1 * sample_rate / 100.0f);
+      
+      // Ensure bounds are within buffer
+      if (seg_start < total_samples && seg_end <= total_samples && seg_end > seg_start) {
+        speaker_turn = detect_speaker_change(ctx, process_buffer, seg_start, seg_end, t0, t1);
+      }
+    } else {
+      // First segment: initialize tracking
+      size_t seg_start = (size_t)(t0 * sample_rate / 100.0f);
+      size_t seg_end = (size_t)(t1 * sample_rate / 100.0f);
+      if (seg_start < total_samples && seg_end <= total_samples && seg_end > seg_start) {
+        ctx->last_segment_energy = calculate_energy(process_buffer, seg_start, seg_end);
+        ctx->last_segment_pitch = estimate_pitch(process_buffer, seg_start, seg_end);
+        ctx->last_segment_end_time = t1;
+      }
+      ctx->first_segment = false;
+    }
+    
+    // Store the speaker turn flag for this segment
+    speaker_turns[i] = speaker_turn;
     
     if (i == 0) first_t0 = t0;
     last_t1 = t1;
@@ -428,6 +598,7 @@ int ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
   if (total_len > 0) {
     char* transcript = (char*)calloc(total_len + 200, 1);  // Extra space for speaker markers
     if (!transcript) {
+      free(speaker_turns);
       free(process_buffer);
       ctx->audio_buffer_size = 0;
       return -1;
@@ -436,7 +607,16 @@ int ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
     // Track speaker changes across this chunk
     for (int i = 0; i < n_segments; i++) {
       const char* text = whisper_full_get_segment_text(ctx->ctx, i);
-      bool speaker_turn = whisper_full_get_segment_speaker_turn_next(ctx->ctx, i);
+      int64_t t0 = whisper_full_get_segment_t0(ctx->ctx, i);
+      int64_t t1 = whisper_full_get_segment_t1(ctx->ctx, i);
+      
+      // Skip segments in overlap region
+      if (ctx->overlap_size > 0 && t1 <= overlap_time_threshold) {
+        continue;
+      }
+      
+      // Use the speaker turn flag we calculated earlier
+      bool speaker_turn = speaker_turns[i];
       
       if (text && strlen(text) > 0) {
         // Add space separator if not first segment in transcript
@@ -498,6 +678,8 @@ int ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
   }
   
 save_overlap:
+  free(speaker_turns);  // Clean up speaker turn flags array
+  
   // Save last 200ms of audio as overlap for next chunk (context continuity)
   ctx->overlap_size = (ctx->audio_buffer_size > ctx->overlap_capacity) 
                       ? ctx->overlap_capacity 

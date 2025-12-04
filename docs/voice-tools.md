@@ -1,8 +1,9 @@
 # Voice Tools Design Document
 
-**Status**: Design Phase  
+**Status**: Partially Implemented (STT + Speaker Detection Complete)  
 **Target**: EthervoxAI Governor Integration  
-**License Requirements**: MIT-compatible only (commercial-safe)
+**License Requirements**: MIT-compatible only (commercial-safe)  
+**Last Updated**: December 4, 2025
 
 ## Overview
 
@@ -51,7 +52,7 @@ This document outlines the design for integrating voice input/output capabilitie
 
 **Alternative Considered**: Piper1-GPL (rejected due to GPL-3.0 license)
 
-### Speech-to-Text: Whisper.cpp (MIT License)
+### Speech-to-Text: Whisper.cpp (MIT License) ✅ IMPLEMENTED
 
 **Selected Implementation**: whisper.cpp (ggerganov/whisper.cpp)
 - **Repository**: https://github.com/ggerganov/whisper.cpp
@@ -64,6 +65,15 @@ This document outlines the design for integrating voice input/output capabilitie
 
 **Recommended Model**: `base.en` (74MB, English-only, ~4x real-time on M1)
 
+**Implementation Status**:
+- ✅ Whisper.cpp integration complete (`src/stt/whisper_backend.c`)
+- ✅ Beam search with configurable parameters (reduces repetition loops)
+- ✅ Multi-language auto-detection support
+- ✅ Translation toggle (`/translate` command)
+- ✅ Streaming with 200ms overlap buffer for context
+- ✅ Configurable quality thresholds in `config.h`
+- ✅ Timestamps for segment alignment (10ms resolution)
+
 **Why Whisper.cpp**:
 - Industry standard for local STT
 - Excellent accuracy-to-speed ratio
@@ -72,40 +82,176 @@ This document outlines the design for integrating voice input/output capabilitie
 - Active maintenance
 - MIT licensed
 
-### Speaker Diarization Strategy
+### Speaker Diarization Strategy ✅ IMPLEMENTED (Phase 1)
 
-**Phase 1**: Simple Heuristics (No external dependencies)
-- Voice energy level changes
-- Pitch/frequency analysis
-- Pause detection between speakers
-- Basic clustering algorithm
-- Accuracy: 60-70% (good enough for basic use)
+**Phase 1**: Acoustic Feature Analysis ✅ COMPLETE
+- ✅ **RMS Energy Tracking**: Detects volume changes between speakers (30% threshold)
+- ✅ **Zero-Crossing Rate**: Estimates pitch/voice characteristics (15% threshold)
+- ✅ **Pause Detection**: Identifies silence between speakers (500ms threshold)
+- ✅ **Multi-Factor Confirmation**: Requires 2+ factors to confirm speaker change (reduces false positives)
+- ✅ **Configurable Thresholds**: All values adjustable in `config.h`
+- **Implementation**: `src/stt/whisper_backend.c` - `detect_speaker_change()`, `calculate_energy()`, `estimate_pitch()`
+- **Accuracy**: 60-70% (good enough for basic use, no external dependencies)
 
-**Phase 2** (Optional): Advanced Diarization
+**Configuration (`include/ethervox/config.h`)**:
+```c
+#define ETHERVOX_SPEAKER_ENERGY_CHANGE_THRESHOLD 0.3f  // 30% RMS energy change
+#define ETHERVOX_SPEAKER_PITCH_CHANGE_THRESHOLD 0.15f  // 15% pitch change
+#define ETHERVOX_SPEAKER_PAUSE_THRESHOLD 50            // 500ms pause (10ms units)
+#define ETHERVOX_SPEAKER_CHANGE_MIN_FACTORS 2          // Minimum factors required
+#define ETHERVOX_SPEAKER_MAX_SPEAKERS 10               // Maximum speakers to track
+#define ETHERVOX_SPEAKER_EXAMPLE_QUOTES 3              // Quotes shown during identification
+```
+
+**Phase 2** (Future): Advanced Diarization
 - pyannote.audio subprocess (MPL license - user installs separately)
 - Voice fingerprinting with MFCC features
 - External tool integration (user consent required)
 - Accuracy: 90%+
 
-**Implementation Note**: Start with Phase 1, make Phase 2 opt-in plugin
+**Implementation Note**: Phase 1 complete and working, Phase 2 is future opt-in plugin
+
+## Implementation Status
+
+### ✅ Completed Features
+
+**Speech-to-Text (Whisper Integration)**:
+- ✅ Whisper.cpp backend with beam search (`src/stt/whisper_backend.c`)
+- ✅ Multi-language auto-detection and transcription
+- ✅ Translation toggle (`/translate` command)
+- ✅ Streaming with overlap buffer (200ms context)
+- ✅ Configurable quality thresholds (noise filtering, confidence)
+- ✅ Real-time transcription with `/transcribe` command
+
+**Speaker Detection**:
+- ✅ Acoustic feature analysis (energy, pitch, pause)
+- ✅ Multi-factor speaker change detection (2+ factors required)
+- ✅ Speaker ID assignment (Speaker 0, 1, 2, ...)
+- ✅ Speaker turn tracking across sessions
+- ✅ Configurable detection thresholds in `config.h`
+
+**Speaker Identification** (`src/plugins/voice_tools/voice_tools.c`):
+- ✅ Post-transcription speaker naming prompt
+- ✅ Example quote extraction (shows 3 quotes per speaker)
+- ✅ Interactive name assignment ("Speaker 0" → "Alice")
+- ✅ Transcript file update with named speakers
+- ✅ Anonymous speaker labels if user declines naming
+
+**Configuration System** (`include/ethervox/config.h`):
+- ✅ Whisper beam search size (default: 5)
+- ✅ Quality thresholds (no_speech, logprob, entropy)
+- ✅ Temperature settings for decoding fallback
+- ✅ Speaker detection thresholds (energy, pitch, pause)
+- ✅ Min factors for speaker change confirmation
+- ✅ Max speakers and example quotes count
+
+**User Commands** (`src/main.c`):
+- ✅ `/transcribe` - Start microphone transcription
+- ✅ `/stoptranscribe` - Stop and save transcript
+- ✅ `/translate` - Toggle translation on/off
+- ✅ `/testwhisper` - Test Whisper with sample audio
+
+### 🚧 In Progress
+
+**Voice Tools Integration**:
+- 🚧 Memory storage for transcripts
+- 🚧 LLM-controlled listening duration
+- 🚧 Auto-summarization after transcription
+
+### 📋 Planned Features
+
+**Text-to-Speech (Piper)**:
+- ⏳ Piper library integration
+- ⏳ TTS output for LLM responses
+- ⏳ `/tts on/off` command
+- ⏳ `voice_speak` Governor tool
+
+**Advanced Features**:
+- ⏳ LLM autonomous listening (`voice_listen` tool)
+- ⏳ Continuous listening mode (duration=0)
+- ⏳ Voice memory search and retrieval
+- ⏳ Export transcripts (text, SRT subtitles)
 
 ## Architecture Design
 
-### Voice Engine Structure
+### Current Implementation Structure
 
+**STT Runtime** (`include/ethervox/stt.h`):
 ```c
-// include/ethervox/voice.h
-
-#define ETHERVOX_VOICE_MAX_SPEAKERS 10
-#define ETHERVOX_VOICE_BUFFER_SIZE 16000  // 1 second at 16kHz
+typedef struct {
+    char model_path[512];           // Path to Whisper model
+    char language[8];               // Language code ("auto", "en", etc.)
+    uint32_t sample_rate;           // Audio sample rate (16000 Hz)
+    bool enable_partial_results;    // Stream partial transcripts
+    bool enable_punctuation;        // Add punctuation
+    float vad_threshold;            // Voice activity detection
+    bool translate_to_english;      // Translation toggle
+} ethervox_stt_config_t;
 
 typedef struct {
-    char* text;               // Transcribed text
-    float start_time;         // Segment start (seconds)
-    float end_time;           // Segment end (seconds)
-    uint32_t speaker_id;      // Speaker identifier (0-based)
-    float confidence;         // Transcription confidence (0.0-1.0)
-} ethervox_voice_segment_t;
+    ethervox_stt_config_t config;
+    void* backend_ctx;              // Whisper backend context
+    bool is_active;
+} ethervox_stt_runtime_t;
+```
+
+**Whisper Backend Context** (`src/stt/whisper_backend.c`):
+```c
+typedef struct {
+    struct whisper_context* ctx;           // Whisper.cpp context
+    struct whisper_full_params params;     // Beam search parameters
+    
+    // Streaming buffers
+    float* audio_buffer;                   // Main accumulation buffer
+    size_t audio_buffer_size;
+    float* overlap_buffer;                 // 200ms overlap for context
+    size_t overlap_size;
+    
+    // Language detection
+    bool auto_detect_language;
+    char detected_language[3];
+    bool language_detected;
+    
+    // Speaker tracking
+    int current_speaker;                   // Current active speaker ID
+    bool show_speaker_labels;
+    
+    // Acoustic feature tracking for speaker detection
+    float last_segment_energy;             // RMS energy of last segment
+    float last_segment_pitch;              // Estimated pitch (zero-crossing rate)
+    int64_t last_segment_end_time;         // End time for pause detection
+    bool first_segment;
+    
+    // Duplicate detection
+    char* last_transcript;
+    int duplicate_count;
+} whisper_backend_context_t;
+```
+
+**Voice Session** (`include/ethervox/voice_tools.h`):
+```c
+typedef struct {
+    bool is_recording;
+    bool is_initialized;
+    
+    // STT runtime
+    ethervox_stt_runtime_t stt_runtime;
+    ethervox_audio_runtime_t audio_runtime;
+    
+    // Accumulated transcript
+    char* full_transcript;
+    size_t transcript_len;
+    
+    // Session metadata
+    uint64_t session_start_time;
+    uint32_t segment_count;
+    char last_transcript_file[1024];
+    
+    // Speaker tracking
+    int max_speaker_id;                    // Highest speaker ID in session
+    char** speaker_names;                  // Array of assigned names
+    int speaker_names_capacity;
+} ethervox_voice_session_t;
 
 typedef struct {
     // TTS Engine (Piper)
@@ -316,9 +462,74 @@ void ethervox_voice_cleanup(ethervox_voice_engine_t* engine);
 }
 ```
 
-## User Commands
+## User Commands (Current Implementation)
 
-### /tts [on|off]
+### /transcribe ✅ IMPLEMENTED
+Start microphone capture and real-time transcription with speaker detection.
+
+```bash
+> /transcribe
+Starting microphone capture... (use /stoptranscribe to end)
+[Real-time transcription appears as you speak]
+[Speaker 0] Hello, this is a test of the transcription system.
+[Speaker 1] Yes, I can hear you clearly.
+[Speaker 0] Great, the speaker detection seems to be working.
+```
+
+### /stoptranscribe ✅ IMPLEMENTED
+Stop current transcription session and prompt for speaker identification.
+
+```bash
+> /stoptranscribe
+Stopped transcription.
+
+========================================
+Speaker Identification
+========================================
+Detected 2 speaker(s) in the conversation.
+
+Speaker 0 examples:
+  1. "Hello, this is a test of the transcription system."
+  2. "Great, the speaker detection seems to be working."
+
+Speaker 1 examples:
+  1. "Yes, I can hear you clearly."
+
+Would you like to assign names to the speakers? [y/N]: y
+
+Enter name for Speaker 0: Alice
+Enter name for Speaker 1: Bob
+
+Speaker assignments:
+  Speaker 0 → Alice
+  Speaker 1 → Bob
+
+✓ Transcript updated with speaker names
+  File: ~/.ethervox/memory/voice_transcript_1733356800.txt
+```
+
+### /translate ✅ IMPLEMENTED
+Toggle translation on/off (multilingual models only).
+
+```bash
+> /translate
+Translation: OFF (transcribing in original language)
+
+> /translate
+Translation: ON (will translate non-English to English)
+```
+
+### /testwhisper ✅ IMPLEMENTED
+Test Whisper STT with sample audio file.
+
+```bash
+> /testwhisper
+Testing Whisper STT backend...
+[Processes test audio file]
+Transcript: [Test audio transcription]
+```
+
+### /tts [on|off] ⏳ PLANNED
 Enable or disable automatic text-to-speech for LLM responses.
 
 ```bash
@@ -327,40 +538,6 @@ TTS enabled - all responses will be spoken aloud
 
 > /tts off
 TTS disabled
-```
-
-### /listen [duration]
-Force the LLM to start listening (user-initiated).
-
-```bash
-> /listen
-Listening (continuous - use /stop to end)...
-
-> /listen 30
-Listening for 30 seconds...
-
-> /listen 0
-Listening (continuous)...
-```
-
-### /stop
-Stop current listening session.
-
-```bash
-> /stop
-Stopped listening. Transcribing...
-[Transcript appears]
-```
-
-### /voice status
-Show current voice engine status.
-
-```bash
-> /voice status
-TTS: enabled (piper/en_US-lessac-medium.onnx)
-STT: ready (whisper/base.en.bin)
-Listening: no
-Speakers detected: 0
 ```
 
 ## Memory Integration
@@ -422,56 +599,97 @@ snprintf(metadata, sizeof(metadata),
 
 ## Implementation Phases
 
-### Phase 1: TTS Output (Week 1)
-**Goal**: LLM can speak responses
+### Phase 1: STT Input ✅ COMPLETE
+**Goal**: Capture and transcribe audio with speaker detection
 
-**Tasks**:
-1. Integrate Piper library (compile as dependency)
-2. Implement `ethervox_voice_init()` with TTS-only mode
-3. Implement `ethervox_voice_speak()`
-4. Add `/tts on/off` command to main.c
-5. Register `voice_speak` tool with governor
-6. Auto-speak LLM responses when TTS enabled
+**Completed Tasks**:
+- ✅ Integrated whisper.cpp library (submodule at `external/whisper.cpp`)
+- ✅ Implemented Whisper backend (`src/stt/whisper_backend.c`)
+- ✅ Implemented audio capture (`src/audio/platform_macos.c` and platform-specific)
+- ✅ Beam search configuration (size=5, no_context=true to prevent loops)
+- ✅ Multi-language auto-detection (two-pass: detect then transcribe)
+- ✅ Translation toggle (`/translate` command)
+- ✅ Streaming with 200ms overlap buffer
+- ✅ Quality thresholds (no_speech=0.6, entropy, logprob)
+- ✅ Added `/transcribe` and `/stoptranscribe` commands
+- ✅ Acoustic speaker detection (energy, pitch, pause analysis)
+- ✅ Multi-factor speaker change confirmation (2+ factors)
+- ✅ Speaker ID assignment and tracking
+- ✅ Configuration system in `config.h`
 
 **Deliverables**:
-- `src/voice/voice_tts.c` - TTS implementation
-- `include/ethervox/voice.h` - Public API
-- Piper model download script
-- Documentation updates
+- ✅ `src/stt/whisper_backend.c` - Whisper integration with speaker detection
+- ✅ `src/stt/stt_core.c` - STT runtime management
+- ✅ `include/ethervox/stt.h` - Public STT API
+- ✅ `include/ethervox/config.h` - Configurable thresholds
+- ✅ `scripts/download-whisper-model.sh` - Model download script
+- ✅ Multi-speaker transcript formatting
 
 **Testing**:
 ```bash
-> /tts on
-> Hello, can you speak this?
-[LLM responds with text AND speaks it]
+> /transcribe
+Starting microphone capture...
+[User speaks: "Hello, this is a test"]
+[Speaker 0] Hello, this is a test
+> /stoptranscribe
+Stopped transcription.
+
+========================================
+Speaker Identification
+========================================
+Detected 1 speaker(s) in the conversation.
+
+Speaker 0 examples:
+  1. "Hello, this is a test"
 ```
 
-### Phase 2: Basic STT Input (Week 2)
-**Goal**: Capture and transcribe single-speaker audio
+### Phase 2: Speaker Identification ✅ COMPLETE
+**Goal**: Identify and name speakers with example quotes
 
-**Tasks**:
-1. Integrate whisper.cpp library
-2. Implement audio capture (platform-specific)
-3. Implement `ethervox_voice_listen_start()` - fixed duration
-4. Implement `ethervox_voice_listen_stop()` - single speaker
-5. Add `/listen` and `/stop` commands
-6. Register `voice_listen` tool
+**Completed Tasks**:
+- ✅ Extract example quotes from transcript (up to 3 per speaker)
+- ✅ Display examples before prompting for names
+- ✅ Interactive speaker name assignment
+- ✅ Update transcript file with named speakers ("[Speaker 0]" → "[Alice]")
+- ✅ Configurable quote count (`ETHERVOX_SPEAKER_EXAMPLE_QUOTES`)
+- ✅ Graceful handling of empty transcripts
+- ✅ Anonymous speaker labels if user declines naming
 
 **Deliverables**:
-- `src/voice/voice_stt.c` - STT implementation
-- `src/voice/audio_capture_*.c` - Platform audio I/O
-- Whisper model download script
-- Basic transcript formatting
+- ✅ `src/plugins/voice_tools/voice_tools.c` - Enhanced `assign_speaker_names()`
+- ✅ Example quote extraction logic
+- ✅ Transcript file update with name substitution
+- ✅ User-friendly prompts and formatting
 
 **Testing**:
 ```bash
-> /listen 10
-Listening for 10 seconds...
-[User speaks: "Test transcription"]
-Transcript: Test transcription
+========================================
+Speaker Identification
+========================================
+Detected 2 speaker(s) in the conversation.
+
+Speaker 0 examples:
+  1. "Hello, how are you today?"
+  2. "I think we should discuss the project."
+  3. "That's a great point."
+
+Speaker 1 examples:
+  1. "I'm doing well, thanks for asking."
+  2. "Yes, let's review it together."
+
+Would you like to assign names to the speakers? [y/N]: y
+
+Enter name for Speaker 0: Alice
+Enter name for Speaker 1: Bob
+
+Speaker assignments:
+  Speaker 0 → Alice
+  Speaker 1 → Bob
+
+✓ Transcript updated with speaker names
 ```
 
-### Phase 3: LLM-Controlled Listening (Week 3)
+### Phase 3: LLM-Controlled Listening 🚧 IN PROGRESS
 **Goal**: LLM decides when and how long to listen
 
 **Tasks**:
@@ -494,56 +712,124 @@ LLM: <tool_call name="voice_listen" duration_seconds="30" />
 LLM: "I understand you said..."
 ```
 
-### Phase 4: Speaker Detection (Week 4)
-**Goal**: Identify and separate multiple speakers
+### Phase 4: TTS Output ⏳ PLANNED
+**Goal**: LLM can speak responses
 
-**Tasks**:
-1. Implement simple speaker detection heuristics
-   - Voice energy level tracking
-   - Pitch/frequency analysis
-   - Pause-based segmentation
-2. Assign speaker IDs to segments
-3. Format multi-speaker transcripts
-4. Update memory storage with speaker labels
+**Planned Tasks**:
+1. Integrate Piper library (compile as dependency)
+2. Implement `ethervox_voice_init()` with TTS-only mode
+3. Implement `ethervox_voice_speak()`
+4. Add `/tts on/off` command to main.c
+5. Register `voice_speak` tool with governor
+6. Auto-speak LLM responses when TTS enabled
 
-**Deliverables**:
-- `src/voice/speaker_detection.c`
-- Enhanced transcript formatting
-- Speaker profile tracking
+**Planned Deliverables**:
+- `src/voice/voice_tts.c` - TTS implementation
+- `include/ethervox/voice.h` - Public API
+- Piper model download script
+- Documentation updates
 
-**Testing**:
+**Expected Testing**:
 ```bash
-> /listen 20
-[Two people speak]
-Transcript:
-[Speaker 0] Hello there
-[Speaker 1] Hi how are you
-[Speaker 0] I'm doing well
+> /tts on
+> Hello, can you speak this?
+[LLM responds with text AND speaks it]
 ```
 
-### Phase 5: Memory Integration & Summaries (Week 5)
+### Phase 5: Memory Integration & Summaries 🚧 IN PROGRESS
 **Goal**: Seamless voice data storage and LLM summarization
 
-**Tasks**:
-1. Automatic transcript storage after listening
+**Partial Completion**:
+- ✅ Transcript file storage (JSONL format with timestamps)
+- ✅ Speaker labels in stored transcripts
+- 🚧 LLM automatic summarization
+- ⏳ Cross-reference summaries with transcripts
+- ⏳ Search/retrieve voice memories
+- ⏳ Export voice transcripts
+
+**Remaining Tasks**:
+1. Automatic transcript storage in memory system
 2. LLM generates summaries using `memory_store` tool
 3. Cross-reference summaries with transcripts
-4. Search/retrieve voice memories
-5. Export voice transcripts
+4. Search/retrieve voice memories by speaker
+5. Export formats (text, SRT subtitles)
 
-**Deliverables**:
+**Planned Deliverables**:
 - Voice memory templates
 - Summary generation prompts
-- Search by speaker
+- Search by speaker functionality
 - Export formats (text, SRT subtitles)
 
-**Testing**:
+**Expected Testing**:
 ```bash
-> /listen 60
-[Long conversation]
+> /transcribe
+[Long conversation with multiple speakers]
+> /stoptranscribe
+[Transcript stored and speaker names assigned]
 > Can you summarize what we discussed?
 [LLM searches voice memories, generates summary]
 ```
+
+## Current Configuration Reference
+
+All configuration values are in `include/ethervox/config.h` and can be overridden at compile time.
+
+### Whisper STT Configuration
+
+```c
+// Beam search settings
+#define ETHERVOX_WHISPER_BEAM_SIZE 5  // Number of beams (higher = more accurate but slower)
+
+// Quality thresholds
+#define ETHERVOX_WHISPER_NO_SPEECH_THRESHOLD 0.6f  // Noise/silence filtering (0.0-1.0)
+#define ETHERVOX_WHISPER_LOGPROB_THRESHOLD -1.0f   // Confidence threshold
+#define ETHERVOX_WHISPER_ENTROPY_THRESHOLD 2.4f    // Uncertainty filtering
+
+// Temperature settings for decoding fallback
+#define ETHERVOX_WHISPER_TEMPERATURE_START 0.0f        // Start greedy (deterministic)
+#define ETHERVOX_WHISPER_TEMPERATURE_INCREMENT 0.2f    // Increase if decoding fails
+
+// Streaming settings
+#define ETHERVOX_WHISPER_CHUNK_SIZE 480000      // 30 seconds at 16kHz
+#define ETHERVOX_WHISPER_OVERLAP_SIZE 3200      // 200ms at 16kHz
+```
+
+### Speaker Detection Configuration
+
+```c
+// Acoustic feature thresholds for speaker change detection
+#define ETHERVOX_SPEAKER_ENERGY_CHANGE_THRESHOLD 0.3f   // 30% RMS energy change
+#define ETHERVOX_SPEAKER_PITCH_CHANGE_THRESHOLD 0.15f   // 15% pitch change (ZCR)
+#define ETHERVOX_SPEAKER_PAUSE_THRESHOLD 50             // 500ms pause (10ms units)
+#define ETHERVOX_SPEAKER_CHANGE_MIN_FACTORS 2           // Min factors to confirm change
+
+// Speaker tracking limits
+#define ETHERVOX_SPEAKER_MAX_SPEAKERS 10                // Maximum speakers per session
+#define ETHERVOX_SPEAKER_EXAMPLE_QUOTES 3               // Quotes shown during naming
+```
+
+### Tuning Guidelines
+
+**For more sensitive speaker detection** (detects changes more frequently):
+- Decrease `ETHERVOX_SPEAKER_ENERGY_CHANGE_THRESHOLD` to 0.2 (20%)
+- Decrease `ETHERVOX_SPEAKER_PITCH_CHANGE_THRESHOLD` to 0.1 (10%)
+- Decrease `ETHERVOX_SPEAKER_PAUSE_THRESHOLD` to 30 (300ms)
+- Decrease `ETHERVOX_SPEAKER_CHANGE_MIN_FACTORS` to 1 (single factor)
+
+**For more conservative speaker detection** (reduces false positives):
+- Increase `ETHERVOX_SPEAKER_ENERGY_CHANGE_THRESHOLD` to 0.4 (40%)
+- Increase `ETHERVOX_SPEAKER_PITCH_CHANGE_THRESHOLD` to 0.2 (20%)
+- Increase `ETHERVOX_SPEAKER_PAUSE_THRESHOLD` to 70 (700ms)
+- Keep `ETHERVOX_SPEAKER_CHANGE_MIN_FACTORS` at 2 or increase to 3
+
+**For better transcription quality** (reduces noise and repetition):
+- Increase `ETHERVOX_WHISPER_NO_SPEECH_THRESHOLD` to 0.7 or 0.8
+- Increase `ETHERVOX_WHISPER_BEAM_SIZE` to 8 or 10 (slower but more accurate)
+- Keep `ETHERVOX_WHISPER_TEMPERATURE_START` at 0.0 for deterministic output
+
+**For faster processing** (may reduce accuracy):
+- Decrease `ETHERVOX_WHISPER_BEAM_SIZE` to 3
+- Use smaller Whisper model (tiny or base instead of small/medium)
 
 ## Platform-Specific Considerations
 

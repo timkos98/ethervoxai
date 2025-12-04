@@ -198,6 +198,78 @@ extern "C" {
 #define ETHERVOX_GOVERNOR_CONFIDENCE_THRESHOLD 0.85f  // 85% confidence required
 #endif
 
+// ===========================================================================
+// Whisper STT Configuration
+// ===========================================================================
+
+// Beam search settings
+#ifndef ETHERVOX_WHISPER_BEAM_SIZE
+#define ETHERVOX_WHISPER_BEAM_SIZE 5  // Number of beams for beam search (higher = more accurate but slower)
+#endif
+
+// Quality thresholds
+#ifndef ETHERVOX_WHISPER_NO_SPEECH_THRESHOLD
+#define ETHERVOX_WHISPER_NO_SPEECH_THRESHOLD 0.6f  // Threshold for filtering noise/silence (0.0-1.0)
+#endif
+
+#ifndef ETHERVOX_WHISPER_LOGPROB_THRESHOLD
+#define ETHERVOX_WHISPER_LOGPROB_THRESHOLD -1.0f  // Confidence threshold for segments
+#endif
+
+#ifndef ETHERVOX_WHISPER_ENTROPY_THRESHOLD
+#define ETHERVOX_WHISPER_ENTROPY_THRESHOLD 2.4f  // Entropy threshold for filtering uncertain predictions
+#endif
+
+// Temperature settings for decoding fallback
+#ifndef ETHERVOX_WHISPER_TEMPERATURE_START
+#define ETHERVOX_WHISPER_TEMPERATURE_START 0.0f  // Start with greedy decoding (deterministic)
+#endif
+
+#ifndef ETHERVOX_WHISPER_TEMPERATURE_INCREMENT
+#define ETHERVOX_WHISPER_TEMPERATURE_INCREMENT 0.2f  // Increase temperature if decoding fails
+#endif
+
+// Streaming chunk size (in samples at 16kHz)
+#ifndef ETHERVOX_WHISPER_CHUNK_SIZE
+#define ETHERVOX_WHISPER_CHUNK_SIZE 480000  // 30 seconds at 16kHz
+#endif
+
+// Overlap buffer for context continuity (in samples at 16kHz)
+#ifndef ETHERVOX_WHISPER_OVERLAP_SIZE
+#define ETHERVOX_WHISPER_OVERLAP_SIZE 3200  // 200ms at 16kHz
+#endif
+
+// ===========================================================================
+// Speaker Detection Configuration
+// ===========================================================================
+
+// Acoustic feature thresholds for speaker change detection
+#ifndef ETHERVOX_SPEAKER_ENERGY_CHANGE_THRESHOLD
+#define ETHERVOX_SPEAKER_ENERGY_CHANGE_THRESHOLD 0.3f  // 30% change in RMS energy
+#endif
+
+#ifndef ETHERVOX_SPEAKER_PITCH_CHANGE_THRESHOLD
+#define ETHERVOX_SPEAKER_PITCH_CHANGE_THRESHOLD 0.12f  // 12% change in estimated pitch
+#endif
+
+#ifndef ETHERVOX_SPEAKER_PAUSE_THRESHOLD
+#define ETHERVOX_SPEAKER_PAUSE_THRESHOLD 50  // 500ms pause (in 10ms units)
+#endif
+
+#ifndef ETHERVOX_SPEAKER_CHANGE_MIN_FACTORS
+#define ETHERVOX_SPEAKER_CHANGE_MIN_FACTORS 2  // Minimum factors required to confirm speaker change
+#endif
+
+// Maximum speakers to track in a session
+#ifndef ETHERVOX_SPEAKER_MAX_SPEAKERS
+#define ETHERVOX_SPEAKER_MAX_SPEAKERS 10
+#endif
+
+// Number of example quotes to show per speaker during identification
+#ifndef ETHERVOX_SPEAKER_EXAMPLE_QUOTES
+#define ETHERVOX_SPEAKER_EXAMPLE_QUOTES 3
+#endif
+
 #ifndef ETHERVOX_GOVERNOR_MAX_ITERATIONS
 #define ETHERVOX_GOVERNOR_MAX_ITERATIONS 10  // Maximum reasoning iterations
 #endif

@@ -1219,12 +1219,6 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         return;
     }
     
-    // Not a command - treat as user message
-    if (g_debug_enabled) {
-        fprintf(stderr, "[DEBUG] Not a slash command, sending to LLM: '%s'\n", line);
-    }
-    printf("\n");
-    
     // Store user message
     store_message(memory, line, true, 0.8f);
     

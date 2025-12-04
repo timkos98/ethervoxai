@@ -19,6 +19,7 @@
 #include "ethervox/file_tools.h"
 #include "ethervox/governor.h"
 #include "ethervox/logging.h"
+#include "ethervox/config.h"
 
 #define LOG_ERROR(...) \
   ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__, __VA_ARGS__)
@@ -817,17 +818,94 @@ int ethervox_voice_tools_assign_speaker_names(ethervox_voice_session_t* session)
   
   int num_speakers = session->max_speaker_id + 1;
   
-  // Prompt user
+  // First, extract example quotes from each speaker
+  typedef struct {
+    char* quotes[ETHERVOX_SPEAKER_EXAMPLE_QUOTES];
+    int quote_count;
+  } speaker_examples_t;
+  
+  speaker_examples_t* examples = (speaker_examples_t*)calloc(num_speakers, sizeof(speaker_examples_t));
+  if (!examples) {
+    LOG_ERROR("Failed to allocate speaker examples array");
+    return -1;
+  }
+  
+  // Read transcript file to extract examples
+  if (session->last_transcript_file[0] != '\0') {
+    FILE* f = fopen(session->last_transcript_file, "r");
+    if (f) {
+      char line[1024];
+      while (fgets(line, sizeof(line), f)) {
+        // Look for speaker markers: [Speaker N] anywhere in the line
+        // Format: [2025-12-04 08:45:30] (en) [Speaker 0] text here
+        const char* speaker_marker = strstr(line, "[Speaker ");
+        if (speaker_marker) {
+          int speaker_id = -1;
+          if (sscanf(speaker_marker, "[Speaker %d]", &speaker_id) == 1) {
+            if (speaker_id >= 0 && speaker_id < num_speakers) {
+              // Extract text after speaker marker
+              const char* text_start = strchr(speaker_marker, ']');
+              if (text_start) {
+                text_start++;  // Skip ]
+                while (*text_start == ' ') text_start++;  // Skip spaces
+                
+                // Store this quote if we have room and it's not empty
+                if (examples[speaker_id].quote_count < ETHERVOX_SPEAKER_EXAMPLE_QUOTES && 
+                    strlen(text_start) > 1) {  // More than just newline
+                  // Trim newline
+                  size_t len = strlen(text_start);
+                  if (len > 0 && text_start[len - 1] == '\n') {
+                    char* quote = (char*)malloc(len);
+                    if (quote) {
+                      strncpy(quote, text_start, len - 1);
+                      quote[len - 1] = '\0';
+                      examples[speaker_id].quotes[examples[speaker_id].quote_count++] = quote;
+                    }
+                  } else {
+                    examples[speaker_id].quotes[examples[speaker_id].quote_count++] = strdup(text_start);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      fclose(f);
+    }
+  }
+  
+  // Prompt user with examples
   printf("\n");
   printf("========================================\n");
   printf("Speaker Identification\n");
   printf("========================================\n");
-  printf("Detected %d speaker(s) in the conversation.\n", num_speakers);
+  printf("Detected %d speaker(s) in the conversation.\n\n", num_speakers);
+  
+  // Show examples for each speaker
+  for (int i = 0; i < num_speakers; i++) {
+    printf("Speaker %d examples:\n", i);
+    if (examples[i].quote_count == 0) {
+      printf("  (no examples found)\n");
+    } else {
+      for (int j = 0; j < examples[i].quote_count; j++) {
+        printf("  %d. \"%s\"\n", j + 1, examples[i].quotes[j]);
+      }
+    }
+    printf("\n");
+  }
+  
   printf("Would you like to assign names to the speakers? [y/N]: ");
   fflush(stdout);
   
   char response[10];
   if (fgets(response, sizeof(response), stdin) == NULL) {
+    // Cleanup examples
+    for (int i = 0; i < num_speakers; i++) {
+      for (int j = 0; j < examples[i].quote_count; j++) {
+        free(examples[i].quotes[j]);
+      }
+    }
+    free(examples);
     return -1;
   }
   
@@ -840,8 +918,23 @@ int ethervox_voice_tools_assign_speaker_names(ethervox_voice_session_t* session)
   // Check if user declined
   if (response[0] != 'y' && response[0] != 'Y') {
     printf("Keeping anonymous speaker labels (Speaker 0, Speaker 1, etc.)\n");
+    // Cleanup examples
+    for (int i = 0; i < num_speakers; i++) {
+      for (int j = 0; j < examples[i].quote_count; j++) {
+        free(examples[i].quotes[j]);
+      }
+    }
+    free(examples);
     return 1;  // User declined
   }
+  
+  // Cleanup examples now that we're done showing them
+  for (int i = 0; i < num_speakers; i++) {
+    for (int j = 0; j < examples[i].quote_count; j++) {
+      free(examples[i].quotes[j]);
+    }
+  }
+  free(examples);
   
   // Allocate speaker names array
   session->speaker_names_capacity = num_speakers;
