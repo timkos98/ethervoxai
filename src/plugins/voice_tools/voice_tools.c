@@ -7,466 +7,1063 @@
  */
 
 #include "ethervox/voice_tools.h"
-#include "ethervox/governor.h"
-#include "ethervox/logging.h"
+
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
-#include <pthread.h>
-#include <unistd.h>
 #include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
 
-#define LOG_ERROR(...) ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__, __VA_ARGS__)
-#define LOG_WARN(...)  ethervox_log(ETHERVOX_LOG_LEVEL_WARN, __FILE__, __LINE__, __func__, __VA_ARGS__)
-#define LOG_INFO(...)  ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__, __VA_ARGS__)
-#define LOG_DEBUG(...) ethervox_log(ETHERVOX_LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__, __VA_ARGS__)
+#include "ethervox/file_tools.h"
+#include "ethervox/governor.h"
+#include "ethervox/logging.h"
+
+#define LOG_ERROR(...) \
+  ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__, __VA_ARGS__)
+#define LOG_WARN(...) \
+  ethervox_log(ETHERVOX_LOG_LEVEL_WARN, __FILE__, __LINE__, __func__, __VA_ARGS__)
+#define LOG_INFO(...) \
+  ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__, __VA_ARGS__)
+#define LOG_DEBUG(...) \
+  ethervox_log(ETHERVOX_LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__, __VA_ARGS__)
+
+// Memory tag for path configurations
+#define PATH_CONFIG_TAG "user_path"
+#define PATH_CONFIG_PREFIX "USER_PATH:"
+
+/**
+ * Attempt to download Whisper model using download script
+ */
+static int download_whisper_model(const char* model_name, const char* dest_dir) {
+  char script_path[1024];
+  char command[2048];
+
+  // Find download script
+  const char* script_locations[] = {
+      "scripts/download-whisper-model.sh", "./scripts/download-whisper-model.sh",
+      "../scripts/download-whisper-model.sh", "../../scripts/download-whisper-model.sh", NULL};
+
+  const char* script = NULL;
+  for (int i = 0; script_locations[i] != NULL; i++) {
+    FILE* test = fopen(script_locations[i], "r");
+    if (test) {
+      fclose(test);
+      script = script_locations[i];
+      break;
+    }
+  }
+
+  if (!script) {
+    LOG_ERROR("Download script not found. Please manually download the model.");
+    LOG_ERROR("Visit: https://huggingface.co/ggerganov/whisper.cpp/tree/main");
+    LOG_ERROR("Download: ggml-%s.bin and place in %s/", model_name, dest_dir);
+    return -1;
+  }
+
+  // Create destination directory
+  snprintf(command, sizeof(command), "mkdir -p \"%s\"", dest_dir);
+  system(command);
+
+  // Run download script
+  LOG_INFO("Downloading Whisper model '%s' to %s/", model_name, dest_dir);
+  LOG_INFO("This may take a few minutes...");
+
+  snprintf(command, sizeof(command), "bash \"%s\" \"%s\" \"%s\"", script, model_name, dest_dir);
+
+  int result = system(command);
+  if (result != 0) {
+    LOG_ERROR("Model download failed with code %d", result);
+    return -1;
+  }
+
+  LOG_INFO("Model download completed successfully");
+  return 0;
+}
 
 // Global session pointer for tool wrappers
 static ethervox_voice_session_t* g_voice_session = NULL;
 
 /**
  * Background thread that captures audio and feeds to STT
+ *
+ * This thread continuously feeds audio to Whisper's internal buffer and lets
+ * Whisper's VAD decide when to segment and transcribe at natural speech pauses.
+ * We only force processing when:
+ *   1. Buffer approaches capacity (~30s at 90% full)
+ *   2. User calls /stoptranscribe (handled by stop_listen -> finalize)
  */
 static void* audio_capture_thread(void* arg) {
-    ethervox_voice_session_t* session = (ethervox_voice_session_t*)arg;
-    
-    ethervox_audio_buffer_t audio_buf;
-    audio_buf.data = (float*)malloc(16000 * sizeof(float)); // 1 second buffer
-    audio_buf.size = 16000;
-    audio_buf.channels = 1;
-    audio_buf.timestamp_us = 0;
-    
-    if (!audio_buf.data) {
-        LOG_ERROR("Failed to allocate audio buffer");
-        return NULL;
-    }
-    
-    LOG_INFO("Audio capture thread started");
-    
-    while (session->is_recording && !session->stop_requested) {
-        // Read audio from platform driver
-        int samples_read = ethervox_audio_read(&session->audio_runtime, &audio_buf);
-        
-        if (samples_read > 0) {
-            // Feed to STT
-            ethervox_stt_result_t result;
-            if (ethervox_stt_process(&session->stt_runtime, &audio_buf, &result) == 0) {
-                if (result.text && strlen(result.text) > 0) {
-                    // Append to transcript
-                    size_t needed = session->transcript_len + strlen(result.text) + 2;
-                    if (needed > session->transcript_capacity) {
-                        session->transcript_capacity = needed * 2;
-                        session->full_transcript = (char*)realloc(session->full_transcript, 
-                                                                 session->transcript_capacity);
-                    }
-                    
-                    if (session->transcript_len > 0) {
-                        strcat(session->full_transcript, " ");
-                        session->transcript_len++;
-                    }
-                    strcat(session->full_transcript, result.text);
-                    session->transcript_len += strlen(result.text);
-                    session->segment_count++;
-                    
-                    LOG_DEBUG("Segment %u: %s", session->segment_count, result.text);
-                    ethervox_stt_result_free(&result);
-                }
-            }
-        } else if (samples_read == 0) {
-            // No audio available yet, sleep briefly
-            usleep(50000); // 50ms
-        } else {
-            LOG_ERROR("Audio read error: %d", samples_read);
-            break;
-        }
-    }
-    
-    free(audio_buf.data);
-    LOG_INFO("Audio capture thread stopped");
+  ethervox_voice_session_t* session = (ethervox_voice_session_t*)arg;
+
+  ethervox_audio_buffer_t audio_buf;
+  audio_buf.data = (float*)malloc(16000 * sizeof(float));  // 1 second buffer
+  audio_buf.size = 16000;
+  audio_buf.channels = 1;
+  audio_buf.timestamp_us = 0;
+  const uint32_t buffer_capacity = audio_buf.size;
+
+  if (!audio_buf.data) {
+    LOG_ERROR("Failed to allocate audio buffer");
     return NULL;
+  }
+
+  LOG_INFO("Audio capture thread started - feeding to Whisper VAD");
+
+  while (session->is_recording && !session->stop_requested) {
+    // Read audio from platform driver
+    audio_buf.size = buffer_capacity;
+    int samples_read = ethervox_audio_read(&session->audio_runtime, &audio_buf);
+
+    if (samples_read > 0) {
+      if (samples_read > (int)buffer_capacity) {
+        samples_read = (int)buffer_capacity;
+      }
+      audio_buf.size = (uint32_t)samples_read;
+
+      // Feed audio to STT - it will accumulate internally
+      // Whisper's VAD will decide when to segment and transcribe
+      ethervox_stt_result_t result;
+      int stt_ret = ethervox_stt_process(&session->stt_runtime, &audio_buf, &result);
+
+      if (stt_ret == 1) {
+        // Normal: audio is accumulating in Whisper's buffer, VAD hasn't triggered yet
+        // This is the expected path most of the time
+        continue;
+      } else if (stt_ret < 0) {
+        LOG_WARN("STT processing error: %d", stt_ret);
+        continue;
+      }
+
+      // stt_ret == 0: Whisper's VAD detected a natural speech boundary and transcribed
+      if (stt_ret == 0 && result.text && strlen(result.text) > 0) {
+        LOG_INFO("📥 Whisper VAD segment complete: %zu chars", strlen(result.text));
+
+        // Track max speaker ID for later naming
+        // Text contains [Speaker N] markers - extract highest N
+        const char* speaker_marker = strstr(result.text, "[Speaker ");
+        while (speaker_marker) {
+          int speaker_id = -1;
+          if (sscanf(speaker_marker, "[Speaker %d]", &speaker_id) == 1) {
+            if (speaker_id > session->max_speaker_id) {
+              session->max_speaker_id = speaker_id;
+            }
+          }
+          speaker_marker = strstr(speaker_marker + 1, "[Speaker ");
+        }
+
+        // Format segment with timestamp and language info
+        char formatted_segment[8192];
+        
+        // Get current date/time
+        time_t now = time(NULL);
+        struct tm* tm_info = localtime(&now);
+        char datetime_str[64];
+        strftime(datetime_str, sizeof(datetime_str), "%Y-%m-%d %H:%M:%S", tm_info);
+        
+        // Add date/time timestamp and language to the transcript
+        snprintf(formatted_segment, sizeof(formatted_segment), 
+                 "[%s] (%s) %s",
+                 datetime_str, result.language, result.text);
+
+        // Append to transcript buffer (in-memory)
+        size_t needed = session->transcript_len + strlen(formatted_segment) + 2;
+        if (needed > session->transcript_capacity) {
+          session->transcript_capacity = needed * 2;
+          session->full_transcript =
+              (char*)realloc(session->full_transcript, session->transcript_capacity);
+        }
+
+        if (session->transcript_len > 0) {
+          strcat(session->full_transcript, "\n");
+          session->transcript_len++;
+        }
+        strcat(session->full_transcript, formatted_segment);
+        session->transcript_len += strlen(formatted_segment);
+        session->segment_count++;
+
+        LOG_INFO("Segment %u: %s", session->segment_count, formatted_segment);
+
+        // LIVE UPDATE: Append to file immediately for LLM monitoring
+        if (session->last_transcript_file[0] != '\0') {
+          FILE* f = fopen(session->last_transcript_file, "a");
+          if (f) {
+            fprintf(f, "%s\n", formatted_segment);
+            fflush(f);  // Ensure data is written immediately
+            fclose(f);
+            LOG_DEBUG("Updated live transcript file: %s", session->last_transcript_file);
+          } else {
+            LOG_WARN("Failed to open transcript file for writing: %s",
+                     session->last_transcript_file);
+          }
+        }
+
+        ethervox_stt_result_free(&result);
+      }
+
+      audio_buf.size = buffer_capacity;  // restore capacity for next read
+    } else if (samples_read == 0) {
+      // No audio available yet, sleep briefly
+      usleep(50000);  // 50ms
+    } else {
+      LOG_ERROR("Audio read error: %d", samples_read);
+      break;
+    }
+  }
+
+  free(audio_buf.data);
+  LOG_INFO("Audio capture thread stopped");
+  return NULL;
 }
 
 /**
  * Initialize voice tools with Whisper backend
  */
 int ethervox_voice_tools_init(ethervox_voice_session_t* session, void* memory) {
-    if (!session) {
-        LOG_ERROR("Session is NULL");
-        return -1;
+  if (!session) {
+    LOG_ERROR("Session is NULL");
+    return -1;
+  }
+
+  memset(session, 0, sizeof(ethervox_voice_session_t));
+
+  session->memory_store = memory;
+  session->transcript_capacity = 1024 * 100;  // 100KB initial
+  session->full_transcript = (char*)calloc(session->transcript_capacity, 1);
+
+  if (!session->full_transcript) {
+    LOG_ERROR("Failed to allocate transcript buffer");
+    return -1;
+  }
+
+  // Initialize path config to use standard directories
+  ethervox_path_config_t path_config;
+  if (ethervox_path_config_init(&path_config, memory) != 0) {
+    LOG_WARN("Failed to initialize path config, using fallback paths");
+  }
+
+  // Build comprehensive path search list
+  // CRITICAL: Search for multilingual base.bin ONLY to ensure auto language detection works
+  // The .en variant is only used if explicitly requested or if base.bin doesn't exist
+  const int MAX_MODEL_PATHS = 64;
+  char possible_paths[MAX_MODEL_PATHS][ETHERVOX_FILE_MAX_PATH];
+  int path_count = 0;
+  bool path_overflow_logged = false;
+
+  // First pass: try to find base.bin (multilingual)
+  const char* preferred_model = "base.bin";
+  bool found_multilingual = false;
+
+  char custom_path[ETHERVOX_FILE_MAX_PATH];
+  bool has_custom_path = (ethervox_path_config_get(&path_config, "WhisperModels", custom_path,
+                                                   sizeof(custom_path)) == 0);
+
+  ethervox_user_path_t* user_paths = NULL;
+  uint32_t user_path_count = 0;
+  bool has_user_paths =
+      (ethervox_path_config_list(&path_config, &user_paths, &user_path_count) == 0);
+
+  const char* home = getenv("HOME");
+  char default_model_dir[ETHERVOX_FILE_MAX_PATH] = ".ethervox/models/whisper";
+  if (home) {
+    snprintf(default_model_dir, sizeof(default_model_dir), "%s/.ethervox/models/whisper", home);
+  }
+
+  // Build search paths for preferred multilingual model
+  if (has_custom_path) {
+    if (path_count < MAX_MODEL_PATHS) {
+      snprintf(possible_paths[path_count++], ETHERVOX_FILE_MAX_PATH, "%s/%s", custom_path,
+               preferred_model);
+      LOG_DEBUG("Added custom model path candidate: %s/%s", custom_path, preferred_model);
     }
-    
-    memset(session, 0, sizeof(ethervox_voice_session_t));
-    
-    session->memory_store = memory;
-    session->transcript_capacity = 1024 * 100; // 100KB initial
-    session->full_transcript = (char*)calloc(session->transcript_capacity, 1);
-    
-    if (!session->full_transcript) {
-        LOG_ERROR("Failed to allocate transcript buffer");
-        return -1;
+  }
+
+  if (has_user_paths && user_paths) {
+    for (uint32_t i = 0; i < user_path_count; i++) {
+      if (!user_paths[i].verified)
+        continue;
+      if (path_count < MAX_MODEL_PATHS) {
+        snprintf(possible_paths[path_count++], ETHERVOX_FILE_MAX_PATH,
+                 "%s/ethervox/models/whisper/%s", user_paths[i].path, preferred_model);
+      }
+      if (path_count < MAX_MODEL_PATHS) {
+        snprintf(possible_paths[path_count++], ETHERVOX_FILE_MAX_PATH,
+                 "%s/.ethervox/models/whisper/%s", user_paths[i].path, preferred_model);
+      }
     }
-    
-    // Determine Whisper model path
-    const char* possible_paths[] = {
-        "models/whisper/base.en.bin",
-        "./models/whisper/base.en.bin",
-        "../models/whisper/base.en.bin",
-        "../../models/whisper/base.en.bin",
-        NULL
-    };
-    
-    const char* model_path = NULL;
-    for (int i = 0; possible_paths[i] != NULL; i++) {
-        FILE* test = fopen(possible_paths[i], "rb");
+  }
+
+  // Standard paths
+  const char* standard_paths[] = {".ethervox/models/whisper/%s",
+                                  "./.ethervox/models/whisper/%s",
+                                  "../.ethervox/models/whisper/%s",
+                                  "models/whisper/%s",
+                                  "./models/whisper/%s",
+                                  "../models/whisper/%s",
+                                  "../../models/whisper/%s"};
+  for (size_t i = 0; i < sizeof(standard_paths) / sizeof(standard_paths[0]); i++) {
+    if (path_count < MAX_MODEL_PATHS) {
+      snprintf(possible_paths[path_count++], ETHERVOX_FILE_MAX_PATH, standard_paths[i],
+               preferred_model);
+    }
+  }
+
+  if (home) {
+    if (path_count < MAX_MODEL_PATHS) {
+      snprintf(possible_paths[path_count++], ETHERVOX_FILE_MAX_PATH,
+               "%s/.ethervox/models/whisper/%s", home, preferred_model);
+    }
+    if (path_count < MAX_MODEL_PATHS) {
+      snprintf(possible_paths[path_count++], ETHERVOX_FILE_MAX_PATH,
+               "%s/ethervox/models/whisper/%s", home, preferred_model);
+    }
+    if (path_count < MAX_MODEL_PATHS) {
+      snprintf(possible_paths[path_count++], ETHERVOX_FILE_MAX_PATH,
+               "%s/Documents/ethervox/models/whisper/%s", home, preferred_model);
+    }
+  }
+
+  // Try to find multilingual model first
+  const char* model_path = NULL;
+  for (int i = 0; i < path_count; i++) {
+    FILE* test = fopen(possible_paths[i], "rb");
+    if (test) {
+      fclose(test);
+      model_path = strdup(possible_paths[i]);
+      session->model_path = (char*)model_path;
+      found_multilingual = true;
+      LOG_INFO("Found multilingual Whisper model at: %s", model_path);
+      break;
+    }
+  }
+
+  // Fallback: if multilingual not found, try English-only variant
+  if (!found_multilingual) {
+    LOG_WARN("Multilingual base.bin not found, falling back to base.en.bin");
+    const char* fallback_model = "base.en.bin";
+    int fallback_count = 0;
+
+    // Rebuild paths with fallback model
+    if (has_custom_path && fallback_count < MAX_MODEL_PATHS) {
+      snprintf(possible_paths[fallback_count++], ETHERVOX_FILE_MAX_PATH, "%s/%s", custom_path,
+               fallback_model);
+    }
+
+    if (has_user_paths && user_paths) {
+      for (uint32_t i = 0; i < user_path_count && fallback_count < MAX_MODEL_PATHS; i++) {
+        if (!user_paths[i].verified)
+          continue;
+        snprintf(possible_paths[fallback_count++], ETHERVOX_FILE_MAX_PATH,
+                 "%s/ethervox/models/whisper/%s", user_paths[i].path, fallback_model);
+        snprintf(possible_paths[fallback_count++], ETHERVOX_FILE_MAX_PATH,
+                 "%s/.ethervox/models/whisper/%s", user_paths[i].path, fallback_model);
+      }
+    }
+
+    for (size_t i = 0;
+         i < sizeof(standard_paths) / sizeof(standard_paths[0]) && fallback_count < MAX_MODEL_PATHS;
+         i++) {
+      snprintf(possible_paths[fallback_count++], ETHERVOX_FILE_MAX_PATH, standard_paths[i],
+               fallback_model);
+    }
+
+    if (home) {
+      if (fallback_count < MAX_MODEL_PATHS) {
+        snprintf(possible_paths[fallback_count++], ETHERVOX_FILE_MAX_PATH,
+                 "%s/.ethervox/models/whisper/%s", home, fallback_model);
+      }
+      if (fallback_count < MAX_MODEL_PATHS) {
+        snprintf(possible_paths[fallback_count++], ETHERVOX_FILE_MAX_PATH,
+                 "%s/ethervox/models/whisper/%s", home, fallback_model);
+      }
+      if (fallback_count < MAX_MODEL_PATHS) {
+        snprintf(possible_paths[fallback_count++], ETHERVOX_FILE_MAX_PATH,
+                 "%s/Documents/ethervox/models/whisper/%s", home, fallback_model);
+      }
+    }
+
+    for (int i = 0; i < fallback_count; i++) {
+      FILE* test = fopen(possible_paths[i], "rb");
+      if (test) {
+        fclose(test);
+        model_path = strdup(possible_paths[i]);
+        session->model_path = (char*)model_path;
+        LOG_INFO("Found English-only Whisper model at: %s", model_path);
+        break;
+      }
+    }
+    path_count = fallback_count;
+  }
+
+  if (has_user_paths && user_paths) {
+    free(user_paths);
+  }
+
+  if (!model_path) {
+    LOG_WARN("Whisper model not found. Searched %d locations:", path_count);
+    for (int i = 0; i < path_count && i < 5; i++) {
+      LOG_WARN("  - %s", possible_paths[i]);
+    }
+    if (path_count > 5) {
+      LOG_WARN("  ... and %d more locations", path_count - 5);
+    }
+
+    // Offer to auto-download
+    LOG_INFO("========================================");
+    LOG_INFO("Whisper Model Auto-Download Available");
+    LOG_INFO("========================================");
+    LOG_INFO("Would you like to download the Whisper base (multilingual) model (~141 MB)?");
+    LOG_INFO("This is a one-time download and will be saved to: %s", default_model_dir);
+    LOG_INFO("");
+    LOG_INFO("Options:");
+    LOG_INFO("  1. Auto-download now (recommended for first-time setup)");
+    LOG_INFO("  2. Manual download instructions");
+    LOG_INFO("  3. Configure custom model path with path_set tool");
+    LOG_INFO("");
+
+    // Attempt auto-download to standard location
+    const char* download_dir = default_model_dir;
+    LOG_INFO("Attempting auto-download to %s/...", download_dir);
+
+    if (download_whisper_model("base", download_dir) == 0) {
+      // Try to find the downloaded model
+      const char* downloaded_candidates[] = {"base.bin", "base.en.bin"};
+      const size_t downloaded_candidate_count =
+          sizeof(downloaded_candidates) / sizeof(downloaded_candidates[0]);
+      char downloaded_path[ETHERVOX_FILE_MAX_PATH];
+      bool downloaded_model_found = false;
+
+      for (size_t i = 0; i < downloaded_candidate_count && !downloaded_model_found; ++i) {
+        snprintf(downloaded_path, sizeof(downloaded_path), "%s/%s", download_dir,
+                 downloaded_candidates[i]);
+        FILE* test = fopen(downloaded_path, "rb");
         if (test) {
-            fclose(test);
-            model_path = possible_paths[i];
-            LOG_INFO("Found Whisper model at: %s", model_path);
-            break;
+          fclose(test);
+          downloaded_model_found = true;
         }
-    }
-    
-    if (!model_path) {
-        LOG_ERROR("Whisper model not found. Tried: models/whisper/base.en.bin (and variations)");
-        LOG_ERROR("Please ensure base.en.bin is in the models/whisper/ directory");
+      }
+
+      if (downloaded_model_found) {
+        model_path = strdup(downloaded_path);
+        session->model_path = (char*)model_path;
+        LOG_INFO("Successfully downloaded and loaded model from: %s", model_path);
+      } else {
+        LOG_ERROR("Download completed but model file not found in %s", download_dir);
+        ethervox_path_config_cleanup(&path_config);
         free(session->full_transcript);
         return -1;
+      }
+    } else {
+      LOG_ERROR("Auto-download failed. Manual download required:");
+      LOG_ERROR("");
+      LOG_ERROR("Option 1 - Use download script:");
+      LOG_ERROR("  ./scripts/download-whisper-model.sh base");
+      LOG_ERROR("");
+      LOG_ERROR("Option 2 - Manual download:");
+      LOG_ERROR("  1. Visit: https://huggingface.co/ggerganov/whisper.cpp/tree/main");
+      LOG_ERROR("  2. Download: ggml-base.bin (~141 MB, multilingual)");
+      LOG_ERROR("  3. Place in: ~/.ethervox/models/whisper/base.bin");
+      LOG_ERROR("");
+      LOG_ERROR("Option 3 - Configure custom path:");
+      LOG_ERROR("  Use path_set(\"WhisperModels\", \"/your/path/to/.ethervox/models/whisper\")");
+
+      ethervox_path_config_cleanup(&path_config);
+      free(session->full_transcript);
+      return -1;
     }
-    
-    // Configure STT with Whisper backend
-    ethervox_stt_config_t stt_config = {
-        .backend = ETHERVOX_STT_BACKEND_WHISPER,  // Use Whisper!
-        .model_path = model_path,
-        .language = "auto",  // Auto-detect language by default
-        .sample_rate = 16000,
-        .enable_partial_results = true,
-        .enable_punctuation = true,
-        .vad_threshold = 0.5f
-    };
-    
-    // Initialize STT with Whisper
-    if (ethervox_stt_init(&session->stt_runtime, &stt_config) != 0) {
-        LOG_ERROR("Failed to initialize Whisper STT");
-        free(session->full_transcript);
-        return -1;
-    }
-    
-    // Initialize audio (will use platform-specific implementation)
-    ethervox_audio_config_t audio_config = ethervox_audio_get_default_config();
-    if (ethervox_audio_init(&session->audio_runtime, &audio_config) != 0) {
-        LOG_WARN("Audio init failed - will use test data");
-        // Continue anyway - we can test with simulated audio
-    }
-    
-    session->is_initialized = true;
-    LOG_INFO("Voice tools initialized with Whisper STT backend");
-    
-    return 0;
+  }
+
+  // Determine language mode based on model filename
+  const char* model_filename = strrchr(model_path, '/');
+  model_filename = model_filename ? model_filename + 1 : model_path;
+  bool english_only_model = false;
+  if (model_filename) {
+    size_t name_len = strlen(model_filename);
+    english_only_model = (strstr(model_filename, ".en.") != NULL) ||
+                         (strstr(model_filename, "_en.") != NULL) ||
+                         (strstr(model_filename, "-en.") != NULL) ||
+                         (name_len >= 7 && strcmp(model_filename + name_len - 7, ".en.bin") == 0);
+  }
+
+  const char* language_code = english_only_model ? "en" : "auto";
+  if (!english_only_model) {
+    LOG_INFO("Detected multilingual Whisper model (%s) - enabling auto language detection",
+             model_filename ? model_filename : model_path);
+  } else {
+    LOG_INFO("Detected English-only Whisper model (%s) - forcing language=en",
+             model_filename ? model_filename : model_path);
+  }
+
+  // Configure STT with Whisper backend
+  ethervox_stt_config_t stt_config = {.backend = ETHERVOX_STT_BACKEND_WHISPER,  // Use Whisper!
+                                      .model_path = model_path,
+                                      .language = language_code,
+                                      .sample_rate = 16000,
+                                      .enable_partial_results = true,
+                                      .enable_punctuation = true,
+                                      .vad_threshold = 0.5f};
+
+  // Initialize STT with Whisper
+  if (ethervox_stt_init(&session->stt_runtime, &stt_config) != 0) {
+    LOG_ERROR("Failed to initialize Whisper STT");
+    free(session->model_path);  // Clean up allocated path
+    session->model_path = NULL;
+    ethervox_path_config_cleanup(&path_config);
+    free(session->full_transcript);
+    return -1;
+  }
+
+  // Initialize audio (will use platform-specific implementation)
+  ethervox_audio_config_t audio_config = ethervox_audio_get_default_config();
+  if (ethervox_audio_init(&session->audio_runtime, &audio_config) != 0) {
+    LOG_WARN("Audio init failed - will use test data");
+    // Continue anyway - we can test with simulated audio
+  }
+
+  // Cleanup path config (model_path is now owned by stt_config)
+  ethervox_path_config_cleanup(&path_config);
+
+  // Initialize speaker tracking
+  session->max_speaker_id = -1;
+  session->speaker_names = NULL;
+  session->speaker_names_capacity = 0;
+
+  session->is_initialized = true;
+  LOG_INFO("Voice tools initialized with Whisper STT backend");
+
+  return 0;
 }
 
 /**
  * Start listening session
  */
 int ethervox_voice_tools_start_listen(ethervox_voice_session_t* session) {
-    if (!session || !session->is_initialized) {
-        LOG_ERROR("Session not initialized");
-        return -1;
-    }
-    
-    if (session->is_recording) {
-        LOG_WARN("Already recording");
-        return 0;
-    }
-    
-    // Reset transcript
-    session->full_transcript[0] = '\0';
-    session->transcript_len = 0;
-    session->segment_count = 0;
-    session->session_start_time = time(NULL);
-    session->stop_requested = false;
-    
-    // Start STT
-    if (ethervox_stt_start(&session->stt_runtime) != 0) {
-        LOG_ERROR("Failed to start STT");
-        return -1;
-    }
-    
-    // Start audio capture
-    if (!session->audio_runtime.is_initialized) {
-        LOG_ERROR("Audio runtime not initialized");
-        ethervox_stt_stop(&session->stt_runtime);
-        return -1;
-    }
-    
-    if (ethervox_audio_start_capture(&session->audio_runtime) != 0) {
-        LOG_ERROR("Failed to start audio capture");
-        ethervox_stt_stop(&session->stt_runtime);
-        return -1;
-    }
-    
-    session->is_recording = true;
-    
-    // Start background capture thread
-    pthread_t* thread = (pthread_t*)malloc(sizeof(pthread_t));
-    if (thread && pthread_create(thread, NULL, audio_capture_thread, session) == 0) {
-        session->capture_thread = thread;
-        LOG_INFO("Voice recording session started with background thread");
-    } else {
-        LOG_ERROR("Failed to create capture thread");
-        free(thread);
-        ethervox_audio_stop_capture(&session->audio_runtime);
-        ethervox_stt_stop(&session->stt_runtime);
-        session->is_recording = false;
-        return -1;
-    }
-    
+  if (!session || !session->is_initialized) {
+    LOG_ERROR("Session not initialized");
+    return -1;
+  }
+
+  if (session->is_recording) {
+    LOG_WARN("Already recording");
     return 0;
+  }
+
+  // Reset transcript
+  session->full_transcript[0] = '\0';
+  session->transcript_len = 0;
+  session->segment_count = 0;
+  session->session_start_time = time(NULL);
+  session->stop_requested = false;
+  
+  // Reset speaker tracking for new session
+  session->max_speaker_id = -1;
+  if (session->speaker_names) {
+    for (int i = 0; i < session->speaker_names_capacity; i++) {
+      free(session->speaker_names[i]);
+    }
+    free(session->speaker_names);
+    session->speaker_names = NULL;
+    session->speaker_names_capacity = 0;
+  }
+
+  // Start STT
+  if (ethervox_stt_start(&session->stt_runtime) != 0) {
+    LOG_ERROR("Failed to start STT");
+    return -1;
+  }
+
+  LOG_INFO("Voice recording started - listening for speech...");
+  LOG_DEBUG("Language: %s, VAD threshold: %.2f", session->stt_runtime.config.language,
+            session->stt_runtime.config.vad_threshold);
+
+  // Start audio capture
+  if (!session->audio_runtime.is_initialized) {
+    LOG_ERROR("Audio runtime not initialized");
+    ethervox_stt_stop(&session->stt_runtime);
+    return -1;
+  }
+
+  if (ethervox_audio_start_capture(&session->audio_runtime) != 0) {
+    LOG_ERROR("Failed to start audio capture");
+    ethervox_stt_stop(&session->stt_runtime);
+    return -1;
+  }
+
+  session->is_recording = true;
+
+  // Create transcript file immediately for live LLM monitoring
+  const char* home = getenv("HOME");
+  if (home) {
+    char transcript_dir[512];
+    snprintf(transcript_dir, sizeof(transcript_dir), "%s/.ethervox/transcripts", home);
+    mkdir(transcript_dir, 0755);
+
+    time_t now = time(NULL);
+    struct tm* tm_info = localtime(&now);
+    char timestamp[64];
+    strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", tm_info);
+
+    snprintf(session->last_transcript_file, sizeof(session->last_transcript_file),
+             "%s/transcript_%s.txt", transcript_dir, timestamp);
+
+    // Create file with header
+    FILE* f = fopen(session->last_transcript_file, "w");
+    if (f) {
+      fprintf(f, "Voice Transcript - Recording Started: %s\n", timestamp);
+      fprintf(f, "========================================\n\n");
+      fclose(f);
+      LOG_INFO("Created live transcript file: %s", session->last_transcript_file);
+    }
+  }
+
+  // Start background capture thread
+  pthread_t* thread = (pthread_t*)malloc(sizeof(pthread_t));
+  if (thread && pthread_create(thread, NULL, audio_capture_thread, session) == 0) {
+    session->capture_thread = thread;
+    LOG_INFO("Voice recording session started with background thread");
+  } else {
+    LOG_ERROR("Failed to create capture thread");
+    free(thread);
+    ethervox_audio_stop_capture(&session->audio_runtime);
+    ethervox_stt_stop(&session->stt_runtime);
+    session->is_recording = false;
+    return -1;
+  }
+
+  return 0;
 }
 
 /**
  * Stop listening and get transcript
  */
-int ethervox_voice_tools_stop_listen(ethervox_voice_session_t* session, const char** transcript_out) {
-    if (!session || !session->is_initialized) {
-        LOG_ERROR("Session not initialized");
-        return -1;
+int ethervox_voice_tools_stop_listen(ethervox_voice_session_t* session,
+                                     const char** transcript_out) {
+  if (!session || !session->is_initialized) {
+    LOG_ERROR("Session not initialized");
+    return -1;
+  }
+
+  bool was_recording = session->is_recording;
+  bool has_thread = (session->capture_thread != NULL);
+
+  if (!was_recording && !has_thread) {
+    LOG_WARN("Not currently recording");
+    return -1;
+  }
+
+  // Signal thread to stop (even if flag already dropped)
+  session->stop_requested = true;
+  session->is_recording = false;
+
+  // Wait for capture thread to finish if it is still running
+  if (has_thread) {
+    pthread_t* thread = (pthread_t*)session->capture_thread;
+    pthread_join(*thread, NULL);
+    free(thread);
+    session->capture_thread = NULL;
+    LOG_INFO("Capture thread joined");
+  }
+
+  // Stop audio capture
+  if (session->audio_runtime.is_initialized) {
+    ethervox_audio_stop_capture(&session->audio_runtime);
+  }
+
+  // CRITICAL: Finalize STT to process any remaining buffered audio
+  // This forces Whisper to transcribe whatever is left in the buffer,
+  // even if VAD hasn't triggered yet (handles the /stoptranscribe case)
+  LOG_INFO("Finalizing Whisper transcription for remaining audio...");
+  ethervox_stt_result_t final_result;
+  if (ethervox_stt_finalize(&session->stt_runtime, &final_result) == 0) {
+    if (final_result.text && strlen(final_result.text) > 0) {
+      LOG_INFO("Finalize produced %zu chars", strlen(final_result.text));
+      // Append final text to transcript
+      size_t needed = session->transcript_len + strlen(final_result.text) + 2;
+      if (needed > session->transcript_capacity) {
+        session->transcript_capacity = needed * 2;
+        session->full_transcript =
+            (char*)realloc(session->full_transcript, session->transcript_capacity);
+      }
+      if (session->transcript_len > 0) {
+        strcat(session->full_transcript, " ");
+      }
+      strcat(session->full_transcript, final_result.text);
+      session->transcript_len = strlen(session->full_transcript);
     }
-    
-    if (!session->is_recording) {
-        LOG_WARN("Not currently recording");
-        return -1;
-    }
-    
-    // Signal thread to stop
-    session->stop_requested = true;
-    session->is_recording = false;
-    
-    // Wait for capture thread to finish
-    if (session->capture_thread) {
-        pthread_t* thread = (pthread_t*)session->capture_thread;
-        pthread_join(*thread, NULL);
-        free(thread);
-        session->capture_thread = NULL;
-        LOG_INFO("Capture thread joined");
-    }
-    
-    // Stop audio capture
-    if (session->audio_runtime.is_initialized) {
-        ethervox_audio_stop_capture(&session->audio_runtime);
-    }
-    
-    // Finalize STT to get any remaining transcript
-    ethervox_stt_result_t final_result;
-    if (ethervox_stt_finalize(&session->stt_runtime, &final_result) == 0) {
-        if (final_result.text && strlen(final_result.text) > 0) {
-            // Append final text to transcript
-            size_t needed = session->transcript_len + strlen(final_result.text) + 2;
-            if (needed > session->transcript_capacity) {
-                session->transcript_capacity = needed * 2;
-                session->full_transcript = (char*)realloc(session->full_transcript, session->transcript_capacity);
-            }
-            if (session->transcript_len > 0) {
-                strcat(session->full_transcript, " ");
-            }
-            strcat(session->full_transcript, final_result.text);
-            session->transcript_len = strlen(session->full_transcript);
+    ethervox_stt_result_free(&final_result);
+  }
+
+  ethervox_stt_stop(&session->stt_runtime);
+  session->is_recording = false;
+
+  // Append completion status to transcript file (content already written live during recording)
+  if (session->transcript_len > 0 && session->last_transcript_file[0] != '\0') {
+    FILE* f = fopen(session->last_transcript_file, "a");
+    if (f) {
+      time_t now = time(NULL);
+      struct tm* tm_info = localtime(&now);
+      char timestamp[64];
+      strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", tm_info);
+
+      fprintf(f, "\n\n========================================\n");
+      fprintf(f, "Recording completed: %s\n", timestamp);
+      fprintf(f, "Duration: %llu seconds\n",
+              (unsigned long long)(time(NULL) - session->session_start_time));
+      fprintf(f, "Total segments: %u\n", session->segment_count);
+      fprintf(f, "Total characters: %zu\n", session->transcript_len);
+      fflush(f);
+      fclose(f);
+
+      LOG_INFO("Saved transcript to: %s (%zu chars, %u segments)", session->last_transcript_file,
+               session->transcript_len, session->segment_count);
+      
+      // Prompt user to assign speaker names if speakers were detected
+      if (session->max_speaker_id >= 0) {
+        LOG_INFO("Detected %d speaker(s) in conversation", session->max_speaker_id + 1);
+        int naming_result = ethervox_voice_tools_assign_speaker_names(session);
+        if (naming_result == 0) {
+          LOG_INFO("Speaker names assigned and transcript updated");
+        } else if (naming_result == 1) {
+          LOG_INFO("User chose to keep anonymous speaker labels");
         }
-        ethervox_stt_result_free(&final_result);
+      }
+
+      // Also store in memory system
+      if (session->memory_store) {
+        ethervox_memory_store_t* mem = (ethervox_memory_store_t*)session->memory_store;
+        const char* tags[] = {"voice", "transcript", "whisper"};
+        uint64_t memory_id = 0;
+
+        // Store with file path reference
+        char memory_content[2048];
+        snprintf(memory_content, sizeof(memory_content),
+                 "Voice transcript saved to: %s\n\nTranscript:\n%s", session->last_transcript_file,
+                 session->full_transcript);
+
+        ethervox_memory_store_add(mem, memory_content, tags, 3, 0.9f, false, &memory_id);
+        LOG_INFO("Stored in memory (ID: %llu) with file reference", (unsigned long long)memory_id);
+      }
+    } else {
+      LOG_ERROR("Failed to open transcript file for final update: %s",
+                session->last_transcript_file);
     }
-    
-    ethervox_stt_stop(&session->stt_runtime);
-    session->is_recording = false;
-    
-    // Save transcript to file with timestamp
-    session->last_transcript_file[0] = '\0';
-    if (session->transcript_len > 0) {
-        const char* home = getenv("HOME");
-        char transcript_dir[512];
-        
-        if (home) {
-            snprintf(transcript_dir, sizeof(transcript_dir), "%s/.ethervox/transcripts", home);
-            
-            // Create directory if it doesn't exist
-            mkdir(transcript_dir, 0755);
-            
-            // Generate filename with timestamp
-            time_t now = time(NULL);
-            struct tm* tm_info = localtime(&now);
-            char timestamp[64];
-            strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", tm_info);
-            
-            snprintf(session->last_transcript_file, sizeof(session->last_transcript_file), 
-                    "%s/transcript_%s.txt", transcript_dir, timestamp);
-            
-            // Write transcript to file
-            FILE* f = fopen(session->last_transcript_file, "w");
-            if (f) {
-                fprintf(f, "Voice Transcript - Recorded: %s\n", timestamp);
-                fprintf(f, "Duration: %llu seconds\n", 
-                       (unsigned long long)(time(NULL) - session->session_start_time));
-                fprintf(f, "Segments: %u\n", session->segment_count);
-                fprintf(f, "========================================\n\n");
-                fprintf(f, "%s\n", session->full_transcript);
-                fclose(f);
-                
-                LOG_INFO("Saved transcript to: %s", session->last_transcript_file);
-                
-                // Also store in memory system
-                if (session->memory_store) {
-                    ethervox_memory_store_t* mem = (ethervox_memory_store_t*)session->memory_store;
-                    const char* tags[] = {"voice", "transcript", "whisper"};
-                    uint64_t memory_id = 0;
-                    
-                    // Store with file path reference
-                    char memory_content[2048];
-                    snprintf(memory_content, sizeof(memory_content),
-                            "Voice transcript saved to: %s\n\nTranscript:\n%s",
-                            session->last_transcript_file, session->full_transcript);
-                    
-                    ethervox_memory_store_add(mem, memory_content, tags, 3, 0.9f, false, &memory_id);
-                    LOG_INFO("Stored in memory (ID: %llu) with file reference", (unsigned long long)memory_id);
-                }
-            } else {
-                LOG_ERROR("Failed to save transcript to: %s", session->last_transcript_file);
-                session->last_transcript_file[0] = '\0';
-            }
-        }
-    }
-    
-    *transcript_out = session->full_transcript;
-    
-    LOG_INFO("Voice recording session stopped - %zu chars transcribed", session->transcript_len);
-    
-    return 0;
+  }
+
+  *transcript_out = session->full_transcript;
+
+  LOG_INFO("Voice recording session stopped - %zu chars transcribed", session->transcript_len);
+
+  return 0;
 }
 
 /**
  * Check if recording
  */
 bool ethervox_voice_tools_is_recording(const ethervox_voice_session_t* session) {
-    return session && session->is_recording;
+  return session && session->is_recording;
 }
 
 /**
  * Cleanup
  */
 void ethervox_voice_tools_cleanup(ethervox_voice_session_t* session) {
-    if (!session) return;
+  if (!session)
+    return;
+
+  if (session->is_recording) {
+    const char* transcript;
+    ethervox_voice_tools_stop_listen(session, &transcript);
+  }
+
+  ethervox_stt_cleanup(&session->stt_runtime);
+
+  if (session->audio_runtime.is_initialized) {
+    ethervox_audio_cleanup(&session->audio_runtime);
+  }
+
+  if (session->full_transcript) {
+    free(session->full_transcript);
+    session->full_transcript = NULL;
+  }
+  
+  // Cleanup speaker names
+  if (session->speaker_names) {
+    for (int i = 0; i < session->speaker_names_capacity; i++) {
+      free(session->speaker_names[i]);
+    }
+    free(session->speaker_names);
+    session->speaker_names = NULL;
+    session->speaker_names_capacity = 0;
+  }
+
+  if (session->model_path) {
+    free(session->model_path);
+    session->model_path = NULL;
+  }
+
+  session->is_initialized = false;
+
+  LOG_INFO("Voice tools cleaned up");
+}
+
+/**
+ * Prompt user to assign names to speakers and update transcript file
+ */
+int ethervox_voice_tools_assign_speaker_names(ethervox_voice_session_t* session) {
+  if (!session || session->max_speaker_id < 0) {
+    return -1;  // No speakers detected
+  }
+  
+  int num_speakers = session->max_speaker_id + 1;
+  
+  // Prompt user
+  printf("\n");
+  printf("========================================\n");
+  printf("Speaker Identification\n");
+  printf("========================================\n");
+  printf("Detected %d speaker(s) in the conversation.\n", num_speakers);
+  printf("Would you like to assign names to the speakers? [y/N]: ");
+  fflush(stdout);
+  
+  char response[10];
+  if (fgets(response, sizeof(response), stdin) == NULL) {
+    return -1;
+  }
+  
+  // Trim newline
+  size_t len = strlen(response);
+  if (len > 0 && response[len - 1] == '\n') {
+    response[len - 1] = '\0';
+  }
+  
+  // Check if user declined
+  if (response[0] != 'y' && response[0] != 'Y') {
+    printf("Keeping anonymous speaker labels (Speaker 0, Speaker 1, etc.)\n");
+    return 1;  // User declined
+  }
+  
+  // Allocate speaker names array
+  session->speaker_names_capacity = num_speakers;
+  session->speaker_names = (char**)calloc(num_speakers, sizeof(char*));
+  if (!session->speaker_names) {
+    LOG_ERROR("Failed to allocate speaker names array");
+    return -1;
+  }
+  
+  // Prompt for each speaker's name
+  printf("\n");
+  for (int i = 0; i < num_speakers; i++) {
+    printf("Enter name for Speaker %d: ", i);
+    fflush(stdout);
     
-    if (session->is_recording) {
-        const char* transcript;
-        ethervox_voice_tools_stop_listen(session, &transcript);
+    char name_buffer[128];
+    if (fgets(name_buffer, sizeof(name_buffer), stdin) == NULL) {
+      // Failed to read - use anonymous
+      session->speaker_names[i] = strdup("Anonymous");
+      continue;
     }
     
-    ethervox_stt_cleanup(&session->stt_runtime);
-    
-    if (session->audio_runtime.is_initialized) {
-        ethervox_audio_cleanup(&session->audio_runtime);
+    // Trim newline and whitespace
+    len = strlen(name_buffer);
+    while (len > 0 && (name_buffer[len - 1] == '\n' || name_buffer[len - 1] == ' ' || 
+                       name_buffer[len - 1] == '\t')) {
+      name_buffer[--len] = '\0';
     }
     
-    if (session->full_transcript) {
-        free(session->full_transcript);
-        session->full_transcript = NULL;
+    // Skip leading whitespace
+    char* name_start = name_buffer;
+    while (*name_start == ' ' || *name_start == '\t') {
+      name_start++;
     }
     
-    session->is_initialized = false;
+    // Use provided name or "Anonymous" if empty
+    if (strlen(name_start) > 0) {
+      session->speaker_names[i] = strdup(name_start);
+    } else {
+      session->speaker_names[i] = strdup("Anonymous");
+    }
+  }
+  
+  printf("\n");
+  printf("Speaker assignments:\n");
+  for (int i = 0; i < num_speakers; i++) {
+    printf("  Speaker %d → %s\n", i, session->speaker_names[i]);
+  }
+  printf("\n");
+  
+  // Update transcript file with named speakers
+  if (session->last_transcript_file[0] == '\0') {
+    LOG_WARN("No transcript file to update");
+    return 0;  // Names saved but no file to update
+  }
+  
+  // Read current transcript file
+  FILE* f = fopen(session->last_transcript_file, "r");
+  if (!f) {
+    LOG_ERROR("Failed to open transcript file for reading: %s", session->last_transcript_file);
+    return -1;
+  }
+  
+  // Read entire file into memory
+  fseek(f, 0, SEEK_END);
+  long file_size = ftell(f);
+  fseek(f, 0, SEEK_SET);
+  
+  char* file_content = (char*)malloc(file_size + 1);
+  if (!file_content) {
+    fclose(f);
+    LOG_ERROR("Failed to allocate memory for file content");
+    return -1;
+  }
+  
+  size_t bytes_read = fread(file_content, 1, file_size, f);
+  file_content[bytes_read] = '\0';
+  fclose(f);
+  
+  // Create updated content by replacing [Speaker N] with names
+  char* updated_content = (char*)malloc(file_size * 2 + 1024);  // Extra space for longer names
+  if (!updated_content) {
+    free(file_content);
+    LOG_ERROR("Failed to allocate memory for updated content");
+    return -1;
+  }
+  
+  // Process content and replace speaker markers
+  const char* read_ptr = file_content;
+  char* write_ptr = updated_content;
+  
+  while (*read_ptr) {
+    // Look for [Speaker N] pattern
+    if (strncmp(read_ptr, "[Speaker ", 9) == 0) {
+      int speaker_id = -1;
+      int chars_read = 0;
+      if (sscanf(read_ptr, "[Speaker %d]%n", &speaker_id, &chars_read) == 1) {
+        // Found a speaker marker - replace with name
+        if (speaker_id >= 0 && speaker_id < num_speakers && session->speaker_names[speaker_id]) {
+          int name_len = sprintf(write_ptr, "[%s]", session->speaker_names[speaker_id]);
+          write_ptr += name_len;
+          read_ptr += chars_read;
+          continue;
+        }
+      }
+    }
     
-    LOG_INFO("Voice tools cleaned up");
+    // Not a speaker marker or failed to parse - copy character as-is
+    *write_ptr++ = *read_ptr++;
+  }
+  *write_ptr = '\0';
+  
+  // Write updated content back to file
+  f = fopen(session->last_transcript_file, "w");
+  if (!f) {
+    free(file_content);
+    free(updated_content);
+    LOG_ERROR("Failed to open transcript file for writing: %s", session->last_transcript_file);
+    return -1;
+  }
+  
+  fprintf(f, "%s", updated_content);
+  fclose(f);
+  
+  free(file_content);
+  free(updated_content);
+  
+  LOG_INFO("✓ Updated transcript file with speaker names: %s", session->last_transcript_file);
+  printf("✓ Transcript updated with speaker names\n");
+  printf("  File: %s\n\n", session->last_transcript_file);
+  
+  return 0;
 }
 
 /**
  * Tool wrapper: listen_and_summarize
- * 
+ *
  * This tool allows the LLM to start/stop voice recording with Whisper transcription.
  * The LLM must call with action="start" then action="stop" to get the transcript.
  */
-static int tool_listen_and_summarize_wrapper(
-    const char* args_json,
-    char** result,
-    char** error
-) {
-    ethervox_voice_session_t* session = g_voice_session;
-    
-    if (!session || !session->is_initialized) {
-        *error = strdup("Voice tools not initialized");
-        return -1;
+static int tool_listen_and_summarize_wrapper(const char* args_json, char** result, char** error) {
+  ethervox_voice_session_t* session = g_voice_session;
+
+  if (!session || !session->is_initialized) {
+    *error = strdup("Voice tools not initialized");
+    return -1;
+  }
+
+  // Parse action parameter
+  char action[32] = {0};
+  const char* action_start = strstr(args_json, "\"action\":");
+  if (action_start) {
+    action_start = strchr(action_start, ':') + 1;
+    while (*action_start == ' ' || *action_start == '"')
+      action_start++;
+    const char* action_end = strchr(action_start, '"');
+    if (action_end) {
+      size_t len = action_end - action_start;
+      if (len < sizeof(action)) {
+        strncpy(action, action_start, len);
+        action[len] = '\0';
+      }
     }
-    
-    // Parse action parameter
-    char action[32] = {0};
-    const char* action_start = strstr(args_json, "\"action\":");
-    if (action_start) {
-        action_start = strchr(action_start, ':') + 1;
-        while (*action_start == ' ' || *action_start == '"') action_start++;
-        const char* action_end = strchr(action_start, '"');
-        if (action_end) {
-            size_t len = action_end - action_start;
-            if (len < sizeof(action)) {
-                strncpy(action, action_start, len);
-                action[len] = '\0';
-            }
-        }
+  }
+
+  if (strcmp(action, "start") == 0) {
+    // Start recording
+    if (ethervox_voice_tools_start_listen(session) != 0) {
+      *error = strdup("Failed to start listening");
+      return -1;
     }
-    
-    if (strcmp(action, "start") == 0) {
-        // Start recording
-        if (ethervox_voice_tools_start_listen(session) != 0) {
-            *error = strdup("Failed to start listening");
-            return -1;
-        }
-        
-        *result = strdup("{\"status\":\"recording\",\"message\":\"Voice recording started. Use /end command or call with action='stop' to finish.\"}");
-        return 0;
-        
-    } else if (strcmp(action, "stop") == 0) {
-        // Stop recording and get transcript
-        const char* transcript;
-        if (ethervox_voice_tools_stop_listen(session, &transcript) != 0) {
-            *error = strdup("Failed to stop listening or not recording");
-            return -1;
-        }
-        
-        // Build JSON response with transcript
-        size_t res_len = strlen(transcript) + 512;
-        char* res = malloc(res_len);
-        snprintf(res, res_len, 
-                "{\"status\":\"completed\",\"transcript\":\"%s\",\"length\":%zu,\"segments\":%u}",
-                transcript,
-                session->transcript_len,
-                session->segment_count);
-        
-        *result = res;
-        
-        // Store transcript in memory
-        if (session->memory_store && strlen(transcript) > 0) {
-            const char* tags[] = {"voice", "transcript", "whisper"};
-            uint64_t memory_id = 0;
-            
-            // Cast to memory store and add
-            ethervox_memory_store_t* mem = (ethervox_memory_store_t*)session->memory_store;
-            ethervox_memory_store_add(mem, transcript, tags, 3, 0.8f, false, &memory_id);
-            
-            LOG_INFO("Stored voice transcript in memory (ID: %llu)", (unsigned long long)memory_id);
-        }
-        
-        return 0;
-        
-    } else if (strcmp(action, "status") == 0) {
-        // Check recording status
-        char status_msg[256];
-        snprintf(status_msg, sizeof(status_msg),
-                "{\"is_recording\":%s,\"transcript_length\":%zu,\"segments\":%u}",
-                session->is_recording ? "true" : "false",
-                session->transcript_len,
-                session->segment_count);
-        *result = strdup(status_msg);
-        return 0;
-        
-    } else {
-        *error = strdup("Invalid action. Use 'start', 'stop', or 'status'");
-        return -1;
+
+    *result = strdup(
+        "{\"status\":\"recording\",\"message\":\"Voice recording started. Use /end command or call "
+        "with action='stop' to finish.\"}");
+    return 0;
+
+  } else if (strcmp(action, "stop") == 0) {
+    // Stop recording and get transcript
+    const char* transcript;
+    if (ethervox_voice_tools_stop_listen(session, &transcript) != 0) {
+      *error = strdup("Failed to stop listening or not recording");
+      return -1;
     }
+
+    // Build JSON response with transcript
+    size_t res_len = strlen(transcript) + 512;
+    char* res = malloc(res_len);
+    snprintf(res, res_len,
+             "{\"status\":\"completed\",\"transcript\":\"%s\",\"length\":%zu,\"segments\":%u}",
+             transcript, session->transcript_len, session->segment_count);
+
+    *result = res;
+
+    // Store transcript in memory
+    if (session->memory_store && strlen(transcript) > 0) {
+      const char* tags[] = {"voice", "transcript", "whisper"};
+      uint64_t memory_id = 0;
+
+      // Cast to memory store and add
+      ethervox_memory_store_t* mem = (ethervox_memory_store_t*)session->memory_store;
+      ethervox_memory_store_add(mem, transcript, tags, 3, 0.8f, false, &memory_id);
+
+      LOG_INFO("Stored voice transcript in memory (ID: %llu)", (unsigned long long)memory_id);
+    }
+
+    return 0;
+
+  } else if (strcmp(action, "status") == 0) {
+    // Check recording status
+    char status_msg[256];
+    snprintf(status_msg, sizeof(status_msg),
+             "{\"is_recording\":%s,\"transcript_length\":%zu,\"segments\":%u}",
+             session->is_recording ? "true" : "false", session->transcript_len,
+             session->segment_count);
+    *result = strdup(status_msg);
+    return 0;
+
+  } else {
+    *error = strdup("Invalid action. Use 'start', 'stop', or 'status'");
+    return -1;
+  }
 }
 
 /**
@@ -474,43 +1071,45 @@ static int tool_listen_and_summarize_wrapper(
  */
 static ethervox_tool_t listen_tool = {
     .name = "listen_and_summarize",
-    .description = "Start or stop voice recording with Whisper STT transcription and speaker detection. "
-                   "Call with {\"action\":\"start\"} to begin recording (user will use /stoptranscribe command to end), "
-                   "or {\"action\":\"stop\"} to get the final transcript with speaker labels. "
-                   "Transcript will be automatically stored in memory.",
-    .parameters_json_schema = "{\"type\":\"object\","
+    .description =
+        "Start or stop voice recording with Whisper STT transcription and speaker detection. "
+        "Call with {\"action\":\"start\"} to begin recording (user will use /stoptranscribe "
+        "command to end), "
+        "or {\"action\":\"stop\"} to get the final transcript with speaker labels. "
+        "Transcript will be automatically stored in memory.",
+    .parameters_json_schema =
+        "{\"type\":\"object\","
         "\"properties\":{"
         "\"action\":{\"type\":\"string\",\"enum\":[\"start\",\"stop\",\"status\"],"
-        "\"description\":\"Action to perform: start recording, stop and get transcript, or check status\"}"
+        "\"description\":\"Action to perform: start recording, stop and get transcript, or check "
+        "status\"}"
         "},"
         "\"required\":[\"action\"]}",
     .execute = tool_listen_and_summarize_wrapper,
     .is_deterministic = false,
     .requires_confirmation = false,
     .is_stateful = true,
-    .estimated_latency_ms = 100.0f
-};
+    .estimated_latency_ms = 100.0f};
 
 /**
  * Register voice tools with Governor
  */
 int ethervox_voice_tools_register(void* registry, ethervox_voice_session_t* session) {
-    if (!registry || !session) {
-        LOG_ERROR("Invalid parameters for voice tools registration");
-        return -1;
-    }
-    
-    g_voice_session = session;
-    
-    ethervox_tool_registry_t* reg = (ethervox_tool_registry_t*)registry;
-    
-    if (ethervox_tool_registry_add(reg, &listen_tool) != 0) {
-        LOG_ERROR("Failed to register listen_and_summarize tool");
-        return -1;
-    }
-    
-    LOG_INFO("Registered listen_and_summarize tool with Governor (Whisper STT)");
-    
-    return 0;
-}
+  if (!registry || !session) {
+    LOG_ERROR("Invalid parameters for voice tools registration");
+    return -1;
+  }
 
+  g_voice_session = session;
+
+  ethervox_tool_registry_t* reg = (ethervox_tool_registry_t*)registry;
+
+  if (ethervox_tool_registry_add(reg, &listen_tool) != 0) {
+    LOG_ERROR("Failed to register listen_and_summarize tool");
+    return -1;
+  }
+
+  LOG_INFO("Registered listen_and_summarize tool with Governor (Whisper STT)");
+
+  return 0;
+}

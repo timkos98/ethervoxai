@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 // Global file config pointer for tool wrappers
 static ethervox_file_tools_config_t* g_file_config = NULL;
@@ -104,7 +105,6 @@ static int tool_file_list_wrapper(
     
     return 0;
 }
-
 // Tool wrapper: file_read
 static int tool_file_read_wrapper(
     const char* args_json,
@@ -120,11 +120,63 @@ static int tool_file_read_wrapper(
         return -1;
     }
     
+    // Check file size first to provide helpful error before reading
+    struct stat st;
+    if (stat(file_path, &st) == 0) {
+        // Estimate tokens (rough: 1 token ≈ 4 characters)
+        uint64_t estimated_tokens = st.st_size / 4;
+        
+        // If file would likely overflow context (> 1500 tokens ≈ 6KB)
+        if (estimated_tokens > 1500) {
+            // Build helpful error JSON
+            size_t err_len = 1024;
+            char* err_msg = malloc(err_len);
+            if (err_msg) {
+                // Count lines for better guidance
+                FILE* fp = fopen(file_path, "r");
+                uint32_t line_count = 0;
+                if (fp) {
+                    char line_buf[1024];
+                    while (fgets(line_buf, sizeof(line_buf), fp)) {
+                        line_count++;
+                    }
+                    fclose(fp);
+                }
+                
+                snprintf(err_msg, err_len,
+                    "{\"error\":\"file_too_large\","
+                    "\"file_path\":\"%s\","
+                    "\"size_bytes\":%llu,"
+                    "\"size_kb\":%llu,"
+                    "\"estimated_tokens\":%llu,"
+                    "\"total_lines\":%u,"
+                    "\"suggestion\":\"File is too large for context window. Use file_preview to see structure, then file_read_chunk with line ranges.\","
+                    "\"recommended_chunk_size\":200}",
+                    file_path,
+                    (unsigned long long)st.st_size,
+                    (unsigned long long)(st.st_size / 1024),
+                    (unsigned long long)estimated_tokens,
+                    line_count
+                );
+                *result = err_msg;  // Return as result, not error (LLM can parse JSON)
+                return 0;  // Success - we provided useful info
+            }
+        }
+    }
+    
     char* content = NULL;
     uint64_t size = 0;
     
-    if (ethervox_file_read(config, file_path, &content, &size) != 0) {
-        *error = strdup("Failed to read file");
+    int read_result = ethervox_file_read(config, file_path, &content, &size);
+    
+    if (read_result == -2) {
+        // Binary file detected
+        *result = strdup("{\"error\":\"binary_file\","
+                        "\"message\":\"File contains binary data (non-text). Cannot read binary files.\","
+                        "\"suggestion\":\"Ensure file is a text file (.txt, .md, .c, etc.)\"}");
+        return 0;  // Return as result for LLM to understand
+    } else if (read_result != 0) {
+        *error = strdup("Failed to read file (permission denied or file not found)");
         return -1;
     }
     

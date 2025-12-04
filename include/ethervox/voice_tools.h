@@ -31,6 +31,9 @@ typedef struct {
     ethervox_stt_runtime_t stt_runtime;
     ethervox_audio_runtime_t audio_runtime;
     
+    // Model configuration
+    char* model_path;  // Allocated path to Whisper model
+    
     // Accumulated transcript
     char* full_transcript;
     size_t transcript_len;
@@ -48,6 +51,11 @@ typedef struct {
     
     // Background processing thread
     void* capture_thread;  // pthread_t*
+    
+    // Speaker tracking
+    int max_speaker_id;  // Highest speaker ID encountered in this session
+    char** speaker_names;  // Array of speaker names (NULL if anonymous)
+    int speaker_names_capacity;  // Allocated capacity for speaker_names array
     
 } ethervox_voice_session_t;
 
@@ -86,6 +94,15 @@ bool ethervox_voice_tools_is_recording(const ethervox_voice_session_t* session);
  * Cleanup voice tools
  */
 void ethervox_voice_tools_cleanup(ethervox_voice_session_t* session);
+
+/**
+ * Prompt user to assign names to speakers and update transcript file
+ * Called after transcription ends
+ * 
+ * @param session Voice session with completed transcript
+ * @return 0 on success, -1 on error, 1 if user declined naming
+ */
+int ethervox_voice_tools_assign_speaker_names(ethervox_voice_session_t* session);
 
 /**
  * Register voice tools with Governor

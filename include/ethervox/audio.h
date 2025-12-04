@@ -37,8 +37,8 @@ typedef struct {
 
 // Audio buffer structure
 typedef struct {
-  float* data;
-  uint32_t size;
+  float* data;           // Interleaved float samples normalized to [-1, 1]
+  uint32_t size;         // Number of samples stored in data (not bytes)
   uint32_t channels;
   uint64_t timestamp_us;
 } ethervox_audio_buffer_t;

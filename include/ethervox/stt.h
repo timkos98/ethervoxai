@@ -38,6 +38,7 @@ typedef struct {
   bool enable_partial_results;  // Stream partial transcriptions
   bool enable_punctuation;      // Add punctuation to results
   float vad_threshold;          // Voice activity detection threshold
+  bool translate_to_english;    // Translate non-English speech to English (Whisper only)
 } ethervox_stt_config_t;
 
 /**
@@ -147,6 +148,29 @@ int ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
 int ethervox_stt_whisper_finalize(ethervox_stt_runtime_t* runtime, ethervox_stt_result_t* result);
 void ethervox_stt_whisper_stop(ethervox_stt_runtime_t* runtime);
 void ethervox_stt_whisper_cleanup(ethervox_stt_runtime_t* runtime);
+
+// Testing utilities
+/**
+ * Test Whisper with a WAV file
+ * 
+ * @param runtime STT runtime (must be initialized)
+ * @param wav_file Path to 16kHz mono WAV file
+ * @param result Output transcription result
+ * @return 0 on success, negative on error
+ */
+int ethervox_whisper_test_wav(
+    ethervox_stt_runtime_t* runtime,
+    const char* wav_file,
+    ethervox_stt_result_t* result
+);
+
+/**
+ * Quick test using the JFK sample (expected to work out of box)
+ * 
+ * @param runtime STT runtime (must be initialized)
+ * @return 0 on success, negative on error
+ */
+int ethervox_whisper_test_jfk(ethervox_stt_runtime_t* runtime);
 
 #ifdef __cplusplus
 }

@@ -233,7 +233,8 @@ static int macos_audio_read(ethervox_audio_runtime_t* runtime, ethervox_audio_bu
     state->read_pos = (state->read_pos + 1) % state->ring_buffer_size;
   }
   
-  buffer->size = to_read;
+  // NOTE: Do NOT overwrite buffer->size - it's the capacity, not the actual count
+  // The return value indicates how many samples were actually read
   
   pthread_mutex_unlock(&state->lock);
   
