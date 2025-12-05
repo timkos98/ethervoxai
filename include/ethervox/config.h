@@ -169,6 +169,7 @@ extern "C" {
 #endif
 
 // Android-specific LLM configuration (high performance mobile)
+// TODO Let these settings set themselves upon loading based on the model details extracted from the GGUF file.
 #ifdef ETHERVOX_PLATFORM_ANDROID
 #ifndef ETHERVOX_LLM_MAX_TOKENS_ANDROID
 #define ETHERVOX_LLM_MAX_TOKENS_ANDROID 200  // Longer responses for voice

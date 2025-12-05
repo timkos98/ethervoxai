@@ -57,6 +57,9 @@ typedef struct {
     char** speaker_names;  // Array of speaker names (NULL if anonymous)
     int speaker_names_capacity;  // Allocated capacity for speaker_names array
     
+    // Summarization state
+    bool needs_summarization;  // Flag to trigger LLM summarization
+    
 } ethervox_voice_session_t;
 
 /**

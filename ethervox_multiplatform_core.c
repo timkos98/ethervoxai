@@ -32,8 +32,8 @@
 #define LOGI(...) ETHERVOX_LOGI(__VA_ARGS__)
 #define LOGE(...) ETHERVOX_LOGE(__VA_ARGS__)
 
-// Global debug mode flag (default to enabled, can be toggled at runtime)
-int g_ethervox_debug_enabled = 1;
+// Global debug mode flag (defined in logging.c, referenced here)
+extern int g_ethervox_debug_enabled;
 
 // Global log callback for sending C logs to Java/Kotlin debug window
 ethervox_log_callback_t g_ethervox_log_callback = NULL;

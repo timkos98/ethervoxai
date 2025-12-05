@@ -643,16 +643,20 @@ ethervox_governor_status_t ethervox_governor_execute(
     
     // Clear if we're past system prompt and getting close to context limit (>50% full)
     if (max_pos > governor->system_prompt_token_count && max_pos > (n_ctx / 2)) {
-        // Clear everything after system prompt to start fresh
+        GOV_LOG("KV cache clearing: removing positions %d to %d (was at %d%% capacity)", 
+                governor->system_prompt_token_count, max_pos, (max_pos * 100 / n_ctx));
+        
+        // Clear everything after system prompt to reset conversation history
+        // Note: llama_memory_seq_rm marks cells as removed but doesn't defragment the cache
+        // The function always returns true in standard KV cache, so we don't check the return value
         llama_memory_seq_rm(mem, 0, governor->system_prompt_token_count, -1);
         
-        // After clearing, get the actual max position in the sequence
-        // This should now be system_prompt_token_count - 1 (last token of system prompt)
-        int32_t actual_max = llama_memory_seq_pos_max(mem, 0);
-        governor->current_kv_pos = actual_max + 1;  // Next position after system prompt
+        // After marking cells as removed, reset position to right after system prompt
+        // Don't trust seq_pos_max here - it may still report stale positions
+        governor->current_kv_pos = governor->system_prompt_token_count;
         
-        GOV_LOG("KV cache cleared: removed positions %d to %d (was at %d%% capacity), resuming at %d", 
-                governor->system_prompt_token_count, max_pos, (max_pos * 100 / n_ctx), governor->current_kv_pos);
+        GOV_LOG("KV cache cleared: kept system prompt [0..%d), resuming at position %d", 
+                governor->system_prompt_token_count, governor->current_kv_pos);
     } else if (max_pos >= governor->system_prompt_token_count) {
         // Continue from where we left off
         governor->current_kv_pos = max_pos + 1;

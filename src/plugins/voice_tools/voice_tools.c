@@ -529,6 +529,7 @@ int ethervox_voice_tools_init(ethervox_voice_session_t* session, void* memory) {
   session->max_speaker_id = -1;
   session->speaker_names = NULL;
   session->speaker_names_capacity = 0;
+  session->needs_summarization = false;
 
   session->is_initialized = true;
   LOG_INFO("Voice tools initialized with Whisper STT backend");
@@ -725,6 +726,13 @@ int ethervox_voice_tools_stop_listen(ethervox_voice_session_t* session,
         int naming_result = ethervox_voice_tools_assign_speaker_names(session);
         if (naming_result == 0) {
           LOG_INFO("Speaker names assigned and transcript updated");
+          
+          // Trigger LLM summarization
+          printf("Summarizing...\n");
+          fflush(stdout);
+          
+          // Set flag to trigger summarization in main loop
+          session->needs_summarization = true;
         } else if (naming_result == 1) {
           LOG_INFO("User chose to keep anonymous speaker labels");
         }
@@ -894,29 +902,53 @@ int ethervox_voice_tools_assign_speaker_names(ethervox_voice_session_t* session)
     printf("\n");
   }
   
-  printf("Would you like to assign names to the speakers? [y/N]: ");
-  fflush(stdout);
+  // Loop until valid input (y/Y/n/N or empty for default No)
+  bool valid_input = false;
+  bool assign_names = false;
   
-  char response[10];
-  if (fgets(response, sizeof(response), stdin) == NULL) {
-    // Cleanup examples
-    for (int i = 0; i < num_speakers; i++) {
-      for (int j = 0; j < examples[i].quote_count; j++) {
-        free(examples[i].quotes[j]);
+  while (!valid_input) {
+    printf("Would you like to assign names to the speakers? [y/N]: ");
+    fflush(stdout);
+    
+    char response[10];
+    if (fgets(response, sizeof(response), stdin) == NULL) {
+      // Cleanup examples
+      for (int i = 0; i < num_speakers; i++) {
+        for (int j = 0; j < examples[i].quote_count; j++) {
+          free(examples[i].quotes[j]);
+        }
       }
+      free(examples);
+      return -1;
     }
-    free(examples);
-    return -1;
-  }
-  
-  // Trim newline
-  size_t len = strlen(response);
-  if (len > 0 && response[len - 1] == '\n') {
-    response[len - 1] = '\0';
+    
+    // Trim newline and whitespace
+    size_t len = strlen(response);
+    while (len > 0 && (response[len - 1] == '\n' || response[len - 1] == ' ' || 
+                       response[len - 1] == '\t')) {
+      response[--len] = '\0';
+    }
+    
+    // Skip leading whitespace
+    char* input = response;
+    while (*input == ' ' || *input == '\t') {
+      input++;
+    }
+    
+    // Validate input: empty (default No), y, Y, n, or N
+    if (strlen(input) == 0 || input[0] == 'n' || input[0] == 'N') {
+      valid_input = true;
+      assign_names = false;
+    } else if (input[0] == 'y' || input[0] == 'Y') {
+      valid_input = true;
+      assign_names = true;
+    } else {
+      printf("Invalid input. Please enter 'y' for yes or 'n' for no (or press Enter for no).\n\n");
+    }
   }
   
   // Check if user declined
-  if (response[0] != 'y' && response[0] != 'Y') {
+  if (!assign_names) {
     printf("Keeping anonymous speaker labels (Speaker 0, Speaker 1, etc.)\n");
     // Cleanup examples
     for (int i = 0; i < num_speakers; i++) {
@@ -958,10 +990,10 @@ int ethervox_voice_tools_assign_speaker_names(ethervox_voice_session_t* session)
     }
     
     // Trim newline and whitespace
-    len = strlen(name_buffer);
-    while (len > 0 && (name_buffer[len - 1] == '\n' || name_buffer[len - 1] == ' ' || 
-                       name_buffer[len - 1] == '\t')) {
-      name_buffer[--len] = '\0';
+    size_t name_len = strlen(name_buffer);
+    while (name_len > 0 && (name_buffer[name_len - 1] == '\n' || name_buffer[name_len - 1] == ' ' || 
+                       name_buffer[name_len - 1] == '\t')) {
+      name_buffer[--name_len] = '\0';
     }
     
     // Skip leading whitespace
@@ -1058,6 +1090,86 @@ int ethervox_voice_tools_assign_speaker_names(ethervox_voice_session_t* session)
   
   fprintf(f, "%s", updated_content);
   fclose(f);
+  
+  // Rename file with speaker names if provided
+  char new_filename[1024];
+  bool should_rename = false;
+  
+  // Build new filename with first two speaker names (or first if only one)
+  if (num_speakers >= 2 && session->speaker_names[0] && session->speaker_names[1]) {
+    // Extract directory and timestamp from original filename
+    const char* last_slash = strrchr(session->last_transcript_file, '/');
+    size_t dir_len = last_slash ? (last_slash - session->last_transcript_file + 1) : 0;
+    
+    // Get timestamp from original filename (transcript_YYYYMMDD_HHMMSS.txt)
+    const char* timestamp_start = strstr(session->last_transcript_file, "transcript_");
+    char timestamp[32] = "";
+    if (timestamp_start) {
+      timestamp_start += 11; // Skip "transcript_"
+      const char* timestamp_end = strchr(timestamp_start, '.');
+      if (timestamp_end) {
+        size_t ts_len = timestamp_end - timestamp_start;
+        if (ts_len < sizeof(timestamp)) {
+          strncpy(timestamp, timestamp_start, ts_len);
+          timestamp[ts_len] = '\0';
+        }
+      }
+    }
+    
+    if (dir_len > 0 && strlen(timestamp) > 0) {
+      snprintf(new_filename, sizeof(new_filename), "%.*s%s_and_%s_%s.txt",
+               (int)dir_len, session->last_transcript_file,
+               session->speaker_names[0], session->speaker_names[1], timestamp);
+      should_rename = true;
+    }
+  } else if (num_speakers == 1 && session->speaker_names[0]) {
+    const char* last_slash = strrchr(session->last_transcript_file, '/');
+    size_t dir_len = last_slash ? (last_slash - session->last_transcript_file + 1) : 0;
+    
+    const char* timestamp_start = strstr(session->last_transcript_file, "transcript_");
+    char timestamp[32] = "";
+    if (timestamp_start) {
+      timestamp_start += 11;
+      const char* timestamp_end = strchr(timestamp_start, '.');
+      if (timestamp_end) {
+        size_t ts_len = timestamp_end - timestamp_start;
+        if (ts_len < sizeof(timestamp)) {
+          strncpy(timestamp, timestamp_start, ts_len);
+          timestamp[ts_len] = '\0';
+        }
+      }
+    }
+    
+    if (dir_len > 0 && strlen(timestamp) > 0) {
+      snprintf(new_filename, sizeof(new_filename), "%.*s%s_%s.txt",
+               (int)dir_len, session->last_transcript_file,
+               session->speaker_names[0], timestamp);
+      should_rename = true;
+    }
+  }
+  
+  // Attempt to rename the file
+  if (should_rename) {
+    if (rename(session->last_transcript_file, new_filename) == 0) {
+      LOG_INFO("Renamed transcript file to: %s", new_filename);
+      printf("\n📝 Renamed transcript file:\n");
+      printf("  Old: %s\n", session->last_transcript_file);
+      printf("  New: %s\n\n", new_filename);
+      
+      // Update session with new filename
+      strncpy(session->last_transcript_file, new_filename, sizeof(session->last_transcript_file) - 1);
+      session->last_transcript_file[sizeof(session->last_transcript_file) - 1] = '\0';
+    } else {
+      LOG_WARN("Failed to rename transcript file");
+    }
+  }
+  
+  // Display the updated transcript content
+  printf("\n========================================\n");
+  printf("📄 Updated Transcript\n");
+  printf("========================================\n\n");
+  printf("%s\n", updated_content);
+  printf("========================================\n\n");
   
   free(file_content);
   free(updated_content);

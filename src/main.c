@@ -670,21 +670,11 @@ static void print_transcript_summary(const ethervox_voice_session_t* session, co
         return;
     }
     if (session->last_transcript_file[0] != '\0') {
-        printf("💾 Saved to: %s\n", session->last_transcript_file);
-        printf("   📊 File was updated LIVE during recording (LLM could monitor in real-time)\n");
-        printf("   💬 Also stored in memory with tags: voice, transcript, whisper\n");
-        printf("   🔍 Use: /search voice  or  /search transcript  to retrieve it\n\n");
+        printf("Transcript saved to: %s\n", session->last_transcript_file);
     } else {
-        printf("⚠️  Transcript not saved to file (no home directory found)\n");
+        printf("Error - Transcript not saved to file (no home directory found)\n");
         printf("   But stored in memory - use /search voice to retrieve\n\n");
     }
-    const char* reference_path = session->last_transcript_file[0] != '\0'
-        ? session->last_transcript_file
-        : "~/.ethervox/transcripts/";
-    printf("💡 You can now ask the LLM:\n");
-    printf("   \"Summarize the voice transcript\"\n");
-    printf("   \"What topics were discussed in the recording?\"\n");
-    printf("   \"Read the transcript file at %s\"\n\n", reference_path);
 }
 
 static bool stop_transcription_and_show(ethervox_voice_session_t* session) {
@@ -1318,6 +1308,7 @@ int main(int argc, char** argv) {
     bool quiet_mode = true;  // Default to quiet mode
     bool no_persist = false;
     bool skip_startup_prompt = false;
+    bool engineering_mode = false;  // Engineering mode: no help, no startup, debug on
 
     // Dafualt to auto-load model unless --noautoload specified
     bool auto_load_model = true;
@@ -1347,6 +1338,12 @@ int main(int argc, char** argv) {
             quiet_mode = true;
             g_quiet_mode = true;  // Set global flag
             g_debug_enabled = false;
+        } else if (strcmp(argv[i], "-engineering") == 0) {
+            engineering_mode = true;
+            g_quiet_mode = false;
+            g_debug_enabled = true;
+            quiet_mode = false;
+            skip_startup_prompt = true;
         } else if (strcmp(argv[i], "--startup-prompt") == 0 && i + 1 < argc) {
             startup_prompt_file = argv[++i];
         } else if (strcmp(argv[i], "--no-startup-prompt") == 0) {
@@ -1364,6 +1361,7 @@ int main(int argc, char** argv) {
             printf("  --no-startup-prompt      Skip automatic startup prompt\n");
             printf("  --debug, -d        Enable debug logging (default: off)\n");
             printf("  --quiet, -q        Disable debug logging (explicit quiet)\n");
+            printf("  -engineering       Engineering mode: suppress help/startup, enable debug\n");
             printf("  --test             Run component tests before starting\n");
             printf("  --help, -h         Show this help message\n");
             printf("\n");
@@ -1725,7 +1723,9 @@ int main(int argc, char** argv) {
         printf("Recommended: granite-4.0-h-tiny-Q4_K_M.gguf (will search in ~/.ethervox/models/)\n\n");
     }
     
-    print_help();
+    if (!engineering_mode) {
+        print_help();
+    }
     
     // Execute startup prompt if model is loaded and not skipped
     if (!skip_startup_prompt && g_loaded_model_path[0] != '\0') {
@@ -1847,6 +1847,84 @@ int main(int argc, char** argv) {
         process_command(line, &memory, governor, &path_config, &file_config, voice_session, &quit);
         free(line);
         handle_pending_sigint_stop();
+        
+        // Check if voice session needs summarization
+        if (voice_session && g_loaded_model_path[0] != '\0') {
+            ethervox_voice_session_t* session = (ethervox_voice_session_t*)voice_session;
+            if (session->needs_summarization && session->last_transcript_file[0] != '\0') {
+                session->needs_summarization = false;  // Reset flag
+                
+                // Build summarization query with instruction to append to file
+                char summary_query[2048];
+                snprintf(summary_query, sizeof(summary_query),
+                        "Read the transcript file at '%s' and create a concise summary of the conversation. "
+                        "After creating the summary, append it to the end of the same transcript file with a clear "
+                        "heading '\\n\\n========================================\\nLLM SUMMARY\\n========================================\\n\\n' "
+                        "followed by your summary. Use the file_append tool to add the summary.",
+                        session->last_transcript_file);
+                
+                if (g_debug_enabled) {
+                    fprintf(stderr, "[DEBUG] Sending summarization query: %s\n", summary_query);
+                }
+                
+                // Suppress all output during summarization unless debug is enabled
+                int stdout_backup = -1;
+                int stderr_backup = -1;
+                if (!g_debug_enabled) {
+                    stdout_backup = dup(STDOUT_FILENO);
+                    stderr_backup = dup(STDERR_FILENO);
+                    int dev_null = open("/dev/null", O_WRONLY);
+                    if (dev_null != -1) {
+                        dup2(dev_null, STDOUT_FILENO);
+                        dup2(dev_null, STDERR_FILENO);
+                        close(dev_null);
+                    }
+                }
+                
+                // Execute summarization
+                char* response = NULL;
+                char* error = NULL;
+                
+                int status = ethervox_governor_execute(
+                    governor,
+                    summary_query,
+                    &response,
+                    &error,
+                    NULL,  // No metrics
+                    NULL,  // No progress callback
+                    NULL,  // No token callback
+                    NULL   // No user data
+                );
+                
+                // Restore output streams
+                if (!g_debug_enabled) {
+                    fflush(stdout);
+                    fflush(stderr);
+                    if (stdout_backup != -1) {
+                        dup2(stdout_backup, STDOUT_FILENO);
+                        close(stdout_backup);
+                    }
+                    if (stderr_backup != -1) {
+                        dup2(stderr_backup, STDERR_FILENO);
+                        close(stderr_backup);
+                    }
+                }
+                
+                if (status == 0 && response) {
+                    printf("\n\u2713 Summary completed\n\n");
+                    if (g_debug_enabled) {
+                        fprintf(stderr, "[DEBUG] Summary response: %s\n", response);
+                    }
+                    free(response);
+                } else {
+                    printf("\n\u26a0\ufe0f  Failed to generate summary\n");
+                    if (error) {
+                        printf("  Error: %s\n\n", error);
+                        free(error);
+                    }
+                }
+            }
+        }
     }
 #else
     // Fallback for platforms without readline
@@ -1875,6 +1953,84 @@ int main(int argc, char** argv) {
         
         process_command(line, &memory, governor, &path_config, &file_config, voice_session, &quit);
         handle_pending_sigint_stop();
+        
+        // Check if voice session needs summarization
+        if (voice_session && g_loaded_model_path[0] != '\0') {
+            ethervox_voice_session_t* session = (ethervox_voice_session_t*)voice_session;
+            if (session->needs_summarization && session->last_transcript_file[0] != '\0') {
+                session->needs_summarization = false;  // Reset flag
+                
+                // Build summarization query with instruction to append to file
+                char summary_query[2048];
+                snprintf(summary_query, sizeof(summary_query),
+                        "Read the transcript file at '%s' and create a concise summary of the conversation. "
+                        "After creating the summary, append it to the end of the same transcript file with a clear "
+                        "heading '\\n\\n========================================\\nLLM SUMMARY\\n========================================\\n\\n' "
+                        "followed by your summary. Use the file_append tool to add the summary.",
+                        session->last_transcript_file);
+                
+                if (g_debug_enabled) {
+                    fprintf(stderr, "[DEBUG] Sending summarization query: %s\n", summary_query);
+                }
+                
+                // Suppress all output during summarization unless debug is enabled
+                int stdout_backup = -1;
+                int stderr_backup = -1;
+                if (!g_debug_enabled) {
+                    stdout_backup = dup(STDOUT_FILENO);
+                    stderr_backup = dup(STDERR_FILENO);
+                    int dev_null = open("/dev/null", O_WRONLY);
+                    if (dev_null != -1) {
+                        dup2(dev_null, STDOUT_FILENO);
+                        dup2(dev_null, STDERR_FILENO);
+                        close(dev_null);
+                    }
+                }
+                
+                // Execute summarization
+                char* response = NULL;
+                char* error = NULL;
+                
+                int status = ethervox_governor_execute(
+                    governor,
+                    summary_query,
+                    &response,
+                    &error,
+                    NULL,  // No metrics
+                    NULL,  // No progress callback
+                    NULL,  // No token callback
+                    NULL   // No user data
+                );
+                
+                // Restore output streams
+                if (!g_debug_enabled) {
+                    fflush(stdout);
+                    fflush(stderr);
+                    if (stdout_backup != -1) {
+                        dup2(stdout_backup, STDOUT_FILENO);
+                        close(stdout_backup);
+                    }
+                    if (stderr_backup != -1) {
+                        dup2(stderr_backup, STDERR_FILENO);
+                        close(stderr_backup);
+                    }
+                }
+                
+                if (status == 0 && response) {
+                    printf("\\n\u2713 Summary completed\\n\\n");
+                    if (g_debug_enabled) {
+                        fprintf(stderr, "[DEBUG] Summary response: %s\n", response);
+                    }
+                    free(response);
+                } else {
+                    printf("\\n\u26a0\ufe0f  Failed to generate summary\\n");
+                    if (error) {
+                        printf("  Error: %s\\n\\n", error);
+                        free(error);
+                    }
+                }
+            }
+        }
     }
 #endif
     
