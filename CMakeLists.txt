@@ -1,91 +1,85 @@
 cmake_minimum_required(VERSION 3.16)
 
-# Get backend version from Git tag
-execute_process(
-    COMMAND git tag --list "backend-v*" --sort=-version:refname
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-    OUTPUT_VARIABLE GIT_BACKEND_TAGS
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET
-)
-
-# Get branch and commit for fallback
-execute_process(
-    COMMAND git rev-parse --abbrev-ref HEAD
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-    OUTPUT_VARIABLE GIT_BRANCH
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET
-)
-
-execute_process(
-    COMMAND git rev-parse --short HEAD
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-    OUTPUT_VARIABLE GIT_COMMIT
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET
-)
-
-# Parse version from tag
-if(GIT_BACKEND_TAGS)
-    string(REGEX REPLACE "\n.*" "" FIRST_TAG "${GIT_BACKEND_TAGS}")
-    string(REGEX REPLACE "backend-v" "" BACKEND_VERSION "${FIRST_TAG}")
-else()
-    set(BACKEND_VERSION "${GIT_BRANCH}-${GIT_COMMIT}")
-endif()
-
-if(NOT BACKEND_VERSION)
-    set(BACKEND_VERSION "0.0.0-dev")
-endif()
-
-message(STATUS "Backend Version: ${BACKEND_VERSION}")
-
-project(EthervoxAI VERSION 0.0.3 LANGUAGES C CXX)
-
-# Define backend version as preprocessor macro
-add_definitions(-DETHERVOX_BACKEND_VERSION="${BACKEND_VERSION}")
+project(EthervoxAI VERSION 0.0.5 LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-# Get Git version info for backend
+# =============================================================================
+# Git Information Extraction (REQUIRED)
+# =============================================================================
+
+# Get version tag (cpp repo uses v* pattern, not backend-v*)
 execute_process(
-    COMMAND git describe --tags --abbrev=0 --match=backend-v*
+    COMMAND git describe --tags --abbrev=0 --match=v*
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-    OUTPUT_VARIABLE GIT_BACKEND_TAG
+    OUTPUT_VARIABLE GIT_VERSION_TAG
     OUTPUT_STRIP_TRAILING_WHITESPACE
     ERROR_QUIET
+    RESULT_VARIABLE GIT_TAG_RESULT
 )
 
+# Get branch name (REQUIRED)
 execute_process(
     COMMAND git rev-parse --abbrev-ref HEAD
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     OUTPUT_VARIABLE GIT_BRANCH
     OUTPUT_STRIP_TRAILING_WHITESPACE
     ERROR_QUIET
+    RESULT_VARIABLE GIT_BRANCH_RESULT
 )
 
+# Get commit hash (REQUIRED)
 execute_process(
     COMMAND git rev-parse --short HEAD
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     OUTPUT_VARIABLE GIT_COMMIT_HASH
     OUTPUT_STRIP_TRAILING_WHITESPACE
     ERROR_QUIET
+    RESULT_VARIABLE GIT_COMMIT_RESULT
 )
 
-# Set backend version string
-if(GIT_BACKEND_TAG)
-    string(REPLACE "backend-v" "" ETHERVOX_BACKEND_VERSION "${GIT_BACKEND_TAG}")
-else()
-    if(GIT_BRANCH AND GIT_COMMIT_HASH)
-        set(ETHERVOX_BACKEND_VERSION "${GIT_BRANCH}-${GIT_COMMIT_HASH}")
-    else()
-        set(ETHERVOX_BACKEND_VERSION "0.5.0")
-    endif()
+# Verify git information is available
+if(GIT_BRANCH_RESULT OR NOT GIT_BRANCH)
+    message(FATAL_ERROR "Failed to get git branch. Ensure this is a git repository with commits.")
 endif()
 
-message(STATUS "Backend Version: ${ETHERVOX_BACKEND_VERSION}")
+if(GIT_COMMIT_RESULT OR NOT GIT_COMMIT_HASH)
+    message(FATAL_ERROR "Failed to get git commit hash. Ensure this is a git repository with commits.")
+endif()
+
+message(STATUS "Git Branch: ${GIT_BRANCH}")
+message(STATUS "Git Commit: ${GIT_COMMIT_HASH}")
+
+# Set backend version string
+if(GIT_TAG_RESULT EQUAL 0 AND GIT_VERSION_TAG)
+    # Tag exists - strip 'v' prefix (e.g., v0.0.5 -> 0.0.5)
+    string(REPLACE "v" "" ETHERVOX_BACKEND_VERSION "${GIT_VERSION_TAG}")
+    message(STATUS "Backend Version Tag: ${ETHERVOX_BACKEND_VERSION}")
+else()
+    # No tag - use branch-commit format
+    set(ETHERVOX_BACKEND_VERSION "${GIT_BRANCH}-${GIT_COMMIT_HASH}")
+    message(STATUS "Backend Version (no tag): ${ETHERVOX_BACKEND_VERSION}")
+endif()
+
+# Always define these at compile time
 add_definitions(-DETHERVOX_BACKEND_VERSION="${ETHERVOX_BACKEND_VERSION}")
+add_definitions(-DETHERVOX_GIT_BRANCH="${GIT_BRANCH}")
+add_definitions(-DETHERVOX_GIT_COMMIT="${GIT_COMMIT_HASH}")
+
+# Parse version components (MAJOR.MINOR.PATCH) only if we have a proper tag
+if(GIT_TAG_RESULT EQUAL 0 AND GIT_VERSION_TAG AND ETHERVOX_BACKEND_VERSION MATCHES "^([0-9]+)\\.([0-9]+)\\.([0-9]+)")
+    set(VERSION_MAJOR ${CMAKE_MATCH_1})
+    set(VERSION_MINOR ${CMAKE_MATCH_2})
+    set(VERSION_PATCH ${CMAKE_MATCH_3})
+    add_definitions(-DETHERVOX_VERSION_MAJOR=${VERSION_MAJOR})
+    add_definitions(-DETHERVOX_VERSION_MINOR=${VERSION_MINOR})
+    add_definitions(-DETHERVOX_VERSION_PATCH=${VERSION_PATCH})
+    message(STATUS "Version components: ${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_PATCH}")
+else()
+    # No version tag - components remain 0.0.0 from config.h defaults
+    message(STATUS "No version tag found - using 0.0.0 from config.h defaults")
+endif()
 
 # Platform detection and configuration
 # Only auto-detect if not cross-compiling
@@ -219,21 +213,8 @@ endif()
 
 message(STATUS "Runtime directory base configured for ${TARGET_PLATFORM}")
 
-# Get Git commit hash
-execute_process(
-    COMMAND git rev-parse --short HEAD
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    OUTPUT_VARIABLE GIT_COMMIT_HASH
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET
-)
-
-if(NOT GIT_COMMIT_HASH)
-    set(GIT_COMMIT_HASH "unknown")
-endif()
-
-message(STATUS "Git commit hash: ${GIT_COMMIT_HASH}")
-add_definitions(-DETHERVOX_GIT_COMMIT_HASH="${GIT_COMMIT_HASH}")
+# Git info already extracted and defined above
+# GIT_COMMIT_HASH and GIT_BRANCH are already available
 
 # Build configuration
 option(BUILD_TESTS "Build test suite" ON)

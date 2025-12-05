@@ -390,11 +390,31 @@ void ethervox_log_with_callback(int level, const char* tag, const char* fmt, ...
   } } while(0)
 #endif
 
-// Version information (single source of truth)
+// Version information - parsed from Git tags by CMake
+// If no version tag exists, all components default to 0
+#ifndef ETHERVOX_VERSION_MAJOR
 #define ETHERVOX_VERSION_MAJOR 0
+#endif
+#ifndef ETHERVOX_VERSION_MINOR
 #define ETHERVOX_VERSION_MINOR 0
-#define ETHERVOX_VERSION_PATCH 4
+#endif
+#ifndef ETHERVOX_VERSION_PATCH
+#define ETHERVOX_VERSION_PATCH 0
+#endif
+#ifndef ETHERVOX_BUILD_TYPE
 #define ETHERVOX_BUILD_TYPE "Engineering"
+#endif
+
+// Git information - MUST be provided by CMake at compile time
+#ifndef ETHERVOX_GIT_BRANCH
+#error "ETHERVOX_GIT_BRANCH must be defined by CMake. Build system error."
+#endif
+#ifndef ETHERVOX_GIT_COMMIT
+#error "ETHERVOX_GIT_COMMIT must be defined by CMake. Build system error."
+#endif
+#ifndef ETHERVOX_BACKEND_VERSION
+#error "ETHERVOX_BACKEND_VERSION must be defined by CMake. Build system error."
+#endif
 
 // Build version string from components
 #define ETHERVOX_STRINGIFY(x) #x
