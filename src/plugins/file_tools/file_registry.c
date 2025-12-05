@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 // Global file config pointer for tool wrappers
 static ethervox_file_tools_config_t* g_file_config = NULL;
@@ -104,7 +105,6 @@ static int tool_file_list_wrapper(
     
     return 0;
 }
-
 // Tool wrapper: file_read
 static int tool_file_read_wrapper(
     const char* args_json,
@@ -115,16 +115,72 @@ static int tool_file_read_wrapper(
     
     char file_path[ETHERVOX_FILE_MAX_PATH];
     
+    // Try both "file_path" and "path" for compatibility with LLM optimized calls
     if (parse_json_string(args_json, "file_path", file_path, sizeof(file_path)) != 0) {
-        *error = strdup("Missing 'file_path' parameter");
-        return -1;
+        // Fall back to "path" parameter
+        if (parse_json_string(args_json, "path", file_path, sizeof(file_path)) != 0) {
+            *error = strdup("Missing 'file_path' or 'path' parameter");
+            return -1;
+        }
+    }
+    
+    // Check file size first to provide helpful error before reading
+    struct stat st;
+    if (stat(file_path, &st) == 0) {
+        // Estimate tokens (rough: 1 token ≈ 4 characters)
+        uint64_t estimated_tokens = st.st_size / 4;
+        
+        // If file would likely overflow context (> 1500 tokens ≈ 6KB)
+        if (estimated_tokens > 1500) {
+            // Build helpful error JSON
+            size_t err_len = 1024;
+            char* err_msg = malloc(err_len);
+            if (err_msg) {
+                // Count lines for better guidance
+                FILE* fp = fopen(file_path, "r");
+                uint32_t line_count = 0;
+                if (fp) {
+                    char line_buf[1024];
+                    while (fgets(line_buf, sizeof(line_buf), fp)) {
+                        line_count++;
+                    }
+                    fclose(fp);
+                }
+                
+                snprintf(err_msg, err_len,
+                    "{\"error\":\"file_too_large\","
+                    "\"file_path\":\"%s\","
+                    "\"size_bytes\":%llu,"
+                    "\"size_kb\":%llu,"
+                    "\"estimated_tokens\":%llu,"
+                    "\"total_lines\":%u,"
+                    "\"suggestion\":\"File is too large for context window. Use file_preview to see structure, then file_read_chunk with line ranges.\","
+                    "\"recommended_chunk_size\":200}",
+                    file_path,
+                    (unsigned long long)st.st_size,
+                    (unsigned long long)(st.st_size / 1024),
+                    (unsigned long long)estimated_tokens,
+                    line_count
+                );
+                *result = err_msg;  // Return as result, not error (LLM can parse JSON)
+                return 0;  // Success - we provided useful info
+            }
+        }
     }
     
     char* content = NULL;
     uint64_t size = 0;
     
-    if (ethervox_file_read(config, file_path, &content, &size) != 0) {
-        *error = strdup("Failed to read file");
+    int read_result = ethervox_file_read(config, file_path, &content, &size);
+    
+    if (read_result == -2) {
+        // Binary file detected
+        *result = strdup("{\"error\":\"binary_file\","
+                        "\"message\":\"File contains binary data (non-text). Cannot read binary files.\","
+                        "\"suggestion\":\"Ensure file is a text file (.txt, .md, .c, etc.)\"}");
+        return 0;  // Return as result for LLM to understand
+    } else if (read_result != 0) {
+        *error = strdup("Failed to read file (permission denied or file not found)");
         return -1;
     }
     
@@ -331,6 +387,134 @@ static int tool_file_write_wrapper(
         *error = strdup("Write failed (check permissions and access mode)");
         return -1;
     }
+    
+    free(content);
+    free(unescaped);
+    
+    char* res = malloc(64);
+    snprintf(res, 64, "{\"success\":true}");
+    *result = res;
+    
+    return 0;
+}
+
+// Tool wrapper: file_append
+static int tool_file_append_wrapper(
+    const char* args_json,
+    char** result,
+    char** error
+) {
+    ethervox_file_tools_config_t* config = g_file_config;
+    
+    char file_path[ETHERVOX_FILE_MAX_PATH];
+    
+    if (!config) {
+        *error = strdup("File tools not initialized");
+        return -1;
+    }
+    
+    // Try both "file_path" and "path" for compatibility
+    if (parse_json_string(args_json, "file_path", file_path, sizeof(file_path)) != 0) {
+        if (parse_json_string(args_json, "path", file_path, sizeof(file_path)) != 0) {
+            *error = strdup("Missing 'file_path' or 'path' parameter");
+            return -1;
+        }
+    }
+    
+    // Extract content (same as file_write)
+    const char* content_key = "\"content\":\"";
+    const char* content_start = strstr(args_json, content_key);
+    if (!content_start) {
+        content_key = "\"content\": \"";
+        content_start = strstr(args_json, content_key);
+        if (!content_start) {
+            *error = strdup("Missing 'content' parameter");
+            return -1;
+        }
+    }
+    
+    content_start += strlen(content_key);
+    
+    // Find the closing quote
+    const char* content_end = content_start;
+    while (*content_end) {
+        if (*content_end == '\\') {
+            content_end++;
+            if (*content_end) content_end++;
+        } else if (*content_end == '"') {
+            break;
+        } else {
+            content_end++;
+        }
+    }
+    
+    if (*content_end != '"' || content_end <= content_start) {
+        *error = strdup("Invalid content format - missing closing quote");
+        return -1;
+    }
+    
+    size_t content_len = content_end - content_start;
+    char* content = malloc(content_len + 1);
+    if (!content) {
+        *error = strdup("Memory allocation failed for content");
+        return -1;
+    }
+    
+    strncpy(content, content_start, content_len);
+    content[content_len] = '\0';
+    
+    // Unescape JSON
+    char* unescaped = malloc(content_len + 1);
+    if (!unescaped) {
+        free(content);
+        *error = strdup("Memory allocation failed for unescaped content");
+        return -1;
+    }
+    
+    size_t out_pos = 0;
+    for (size_t i = 0; i < content_len; i++) {
+        if (content[i] == '\\' && i + 1 < content_len) {
+            switch (content[i + 1]) {
+                case 'n':
+                    unescaped[out_pos++] = '\n';
+                    i++;
+                    break;
+                case 'r':
+                    unescaped[out_pos++] = '\r';
+                    i++;
+                    break;
+                case 't':
+                    unescaped[out_pos++] = '\t';
+                    i++;
+                    break;
+                case '"':
+                    unescaped[out_pos++] = '"';
+                    i++;
+                    break;
+                case '\\':
+                    unescaped[out_pos++] = '\\';
+                    i++;
+                    break;
+                default:
+                    unescaped[out_pos++] = content[i];
+            }
+        } else {
+            unescaped[out_pos++] = content[i];
+        }
+    }
+    unescaped[out_pos] = '\0';
+    
+    // Append to file (open in append mode)
+    FILE* f = fopen(file_path, "a");
+    if (!f) {
+        free(content);
+        free(unescaped);
+        *error = strdup("Failed to open file for appending (check permissions)");
+        return -1;
+    }
+    
+    fprintf(f, "%s", unescaped);
+    fclose(f);
     
     free(content);
     free(unescaped);
@@ -611,8 +795,9 @@ int ethervox_file_tools_register(
         .description = "Read contents of a text based file (.txt, .md, .org, .c, etc.). Maximum 10MB.",
         .parameters_json_schema =
             "{\"type\":\"object\",\"properties\":{"
-            "\"file_path\":{\"type\":\"string\",\"description\":\"Path to file to read\"}"
-            "},\"required\":[\"file_path\"]}",
+            "\"path\":{\"type\":\"string\",\"description\":\"Path to file to read\"},"
+            "\"file_path\":{\"type\":\"string\",\"description\":\"Path to file to read (alternative to 'path')\"}"
+            "}}",
         .execute = tool_file_read_wrapper,
         .is_deterministic = true,
         .requires_confirmation = false,
@@ -659,8 +844,27 @@ int ethervox_file_tools_register(
         
         ret |= ethervox_tool_registry_add(registry, &tool_write);
         
+        // Register file_append tool
+        ethervox_tool_t tool_append = {
+            .name = "file_append",
+            .description = "Append content to the end of an existing file. Useful for adding to notes, logs, or summaries without overwriting. Always provide both path and content.",
+            .parameters_json_schema =
+                "{\"type\":\"object\",\"properties\":{"
+                "\"path\":{\"type\":\"string\",\"description\":\"Path to file to append to\"},"
+                "\"file_path\":{\"type\":\"string\",\"description\":\"Path to file to append to (alternative to 'path')\"},"
+                "\"content\":{\"type\":\"string\",\"description\":\"The text content to append to the file. Can include newlines.\"}"
+                "},\"required\":[\"content\"]}",
+            .execute = tool_file_append_wrapper,
+            .is_deterministic = false,
+            .requires_confirmation = false,
+            .is_stateful = true,
+            .estimated_latency_ms = 100.0f
+        };
+        
+        ret |= ethervox_tool_registry_add(registry, &tool_append);
+        
         ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
-                    "Registered 4 file tools (including write access)");
+                    "Registered 5 file tools (including write access)");
     } else {
         ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
                     "Registered 3 file tools (read-only mode)");

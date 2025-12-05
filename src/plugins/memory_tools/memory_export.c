@@ -417,97 +417,103 @@ int ethervox_memory_import(
         return -1;
     }
     
-    // Detect format: check first line for structured JSON vs JSONL
-    char first_line[256];
-    if (fgets(first_line, sizeof(first_line), fp)) {
-        // Rewind after reading first line
+    // Detect format: read first few lines to check for structured JSON vs JSONL
+    char buffer[1024];
+    bool is_structured_json = false;
+    
+    // Read first chunk to detect format
+    size_t bytes_read = fread(buffer, 1, sizeof(buffer) - 1, fp);
+    buffer[bytes_read] = '\0';
+    fseek(fp, 0, SEEK_SET);  // Rewind
+    
+    // If we find "entries" key, it's a structured JSON export
+    // JSONL files have one object per line, without "entries" wrapper
+    if (strstr(buffer, "\"entries\"")) {
+        is_structured_json = true;
+    }
+    
+    if (is_structured_json) {
+        // Read entire file for structured JSON parsing
+        fseek(fp, 0, SEEK_END);
+        long file_size = ftell(fp);
         fseek(fp, 0, SEEK_SET);
         
-        // If first line contains "entries":[, it's a structured JSON export
-        // JSONL files also start with '{' but don't have "entries" key
-        if (strstr(first_line, "\"entries\"")) {
-            // Read entire file for structured JSON parsing
-            fseek(fp, 0, SEEK_END);
-            long file_size = ftell(fp);
-            fseek(fp, 0, SEEK_SET);
-            
-            char* json_data = malloc(file_size + 1);
-            if (!json_data) {
-                fclose(fp);
-                return -1;
-            }
-            
-            fread(json_data, 1, file_size, fp);
-            json_data[file_size] = '\0';
+        char* json_data = malloc(file_size + 1);
+        if (!json_data) {
             fclose(fp);
-            
-            // Parse structured JSON and extract entries array
-            uint32_t loaded = 0;
-            char* entries_start = strstr(json_data, "\"entries\"");
+            return -1;
+        }
+        
+        fread(json_data, 1, file_size, fp);
+        json_data[file_size] = '\0';
+        fclose(fp);
+        
+        // Parse structured JSON and extract entries array
+        uint32_t loaded = 0;
+        char* entries_start = strstr(json_data, "\"entries\"");
+        if (entries_start) {
+            entries_start = strchr(entries_start, '[');
             if (entries_start) {
-                entries_start = strchr(entries_start, '[');
-                if (entries_start) {
-                    entries_start++;  // Skip '['
+                entries_start++;  // Skip '['
+                
+                // Find each entry object within the array
+                char* entry_cursor = entries_start;
+                while (*entry_cursor && *entry_cursor != ']') {
+                    // Skip whitespace
+                    while (*entry_cursor == ' ' || *entry_cursor == '\n' || *entry_cursor == '\r' || *entry_cursor == '\t') {
+                        entry_cursor++;
+                    }
                     
-                    // Find each entry object within the array
-                    char* entry_cursor = entries_start;
-                    while (*entry_cursor && *entry_cursor != ']') {
-                        // Skip whitespace
-                        while (*entry_cursor == ' ' || *entry_cursor == '\n' || *entry_cursor == '\r' || *entry_cursor == '\t') {
-                            entry_cursor++;
+                    if (*entry_cursor == '{') {
+                        // Found entry object start
+                        char* entry_end = entry_cursor + 1;
+                        int brace_depth = 1;
+                        
+                        // Find matching closing brace
+                        while (*entry_end && brace_depth > 0) {
+                            if (*entry_end == '{') brace_depth++;
+                            else if (*entry_end == '}') brace_depth--;
+                            entry_end++;
                         }
                         
-                        if (*entry_cursor == '{') {
-                            // Found entry object start
-                            char* entry_end = entry_cursor + 1;
-                            int brace_depth = 1;
+                        if (brace_depth == 0) {
+                            // Extract this entry as a line and process it
+                            size_t entry_len = entry_end - entry_cursor;
+                            char entry_line[ETHERVOX_MEMORY_MAX_TEXT_LEN + 512];
                             
-                            // Find matching closing brace
-                            while (*entry_end && brace_depth > 0) {
-                                if (*entry_end == '{') brace_depth++;
-                                else if (*entry_end == '}') brace_depth--;
-                                entry_end++;
-                            }
-                            
-                            if (brace_depth == 0) {
-                                // Extract this entry as a line and process it
-                                size_t entry_len = entry_end - entry_cursor;
-                                char entry_line[ETHERVOX_MEMORY_MAX_TEXT_LEN + 512];
+                            if (entry_len < sizeof(entry_line)) {
+                                memcpy(entry_line, entry_cursor, entry_len);
+                                entry_line[entry_len] = '\0';
                                 
-                                if (entry_len < sizeof(entry_line)) {
-                                    memcpy(entry_line, entry_cursor, entry_len);
-                                    entry_line[entry_len] = '\0';
-                                    
-                                    // Process this entry using the same logic as JSONL
-                                    if (process_json_entry(store, entry_line)) {
-                                        loaded++;
-                                    }
+                                // Process this entry using the same logic as JSONL
+                                if (process_json_entry(store, entry_line)) {
+                                    loaded++;
                                 }
-                                
-                                entry_cursor = entry_end;
-                            } else {
-                                break;  // Malformed JSON
                             }
-                        } else if (*entry_cursor == ',') {
-                            entry_cursor++;  // Skip comma between entries
+                            
+                            entry_cursor = entry_end;
                         } else {
-                            break;  // Unexpected character
+                            break;  // Malformed JSON
                         }
+                    } else if (*entry_cursor == ',') {
+                        entry_cursor++;  // Skip comma between entries
+                    } else {
+                        break;  // Unexpected character
                     }
                 }
             }
-            
-            free(json_data);
-            
-            if (turns_loaded) {
-                *turns_loaded = loaded;
-            }
-            
-            ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
-                        "Imported %u entries from structured JSON: %s", loaded, filepath);
-            
-            return 0;
         }
+        
+        free(json_data);
+        
+        if (turns_loaded) {
+            *turns_loaded = loaded;
+        }
+        
+        ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
+                    "Imported %u entries from structured JSON: %s", loaded, filepath);
+        
+        return 0;
     }
     
     // JSONL format: one entry per line

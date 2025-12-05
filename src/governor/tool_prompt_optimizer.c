@@ -135,6 +135,12 @@ int ethervox_optimize_tool_prompts(ethervox_governor_t* governor, const char* mo
     }
     printf("\n");
     
+    // Note: All registered tools will be optimized, including:
+    // - Memory tools (memory_store, memory_retrieve, memory_search, etc.)
+    // - File tools (file_read, file_write, file_append, file_search, file_list)
+    // - Path tools (path_list, path_get, path_set)
+    // - Context tools (if enabled)
+    
     // Phase 1: Global preferences
     printf("[Phase 1] Asking model about general tool-calling preferences...\n");
     

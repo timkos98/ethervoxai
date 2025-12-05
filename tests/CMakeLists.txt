@@ -55,3 +55,17 @@ target_link_libraries(test_memory_archive ethervoxai)
 target_include_directories(test_memory_archive PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME MemoryArchive COMMAND test_memory_archive)
 set_tests_properties(MemoryArchive PROPERTIES TIMEOUT 30 LABELS "unit")
+
+# File tools tests (Phase 1: Binary detection, token estimation, error handling)
+add_executable(test_file_tools unit/test_file_tools.c)
+target_link_libraries(test_file_tools ethervoxai)
+target_include_directories(test_file_tools PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME FileTools COMMAND test_file_tools)
+set_tests_properties(FileTools PROPERTIES TIMEOUT 60 LABELS "unit")
+
+# File append tool tests
+add_executable(test_file_append unit/test_file_append.c)
+target_link_libraries(test_file_append ethervoxai)
+target_include_directories(test_file_append PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME FileAppend COMMAND test_file_append)
+set_tests_properties(FileAppend PROPERTIES TIMEOUT 30 LABELS "unit;file_tools")

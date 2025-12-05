@@ -26,6 +26,50 @@ This folder contains utility scripts for building, deploying, and setting up cro
 
 ---
 
+## download-whisper-model.sh
+**Purpose:** Downloads Whisper STT models in GGML format for voice transcription.
+
+**Usage:**
+```bash
+./scripts/download-whisper-model.sh [model_name] [dest_dir]
+```
+
+**Parameters:**
+- `model_name` (optional): Model to download, defaults to `base`
+- `dest_dir` (optional): Destination directory, defaults to `~/.ethervox/models/whisper`
+
+**Available Models:**
+- `tiny.en` (~75 MB) - Fastest, English-only
+- `base` (~141 MB) - Multilingual, good balance **(DEFAULT)**
+- `base.en` (~141 MB) - Good balance, English-only
+- `small.en` (~466 MB) - Better accuracy, English-only
+- `medium.en` (~1.5 GB) - High accuracy, English-only
+- `tiny` (~75 MB) - Multilingual (99 languages)
+- `base` (~141 MB) - Multilingual
+- `small` (~466 MB) - Multilingual, better accuracy
+
+**Details:**
+- Downloads from HuggingFace (ggerganov/whisper.cpp)
+- Auto-validates file size
+- Requires curl or wget
+
+**Examples:**
+```bash
+# Download default model (base)
+./scripts/download-whisper-model.sh
+
+# Download specific model
+./scripts/download-whisper-model.sh small.en
+
+# Download to custom location
+./scripts/download-whisper-model.sh base ~/mymodels/whisper
+```
+
+**Auto-Download:**
+Voice tools will automatically attempt to download `base` (multilingual) if no model is found during initialization. The download script can also be run manually for other models or custom locations, including the English-only `.en` variants if desired.
+
+---
+
 ## build.sh
 **Purpose:** Cross-platform build orchestrator for EthervoxAI.
 

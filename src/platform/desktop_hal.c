@@ -275,4 +275,12 @@ int desktop_hal_register(ethervox_platform_t* platform) {
   return 0;
 }
 
+/**
+ * Stub for ethervox_get_android_files_dir() on non-Android platforms
+ * Returns NULL since this is desktop (macOS/Linux/Windows)
+ */
+const char* ethervox_get_android_files_dir(void) {
+  return NULL;  // Not on Android, use HOME directory instead
+}
+
 #endif  // ETHERVOX_PLATFORM_DESKTOP

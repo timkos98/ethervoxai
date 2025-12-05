@@ -62,8 +62,8 @@ int ethervox_wake_process(ethervox_wake_runtime_t* runtime,
   memset(result, 0, sizeof(*result));
   result->wake_word = runtime->config.wake_word;
 
-  const int16_t* samples = (const int16_t*)audio_buffer->data;
-  const uint32_t sample_count = audio_buffer->size / sizeof(int16_t);
+  const float* samples = (const float*)audio_buffer->data;
+  const uint32_t sample_count = audio_buffer->size;
 
   if (sample_count == 0) {
     return 1;
@@ -71,7 +71,7 @@ int ethervox_wake_process(ethervox_wake_runtime_t* runtime,
 
   double energy_sum = 0.0;
   for (uint32_t i = 0; i < sample_count; ++i) {
-    energy_sum += fabs((double)samples[i]) / 32768.0;
+    energy_sum += fabs((double)samples[i]);
   }
 
   const double average_energy = energy_sum / sample_count;

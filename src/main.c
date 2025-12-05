@@ -35,6 +35,7 @@
 #include "ethervox/compute_tools.h"
 #include "ethervox/memory_tools.h"
 #include "ethervox/file_tools.h"
+#include "ethervox/voice_tools.h"
 #include "ethervox/startup_prompt_tools.h"
 #include "ethervox/system_info_tools.h"
 #include "ethervox/logging.h"
@@ -47,16 +48,20 @@
 
 // Global state for signal handling
 static volatile bool g_running = true;
-static bool g_debug_enabled = false;  // Debug logging disabled by default (opt-in)
-static bool g_quiet_mode = true;      // Quiet mode by default
+static bool g_debug_enabled = false;   // Debug logging disabled by default (opt-in)
+static bool g_quiet_mode = true;       // Quiet mode by default
 static bool g_markdown_enabled = true; // Markdown formatting enabled by default
+
+static ethervox_voice_session_t* g_cli_voice_session = NULL;
+static volatile sig_atomic_t g_sigint_stop_transcribe = 0;
 
 #if defined(__APPLE__) || defined(__linux__)
 // Command completion for readline
 static const char* commands[] = {
-    "/help", "/test", "/testllm", "/optimize_tool_prompts", "/load", "/tools",
+    "/help", "/test", "/testllm", "/testwhisper", "/optimize_tool_prompts", "/load", "/tools",
     "/search", "/summary", "/export", "/archive", "/stats", "/startup", "/debug",
-    "/markdown", "/clear", "/reset", "/paste", "/paths", "/setpath", "/safemode", "/quit", NULL
+    "/markdown", "/clear", "/reset", "/paste", "/paths", "/setpath", "/safemode",
+    "/transcribe", "/stoptranscribe", "/setlang", "/translate", "/quit", NULL
 };
 
 static char* command_generator(const char* text, int state) {
@@ -97,6 +102,11 @@ static const char* DEFAULT_STARTUP_PROMPT =
     "Greet the user and show today's date/time and any reminders.";
 
 static void signal_handler(int sig) {
+    if (sig == SIGINT && g_cli_voice_session &&
+        (g_cli_voice_session->is_recording || g_cli_voice_session->capture_thread)) {
+        g_sigint_stop_transcribe = 1;
+        return;
+    }
     (void)sig;
     g_running = false;
     printf("\n\nShutting down gracefully...\n");
@@ -143,6 +153,11 @@ static void print_help(void) {
     printf("  /paths             List configured user paths\n");
     printf("  /setpath <label> <path>  Set a user path (e.g., /setpath Notes ~/Notes)\n");
     printf("  /safemode          Toggle file write permissions (safe mode on/off)\n");
+    printf("  /testwhisper       Test Whisper with JFK sample audio\n");
+    printf("  /transcribe        Start voice recording with Whisper STT\n");
+    printf("  /stoptranscribe    Stop recording and get transcript (saves to ~/.ethervox/transcripts/)\n");
+    printf("  /setlang <code>    Set STT language (e.g., en, es, zh, auto for detection)\n");
+    printf("  /translate         Toggle auto-translation to English on/off (for non-English speech)\n");
     printf("  /stats             Show memory statistics\n");
     printf("  /startup <cmd>     Manage startup prompt (edit/show/reset)\n");
     printf("  /debug             Toggle debug logging on/off\n");
@@ -154,6 +169,7 @@ static void print_help(void) {
     printf("\nRuntime Directory: ~/.ethervox/\n");
     printf("  models/            Recommended location for GGUF model files\n");
     printf("  memory/            Conversation memory (persistent .jsonl files)\n");
+    printf("  transcripts/       Voice recordings (saved by /stoptranscribe command)\n");
     printf("  tests/             Test reports and crash logs\n");
     printf("  startup_prompt.txt Custom startup instruction\n");
     printf("  tool_prompts_*.json Optimized per-model tool descriptions\n");
@@ -641,10 +657,60 @@ static void print_tools(ethervox_governor_t* governor) {
     
     printf("\n");
 }
+static void print_transcript_summary(const ethervox_voice_session_t* session, const char* transcript) {
+    if (!transcript || transcript[0] == '\0') {
+        printf("⚠️  Transcript is empty (no speech detected yet).\n\n");
+        return;
+    }
+    printf("📝 Transcript:\n");
+    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    printf("%s\n", transcript);
+    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
+    if (!session) {
+        return;
+    }
+    if (session->last_transcript_file[0] != '\0') {
+        printf("Transcript saved to: %s\n", session->last_transcript_file);
+    } else {
+        printf("Error - Transcript not saved to file (no home directory found)\n");
+        printf("   But stored in memory - use /search voice to retrieve\n\n");
+    }
+}
+
+static bool stop_transcription_and_show(ethervox_voice_session_t* session) {
+    if (!session) {
+        return false;
+    }
+    const char* transcript = NULL;
+    if (ethervox_voice_tools_stop_listen(session, &transcript) == 0) {
+        print_transcript_summary(session, transcript);
+        return true;
+    }
+    return false;
+}
+
+static void handle_pending_sigint_stop(void) {
+    if (!g_sigint_stop_transcribe) {
+        return;
+    }
+    g_sigint_stop_transcribe = 0;
+    if (!g_cli_voice_session) {
+        g_running = false;
+        printf("\n\nShutting down gracefully...\n");
+        return;
+    }
+    printf("\n⏹️  Ctrl+C detected - stopping recording and transcribing with Whisper...\n\n");
+    if (!stop_transcription_and_show(g_cli_voice_session)) {
+        printf("✗ Failed to stop recording after Ctrl+C\n");
+    } else {
+        printf("(Recording cancelled via Ctrl+C – continue with new commands)\n");
+    }
+}
 
 static void process_command(const char* line, ethervox_memory_store_t* memory,
                            ethervox_governor_t* governor, ethervox_path_config_t* path_config,
-                           ethervox_file_tools_config_t* file_config, bool* quit_flag) {
+                           ethervox_file_tools_config_t* file_config, void* voice_session, 
+                           bool* quit_flag) {
     // Trim leading whitespace
     while (*line == ' ' || *line == '\t') line++;
     
@@ -855,6 +921,133 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         return;
     }
     
+    // Voice commands
+    if (strcmp(line, "/testwhisper") == 0) {
+        // Test Whisper infrastructure with JFK sample
+        printf("\n🧪 Testing Whisper Infrastructure...\n\n");
+        
+        if (!voice_session) {
+            printf("❌ Voice tools not initialized\n");
+            printf("   This should have been initialized at startup.\n");
+            printf("   Check the startup logs for errors.\n");
+            return;
+        }
+        
+        ethervox_voice_session_t* session = (ethervox_voice_session_t*)voice_session;
+        int test_result = ethervox_whisper_test_jfk(&session->stt_runtime);
+        
+        if (test_result == 0) {
+            printf("\n✅ Whisper test PASSED!\n");
+            printf("   The STT infrastructure is working correctly.\n");
+            printf("   You can now use /transcribe for live recording.\n");
+        } else {
+            printf("\n❌ Whisper test FAILED\n");
+            printf("   Check the logs above for details.\n");
+        }
+        return;
+    }
+    
+    if (strcmp(line, "/transcribe") == 0) {
+        if (!voice_session) {
+            printf("✗ Voice tools not initialized\n");
+            return;
+        }
+        
+        if (ethervox_voice_tools_is_recording(voice_session)) {
+            printf("⚠️  Already recording! Use /stoptranscribe to finish.\n");
+            return;
+        }
+        
+        printf("🎤 Starting voice recording with Whisper STT...\n");
+        printf("   Speak now. Use /stoptranscribe when finished.\n");
+        printf("   (Speaker detection enabled - pauses and energy shifts tracked)\n\n");
+        
+        if (ethervox_voice_tools_start_listen(voice_session) != 0) {
+            printf("✗ Failed to start voice recording\n");
+        }
+        return;
+    }
+    
+    // Set language
+    if (strncmp(line, "/setlang", 8) == 0) {
+        if (!voice_session) {
+            printf("⚠️  Voice tools not initialized\n");
+            return;
+        }
+        
+        const char* lang = line + 8;
+        // Skip whitespace
+        while (*lang == ' ' || *lang == '\t') lang++;
+        
+        if (*lang == '\0') {
+            printf("Usage: /setlang <language>\n");
+            printf("Examples:\n");
+            printf("  /setlang auto    - Auto-detect language\n");
+            printf("  /setlang en      - English\n");
+            printf("  /setlang es      - Spanish\n");
+            printf("  /setlang zh      - Chinese\n");
+            printf("  /setlang fr      - French\n");
+            printf("  /setlang de      - German\n");
+            printf("  /setlang ja      - Japanese\n");
+            printf("  /setlang ko      - Korean\n");
+            printf("  /setlang ar      - Arabic\n");
+            printf("  /setlang hi      - Hindi\n");
+            return;
+        }
+        
+        ethervox_voice_session_t* session = (ethervox_voice_session_t*)voice_session;
+        if (ethervox_stt_set_language(&session->stt_runtime, lang) == 0) {
+            if (strcmp(lang, "auto") == 0) {
+                printf("🌍 Language detection: AUTO (will detect language automatically)\n");
+            } else {
+                printf("🌍 Language set to: %s\n", lang);
+            }
+        } else {
+            printf("❌ Failed to set language to: %s\n", lang);
+        }
+        return;
+    }
+    
+    // Toggle translation
+    if (strcmp(line, "/translate") == 0) {
+        if (!voice_session) {
+            printf("⚠️  Voice tools not initialized\n");
+            return;
+        }
+        
+        ethervox_voice_session_t* session = (ethervox_voice_session_t*)voice_session;
+        
+        // Toggle the translation setting
+        session->stt_runtime.config.translate_to_english = !session->stt_runtime.config.translate_to_english;
+        
+        if (session->stt_runtime.config.translate_to_english) {
+            printf("🌐 Translation ENABLED: Non-English speech will be translated to English\n");
+        } else {
+            printf("🎤 Translation DISABLED: Speech will be transcribed in original language\n");
+        }
+        
+        // Note: This only affects new recordings, not ongoing ones
+        if (session->is_recording) {
+            printf("⚠️  Note: Change will apply to next recording session\n");
+        }
+        
+        return;
+    }
+    
+    if (strcmp(line, "/stoptranscribe") == 0) {
+        if (!voice_session) {
+            printf("✗ Voice tools not initialized\n");
+            return;
+        }
+        
+        printf("⏹️  Stopping recording and transcribing with Whisper...\n\n");
+        ethervox_voice_session_t* session = (ethervox_voice_session_t*)voice_session;
+        if (!stop_transcription_and_show(session)) {
+            printf("⚠️  Not currently recording. Use /transcribe to start.\n");
+        }
+        return;
+    }
+    
     if (strcmp(line, "/test") == 0) {
         printf("\n");
         run_integration_tests();
@@ -1011,16 +1204,10 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
             return;
         }
         // Recursively process the pasted content as a command
-        process_command(pasted, memory, governor, path_config, file_config, quit_flag);
+        process_command(pasted, memory, governor, path_config, file_config, voice_session, quit_flag);
         free(pasted);
         return;
     }
-    
-    // Not a command - treat as user message
-    if (g_debug_enabled) {
-        fprintf(stderr, "[DEBUG] Not a slash command, sending to LLM: '%s'\n", line);
-    }
-    printf("\n");
     
     // Store user message
     store_message(memory, line, true, 0.8f);
@@ -1121,6 +1308,7 @@ int main(int argc, char** argv) {
     bool quiet_mode = true;  // Default to quiet mode
     bool no_persist = false;
     bool skip_startup_prompt = false;
+    bool engineering_mode = false;  // Engineering mode: no help, no startup, debug on
 
     // Dafualt to auto-load model unless --noautoload specified
     bool auto_load_model = true;
@@ -1150,6 +1338,12 @@ int main(int argc, char** argv) {
             quiet_mode = true;
             g_quiet_mode = true;  // Set global flag
             g_debug_enabled = false;
+        } else if (strcmp(argv[i], "-engineering") == 0) {
+            engineering_mode = true;
+            g_quiet_mode = false;
+            g_debug_enabled = true;
+            quiet_mode = false;
+            skip_startup_prompt = true;
         } else if (strcmp(argv[i], "--startup-prompt") == 0 && i + 1 < argc) {
             startup_prompt_file = argv[++i];
         } else if (strcmp(argv[i], "--no-startup-prompt") == 0) {
@@ -1167,6 +1361,7 @@ int main(int argc, char** argv) {
             printf("  --no-startup-prompt      Skip automatic startup prompt\n");
             printf("  --debug, -d        Enable debug logging (default: off)\n");
             printf("  --quiet, -q        Disable debug logging (explicit quiet)\n");
+            printf("  -engineering       Engineering mode: suppress help/startup, enable debug\n");
             printf("  --test             Run component tests before starting\n");
             printf("  --help, -h         Show this help message\n");
             printf("\n");
@@ -1290,6 +1485,8 @@ int main(int argc, char** argv) {
     // Initialize Governor
     ethervox_governor_t* governor = NULL;
     ethervox_tool_registry_t registry;
+    ethervox_voice_session_t voice_state;
+    void* voice_session = NULL;
     
     if (ethervox_tool_registry_init(&registry, 16) != 0) {
         fprintf(stderr, "Failed to initialize tool registry\n");
@@ -1375,6 +1572,20 @@ int main(int argc, char** argv) {
     // Register system info tools
     if (ethervox_system_info_tools_register(&registry) == 0) {
         printf("System Info Tools: Registered with Governor\n");
+    }
+    
+    // Initialize and register voice tools
+    if (ethervox_voice_tools_init(&voice_state, &memory) == 0) {
+        if (ethervox_voice_tools_register(&registry, &voice_state) == 0) {
+            voice_session = &voice_state;
+            g_cli_voice_session = &voice_state;
+            printf("Voice Tools: Registered with Governor (Whisper STT with speaker detection)\n");
+            printf("             Use /transcribe and /stoptranscribe commands\n");
+        } else {
+            printf("⚠️  Voice Tools: Failed to register with Governor\n");
+        }
+    } else {
+        printf("⚠️  Voice Tools: Failed to initialize (check whisper model at ~/.ethervox/models/whisper/base.bin or base.en.bin)\n");
     }
     
     // Auto-load model if requested
@@ -1512,7 +1723,9 @@ int main(int argc, char** argv) {
         printf("Recommended: granite-4.0-h-tiny-Q4_K_M.gguf (will search in ~/.ethervox/models/)\n\n");
     }
     
-    print_help();
+    if (!engineering_mode) {
+        print_help();
+    }
     
     // Execute startup prompt if model is loaded and not skipped
     if (!skip_startup_prompt && g_loaded_model_path[0] != '\0') {
@@ -1612,10 +1825,18 @@ int main(int argc, char** argv) {
     
     // Use readline for command history on macOS/Linux
     while (g_running && !quit) {
+        handle_pending_sigint_stop();
+        if (!g_running || quit) {
+            break;
+        }
         char* line = readline("> ");
         
         if (!line) {
-            break;  // EOF (Ctrl+D)
+            handle_pending_sigint_stop();
+            if (!g_running) {
+                break;
+            }
+            continue;  // EOF (Ctrl+D) or signal
         }
         
         // Add non-empty lines to history
@@ -1623,18 +1844,105 @@ int main(int argc, char** argv) {
             add_history(line);
         }
         
-        process_command(line, &memory, governor, &path_config, &file_config, &quit);
+        process_command(line, &memory, governor, &path_config, &file_config, voice_session, &quit);
         free(line);
+        handle_pending_sigint_stop();
+        
+        // Check if voice session needs summarization
+        if (voice_session && g_loaded_model_path[0] != '\0') {
+            ethervox_voice_session_t* session = (ethervox_voice_session_t*)voice_session;
+            if (session->needs_summarization && session->last_transcript_file[0] != '\0') {
+                session->needs_summarization = false;  // Reset flag
+                
+                // Build summarization query with instruction to append to file
+                char summary_query[2048];
+                snprintf(summary_query, sizeof(summary_query),
+                        "Read the transcript file at '%s' and create a concise summary of the conversation. "
+                        "After creating the summary, append it to the end of the same transcript file with a clear "
+                        "heading '\\n\\n========================================\\nLLM SUMMARY\\n========================================\\n\\n' "
+                        "followed by your summary. Use the file_append tool to add the summary.",
+                        session->last_transcript_file);
+                
+                if (g_debug_enabled) {
+                    fprintf(stderr, "[DEBUG] Sending summarization query: %s\n", summary_query);
+                }
+                
+                // Suppress all output during summarization unless debug is enabled
+                int stdout_backup = -1;
+                int stderr_backup = -1;
+                if (!g_debug_enabled) {
+                    stdout_backup = dup(STDOUT_FILENO);
+                    stderr_backup = dup(STDERR_FILENO);
+                    int dev_null = open("/dev/null", O_WRONLY);
+                    if (dev_null != -1) {
+                        dup2(dev_null, STDOUT_FILENO);
+                        dup2(dev_null, STDERR_FILENO);
+                        close(dev_null);
+                    }
+                }
+                
+                // Execute summarization
+                char* response = NULL;
+                char* error = NULL;
+                
+                int status = ethervox_governor_execute(
+                    governor,
+                    summary_query,
+                    &response,
+                    &error,
+                    NULL,  // No metrics
+                    NULL,  // No progress callback
+                    NULL,  // No token callback
+                    NULL   // No user data
+                );
+                
+                // Restore output streams
+                if (!g_debug_enabled) {
+                    fflush(stdout);
+                    fflush(stderr);
+                    if (stdout_backup != -1) {
+                        dup2(stdout_backup, STDOUT_FILENO);
+                        close(stdout_backup);
+                    }
+                    if (stderr_backup != -1) {
+                        dup2(stderr_backup, STDERR_FILENO);
+                        close(stderr_backup);
+                    }
+                }
+                
+                if (status == 0 && response) {
+                    printf("\n\u2713 Summary completed\n\n");
+                    if (g_debug_enabled) {
+                        fprintf(stderr, "[DEBUG] Summary response: %s\n", response);
+                    }
+                    free(response);
+                } else {
+                    printf("\n\u26a0\ufe0f  Failed to generate summary\n");
+                    if (error) {
+                        printf("  Error: %s\n\n", error);
+                        free(error);
+                    }
+                }
+            }
+        }
     }
 #else
     // Fallback for platforms without readline
     char line[2048];
     while (g_running && !quit) {
+        handle_pending_sigint_stop();
+        if (!g_running || quit) {
+            break;
+        }
         printf("> ");
         fflush(stdout);
         
         if (!fgets(line, sizeof(line), stdin)) {
-            break;
+            handle_pending_sigint_stop();
+            if (!g_running) {
+                break;
+            }
+            continue;
         }
         
         // Remove newline
@@ -1643,7 +1951,86 @@ int main(int argc, char** argv) {
             line[len - 1] = '\0';
         }
         
-        process_command(line, &memory, governor, &path_config, &file_config, &quit);
+        process_command(line, &memory, governor, &path_config, &file_config, voice_session, &quit);
+        handle_pending_sigint_stop();
+        
+        // Check if voice session needs summarization
+        if (voice_session && g_loaded_model_path[0] != '\0') {
+            ethervox_voice_session_t* session = (ethervox_voice_session_t*)voice_session;
+            if (session->needs_summarization && session->last_transcript_file[0] != '\0') {
+                session->needs_summarization = false;  // Reset flag
+                
+                // Build summarization query with instruction to append to file
+                char summary_query[2048];
+                snprintf(summary_query, sizeof(summary_query),
+                        "Read the transcript file at '%s' and create a concise summary of the conversation. "
+                        "After creating the summary, append it to the end of the same transcript file with a clear "
+                        "heading '\\n\\n========================================\\nLLM SUMMARY\\n========================================\\n\\n' "
+                        "followed by your summary. Use the file_append tool to add the summary.",
+                        session->last_transcript_file);
+                
+                if (g_debug_enabled) {
+                    fprintf(stderr, "[DEBUG] Sending summarization query: %s\n", summary_query);
+                }
+                
+                // Suppress all output during summarization unless debug is enabled
+                int stdout_backup = -1;
+                int stderr_backup = -1;
+                if (!g_debug_enabled) {
+                    stdout_backup = dup(STDOUT_FILENO);
+                    stderr_backup = dup(STDERR_FILENO);
+                    int dev_null = open("/dev/null", O_WRONLY);
+                    if (dev_null != -1) {
+                        dup2(dev_null, STDOUT_FILENO);
+                        dup2(dev_null, STDERR_FILENO);
+                        close(dev_null);
+                    }
+                }
+                
+                // Execute summarization
+                char* response = NULL;
+                char* error = NULL;
+                
+                int status = ethervox_governor_execute(
+                    governor,
+                    summary_query,
+                    &response,
+                    &error,
+                    NULL,  // No metrics
+                    NULL,  // No progress callback
+                    NULL,  // No token callback
+                    NULL   // No user data
+                );
+                
+                // Restore output streams
+                if (!g_debug_enabled) {
+                    fflush(stdout);
+                    fflush(stderr);
+                    if (stdout_backup != -1) {
+                        dup2(stdout_backup, STDOUT_FILENO);
+                        close(stdout_backup);
+                    }
+                    if (stderr_backup != -1) {
+                        dup2(stderr_backup, STDERR_FILENO);
+                        close(stderr_backup);
+                    }
+                }
+                
+                if (status == 0 && response) {
+                    printf("\\n\u2713 Summary completed\\n\\n");
+                    if (g_debug_enabled) {
+                        fprintf(stderr, "[DEBUG] Summary response: %s\n", response);
+                    }
+                    free(response);
+                } else {
+                    printf("\\n\u26a0\ufe0f  Failed to generate summary\\n");
+                    if (error) {
+                        printf("  Error: %s\\n\\n", error);
+                        free(error);
+                    }
+                }
+            }
+        }
     }
 #endif
     

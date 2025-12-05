@@ -56,6 +56,20 @@ static int g_llm_tests_passed = 0;
 static int g_llm_tests_failed = 0;
 static int g_llm_tests_skipped = 0;
 
+#define MAX_LLM_TEST_NAMES 50
+static char* g_llm_passed_tests[MAX_LLM_TEST_NAMES];
+static char* g_llm_failed_tests[MAX_LLM_TEST_NAMES];
+static int g_llm_passed_count = 0;
+static int g_llm_failed_count = 0;
+
+static void record_llm_test_result(const char* test_name, bool passed) {
+    if (passed && g_llm_passed_count < MAX_LLM_TEST_NAMES) {
+        g_llm_passed_tests[g_llm_passed_count++] = strdup(test_name);
+    } else if (!passed && g_llm_failed_count < MAX_LLM_TEST_NAMES) {
+        g_llm_failed_tests[g_llm_failed_count++] = strdup(test_name);
+    }
+}
+
 // Test report file
 static FILE* g_test_report_file = NULL;
 static char g_test_report_path[512] = {0};
@@ -1330,6 +1344,46 @@ void run_llm_tool_tests(ethervox_governor_t* governor,
     printf("╚═══════════════════════════════════════════════════════════════╝\n");
     printf(COLOR_RESET);
     
+    // Get git info
+    char git_repo[128] = "unknown";
+    char git_branch[128] = "unknown";
+    char git_commit[64] = "unknown";
+    FILE* git_fp;
+    
+    // Get repository name from remote URL
+    git_fp = popen("git remote get-url origin 2>/dev/null | sed 's#.*/##' | sed 's#\\.git##'", "r");
+    if (git_fp) {
+        if (fgets(git_repo, sizeof(git_repo), git_fp)) {
+            // Remove newline
+            git_repo[strcspn(git_repo, "\n")] = 0;
+        }
+        pclose(git_fp);
+    }
+    
+    git_fp = popen("git rev-parse --abbrev-ref HEAD 2>/dev/null", "r");
+    if (git_fp) {
+        if (fgets(git_branch, sizeof(git_branch), git_fp)) {
+            // Remove newline
+            git_branch[strcspn(git_branch, "\n")] = 0;
+        }
+        pclose(git_fp);
+    }
+    
+    git_fp = popen("git rev-parse --short HEAD 2>/dev/null", "r");
+    if (git_fp) {
+        if (fgets(git_commit, sizeof(git_commit), git_fp)) {
+            // Remove newline
+            git_commit[strcspn(git_commit, "\n")] = 0;
+        }
+        pclose(git_fp);
+    }
+    
+    printf("\n");
+    printf(COLOR_CYAN "  Repository: " COLOR_RESET "%s\n", git_repo);
+    printf(COLOR_CYAN "  Branch:     " COLOR_RESET "%s\n", git_branch);
+    printf(COLOR_CYAN "  Commit:     " COLOR_RESET "%s\n", git_commit);
+    printf("\n");
+    
     if (verbose) {
         printf(COLOR_YELLOW "  [Verbose Mode Enabled]\n" COLOR_RESET);
         printf(COLOR_YELLOW "  - Custom debug messages logged to report\n" COLOR_RESET);
@@ -1459,46 +1513,82 @@ void run_llm_tool_tests(ethervox_governor_t* governor,
     
     time_t start_time = time(NULL);
     
+    // Reset test name tracking
+    g_llm_passed_count = 0;
+    g_llm_failed_count = 0;
+    
     // Run all LLM tool tests
+    int passed_before, failed_before;
+    
     LLM_TEST_HEADER("Test 1: Memory Add Tool");
     report_test_header("Test 1: Memory Add Tool");
+    passed_before = g_llm_tests_passed; failed_before = g_llm_tests_failed;
     test_llm_memory_add(governor);
+    if (g_llm_tests_failed > failed_before) record_llm_test_result("Memory Add Tool", false);
+    else if (g_llm_tests_passed > passed_before) record_llm_test_result("Memory Add Tool", true);
     
     LLM_TEST_HEADER("Test 2: Memory Search Tool");
     report_test_header("Test 2: Memory Search Tool");
+    passed_before = g_llm_tests_passed; failed_before = g_llm_tests_failed;
     test_llm_memory_search(governor);
+    if (g_llm_tests_failed > failed_before) record_llm_test_result("Memory Search Tool", false);
+    else if (g_llm_tests_passed > passed_before) record_llm_test_result("Memory Search Tool", true);
     
     LLM_TEST_HEADER("Test 3: Calculator Tool");
     report_test_header("Test 3: Calculator Tool");
+    passed_before = g_llm_tests_passed; failed_before = g_llm_tests_failed;
     test_llm_calculator(governor);
+    if (g_llm_tests_failed > failed_before) record_llm_test_result("Calculator Tool", false);
+    else if (g_llm_tests_passed > passed_before) record_llm_test_result("Calculator Tool", true);
     
     LLM_TEST_HEADER("Test 4: Memory Correction (Adaptive)");
     report_test_header("Test 4: Memory Correction (Adaptive)");
+    passed_before = g_llm_tests_passed; failed_before = g_llm_tests_failed;
     test_llm_memory_correction(governor);
+    if (g_llm_tests_failed > failed_before) record_llm_test_result("Memory Correction (Adaptive)", false);
+    else if (g_llm_tests_passed > passed_before) record_llm_test_result("Memory Correction (Adaptive)", true);
     
     LLM_TEST_HEADER("Test 5: Tag-Based Memory Search");
     report_test_header("Test 5: Tag-Based Memory Search");
+    passed_before = g_llm_tests_passed; failed_before = g_llm_tests_failed;
     test_llm_memory_tags(governor);
+    if (g_llm_tests_failed > failed_before) record_llm_test_result("Tag-Based Memory Search", false);
+    else if (g_llm_tests_passed > passed_before) record_llm_test_result("Tag-Based Memory Search", true);
     
     LLM_TEST_HEADER("Test 6: Multi-Tool Orchestration");
     report_test_header("Test 6: Multi-Tool Orchestration");
+    passed_before = g_llm_tests_passed; failed_before = g_llm_tests_failed;
     test_llm_multi_tool(governor);
+    if (g_llm_tests_failed > failed_before) record_llm_test_result("Multi-Tool Orchestration", false);
+    else if (g_llm_tests_passed > passed_before) record_llm_test_result("Multi-Tool Orchestration", true);
     
     LLM_TEST_HEADER("Test 7: Model Load/Unload Lifecycle");
     report_test_header("Test 7: Model Load/Unload Lifecycle");
+    passed_before = g_llm_tests_passed; failed_before = g_llm_tests_failed;
     test_llm_model_lifecycle(model_path);
+    if (g_llm_tests_failed > failed_before) record_llm_test_result("Model Load/Unload Lifecycle", false);
+    else if (g_llm_tests_passed > passed_before) record_llm_test_result("Model Load/Unload Lifecycle", true);
     
     LLM_TEST_HEADER("Test 8: Long Runtime Stress Test");
     report_test_header("Test 8: Long Runtime Stress Test");
+    passed_before = g_llm_tests_passed; failed_before = g_llm_tests_failed;
     test_llm_long_runtime(governor);
+    if (g_llm_tests_failed > failed_before) record_llm_test_result("Long Runtime Stress Test", false);
+    else if (g_llm_tests_passed > passed_before) record_llm_test_result("Long Runtime Stress Test", true);
     
     LLM_TEST_HEADER("Test 9: Context Window Management");
     report_test_header("Test 9: Context Window Management");
+    passed_before = g_llm_tests_passed; failed_before = g_llm_tests_failed;
     test_context_window_management(governor);
+    if (g_llm_tests_failed > failed_before) record_llm_test_result("Context Window Management", false);
+    else if (g_llm_tests_passed > passed_before) record_llm_test_result("Context Window Management", true);
     
     LLM_TEST_HEADER("Test 10: Startup Prompt Tools");
     report_test_header("Test 10: Startup Prompt Tools (Read/Write)");
+    passed_before = g_llm_tests_passed; failed_before = g_llm_tests_failed;
     test_llm_startup_prompt_tools(governor);
+    if (g_llm_tests_failed > failed_before) record_llm_test_result("Startup Prompt Tools", false);
+    else if (g_llm_tests_passed > passed_before) record_llm_test_result("Startup Prompt Tools", true);
     
     time_t end_time = time(NULL);
     double duration = difftime(end_time, start_time);
@@ -1524,6 +1614,30 @@ void run_llm_tool_tests(ethervox_governor_t* governor,
     printf(COLOR_YELLOW "  Pass Rate:     %.1f%%\n" COLOR_RESET, pass_rate);
     printf(COLOR_BLUE "  Duration:      %.0f seconds\n" COLOR_RESET, duration);
     printf("\n");
+    printf(COLOR_CYAN "  Repository:    " COLOR_RESET "%s\n", git_repo);
+    printf(COLOR_CYAN "  Branch:        " COLOR_RESET "%s\n", git_branch);
+    printf(COLOR_CYAN "  Commit:        " COLOR_RESET "%s\n", git_commit);
+    printf("\n");
+    
+    // Show passed test names
+    if (g_llm_passed_count > 0) {
+        printf(COLOR_GREEN "  Passed Tests:\n" COLOR_RESET);
+        for (int i = 0; i < g_llm_passed_count; i++) {
+            printf(COLOR_GREEN "    ✓ %s\n" COLOR_RESET, g_llm_passed_tests[i]);
+            free(g_llm_passed_tests[i]);
+        }
+        printf("\n");
+    }
+    
+    // Show failed test names
+    if (g_llm_failed_count > 0) {
+        printf(COLOR_RED "  Failed Tests:\n" COLOR_RESET);
+        for (int i = 0; i < g_llm_failed_count; i++) {
+            printf(COLOR_RED "    ✗ %s\n" COLOR_RESET, g_llm_failed_tests[i]);
+            free(g_llm_failed_tests[i]);
+        }
+        printf("\n");
+    }
     
     if (g_llm_tests_failed == 0 && total_tests > 0) {
         printf(COLOR_BOLD COLOR_GREEN);

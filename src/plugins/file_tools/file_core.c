@@ -266,6 +266,37 @@ int ethervox_file_list(
     return 0;
 }
 
+/**
+ * Detect if file content is binary (non-text)
+ * Checks for null bytes and high proportion of control characters
+ */
+static bool is_binary_content(const char* buffer, size_t size) {
+    if (size == 0) return false;
+    
+    size_t control_chars = 0;
+    size_t null_bytes = 0;
+    size_t check_size = size < 8192 ? size : 8192;  // Check first 8KB
+    
+    for (size_t i = 0; i < check_size; i++) {
+        unsigned char c = (unsigned char)buffer[i];
+        
+        // Null byte = definitely binary
+        if (c == 0) {
+            null_bytes++;
+            if (null_bytes > 0) return true;  // Even one null byte = binary
+        }
+        
+        // Count non-printable control chars (exclude common text chars like \n, \r, \t)
+        if (c < 32 && c != '\n' && c != '\r' && c != '\t') {
+            control_chars++;
+        }
+    }
+    
+    // If > 30% control characters, likely binary
+    float control_ratio = (float)control_chars / check_size;
+    return control_ratio > 0.3f;
+}
+
 int ethervox_file_read(
     ethervox_file_tools_config_t* config,
     const char* file_path,
@@ -330,6 +361,14 @@ int ethervox_file_read(
     }
     
     buffer[bytes_read] = '\0';  // Null-terminate
+    
+    // Check for binary content
+    if (is_binary_content(buffer, bytes_read)) {
+        free(buffer);
+        ethervox_log(ETHERVOX_LOG_LEVEL_WARN, __FILE__, __LINE__, __func__,
+                    "Binary content detected in file: %s", file_path);
+        return -2;  // Special error code for binary files
+    }
     
     *content = buffer;
     *size = bytes_read;
