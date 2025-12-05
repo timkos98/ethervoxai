@@ -107,6 +107,12 @@ typedef struct {
     const char* memory_dir;
     const char* config_dir;
     
+    // Model configuration overrides (0 = auto-detect from model file)
+    uint32_t context_size;          // KV cache context window (0 = use model's n_ctx)
+    uint32_t max_tokens;            // Max tokens per generation (0 = platform default)
+    uint32_t batch_size;            // Batch size for processing (0 = use model's n_batch)
+    uint8_t kv_cache_type;          // GGML quantization type (0 = use model's recommendation)
+    
     // Optional callbacks for async events
     void (*on_log)(const char* message, int level, void* user_data);
     void (*on_progress)(const char* operation, float progress, void* user_data);
@@ -116,6 +122,7 @@ typedef struct {
 } ethervox_session_config_t;
 
 // Create and initialize session
+// Automatically reads model metadata and adjusts KV cache size, context window, etc.
 ethervox_session_t* ethervox_session_create(const ethervox_session_config_t* config);
 
 // Cleanup and destroy session
@@ -126,6 +133,22 @@ bool ethervox_session_is_ready(ethervox_session_t* session);
 
 // Get last error message (thread-local)
 const char* ethervox_get_last_error(void);
+
+// Get active model configuration (after model loading)
+typedef struct {
+    uint32_t context_size;          // Active KV cache size
+    uint32_t max_tokens;            // Active max tokens per generation
+    uint32_t batch_size;            // Active batch size
+    uint8_t kv_cache_type;          // Active KV cache quantization type
+    const char* model_name;         // Model architecture (e.g., "llama", "granite")
+    uint64_t param_count;           // Parameter count (e.g., 3000000000 for 3B)
+    uint32_t vocab_size;            // Vocabulary size
+} ethervox_model_info_t;
+
+int ethervox_get_model_info(
+    ethervox_session_t* session,
+    ethervox_model_info_t* info
+);
 ```
 
 ### Command Execution
@@ -390,20 +413,37 @@ static void handle_slash_command(ethervox_session_t* session, const char* line) 
 static ethervox_session_t* g_session = NULL;
 static JavaVM* g_jvm = NULL;
 
-// Callbacks bridge to Java
+// Cached callback references (set once, used many times)
+static jobject g_log_callback_obj = NULL;  // Global ref
+static jmethodID g_log_method_id = NULL;   // Cached method ID
+
+// Thread-safe callback implementation
 static void on_log_jni(const char* message, int level, void* user_data) {
     (void)user_data;
+    if (!g_jvm || !g_log_callback_obj || !g_log_method_id) return;
     
-    JNIEnv* env;
-    (*g_jvm)->GetEnv(g_jvm, (void**)&env, JNI_VERSION_1_6);
+    JNIEnv* env = NULL;
+    jint result = (*g_jvm)->GetEnv(g_jvm, (void**)&env, JNI_VERSION_1_6);
     
-    // Call Java: EthervoxCallback.onLog(message, level)
-    jclass callback_class = (*env)->FindClass(env, "ai/ethervox/EthervoxCallback");
-    jmethodID on_log = (*env)->GetStaticMethodID(env, callback_class, "onLog", 
-                                                  "(Ljava/lang/String;I)V");
+    // Handle background thread callbacks
+    bool detach = false;
+    if (result == JNI_EDETACHED) {
+        if ((*g_jvm)->AttachCurrentThread(g_jvm, &env, NULL) != JNI_OK) {
+            return;  // Failed to attach, skip callback
+        }
+        detach = true;
+    }
+    
+    // Call Java using cached method ID (no FindClass/GetMethodID overhead)
     jstring jmsg = (*env)->NewStringUTF(env, message);
-    (*env)->CallStaticVoidMethod(env, callback_class, on_log, jmsg, level);
-    (*env)->DeleteLocalRef(env, jmsg);
+    if (jmsg) {
+        (*env)->CallVoidMethod(env, g_log_callback_obj, g_log_method_id, jmsg, level);
+        (*env)->DeleteLocalRef(env, jmsg);
+    }
+    
+    if (detach) {
+        (*g_jvm)->DetachCurrentThread(g_jvm);
+    }
 }
 
 // JNI: Initialize session
@@ -618,12 +658,23 @@ object EthervoxCallback {
    - [ ] Implement `ethervox_chat()` wrapper
    - [ ] Implement `ethervox_memory_search()` wrapper
 
-2. **Test in Parallel**
+2. **Dynamic Model Configuration**
+   - [ ] Create `src/core/model_config.c` to read GGUF metadata
+   - [ ] Extract model context size (n_ctx) from GGUF header
+   - [ ] Extract recommended batch size (n_batch)
+   - [ ] Extract model architecture and parameter count
+   - [ ] Auto-adjust KV cache settings in `ethervox_session_create()`
+   - [ ] Override config.h defaults with model-specific values
+   - [ ] Log configuration decisions (e.g., "Model has 8192 context, using 8192 KV cache")
+
+3. **Test in Parallel**
    - [ ] Keep existing main.c as-is
    - [ ] Create `tests/test_api.c` to test new API
+   - [ ] Test with different models (small 1B, large 7B)
+   - [ ] Verify KV cache adjusts correctly
    - [ ] Ensure API layer works identically to direct calls
 
-3. **No Breaking Changes**
+4. **No Breaking Changes**
    - Governor, memory, LLM remain unchanged
    - main.c still compiles and works
    - New API is additive only
@@ -686,6 +737,176 @@ object EthervoxCallback {
 
 ---
 
+## Dynamic Model Configuration
+
+### Problem: Hard-coded Config Values
+
+Currently, `config.h` has compile-time constants:
+
+```c
+#define ETHERVOX_GOVERNOR_CONTEXT_SIZE 8192
+#define ETHERVOX_GOVERNOR_MAX_TOKENS_PER_ITERATION 64
+#define ETHERVOX_GOVERNOR_KV_CACHE_TYPE GGML_TYPE_Q8_0
+```
+
+These don't adapt to the actual model being loaded:
+- Small 1B model with 2048 context wastes memory with 8192 cache
+- Large 7B model with 32K context gets truncated to 8192
+- Different architectures have different optimal batch sizes
+
+### Solution: Read Model Metadata on Load
+
+**Use llama.cpp's built-in model introspection instead of custom GGUF parsing:**
+
+```c
+// src/core/model_config.c
+#include <llama.h>
+
+typedef struct {
+    uint32_t n_ctx;              // Context size from model
+    uint32_t n_batch;            // Recommended batch size
+    uint32_t n_vocab;            // Vocabulary size
+    uint64_t n_params;           // Total parameters
+    char arch[32];               // Architecture (llama, granite, phi, etc.)
+    uint8_t recommended_kv_type; // Recommended KV cache quantization
+} gguf_model_metadata_t;
+
+// Extract metadata from already-loaded llama model
+int ethervox_extract_model_metadata(struct llama_model* model, gguf_model_metadata_t* metadata) {
+    if (!model || !metadata) return -1;
+    
+    // Extract metadata using llama.cpp APIs
+    metadata->n_ctx = llama_n_ctx_train(model);      // Training context size
+    metadata->n_vocab = llama_n_vocab(model);        // Vocabulary size
+    metadata->n_params = llama_model_n_params(model); // Total parameters
+    
+    // Read architecture string from model metadata
+    const char* arch = llama_model_meta_val_str(model, "general.architecture");
+    if (arch) {
+        strncpy(metadata->arch, arch, sizeof(metadata->arch) - 1);
+        metadata->arch[sizeof(metadata->arch) - 1] = '\0';
+    } else {
+        strcpy(metadata->arch, "unknown");
+    }
+    
+    // Set recommended values based on model size
+    if (metadata->n_params < 2000000000ULL) {
+        // Small model (<2B): use full precision KV cache
+        metadata->recommended_kv_type = GGML_TYPE_F16;
+        metadata->n_batch = 512;
+    } else if (metadata->n_params < 8000000000ULL) {
+        // Medium model (2-8B): use Q8_0 KV cache
+        metadata->recommended_kv_type = GGML_TYPE_Q8_0;
+    
+    // Set recommended values based on model size
+    if (metadata->n_params < 2000000000ULL) {
+        // Small model (<2B): use full precision KV cache
+        metadata->recommended_kv_type = GGML_TYPE_F16;
+        metadata->n_batch = 512;
+    } else if (metadata->n_params < 8000000000ULL) {
+        // Medium model (2-8B): use Q8_0 KV cache
+        metadata->recommended_kv_type = GGML_TYPE_Q8_0;
+        metadata->n_batch = 256;
+    } else {
+        // Large model (>8B): use Q4_0 KV cache
+        metadata->recommended_kv_type = GGML_TYPE_Q4_0;
+        metadata->n_batch = 128;
+    }
+    
+    return 0;
+}
+```
+
+**Why use llama.cpp APIs:**
+- ✅ Handles GGUF versioning, endianness, UTF-8 validation automatically
+- ✅ No need to maintain custom parser (complex, error-prone)
+- ✅ Automatically supports all GGUF formats llama.cpp supports
+- ✅ Reduces code and maintenance burden
+- ✅ **No performance penalty** - metadata extracted from already-loaded model
+
+### Integration with Session Creation
+
+```c
+ethervox_session_t* ethervox_session_create(const ethervox_session_config_t* config) {
+    ethervox_session_t* session = calloc(1, sizeof(ethervox_session_t));
+    
+    // Start with config.h defaults or user overrides
+    session->context_size = config->context_size ? 
+                           config->context_size : ETHERVOX_GOVERNOR_CONTEXT_SIZE;
+    session->max_tokens = config->max_tokens ?
+                         config->max_tokens : ETHERVOX_GOVERNOR_MAX_TOKENS_PER_ITERATION;
+    session->batch_size = config->batch_size ?
+                         config->batch_size : ETHERVOX_GOVERNOR_BATCH_SIZE;
+    session->kv_cache_type = config->kv_cache_type ?
+                            config->kv_cache_type : ETHERVOX_GOVERNOR_KV_CACHE_TYPE;
+    
+    // Initialize governor with initial settings (may be adjusted after model load)
+    llama_context_params ctx_params = llama_context_default_params();
+    ctx_params.n_ctx = session->context_size;
+    ctx_params.n_batch = session->batch_size;
+    ctx_params.type_k = session->kv_cache_type;
+    ctx_params.type_v = session->kv_cache_type;
+    
+    session->governor = ethervox_governor_create(config->model_path, &ctx_params);
+    
+    // After model is loaded, extract metadata and update session if user didn't override
+    if (session->governor && session->governor->llm_model) {
+        gguf_model_metadata_t metadata = {0};
+        if (ethervox_extract_model_metadata(session->governor->llm_model, &metadata) == 0) {
+            // Only update if user didn't explicitly override
+            if (!config->context_size && metadata.n_ctx > 0) {
+                session->context_size = metadata.n_ctx;
+            }
+            if (!config->batch_size) {
+                // Recommend batch size based on model size
+                if (metadata.n_params < 2000000000ULL) {
+                    session->batch_size = 512;  // Small model
+                } else if (metadata.n_params < 8000000000ULL) {
+                    session->batch_size = 256;  // Medium model
+                } else {
+                    session->batch_size = 128;  // Large model
+                }
+            }
+            if (!config->kv_cache_type) {
+                // Recommend KV cache type based on model size
+                if (metadata.n_params < 2000000000ULL) {
+                    session->kv_cache_type = GGML_TYPE_F16;   // Small: full precision
+                } else if (metadata.n_params < 8000000000ULL) {
+                    session->kv_cache_type = GGML_TYPE_Q8_0;  // Medium: Q8
+                } else {
+                    session->kv_cache_type = GGML_TYPE_Q4_0;  // Large: Q4
+                }
+            }
+            
+            // Log configuration
+            if (config->on_log) {
+                char msg[512];
+                snprintf(msg, sizeof(msg),
+                        "Model: %s (%.1fB params), Context: %u, Batch: %u, KV: %s",
+                        metadata.arch,
+                        metadata.n_params / 1e9,
+                        session->context_size,
+                        session->batch_size,
+                        ggml_type_name(session->kv_cache_type));
+                config->on_log(msg, ETHERVOX_LOG_INFO, config->user_data);
+            }
+        }
+    }
+    
+    return session;
+}
+```
+
+### Benefits
+
+1. **Memory Efficiency:** Small models use less KV cache memory
+2. **Quality:** Large models get full context window
+3. **Performance:** Batch size tuned to model architecture
+4. **Transparency:** Logged configuration helps debugging
+5. **Override Capability:** Users can force specific values if needed
+
+---
+
 ## File Structure Changes
 
 ### Before (Current)
@@ -707,6 +928,7 @@ src/
 │   ├── ethervox_api.c     # Public API implementation
 │   ├── ethervox_api.h     # Public API header
 │   ├── session.c          # Session state management
+│   ├── model_config.c     # GGUF metadata reader (dynamic config)
 │   ├── command_handler.c  # Command logic (no UI)
 │   └── event_bus.c        # Event notification
 │

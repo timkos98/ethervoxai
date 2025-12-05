@@ -22,6 +22,7 @@
 #include "ethervox/governor.h"
 #include "ethervox/timer_tools.h"
 #include "ethervox/memory_tools.h"
+#include "ethervox/voice_tools.h"
 #include "ethervox/platform.h"
 #include "ethervox/config.h"
 
@@ -1017,6 +1018,18 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getVersion(
 }
 
 JNIEXPORT jstring JNICALL
+Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getBackendVersion(
+        JNIEnv* env,
+        jobject thiz) {
+    (void)thiz;
+#ifdef ETHERVOX_BACKEND_VERSION
+    return create_jstring(env, ETHERVOX_BACKEND_VERSION);
+#else
+    return create_jstring(env, "unknown");
+#endif
+}
+
+JNIEXPORT jstring JNICALL
 Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getActiveTimerStatus(
         JNIEnv* env,
         jobject thiz) {
@@ -1295,4 +1308,155 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getLlamaPerformanceMetric
 #else
     return NULL;
 #endif
+}
+
+// ===========================================================================
+// Voice Tools / Transcription
+// ===========================================================================
+
+// Global voice session state for transcription
+static ethervox_voice_session_t* g_voice_session = NULL;
+static char g_android_files_dir[512] = {0};
+
+/**
+ * Get Android-specific files directory (set from Kotlin)
+ * Returns NULL if not on Android or not set
+ */
+const char* ethervox_get_android_files_dir(void) {
+#if defined(__ANDROID__)
+    if (g_android_files_dir[0] != '\0') {
+        return g_android_files_dir;
+    }
+#endif
+    return NULL;
+}
+
+JNIEXPORT void JNICALL
+Java_com_droid_ethervox_1multiplatform_1core_NativeLib_setAndroidFilesDir(
+    JNIEnv* env, jobject thiz, jstring filesDir) {
+    (void)thiz;
+    
+    if (!filesDir) {
+        LOGE("Files directory is NULL");
+        return;
+    }
+    
+    const char* dir = (*env)->GetStringUTFChars(env, filesDir, NULL);
+    if (dir) {
+        strncpy(g_android_files_dir, dir, sizeof(g_android_files_dir) - 1);
+        g_android_files_dir[sizeof(g_android_files_dir) - 1] = '\0';
+        (*env)->ReleaseStringUTFChars(env, filesDir, dir);
+        
+        LOGI("[Android] Files directory set to: %s", g_android_files_dir);
+        LOGI("[Android] Whisper models: %s/models/whisper/", g_android_files_dir);
+        LOGI("[Android] Transcripts: %s/transcripts/", g_android_files_dir);
+    }
+}
+
+JNIEXPORT jint JNICALL
+Java_com_droid_ethervox_1multiplatform_1core_NativeLib_startVoiceTranscription(
+    JNIEnv* env, jobject thiz) {
+    (void)env;
+    (void)thiz;
+    
+    LOGI("[Voice] ========================================");
+    LOGI("[Voice] startVoiceTranscription called");
+    LOGI("[Voice] ========================================");
+    
+    // Initialize voice session if not already done
+    if (!g_voice_session) {
+        LOGI("[Voice] Voice session is NULL - initializing for first time...");
+        g_voice_session = (ethervox_voice_session_t*)malloc(sizeof(ethervox_voice_session_t));
+        if (!g_voice_session) {
+            LOGE("[Voice] ERROR: Failed to allocate voice session memory");
+            return -1;
+        }
+        LOGI("[Voice] ✓ Voice session memory allocated");
+        
+        // Initialize voice tools (requires memory store)
+        if (!g_memory_store) {
+            LOGE("[Voice] ERROR: Memory store not initialized - required for voice tools");
+            free(g_voice_session);
+            g_voice_session = NULL;
+            return -1;
+        }
+        LOGI("[Voice] ✓ Memory store exists");
+        
+        LOGI("[Voice] Calling ethervox_voice_tools_init...");
+        int ret = ethervox_voice_tools_init(g_voice_session, g_memory_store);
+        if (ret != 0) {
+            LOGE("[Voice] ✗ ERROR: Failed to initialize voice tools: %d", ret);
+            LOGE("[Voice] This usually means Whisper model not found!");
+            LOGE("[Voice] Check Settings → Whisper Model section to download");
+            free(g_voice_session);
+            g_voice_session = NULL;
+            return ret;
+        }
+        LOGI("[Voice] ✓ Voice tools initialized successfully!");
+        LOGI("[Voice] ✓ Whisper model loaded and ready");
+    } else {
+        LOGI("[Voice] Voice session already initialized (is_initialized=%d)",
+             g_voice_session->is_initialized);
+    }
+    
+    // Verify session is properly initialized
+    if (!g_voice_session->is_initialized) {
+        LOGE("[Voice] ERROR: Voice session exists but is_initialized=false!");
+        LOGE("[Voice] This shouldn't happen - initialization must have failed silently");
+        return -1;
+    }
+    LOGI("[Voice] ✓ Session verification passed");
+    
+    // Start listening (recording + VAD)
+    LOGI("[Voice] Starting voice recording...");
+    int ret = ethervox_voice_tools_start_listen(g_voice_session);
+    if (ret != 0) {
+        LOGE("[Voice] ✗ ERROR: Failed to start voice recording: %d", ret);
+        return ret;
+    }
+    
+    LOGI("[Voice] ✓ Voice transcription started successfully!");
+    LOGI("[Voice] ========================================");
+    return 0;
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_droid_ethervox_1multiplatform_1core_NativeLib_stopVoiceTranscription(
+    JNIEnv* env, jobject thiz) {
+    (void)thiz;
+    
+    if (!g_voice_session) {
+        LOGE("Voice session not initialized");
+        return NULL;
+    }
+    
+    // Stop listening and get transcript
+    const char* transcript = NULL;
+    int ret = ethervox_voice_tools_stop_listen(g_voice_session, &transcript);
+    
+    if (ret != 0) {
+        LOGE("Failed to stop voice transcription: %d", ret);
+        return NULL;
+    }
+    
+    if (!transcript || transcript[0] == '\0') {
+        LOGI("Transcription completed but no speech detected");
+        return (*env)->NewStringUTF(env, "");
+    }
+    
+    LOGI("Transcription completed: %s", transcript);
+    return create_jstring(env, transcript);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_droid_ethervox_1multiplatform_1core_NativeLib_isVoiceTranscribing(
+    JNIEnv* env, jobject thiz) {
+    (void)env;
+    (void)thiz;
+    
+    if (!g_voice_session) {
+        return JNI_FALSE;
+    }
+    
+    return g_voice_session->is_recording ? JNI_TRUE : JNI_FALSE;
 }

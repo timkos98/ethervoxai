@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <pthread.h>
 
 #include "ethervox/audio.h"
 
@@ -309,10 +310,17 @@ typedef struct {
   SLAndroidSimpleBufferQueueItf player_buffer_queue;
   bool is_recording;
   bool is_playing;
-  float* capture_buffer;
+  int16_t* capture_buffer;  // OpenSL ES delivers int16 PCM
   float* playback_buffer;
   size_t buffer_size;
   ethervox_audio_runtime_t* runtime;
+  
+  // Ring buffer for synchronous reads (like macOS)
+  int16_t* ring_buffer;  // Store int16, convert to float on read
+  size_t ring_buffer_size;
+  size_t write_pos;
+  size_t read_pos;
+  pthread_mutex_t lock;
 } opensl_data_t;
 
 static void opensl_recorder_callback(SLAndroidSimpleBufferQueueItf bq, void* context) {
@@ -321,9 +329,33 @@ static void opensl_recorder_callback(SLAndroidSimpleBufferQueueItf bq, void* con
     return;
   }
 
+  // Copy int16 audio data to ring buffer for synchronous reads
+  pthread_mutex_lock(&data->lock);
+  
+  size_t sample_count = data->buffer_size;
+  for (size_t i = 0; i < sample_count; i++) {
+    data->ring_buffer[data->write_pos] = data->capture_buffer[i];
+    data->write_pos = (data->write_pos + 1) % data->ring_buffer_size;
+    
+    // Overwrite old data if buffer full
+    if (data->write_pos == data->read_pos) {
+      data->read_pos = (data->read_pos + 1) % data->ring_buffer_size;
+    }
+  }
+  
+  pthread_mutex_unlock(&data->lock);
+
+  // Also call user callback if set (for backward compatibility)
   if (data->runtime->on_audio_data) {
+    // Convert int16 to float for the callback
+    static float temp_buffer[16000];  // Max 1 second at 16kHz
+    size_t count = (data->buffer_size < 16000) ? data->buffer_size : 16000;
+    for (size_t i = 0; i < count; i++) {
+      temp_buffer[i] = (float)data->capture_buffer[i] / 32768.0f;
+    }
+    
     ethervox_audio_buffer_t buffer;
-    buffer.data = data->capture_buffer;
+    buffer.data = temp_buffer;
     buffer.size = (uint32_t)data->buffer_size;
     buffer.channels = data->runtime->config.channels;
     
@@ -336,7 +368,7 @@ static void opensl_recorder_callback(SLAndroidSimpleBufferQueueItf bq, void* con
 
   // Re-enqueue the buffer
   (*bq)->Enqueue(bq, data->capture_buffer, 
-                 data->buffer_size * sizeof(float) * data->runtime->config.channels);
+                 data->buffer_size * sizeof(int16_t) * data->runtime->config.channels);
 }
 
 static int opensl_init(ethervox_audio_runtime_t* runtime,
@@ -351,13 +383,21 @@ static int opensl_init(ethervox_audio_runtime_t* runtime,
   audio_data->runtime = runtime;
   audio_data->buffer_size = config->buffer_size;
   
-  audio_data->capture_buffer = (float*)malloc(config->buffer_size * sizeof(float) * config->channels);
+  audio_data->capture_buffer = (int16_t*)malloc(config->buffer_size * sizeof(int16_t) * config->channels);
   audio_data->playback_buffer = (float*)malloc(config->buffer_size * sizeof(float) * config->channels);
   
-  if (!audio_data->capture_buffer || !audio_data->playback_buffer) {
+  // Allocate ring buffer (10 seconds of audio at 16kHz)
+  audio_data->ring_buffer_size = config->sample_rate * 10;
+  audio_data->ring_buffer = (int16_t*)calloc(audio_data->ring_buffer_size, sizeof(int16_t));
+  audio_data->write_pos = 0;
+  audio_data->read_pos = 0;
+  pthread_mutex_init(&audio_data->lock, NULL);
+  
+  if (!audio_data->capture_buffer || !audio_data->playback_buffer || !audio_data->ring_buffer) {
     LOGE("Failed to allocate audio buffers");
     free(audio_data->capture_buffer);
     free(audio_data->playback_buffer);
+    free(audio_data->ring_buffer);
     free(audio_data);
     return -1;
   }
@@ -492,7 +532,7 @@ static int opensl_start_capture(ethervox_audio_runtime_t* runtime) {
   result = (*audio_data->recorder_buffer_queue)->Enqueue(
       audio_data->recorder_buffer_queue,
       audio_data->capture_buffer,
-      audio_data->buffer_size * sizeof(float) * runtime->config.channels);
+      audio_data->buffer_size * sizeof(int16_t) * runtime->config.channels);
   if (result != SL_RESULT_SUCCESS) {
     LOGE("Failed to enqueue initial buffer: %d", result);
     (*audio_data->recorder_object)->Destroy(audio_data->recorder_object);
@@ -668,12 +708,38 @@ static int opensl_stop_playback(ethervox_audio_runtime_t* runtime) {
 }
 
 static int opensl_read_audio(ethervox_audio_runtime_t* runtime, ethervox_audio_buffer_t* buffer) {
-  // OpenSL ES uses callback-based audio, so direct reading is not typical
-  // This would need to be implemented with a ring buffer if synchronous reads are needed
-  (void)runtime;
-  (void)buffer;
-  LOGD("Direct read not implemented for OpenSL ES (use callbacks)");
-  return -1;
+  opensl_data_t* data = (opensl_data_t*)runtime->platform_data;
+  if (!data || !buffer) {
+    return -1;
+  }
+  
+  pthread_mutex_lock(&data->lock);
+  
+  // Calculate available samples in ring buffer
+  size_t available;
+  if (data->write_pos >= data->read_pos) {
+    available = data->write_pos - data->read_pos;
+  } else {
+    available = data->ring_buffer_size - data->read_pos + data->write_pos;
+  }
+  
+  if (available == 0) {
+    pthread_mutex_unlock(&data->lock);
+    return 0; // No data available
+  }
+  
+  // Read up to buffer capacity
+  size_t to_read = (available < buffer->size) ? available : buffer->size;
+  
+  // Convert int16 to float32 normalized to [-1.0, 1.0] (like macOS)
+  for (size_t i = 0; i < to_read; i++) {
+    buffer->data[i] = (float)data->ring_buffer[data->read_pos] / 32768.0f;
+    data->read_pos = (data->read_pos + 1) % data->ring_buffer_size;
+  }
+  
+  pthread_mutex_unlock(&data->lock);
+  
+  return (int)to_read; // Return number of samples read
 }
 
 static int opensl_write_audio(ethervox_audio_runtime_t* runtime,
@@ -715,6 +781,11 @@ static void opensl_cleanup(ethervox_audio_runtime_t* runtime) {
   if (audio_data->playback_buffer) {
     free(audio_data->playback_buffer);
   }
+  if (audio_data->ring_buffer) {
+    free(audio_data->ring_buffer);
+  }
+  
+  pthread_mutex_destroy(&audio_data->lock);
 
   free(audio_data);
   runtime->platform_data = NULL;

@@ -1,9 +1,91 @@
 cmake_minimum_required(VERSION 3.16)
 
+# Get backend version from Git tag
+execute_process(
+    COMMAND git tag --list "backend-v*" --sort=-version:refname
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    OUTPUT_VARIABLE GIT_BACKEND_TAGS
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+
+# Get branch and commit for fallback
+execute_process(
+    COMMAND git rev-parse --abbrev-ref HEAD
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    OUTPUT_VARIABLE GIT_BRANCH
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+
+execute_process(
+    COMMAND git rev-parse --short HEAD
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    OUTPUT_VARIABLE GIT_COMMIT
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+
+# Parse version from tag
+if(GIT_BACKEND_TAGS)
+    string(REGEX REPLACE "\n.*" "" FIRST_TAG "${GIT_BACKEND_TAGS}")
+    string(REGEX REPLACE "backend-v" "" BACKEND_VERSION "${FIRST_TAG}")
+else()
+    set(BACKEND_VERSION "${GIT_BRANCH}-${GIT_COMMIT}")
+endif()
+
+if(NOT BACKEND_VERSION)
+    set(BACKEND_VERSION "0.0.0-dev")
+endif()
+
+message(STATUS "Backend Version: ${BACKEND_VERSION}")
+
 project(EthervoxAI VERSION 0.0.3 LANGUAGES C CXX)
+
+# Define backend version as preprocessor macro
+add_definitions(-DETHERVOX_BACKEND_VERSION="${BACKEND_VERSION}")
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
+
+# Get Git version info for backend
+execute_process(
+    COMMAND git describe --tags --abbrev=0 --match=backend-v*
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    OUTPUT_VARIABLE GIT_BACKEND_TAG
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+
+execute_process(
+    COMMAND git rev-parse --abbrev-ref HEAD
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    OUTPUT_VARIABLE GIT_BRANCH
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+
+execute_process(
+    COMMAND git rev-parse --short HEAD
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    OUTPUT_VARIABLE GIT_COMMIT_HASH
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+
+# Set backend version string
+if(GIT_BACKEND_TAG)
+    string(REPLACE "backend-v" "" ETHERVOX_BACKEND_VERSION "${GIT_BACKEND_TAG}")
+else()
+    if(GIT_BRANCH AND GIT_COMMIT_HASH)
+        set(ETHERVOX_BACKEND_VERSION "${GIT_BRANCH}-${GIT_COMMIT_HASH}")
+    else()
+        set(ETHERVOX_BACKEND_VERSION "0.5.0")
+    endif()
+endif()
+
+message(STATUS "Backend Version: ${ETHERVOX_BACKEND_VERSION}")
+add_definitions(-DETHERVOX_BACKEND_VERSION="${ETHERVOX_BACKEND_VERSION}")
 
 # Platform detection and configuration
 # Only auto-detect if not cross-compiling

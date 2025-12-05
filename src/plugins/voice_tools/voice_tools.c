@@ -8,6 +8,7 @@
 
 #include "ethervox/voice_tools.h"
 
+#include <errno.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,6 +21,9 @@
 #include "ethervox/governor.h"
 #include "ethervox/logging.h"
 #include "ethervox/config.h"
+
+// Forward declaration - implemented in JNI layer (Android) or returns NULL (other platforms)
+extern const char* ethervox_get_android_files_dir(void);
 
 #define LOG_ERROR(...) \
   ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__, __VA_ARGS__)
@@ -245,15 +249,17 @@ int ethervox_voice_tools_init(ethervox_voice_session_t* session, void* memory) {
   }
 
   // Build comprehensive path search list
-  // CRITICAL: Search for multilingual base.bin ONLY to ensure auto language detection works
-  // The .en variant is only used if explicitly requested or if base.bin doesn't exist
+  // CRITICAL: Search for multilingual models to ensure auto language detection works
+  // Preferred order: tiny.bin (small, fast), base.bin (balanced), then .en variants
   const int MAX_MODEL_PATHS = 64;
   char possible_paths[MAX_MODEL_PATHS][ETHERVOX_FILE_MAX_PATH];
   int path_count = 0;
   bool path_overflow_logged = false;
 
-  // First pass: try to find base.bin (multilingual)
-  const char* preferred_model = "base.bin";
+  // Model search priority: tiny.bin > base.bin > tiny.en.bin > base.en.bin
+  const char* model_candidates[] = {"tiny.bin", "ggml-tiny.bin", "base.bin"};
+  const size_t model_candidate_count = sizeof(model_candidates) / sizeof(model_candidates[0]);
+  const char* preferred_model = model_candidates[0];  // Start with tiny.bin
   bool found_multilingual = false;
 
   char custom_path[ETHERVOX_FILE_MAX_PATH];
@@ -265,10 +271,23 @@ int ethervox_voice_tools_init(ethervox_voice_session_t* session, void* memory) {
   bool has_user_paths =
       (ethervox_path_config_list(&path_config, &user_paths, &user_path_count) == 0);
 
+  // Platform-specific default paths
+  const char* android_files_dir = ethervox_get_android_files_dir();
   const char* home = getenv("HOME");
-  char default_model_dir[ETHERVOX_FILE_MAX_PATH] = ".ethervox/models/whisper";
-  if (home) {
+  char default_model_dir[ETHERVOX_FILE_MAX_PATH];
+  
+  if (android_files_dir) {
+    // Android: Use app-specific files directory
+    snprintf(default_model_dir, sizeof(default_model_dir), "%s/models/whisper", android_files_dir);
+    LOG_INFO("[Android] Using app files directory for models: %s", default_model_dir);
+  } else if (home) {
+    // macOS/Linux: Use home directory
     snprintf(default_model_dir, sizeof(default_model_dir), "%s/.ethervox/models/whisper", home);
+    LOG_DEBUG("Using home directory for models: %s", default_model_dir);
+  } else {
+    // Fallback: relative path
+    snprintf(default_model_dir, sizeof(default_model_dir), ".ethervox/models/whisper");
+    LOG_WARN("No platform-specific path available, using relative path");
   }
 
   // Build search paths for preferred multilingual model
@@ -325,76 +344,145 @@ int ethervox_voice_tools_init(ethervox_voice_session_t* session, void* memory) {
     }
   }
 
-  // Try to find multilingual model first
+  // Try to find multilingual model - search all candidates in priority order
   const char* model_path = NULL;
-  for (int i = 0; i < path_count; i++) {
-    FILE* test = fopen(possible_paths[i], "rb");
-    if (test) {
-      fclose(test);
-      model_path = strdup(possible_paths[i]);
-      session->model_path = (char*)model_path;
-      found_multilingual = true;
-      LOG_INFO("Found multilingual Whisper model at: %s", model_path);
-      break;
+  for (size_t m = 0; m < model_candidate_count && !found_multilingual; m++) {
+    preferred_model = model_candidates[m];
+    
+    // Rebuild paths for this candidate
+    path_count = 0;
+    
+    // PLATFORM-SPECIFIC: Add Android or default paths as highest priority
+    if (android_files_dir) {
+      // Android: Use app-specific files directory FIRST
+      if (path_count < MAX_MODEL_PATHS) {
+        snprintf(possible_paths[path_count++], ETHERVOX_FILE_MAX_PATH,
+                 "%s/models/whisper/%s", android_files_dir, preferred_model);
+        LOG_DEBUG("[Android] Added path: %s", possible_paths[path_count - 1]);
+      }
     }
-  }
-
-  // Fallback: if multilingual not found, try English-only variant
-  if (!found_multilingual) {
-    LOG_WARN("Multilingual base.bin not found, falling back to base.en.bin");
-    const char* fallback_model = "base.en.bin";
-    int fallback_count = 0;
-
-    // Rebuild paths with fallback model
-    if (has_custom_path && fallback_count < MAX_MODEL_PATHS) {
-      snprintf(possible_paths[fallback_count++], ETHERVOX_FILE_MAX_PATH, "%s/%s", custom_path,
-               fallback_model);
+    
+    if (has_custom_path) {
+      if (path_count < MAX_MODEL_PATHS) {
+        snprintf(possible_paths[path_count++], ETHERVOX_FILE_MAX_PATH, "%s/%s", custom_path,
+                 preferred_model);
+      }
     }
-
+    
     if (has_user_paths && user_paths) {
-      for (uint32_t i = 0; i < user_path_count && fallback_count < MAX_MODEL_PATHS; i++) {
+      for (uint32_t i = 0; i < user_path_count; i++) {
         if (!user_paths[i].verified)
           continue;
-        snprintf(possible_paths[fallback_count++], ETHERVOX_FILE_MAX_PATH,
-                 "%s/ethervox/models/whisper/%s", user_paths[i].path, fallback_model);
-        snprintf(possible_paths[fallback_count++], ETHERVOX_FILE_MAX_PATH,
-                 "%s/.ethervox/models/whisper/%s", user_paths[i].path, fallback_model);
+        if (path_count < MAX_MODEL_PATHS) {
+          snprintf(possible_paths[path_count++], ETHERVOX_FILE_MAX_PATH,
+                   "%s/ethervox/models/whisper/%s", user_paths[i].path, preferred_model);
+        }
+        if (path_count < MAX_MODEL_PATHS) {
+          snprintf(possible_paths[path_count++], ETHERVOX_FILE_MAX_PATH,
+                   "%s/.ethervox/models/whisper/%s", user_paths[i].path, preferred_model);
+        }
       }
     }
-
-    for (size_t i = 0;
-         i < sizeof(standard_paths) / sizeof(standard_paths[0]) && fallback_count < MAX_MODEL_PATHS;
-         i++) {
-      snprintf(possible_paths[fallback_count++], ETHERVOX_FILE_MAX_PATH, standard_paths[i],
-               fallback_model);
+    
+    for (size_t i = 0; i < sizeof(standard_paths) / sizeof(standard_paths[0]); i++) {
+      if (path_count < MAX_MODEL_PATHS) {
+        snprintf(possible_paths[path_count++], ETHERVOX_FILE_MAX_PATH, standard_paths[i],
+                 preferred_model);
+      }
     }
-
+    
     if (home) {
-      if (fallback_count < MAX_MODEL_PATHS) {
-        snprintf(possible_paths[fallback_count++], ETHERVOX_FILE_MAX_PATH,
-                 "%s/.ethervox/models/whisper/%s", home, fallback_model);
+      if (path_count < MAX_MODEL_PATHS) {
+        snprintf(possible_paths[path_count++], ETHERVOX_FILE_MAX_PATH,
+                 "%s/.ethervox/models/whisper/%s", home, preferred_model);
       }
-      if (fallback_count < MAX_MODEL_PATHS) {
-        snprintf(possible_paths[fallback_count++], ETHERVOX_FILE_MAX_PATH,
-                 "%s/ethervox/models/whisper/%s", home, fallback_model);
+      if (path_count < MAX_MODEL_PATHS) {
+        snprintf(possible_paths[path_count++], ETHERVOX_FILE_MAX_PATH,
+                 "%s/ethervox/models/whisper/%s", home, preferred_model);
       }
-      if (fallback_count < MAX_MODEL_PATHS) {
-        snprintf(possible_paths[fallback_count++], ETHERVOX_FILE_MAX_PATH,
-                 "%s/Documents/ethervox/models/whisper/%s", home, fallback_model);
+      if (path_count < MAX_MODEL_PATHS) {
+        snprintf(possible_paths[path_count++], ETHERVOX_FILE_MAX_PATH,
+                 "%s/Documents/ethervox/models/whisper/%s", home, preferred_model);
       }
     }
-
-    for (int i = 0; i < fallback_count; i++) {
+    
+    // Try to find this candidate
+    for (int i = 0; i < path_count; i++) {
       FILE* test = fopen(possible_paths[i], "rb");
       if (test) {
         fclose(test);
         model_path = strdup(possible_paths[i]);
         session->model_path = (char*)model_path;
-        LOG_INFO("Found English-only Whisper model at: %s", model_path);
+        found_multilingual = true;
+        LOG_INFO("Found multilingual Whisper model at: %s", model_path);
         break;
       }
     }
-    path_count = fallback_count;
+  }
+
+  // Fallback: if multilingual not found, try English-only variants
+  if (!found_multilingual) {
+    LOG_WARN("Multilingual models (tiny.bin, base.bin) not found, falling back to English-only variants");
+    const char* fallback_models[] = {"tiny.en.bin", "ggml-tiny.en.bin", "base.en.bin"};
+    const size_t fallback_model_count = sizeof(fallback_models) / sizeof(fallback_models[0]);
+    
+    for (size_t m = 0; m < fallback_model_count && !model_path; m++) {
+      const char* fallback_model = fallback_models[m];
+      int fallback_count = 0;
+
+      // Rebuild paths with fallback model
+      if (has_custom_path && fallback_count < MAX_MODEL_PATHS) {
+        snprintf(possible_paths[fallback_count++], ETHERVOX_FILE_MAX_PATH, "%s/%s", custom_path,
+                 fallback_model);
+      }
+
+      if (has_user_paths && user_paths) {
+        for (uint32_t i = 0; i < user_path_count && fallback_count < MAX_MODEL_PATHS; i++) {
+          if (!user_paths[i].verified)
+            continue;
+          snprintf(possible_paths[fallback_count++], ETHERVOX_FILE_MAX_PATH,
+                   "%s/ethervox/models/whisper/%s", user_paths[i].path, fallback_model);
+          snprintf(possible_paths[fallback_count++], ETHERVOX_FILE_MAX_PATH,
+                   "%s/.ethervox/models/whisper/%s", user_paths[i].path, fallback_model);
+        }
+      }
+
+      for (size_t i = 0;
+           i < sizeof(standard_paths) / sizeof(standard_paths[0]) && fallback_count < MAX_MODEL_PATHS;
+           i++) {
+        snprintf(possible_paths[fallback_count++], ETHERVOX_FILE_MAX_PATH, standard_paths[i],
+                 fallback_model);
+      }
+
+      if (home) {
+        if (fallback_count < MAX_MODEL_PATHS) {
+          snprintf(possible_paths[fallback_count++], ETHERVOX_FILE_MAX_PATH,
+                   "%s/.ethervox/models/whisper/%s", home, fallback_model);
+        }
+        if (fallback_count < MAX_MODEL_PATHS) {
+          snprintf(possible_paths[fallback_count++], ETHERVOX_FILE_MAX_PATH,
+                   "%s/ethervox/models/whisper/%s", home, fallback_model);
+        }
+        if (fallback_count < MAX_MODEL_PATHS) {
+          snprintf(possible_paths[fallback_count++], ETHERVOX_FILE_MAX_PATH,
+                   "%s/Documents/ethervox/models/whisper/%s", home, fallback_model);
+        }
+      }
+
+      for (int i = 0; i < fallback_count; i++) {
+        FILE* test = fopen(possible_paths[i], "rb");
+        if (test) {
+          fclose(test);
+          model_path = strdup(possible_paths[i]);
+          session->model_path = (char*)model_path;
+          LOG_INFO("Found English-only Whisper model at: %s", model_path);
+          break;
+        }
+      }
+      
+      path_count = fallback_count;
+      if (model_path) break;
+    }
   }
 
   if (has_user_paths && user_paths) {
@@ -595,28 +683,53 @@ int ethervox_voice_tools_start_listen(ethervox_voice_session_t* session) {
   session->is_recording = true;
 
   // Create transcript file immediately for live LLM monitoring
+  // Use platform-specific path (Android app files or macOS home directory)
+  const char* android_files_dir = ethervox_get_android_files_dir();
   const char* home = getenv("HOME");
-  if (home) {
-    char transcript_dir[512];
+  char transcript_dir[512];
+  
+  if (android_files_dir) {
+    // Android: Use app-specific files directory
+    snprintf(transcript_dir, sizeof(transcript_dir), "%s/transcripts", android_files_dir);
+    LOG_INFO("[Android] Saving transcripts to: %s", transcript_dir);
+  } else if (home) {
+    // macOS/Linux: Use home directory
     snprintf(transcript_dir, sizeof(transcript_dir), "%s/.ethervox/transcripts", home);
-    mkdir(transcript_dir, 0755);
+    LOG_INFO("[macOS] Saving transcripts to: %s", transcript_dir);
+  } else {
+    // Fallback: current directory
+    snprintf(transcript_dir, sizeof(transcript_dir), "./transcripts");
+    LOG_WARN("No platform-specific path, using ./transcripts");
+  }
+  
+  // Create directory (platform-safe)
+  int mkdir_result = mkdir(transcript_dir, 0755);
+  if (mkdir_result != 0 && errno != EEXIST) {
+    LOG_ERROR("Failed to create transcript directory %s: errno=%d", transcript_dir, errno);
+  } else {
+    LOG_INFO("Transcript directory ready: %s", transcript_dir);
+  }
 
-    time_t now = time(NULL);
-    struct tm* tm_info = localtime(&now);
-    char timestamp[64];
-    strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", tm_info);
+  time_t now = time(NULL);
+  struct tm* tm_info = localtime(&now);
+  char timestamp[64];
+  strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", tm_info);
 
-    snprintf(session->last_transcript_file, sizeof(session->last_transcript_file),
-             "%s/transcript_%s.txt", transcript_dir, timestamp);
+  snprintf(session->last_transcript_file, sizeof(session->last_transcript_file),
+           "%s/transcript_%s.txt", transcript_dir, timestamp);
 
-    // Create file with header
-    FILE* f = fopen(session->last_transcript_file, "w");
-    if (f) {
-      fprintf(f, "Voice Transcript - Recording Started: %s\n", timestamp);
-      fprintf(f, "========================================\n\n");
-      fclose(f);
-      LOG_INFO("Created live transcript file: %s", session->last_transcript_file);
-    }
+  // Create file with header
+  LOG_INFO("Attempting to create transcript file: %s", session->last_transcript_file);
+  FILE* f = fopen(session->last_transcript_file, "w");
+  if (f) {
+    fprintf(f, "Voice Transcript - Recording Started: %s\n", timestamp);
+    fprintf(f, "========================================\n\n");
+    fflush(f);  // Force write to disk
+    fclose(f);
+    LOG_INFO("✓ Created live transcript file: %s", session->last_transcript_file);
+  } else {
+    LOG_ERROR("✗ Failed to create transcript file: %s (errno=%d)", session->last_transcript_file, errno);
+    session->last_transcript_file[0] = '\0';  // Clear the path since file creation failed
   }
 
   // Start background capture thread
