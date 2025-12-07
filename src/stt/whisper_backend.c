@@ -23,6 +23,36 @@
 #define LOG_INFO(...)  ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__, __VA_ARGS__)
 #define LOG_DEBUG(...) ethervox_log(ETHERVOX_LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__, __VA_ARGS__)
 
+// ============================================================================
+// SAFETY HELPERS FOR WHISPER POINTER VALIDATION
+// ============================================================================
+
+/**
+ * Validate whisper text pointer is safe to dereference
+ * Whisper.cpp occasionally returns invalid low-memory addresses (e.g., 0x1)
+ * instead of NULL when compiled without certain optimizations
+ */
+static inline bool whisper_text_ptr_valid(const char* p) {
+  if (!p) return false;
+  uintptr_t addr = (uintptr_t)p;
+  // Treat very-low addresses as invalid (< 64KB is suspicious)
+  if (addr < 0x10000) return false;
+  return true;
+}
+
+/**
+ * Safe bounded strlen - avoids unbounded scan into potentially corrupted memory
+ * Returns 0 for NULL, actual length up to max, or max if string is longer
+ */
+static inline size_t safe_strnlen(const char* p, size_t max) {
+  if (!p) return 0;
+  return strnlen(p, max);
+}
+
+// ============================================================================
+// WHISPER BACKEND CONTEXT
+// ============================================================================
+
 /**
  * Minimal Whisper context - streaming with overlap
  */
@@ -201,15 +231,16 @@ int ethervox_stt_whisper_init(ethervox_stt_runtime_t* runtime) {
   if (!ctx) return -1;
   
   // Load model
+  LOG_INFO("Loading Whisper model from: %s", runtime->config.model_path);
   struct whisper_context_params cparams = whisper_context_default_params();
   ctx->ctx = whisper_init_from_file_with_params(runtime->config.model_path, cparams);
   if (!ctx->ctx) {
-    LOG_ERROR("Failed to load Whisper model: %s", runtime->config.model_path);
+    LOG_ERROR("Failed to load Whisper model (possibly OOM): %s", runtime->config.model_path);
     free(ctx);
     return -1;
   }
   
-  LOG_INFO("Loaded Whisper model: %s", runtime->config.model_path);
+  LOG_INFO("✅ Successfully loaded Whisper model: %s", runtime->config.model_path);
   
   // Get default params with BEAM_SEARCH strategy for better accuracy
   ctx->params = whisper_full_default_params(WHISPER_SAMPLING_BEAM_SEARCH);
@@ -353,6 +384,17 @@ int ethervox_stt_whisper_start(ethervox_stt_runtime_t* runtime) {
   if (!runtime || !runtime->backend_context) return -1;
   
   whisper_backend_context_t* ctx = (whisper_backend_context_t*)runtime->backend_context;
+  
+  // CRITICAL: Zero out buffer memory at start to ensure clean slate
+  // This prevents any carryover from previous session
+  if (ctx->audio_buffer && ctx->audio_buffer_capacity > 0) {
+    memset(ctx->audio_buffer, 0, ctx->audio_buffer_capacity * sizeof(float));
+  }
+  if (ctx->overlap_buffer && ctx->overlap_capacity > 0) {
+    memset(ctx->overlap_buffer, 0, ctx->overlap_capacity * sizeof(float));
+  }
+  
+  // Reset buffer sizes and speaker tracking
   ctx->audio_buffer_size = 0;
   ctx->overlap_size = 0;
   ctx->current_speaker = 0;  // Reset to Speaker 0 at session start
@@ -361,7 +403,13 @@ int ethervox_stt_whisper_start(ethervox_stt_runtime_t* runtime) {
   ctx->last_segment_pitch = 0.0f;
   ctx->last_segment_end_time = 0;
   
-  LOG_INFO("Whisper session started (streaming mode with 200ms overlap)");
+  // Clear duplicate detection
+  if (ctx->last_transcript) {
+    ctx->last_transcript[0] = '\0';
+  }
+  ctx->duplicate_count = 0;
+  
+  LOG_INFO("Whisper session started with clean buffers");
   return 0;
 }
 
@@ -378,6 +426,14 @@ int ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
   if (!runtime || !runtime->backend_context || !audio_buffer || !result) return -1;
   
   whisper_backend_context_t* ctx = (whisper_backend_context_t*)runtime->backend_context;
+  
+  // CRITICAL: Validate buffers are allocated before processing
+  // This can happen if stop() was called while process() is still running
+  if (!ctx->audio_buffer || !ctx->overlap_buffer || !ctx->ctx) {
+    LOG_WARN("Whisper buffers not initialized, skipping audio processing");
+    return -1;
+  }
+  
   memset(result, 0, sizeof(ethervox_stt_result_t));
   
   const float* samples = (const float*)audio_buffer->data;
@@ -541,6 +597,22 @@ int ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
   
   for (int i = 0; i < n_segments; i++) {
     const char* text = whisper_full_get_segment_text(ctx->ctx, i);
+    
+    // Validate pointer before any access (whisper.cpp bug: sometimes returns invalid low addresses)
+    if (!whisper_text_ptr_valid(text)) {
+      if (text) LOG_WARN("Invalid low-memory text pointer 0x%lx from whisper segment %d - skipping", (uintptr_t)text, i);
+      text = NULL;
+    } else {
+      // Check if string is suspiciously long or empty
+      size_t probe_len = safe_strnlen(text, 65536);
+      if (probe_len == 0) {
+        text = NULL; // Empty string
+      } else if (probe_len >= 65536) {
+        LOG_WARN("Whisper returned extremely long text for segment %d - skipping", i);
+        text = NULL;
+      }
+    }
+    
     int64_t t0 = whisper_full_get_segment_t0(ctx->ctx, i);
     int64_t t1 = whisper_full_get_segment_t1(ctx->ctx, i);
     
@@ -581,11 +653,14 @@ int ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
     last_t1 = t1;
     if (speaker_turn) has_speaker_change = true;
     
-    LOG_DEBUG("Segment %d: [%.2fs -> %.2fs] speaker_turn=%d text='%s'", 
-              i, t0/100.0f, t1/100.0f, speaker_turn, text ? text : "NULL");
+    // Don't log text content or call strlen - text pointer may be invalid
+    LOG_DEBUG("Segment %d: [%.2fs -> %.2fs] speaker_turn=%d has_text=%d", 
+              i, t0/100.0f, t1/100.0f, speaker_turn, text != NULL ? 1 : 0);
     
+    // Only add to total_len if we have valid text (after safety check)
     if (text) {
-      total_len += strlen(text) + 1;
+      size_t text_len = safe_strnlen(text, 65536);
+      total_len += text_len + 1;
       if (speaker_turn && i < n_segments - 1) {
         total_len += 20;  // Space for "[Speaker X: " markers
       }
@@ -595,18 +670,35 @@ int ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
   LOG_INFO("Total %d segments, length=%zu, time=[%.2fs -> %.2fs], speaker_changes=%d", 
            n_segments, total_len, first_t0/100.0f, last_t1/100.0f, has_speaker_change);
   
+  // Allocate transcript buffer (even if empty, we need it for duplicate detection)
+  char* transcript = (char*)calloc(total_len + 200, 1);  // Extra space for speaker markers
+  if (!transcript) {
+    free(speaker_turns);
+    free(process_buffer);
+    ctx->audio_buffer_size = 0;
+    return -1;
+  }
+  
   if (total_len > 0) {
-    char* transcript = (char*)calloc(total_len + 200, 1);  // Extra space for speaker markers
-    if (!transcript) {
-      free(speaker_turns);
-      free(process_buffer);
-      ctx->audio_buffer_size = 0;
-      return -1;
-    }
+    
+    // Track length manually to avoid strlen() on potentially corrupted data
+    size_t current_pos = 0;
     
     // Track speaker changes across this chunk
     for (int i = 0; i < n_segments; i++) {
       const char* text = whisper_full_get_segment_text(ctx->ctx, i);
+      
+      // Validate pointer before any access
+      if (!whisper_text_ptr_valid(text)) {
+        if (text) LOG_WARN("Invalid low-memory text pointer 0x%lx from whisper segment %d in transcript loop - skipping", (uintptr_t)text, i);
+        text = NULL;
+      } else {
+        size_t probe_len = safe_strnlen(text, 65536);
+        if (probe_len == 0 || probe_len >= 65536) {
+          if (probe_len >= 65536) LOG_WARN("Skipping extremely long whisper text for segment %d", i);
+          text = NULL;
+        }
+      }
       int64_t t0 = whisper_full_get_segment_t0(ctx->ctx, i);
       int64_t t1 = whisper_full_get_segment_t1(ctx->ctx, i);
       
@@ -618,21 +710,34 @@ int ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
       // Use the speaker turn flag we calculated earlier
       bool speaker_turn = speaker_turns[i];
       
-      if (text && strlen(text) > 0) {
+      if (text) {
+        size_t text_len = safe_strnlen(text, 65536);
+        if (text_len == 0) continue; // Skip empty strings
+        
         // Add space separator if not first segment in transcript
-        if (strlen(transcript) > 0) {
-          strcat(transcript, " ");
+        if (current_pos > 0) {
+          transcript[current_pos++] = ' ';
         }
         
         // Add speaker label (always show if enabled, or only on turns if disabled)
         if (ctx->show_speaker_labels || (speaker_turn && has_speaker_change)) {
-          char speaker_marker[30];
-          snprintf(speaker_marker, sizeof(speaker_marker), "[Speaker %d] ", ctx->current_speaker);
-          strcat(transcript, speaker_marker);
+          // Ensure we have space for speaker label (max 20 chars for "[Speaker 999] ")
+          if (current_pos + 20 < total_len + 200) {
+            int written = snprintf(transcript + current_pos, 30, "[Speaker %d] ", ctx->current_speaker);
+            if (written > 0 && written < 30) current_pos += written;
+          }
         }
         
-        // Add the actual text
-        strcat(transcript, text);
+        // Add the actual text using memcpy instead of strcat
+        // Ensure we don't write past buffer end
+        if (current_pos + text_len < total_len + 200) {
+          memcpy(transcript + current_pos, text, text_len);
+          current_pos += text_len;
+          transcript[current_pos] = '\0';  // Keep it null-terminated
+        } else {
+          LOG_WARN("Buffer overflow prevented: current_pos=%zu text_len=%zu total=%zu", current_pos, text_len, total_len);
+          break; // Stop adding more segments
+        }
         
         // Update speaker ID if there's a turn detected
         if (speaker_turn) {
@@ -640,14 +745,15 @@ int ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
           LOG_DEBUG("Speaker turn detected → now Speaker %d", ctx->current_speaker);
         }
       }
-    }
-    
-    // Duplicate detection: Check if this transcript matches the last one
-    if (ctx->last_transcript && strcmp(ctx->last_transcript, transcript) == 0) {
-      ctx->duplicate_count++;
-      LOG_WARN("Duplicate transcript detected (count=%d): %s", ctx->duplicate_count, transcript);
-      
-      // If we've seen this 3+ times, it's likely silence/noise - skip it
+  }
+  
+  // Use tracked length instead of calling strlen
+  size_t transcript_len = total_len > 0 ? current_pos : 0;
+  
+  // Duplicate detection: Check if this transcript matches the last one
+  if (ctx->last_transcript && strcmp(ctx->last_transcript, transcript) == 0) {
+    ctx->duplicate_count++;
+    LOG_WARN("Duplicate transcript detected (count=%d, len=%zu)", ctx->duplicate_count, transcript_len);      // If we've seen this 3+ times, it's likely silence/noise - skip it
       if (ctx->duplicate_count >= 3) {
         LOG_INFO("Skipping repeated duplicate (silence detected)");
         free(transcript);
@@ -670,11 +776,15 @@ int ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
     result->is_final = true;
     result->language = ctx->detected_language;
     
-    LOG_INFO("✅ Transcript (%s) [%.2fs-%.2fs]: %s", 
+    LOG_INFO("✅ Transcript lang=%s len=%zu [%.2fs-%.2fs]", 
              result->language, 
+             transcript_len,
              result->start_time_us/1000000.0f,
-             result->end_time_us/1000000.0f,
-             transcript);
+             result->end_time_us/1000000.0f);
+  } else {
+    // No segments - free transcript and return empty
+    LOG_DEBUG("No segments to process (total_len=0)");
+    free(transcript);
   }
   
 save_overlap:
@@ -705,15 +815,52 @@ int ethervox_stt_whisper_finalize(ethervox_stt_runtime_t* runtime, ethervox_stt_
   if (!runtime || !runtime->backend_context || !result) return -1;
   
   whisper_backend_context_t* ctx = (whisper_backend_context_t*)runtime->backend_context;
+  
+  // CRITICAL: Check if buffers are still valid (might be NULL if stop() was called)
+  if (!ctx->audio_buffer || !ctx->ctx) {
+    LOG_WARN("Finalize called but buffers already cleaned up");
+    result->text = strdup("");
+    result->is_final = true;
+    return 0;
+  }
+  
   memset(result, 0, sizeof(ethervox_stt_result_t));
   
-  // Process any remaining audio (even if less than 3 seconds)
-  if (ctx->audio_buffer_size > 16000) { // At least 1 second
-    LOG_INFO("Finalizing with %.1f seconds", (float)ctx->audio_buffer_size / 16000.0f);
-    log_audio_stats(ctx->audio_buffer, ctx->audio_buffer_size, "Finalize stats");
+  // CRITICAL: Process remaining audio WITH overlap (just like during normal processing)
+  // This ensures we don't lose context from the previous chunk
+  size_t total_samples = ctx->overlap_size + ctx->audio_buffer_size;
+  
+  if (total_samples > 8000) { // At least 0.5 seconds total
+    LOG_INFO("Finalizing with %.1f seconds total (%.1f overlap + %.1f new)", 
+             (float)total_samples / 16000.0f,
+             (float)ctx->overlap_size / 16000.0f,
+             (float)ctx->audio_buffer_size / 16000.0f);
     
-    if (whisper_full(ctx->ctx, ctx->params, ctx->audio_buffer, ctx->audio_buffer_size) == 0) {
+    // Prepare processing buffer: overlap + remaining audio (same as normal processing)
+    float* process_buffer = (float*)malloc(total_samples * sizeof(float));
+    if (!process_buffer) {
+      LOG_ERROR("Failed to allocate finalize processing buffer");
+      result->text = strdup("");
+      result->is_final = true;
+      return 0;
+    }
+    
+    // Copy overlap from previous chunk
+    if (ctx->overlap_size > 0) {
+      memcpy(process_buffer, ctx->overlap_buffer, ctx->overlap_size * sizeof(float));
+    }
+    
+    // Copy remaining audio
+    if (ctx->audio_buffer_size > 0) {
+      memcpy(process_buffer + ctx->overlap_size, ctx->audio_buffer, 
+             ctx->audio_buffer_size * sizeof(float));
+    }
+    
+    log_audio_stats(process_buffer, total_samples, "Finalize audio stats (with overlap)");
+    
+    if (whisper_full(ctx->ctx, ctx->params, process_buffer, total_samples) == 0) {
       const int n_segments = whisper_full_n_segments(ctx->ctx);
+      LOG_INFO("Finalize produced %d segment(s)", n_segments);
       
       if (n_segments > 0) {
         size_t total_len = 0;
@@ -727,9 +874,26 @@ int ethervox_stt_whisper_finalize(ethervox_stt_runtime_t* runtime, ethervox_stt_
             if (i > 0) strcat(result->text, " ");
             strcat(result->text, whisper_full_get_segment_text(ctx->ctx, i));
           }
+          LOG_INFO("Finalize extracted: '%s'", result->text);
         }
       }
+    } else {
+      LOG_WARN("Whisper finalize processing failed");
     }
+    
+    free(process_buffer);
+    
+    // CRITICAL: Clear the buffer sizes after processing
+    // Buffer memory will be zeroed by stop() function
+    ctx->audio_buffer_size = 0;
+    ctx->overlap_size = 0;
+  } else if (total_samples > 0) {
+    LOG_INFO("Finalize: Remaining audio too short (%.1fs total) - discarding", 
+             (float)total_samples / 16000.0f);
+    ctx->audio_buffer_size = 0;
+    ctx->overlap_size = 0;
+  } else {
+    LOG_INFO("Finalize: No remaining audio to process");
   }
   
   if (!result->text) {
@@ -746,8 +910,35 @@ int ethervox_stt_whisper_finalize(ethervox_stt_runtime_t* runtime, ethervox_stt_
 void ethervox_stt_whisper_stop(ethervox_stt_runtime_t* runtime) {
   if (!runtime || !runtime->backend_context) return;
   whisper_backend_context_t* ctx = (whisper_backend_context_t*)runtime->backend_context;
+  
+  // CRITICAL: Zero out buffer memory to prevent any carryover
+  if (ctx->audio_buffer && ctx->audio_buffer_capacity > 0) {
+    memset(ctx->audio_buffer, 0, ctx->audio_buffer_capacity * sizeof(float));
+  }
+  if (ctx->overlap_buffer && ctx->overlap_capacity > 0) {
+    memset(ctx->overlap_buffer, 0, ctx->overlap_capacity * sizeof(float));
+  }
+  
+  // Clear buffer sizes
   ctx->audio_buffer_size = 0;
+  ctx->overlap_size = 0;
+  
+  // Reset speaker tracking
+  ctx->current_speaker = 0;
+  ctx->first_segment = true;
+  ctx->last_segment_energy = 0.0f;
+  ctx->last_segment_pitch = 0.0f;
+  ctx->last_segment_end_time = 0;
+  
+  // Clear duplicate detection
+  if (ctx->last_transcript) {
+    ctx->last_transcript[0] = '\0';
+  }
+  ctx->duplicate_count = 0;
+  
+  LOG_INFO("Whisper buffers completely cleared and reset");
 }
+
 
 /**
  * Set language for hot-switching

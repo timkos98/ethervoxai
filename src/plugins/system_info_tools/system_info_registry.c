@@ -37,6 +37,8 @@ static int tool_system_version(const char* args_json, char** result, char** erro
              "\"patch\":%d,"
              "\"build_type\":\"%s\","
              "\"git_commit\":\"%s\","
+             "\"git_branch\":\"%s\","
+             "\"backend_version\":\"%s\","
              "\"platform\":\"%s\""
              "}",
              ETHERVOX_VERSION_STRING,
@@ -44,11 +46,9 @@ static int tool_system_version(const char* args_json, char** result, char** erro
              ETHERVOX_VERSION_MINOR,
              ETHERVOX_VERSION_PATCH,
              ETHERVOX_BUILD_TYPE,
-#ifdef ETHERVOX_GIT_COMMIT_HASH
-             ETHERVOX_GIT_COMMIT_HASH,
-#else
-             "unknown",
-#endif
+             ETHERVOX_GIT_COMMIT,
+             ETHERVOX_GIT_BRANCH,
+             ETHERVOX_BACKEND_VERSION,
 #if defined(ETHERVOX_PLATFORM_MACOS)
              "macOS"
 #elif defined(ETHERVOX_PLATFORM_LINUX)
@@ -67,13 +67,11 @@ static int tool_system_version(const char* args_json, char** result, char** erro
     );
     
     *result = strdup(response);
-    SYSINFO_LOG("Retrieved system version: %s (commit: %s)", 
+    SYSINFO_LOG("Retrieved system version: %s (commit: %s, branch: %s, backend: %s)", 
                 ETHERVOX_VERSION_STRING,
-#ifdef ETHERVOX_GIT_COMMIT_HASH
-                ETHERVOX_GIT_COMMIT_HASH
-#else
-                "unknown"
-#endif
+                ETHERVOX_GIT_COMMIT,
+                ETHERVOX_GIT_BRANCH,
+                ETHERVOX_BACKEND_VERSION
     );
     
     return 0;

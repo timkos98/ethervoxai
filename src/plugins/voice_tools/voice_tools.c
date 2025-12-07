@@ -118,13 +118,19 @@ static void* audio_capture_thread(void* arg) {
 
   while (session->is_recording && !session->stop_requested) {
     // Read audio from platform driver
+    // CRITICAL: Reset buffer size before each read to prevent buffer overflow
     audio_buf.size = buffer_capacity;
     int samples_read = ethervox_audio_read(&session->audio_runtime, &audio_buf);
 
     if (samples_read > 0) {
+      // Clamp samples_read to buffer capacity to prevent overflow
       if (samples_read > (int)buffer_capacity) {
+        LOG_WARN("Audio driver returned more samples (%d) than buffer capacity (%u) - clamping",
+                 samples_read, buffer_capacity);
         samples_read = (int)buffer_capacity;
       }
+      
+      // Set actual size for STT processing
       audio_buf.size = (uint32_t)samples_read;
 
       // Feed audio to STT - it will accumulate internally
@@ -206,8 +212,7 @@ static void* audio_capture_thread(void* arg) {
 
         ethervox_stt_result_free(&result);
       }
-
-      audio_buf.size = buffer_capacity;  // restore capacity for next read
+      // Note: buffer size is reset at the top of the loop before next read
     } else if (samples_read == 0) {
       // No audio available yet, sleep briefly
       usleep(50000);  // 50ms
@@ -777,7 +782,7 @@ int ethervox_voice_tools_stop_listen(ethervox_voice_session_t* session,
     pthread_join(*thread, NULL);
     free(thread);
     session->capture_thread = NULL;
-    LOG_INFO("Capture thread joined");
+    LOG_INFO("Capture thread joined - all audio fed to STT");
   }
 
   // Stop audio capture

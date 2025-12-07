@@ -1,6 +1,6 @@
 /**
- * @file ethervox_multiplatform_core.c
- * @brief JNI wrapper for EthervoxAI on Android
+ * @file ethervox_android_core.c
+ * @brief Android JNI wrapper for EthervoxAI
  *
  * Copyright (c) 2024-2025 EthervoxAI Team
  *
@@ -94,13 +94,17 @@ static jstring create_jstring(JNIEnv* env, const char* str) {
 // Platform Initialization
 // ===========================================================================
 
+// Track last load error code for corruption detection
+static int g_last_governor_load_error = 0;
+
 JNIEXPORT jboolean JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_loadGovernorModel(
+Java_com_droid_ethervox_1core_NativeLib_loadGovernorModel(
     JNIEnv* env, jobject thiz, jstring modelPath) {
     (void)thiz;
     
     if (!g_dialogue_engine || !g_dialogue_engine->governor) {
         LOGE("Cannot load Governor model - dialogue engine or governor not initialized");
+        g_last_governor_load_error = -1;
         return JNI_FALSE;
     }
     
@@ -113,17 +117,98 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_loadGovernorModel(
     
     (*env)->ReleaseStringUTFChars(env, modelPath, path);
     
+    // Store error code for corruption detection
+    g_last_governor_load_error = result;
+    
     if (result == 0) {
         LOGI("[JNI] Governor model loaded successfully");
         return JNI_TRUE;
     } else {
-        LOGE("Failed to load Governor model");
+        if (result == -2) {
+            LOGE("Failed to load Governor model - likely corrupted");
+        } else {
+            LOGE("Failed to load Governor model");
+        }
         return JNI_FALSE;
     }
 }
 
+JNIEXPORT jboolean JNICALL
+Java_com_droid_ethervox_1core_NativeLib_wasLastLoadCorrupted(
+    JNIEnv* env, jobject thiz) {
+    (void)env;
+    (void)thiz;
+    
+    // -2 indicates probable corruption
+    return (g_last_governor_load_error == -2) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_droid_ethervox_1core_NativeLib_unloadGovernorModel(
+    JNIEnv* env, jobject thiz) {
+    (void)env;
+    (void)thiz;
+    
+    if (!g_dialogue_engine || !g_dialogue_engine->governor) {
+        LOGE("Cannot unload Governor model - dialogue engine or governor not initialized");
+        return JNI_FALSE;
+    }
+    
+    LOGI("[JNI] Unloading Governor model to free memory");
+    
+    ethervox_governor_t* governor = (ethervox_governor_t*)g_dialogue_engine->governor;
+    int result = ethervox_governor_unload_model(governor);
+    
+    if (result == 0) {
+        LOGI("[JNI] Governor model unloaded successfully");
+        return JNI_TRUE;
+    } else {
+        LOGE("Failed to unload Governor model");
+        return JNI_FALSE;
+    }
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_droid_ethervox_1core_NativeLib_reloadGovernorModel(
+    JNIEnv* env, jobject thiz) {
+    (void)env;
+    (void)thiz;
+    
+    if (!g_dialogue_engine || !g_dialogue_engine->governor) {
+        LOGE("Cannot reload Governor model - dialogue engine or governor not initialized");
+        return JNI_FALSE;
+    }
+    
+    LOGI("[JNI] Reloading Governor model");
+    
+    ethervox_governor_t* governor = (ethervox_governor_t*)g_dialogue_engine->governor;
+    int result = ethervox_governor_reload_model(governor);
+    
+    if (result == 0) {
+        LOGI("[JNI] Governor model reloaded successfully");
+        return JNI_TRUE;
+    } else {
+        LOGE("Failed to reload Governor model");
+        return JNI_FALSE;
+    }
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_droid_ethervox_1core_NativeLib_isGovernorLoaded(
+    JNIEnv* env, jobject thiz) {
+    (void)env;
+    (void)thiz;
+    
+    if (!g_dialogue_engine || !g_dialogue_engine->governor) {
+        return JNI_FALSE;
+    }
+    
+    ethervox_governor_t* governor = (ethervox_governor_t*)g_dialogue_engine->governor;
+    return ethervox_governor_is_loaded(governor) ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT jobjectArray JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getRegisteredPlugins(
+Java_com_droid_ethervox_1core_NativeLib_getRegisteredPlugins(
     JNIEnv* env, jobject thiz) {
     
     if (!g_dialogue_engine || !g_dialogue_engine->governor_tool_registry) {
@@ -150,7 +235,7 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getRegisteredPlugins(
 }
 
 JNIEXPORT jint JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_platformInit(
+Java_com_droid_ethervox_1core_NativeLib_platformInit(
         JNIEnv* env,
         jobject thiz) {
     (void)thiz;
@@ -225,7 +310,7 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_platformInit(
 }
 
 JNIEXPORT void JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_platformCleanup(
+Java_com_droid_ethervox_1core_NativeLib_platformCleanup(
         JNIEnv* env,
         jobject thiz) {
     (void)env;
@@ -254,7 +339,7 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_platformCleanup(
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_initializeWithModel(
+Java_com_droid_ethervox_1core_NativeLib_initializeWithModel(
         JNIEnv* env,
         jobject thiz,
         jstring model_path,
@@ -329,7 +414,7 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_initializeWithModel(
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_updateLLMParams(
+Java_com_droid_ethervox_1core_NativeLib_updateLLMParams(
         JNIEnv* env,
         jobject thiz,
         jfloat temperature,
@@ -378,7 +463,7 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_updateLLMParams(
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_isLlmLoaded(
+Java_com_droid_ethervox_1core_NativeLib_isLlmLoaded(
         JNIEnv* env,
         jobject thiz) {
     (void)env;
@@ -400,7 +485,7 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_isLlmLoaded(
 }
 
 JNIEXPORT jstring JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getPlatformName(
+Java_com_droid_ethervox_1core_NativeLib_getPlatformName(
         JNIEnv* env,
         jobject thiz) {
     (void)thiz;
@@ -414,7 +499,7 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getPlatformName(
 // ===========================================================================
 
 JNIEXPORT jint JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_audioInit(
+Java_com_droid_ethervox_1core_NativeLib_audioInit(
         JNIEnv* env,
         jobject thiz,
         jint sample_rate,
@@ -452,7 +537,7 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_audioInit(
 }
 
 JNIEXPORT jint JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_audioStartCapture(
+Java_com_droid_ethervox_1core_NativeLib_audioStartCapture(
         JNIEnv* env,
         jobject thiz) {
     (void)env;
@@ -474,7 +559,7 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_audioStartCapture(
 }
 
 JNIEXPORT jint JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_audioStopCapture(
+Java_com_droid_ethervox_1core_NativeLib_audioStopCapture(
         JNIEnv* env,
         jobject thiz) {
     (void)env;
@@ -490,7 +575,7 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_audioStopCapture(
 }
 
 JNIEXPORT void JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_audioCleanup(
+Java_com_droid_ethervox_1core_NativeLib_audioCleanup(
         JNIEnv* env,
         jobject thiz) {
     (void)env;
@@ -509,7 +594,7 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_audioCleanup(
 // ===========================================================================
 
 JNIEXPORT jint JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_wakeWordInit(
+Java_com_droid_ethervox_1core_NativeLib_wakeWordInit(
         JNIEnv* env,
         jobject thiz,
         jstring wake_word,
@@ -549,7 +634,7 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_wakeWordInit(
 }
 
 JNIEXPORT void JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_wakeWordCleanup(
+Java_com_droid_ethervox_1core_NativeLib_wakeWordCleanup(
         JNIEnv* env,
         jobject thiz) {
     (void)env;
@@ -568,7 +653,7 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_wakeWordCleanup(
 // ===========================================================================
 
 JNIEXPORT jint JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_sttInit(
+Java_com_droid_ethervox_1core_NativeLib_sttInit(
         JNIEnv* env,
         jobject thiz,
         jstring model_path,
@@ -611,7 +696,7 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_sttInit(
 }
 
 JNIEXPORT jint JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_sttStart(
+Java_com_droid_ethervox_1core_NativeLib_sttStart(
         JNIEnv* env,
         jobject thiz) {
     (void)env;
@@ -633,7 +718,7 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_sttStart(
 }
 
 JNIEXPORT void JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_sttCleanup(
+Java_com_droid_ethervox_1core_NativeLib_sttCleanup(
         JNIEnv* env,
         jobject thiz) {
     (void)env;
@@ -652,7 +737,7 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_sttCleanup(
 // ===========================================================================
 
 JNIEXPORT jstring JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_processDialogue(
+Java_com_droid_ethervox_1core_NativeLib_processDialogue(
         JNIEnv* env,
         jobject thiz,
         jstring user_text,
@@ -807,7 +892,7 @@ static void native_governor_progress_callback(
 }
 
 JNIEXPORT void JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_processDialogueStreamingNative(
+Java_com_droid_ethervox_1core_NativeLib_processDialogueStreamingNative(
         JNIEnv* env,
         jobject thiz,
         jstring user_text,
@@ -917,7 +1002,7 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_processDialogueStreamingN
 }
 
 JNIEXPORT void JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_cancelProcessing(
+Java_com_droid_ethervox_1core_NativeLib_cancelProcessing(
         JNIEnv* env,
         jobject thiz) {
     (void)env;
@@ -955,7 +1040,7 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_cancelProcessing(
 }
 
 JNIEXPORT jint JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_setDialogueLanguage(
+Java_com_droid_ethervox_1core_NativeLib_setDialogueLanguage(
         JNIEnv* env,
         jobject thiz,
         jstring language) {
@@ -980,7 +1065,7 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_setDialogueLanguage(
 }
 
 JNIEXPORT jstring JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getDialogueLanguage(
+Java_com_droid_ethervox_1core_NativeLib_getDialogueLanguage(
         JNIEnv* env,
         jobject thiz) {
     (void)thiz;
@@ -999,7 +1084,7 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getDialogueLanguage(
 // ===========================================================================
 
 JNIEXPORT jstring JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_stringFromJNI(
+Java_com_droid_ethervox_1core_NativeLib_stringFromJNI(
         JNIEnv* env,
         jobject thiz) {
     (void)thiz;
@@ -1010,7 +1095,7 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_stringFromJNI(
 }
 
 JNIEXPORT jstring JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getVersion(
+Java_com_droid_ethervox_1core_NativeLib_getVersion(
         JNIEnv* env,
         jobject thiz) {
     (void)thiz;
@@ -1018,19 +1103,16 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getVersion(
 }
 
 JNIEXPORT jstring JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getBackendVersion(
+Java_com_droid_ethervox_1core_NativeLib_getBackendVersion(
         JNIEnv* env,
         jobject thiz) {
     (void)thiz;
-#ifdef ETHERVOX_BACKEND_VERSION
+    // ETHERVOX_BACKEND_VERSION is guaranteed to be defined by CMake
     return create_jstring(env, ETHERVOX_BACKEND_VERSION);
-#else
-    return create_jstring(env, "unknown");
-#endif
 }
 
 JNIEXPORT jstring JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getActiveTimerStatus(
+Java_com_droid_ethervox_1core_NativeLib_getActiveTimerStatus(
         JNIEnv* env,
         jobject thiz) {
     (void)thiz;
@@ -1046,7 +1128,7 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getActiveTimerStatus(
 }
 
 JNIEXPORT jobject JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getDefaultLlmConfig(
+Java_com_droid_ethervox_1core_NativeLib_getDefaultLlmConfig(
         JNIEnv* env,
         jobject thiz) {
     (void)thiz;
@@ -1055,7 +1137,7 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getDefaultLlmConfig(
     ethervox_llm_config_t config = ethervox_dialogue_get_default_llm_config();
 
     // Find the LlmConfig class
-    jclass llmConfigClass = (*env)->FindClass(env, "com/droid/ethervox_multiplatform_core/LlmConfig");
+    jclass llmConfigClass = (*env)->FindClass(env, "com/droid/ethervox_core/LlmConfig");
     if (llmConfigClass == NULL) {
         return NULL;
     }
@@ -1079,7 +1161,7 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getDefaultLlmConfig(
 }
 
 JNIEXPORT jobjectArray JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getSupportedLanguages(
+Java_com_droid_ethervox_1core_NativeLib_getSupportedLanguages(
         JNIEnv* env,
         jobject thiz) {
     (void)thiz;
@@ -1112,7 +1194,7 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getSupportedLanguages(
 // ===========================================================================
 
 JNIEXPORT void JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_setMemoryStorageDir(
+Java_com_droid_ethervox_1core_NativeLib_setMemoryStorageDir(
     JNIEnv* env, jobject thiz, jstring storage_dir) {
     (void)thiz;
     
@@ -1149,13 +1231,13 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_setMemoryStorageDir(
 }
 
 JNIEXPORT void JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_setDebugMode(JNIEnv* env, jobject thiz, jboolean enabled) {
+Java_com_droid_ethervox_1core_NativeLib_setDebugMode(JNIEnv* env, jobject thiz, jboolean enabled) {
     g_ethervox_debug_enabled = enabled ? 1 : 0;
     LOGI("Debug mode %s", g_ethervox_debug_enabled ? "enabled" : "disabled");
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getDebugMode(JNIEnv* env, jobject thiz) {
+Java_com_droid_ethervox_1core_NativeLib_getDebugMode(JNIEnv* env, jobject thiz) {
     return (jboolean)(g_ethervox_debug_enabled ? JNI_TRUE : JNI_FALSE);
 }
 
@@ -1196,7 +1278,7 @@ static void java_log_callback_wrapper(int level, const char* tag, const char* me
 }
 
 JNIEXPORT void JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_setLogCallback(
+Java_com_droid_ethervox_1core_NativeLib_setLogCallback(
     JNIEnv* env, jobject thiz, jobject callback) {
     
     // Store JavaVM reference if not already stored
@@ -1234,7 +1316,7 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_setLogCallback(
 }
 
 JNIEXPORT jobject JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getLlamaPerformanceMetrics(
+Java_com_droid_ethervox_1core_NativeLib_getLlamaPerformanceMetrics(
     JNIEnv* env, jobject thiz) {
     (void)thiz;
     
@@ -1271,7 +1353,7 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_getLlamaPerformanceMetric
     }
     
     // Create Java object to return metrics
-    jclass metricsClass = (*env)->FindClass(env, "com/droid/ethervox_multiplatform_core/LlamaPerformanceMetrics");
+    jclass metricsClass = (*env)->FindClass(env, "com/droid/ethervox_core/LlamaPerformanceMetrics");
     if (!metricsClass) {
         LOGE("Failed to find LlamaPerformanceMetrics class");
         return NULL;
@@ -1332,7 +1414,7 @@ const char* ethervox_get_android_files_dir(void) {
 }
 
 JNIEXPORT void JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_setAndroidFilesDir(
+Java_com_droid_ethervox_1core_NativeLib_setAndroidFilesDir(
     JNIEnv* env, jobject thiz, jstring filesDir) {
     (void)thiz;
     
@@ -1354,7 +1436,7 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_setAndroidFilesDir(
 }
 
 JNIEXPORT jint JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_startVoiceTranscription(
+Java_com_droid_ethervox_1core_NativeLib_startVoiceTranscription(
     JNIEnv* env, jobject thiz) {
     (void)env;
     (void)thiz;
@@ -1421,7 +1503,7 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_startVoiceTranscription(
 }
 
 JNIEXPORT jstring JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_stopVoiceTranscription(
+Java_com_droid_ethervox_1core_NativeLib_stopVoiceTranscription(
     JNIEnv* env, jobject thiz) {
     (void)thiz;
     
@@ -1445,11 +1527,43 @@ Java_com_droid_ethervox_1multiplatform_1core_NativeLib_stopVoiceTranscription(
     }
     
     LOGI("Transcription completed: %s", transcript);
-    return create_jstring(env, transcript);
+    
+    // CRITICAL: Copy the transcript to Java string immediately
+    // The transcript pointer points to g_voice_session->full_transcript buffer
+    // which will be reused on the next recording session
+    jstring result = create_jstring(env, transcript);
+    
+    // Clear the session transcript buffer to prevent it from being returned again
+    // This must be done AFTER creating the Java string
+    if (g_voice_session->full_transcript) {
+        g_voice_session->full_transcript[0] = '\0';
+        g_voice_session->transcript_len = 0;
+        g_voice_session->segment_count = 0;
+    }
+    
+    return result;
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_droid_ethervox_1core_NativeLib_getLastTranscriptFilePath(
+    JNIEnv* env, jobject thiz) {
+    (void)thiz;
+    
+    if (!g_voice_session) {
+        LOGE("Voice session not initialized");
+        return NULL;
+    }
+    
+    if (g_voice_session->last_transcript_file[0] == '\0') {
+        LOGI("No transcript file available");
+        return NULL;
+    }
+    
+    return create_jstring(env, g_voice_session->last_transcript_file);
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_droid_ethervox_1multiplatform_1core_NativeLib_isVoiceTranscribing(
+Java_com_droid_ethervox_1core_NativeLib_isVoiceTranscribing(
     JNIEnv* env, jobject thiz) {
     (void)env;
     (void)thiz;

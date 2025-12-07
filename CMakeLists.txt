@@ -158,12 +158,12 @@ elseif(TARGET_PLATFORM STREQUAL "ANDROID")
     set(ETHERVOX_PLATFORM_ANDROID 1)
     set(ETHERVOX_PLATFORM_MOBILE 1)
     
-    # Architecture-specific optimizations for Android - MAXIMUM PERFORMANCE
+    # Architecture-specific optimizations for Android - SAFE BASELINE
     if(ANDROID_ABI STREQUAL "arm64-v8a")
-        # ARM64 NEON optimizations with aggressive flags
-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Ofast -fno-finite-math-only -march=armv8-a+fp+simd+crypto -mtune=cortex-a76")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Ofast -fno-finite-math-only -march=armv8-a+fp+simd+crypto -mtune=cortex-a76")
-        message(STATUS "Enabled MAXIMUM ARM64 NEON optimizations for ${ANDROID_ABI}")
+        # ARM64 baseline optimizations - disabled SIMD/crypto to fix SIGILL crash
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -fno-finite-math-only -march=armv8-a")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -fno-finite-math-only -march=armv8-a")
+        message(STATUS "Enabled SAFE ARM64 baseline optimizations for ${ANDROID_ABI}")
     elseif(ANDROID_ABI STREQUAL "x86_64")
         # x86_64 AVX optimizations - maximum performance
         set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Ofast -fno-finite-math-only -march=x86-64-v3 -mtune=generic")
@@ -273,10 +273,10 @@ if(WITH_LLAMA AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/llama.cpp")
         # Future: Enable with proper Android Vulkan SDK integration
         set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
         
-        # Enable NEON for ARM processors
+        # Disable NEON for ARM processors to fix SIGILL crash
         if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm" OR CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR ANDROID_ABI STREQUAL "arm64-v8a")
-            set(GGML_CPU_ARM_NEON ON CACHE BOOL "" FORCE)
-            message(STATUS "Enabled ARM NEON optimizations for llama.cpp")
+            set(GGML_CPU_ARM_NEON OFF CACHE BOOL "" FORCE)
+            message(STATUS "Disabled ARM NEON optimizations for llama.cpp (fixing SIGILL crash)")
         endif()
         
         # Android 15+ 16KB page size compatibility - apply to llama.cpp libraries
@@ -319,10 +319,10 @@ if(WITH_WHISPER AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/whisper.cpp")
         set(WHISPER_CLBLAST OFF CACHE BOOL "" FORCE)
         set(WHISPER_OPENBLAS OFF CACHE BOOL "" FORCE)
         
-        # Enable NEON for ARM processors
+        # Disable NEON for ARM processors to fix SIGILL crash
         if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm" OR CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR ANDROID_ABI STREQUAL "arm64-v8a")
-            set(GGML_CPU_ARM_NEON ON CACHE BOOL "" FORCE)
-            message(STATUS "Enabled ARM NEON optimizations for whisper.cpp")
+            set(GGML_CPU_ARM_NEON OFF CACHE BOOL "" FORCE)
+            message(STATUS "Disabled ARM NEON optimizations for whisper.cpp (fixing SIGILL crash)")
         endif()
         
         # Android 15+ 16KB page size compatibility
@@ -468,7 +468,7 @@ set(ETHERVOXAI_SOURCES ${COMMON_SOURCES} ${ETHERVOXAI_CORE_SOURCES} ${PLATFORM_S
 
 # Add JNI wrapper for Android
 if(ANDROID)
-    list(APPEND ETHERVOXAI_SOURCES ethervox_multiplatform_core.c)
+    list(APPEND ETHERVOXAI_SOURCES src/platform/ethervox_android_core.c)
 endif()
 
 # Debug: Print sources being compiled

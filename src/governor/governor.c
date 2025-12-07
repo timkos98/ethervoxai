@@ -17,9 +17,11 @@
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
+#include <errno.h>
 
 #if defined(ETHERVOX_WITH_LLAMA) && defined(LLAMA_CPP_AVAILABLE) && LLAMA_CPP_AVAILABLE
 #include <llama.h>
+#include <ggml.h>
 #define LLAMA_HEADER_AVAILABLE 1
 #else
 #define LLAMA_HEADER_AVAILABLE 0
@@ -27,6 +29,47 @@
 
 #define GOV_LOG(...) ETHERVOX_LOGI(__VA_ARGS__)
 #define GOV_ERROR(...) ETHERVOX_LOGE(__VA_ARGS__)
+
+// Global flag to track llama backend initialization (should only happen once per process)
+static bool g_llama_backend_initialized = false;
+
+// Global flag to detect model corruption from llama.cpp error messages
+static bool g_model_corruption_detected = false;
+
+// GGML log callback to capture llama.cpp errors
+static void governor_ggml_log_callback(enum ggml_log_level level, const char * text, void * user_data) {
+    (void)user_data;
+    // Remove trailing newline if present
+    size_t len = strlen(text);
+    char* clean_text = (char*)alloca(len + 1);
+    strcpy(clean_text, text);
+    if (len > 0 && clean_text[len - 1] == '\n') {
+        clean_text[len - 1] = '\0';
+    }
+    
+    // Detect corruption in error messages
+    if (level == GGML_LOG_LEVEL_ERROR) {
+        if (strstr(clean_text, "corrupted") != NULL || 
+            strstr(clean_text, "incomplete") != NULL ||
+            strstr(clean_text, "not within the file bounds") != NULL) {
+            g_model_corruption_detected = true;
+            GOV_ERROR("[llama.cpp] CORRUPTION DETECTED: %s", clean_text);
+        } else {
+            GOV_ERROR("[llama.cpp] %s", clean_text);
+        }
+    } else if (level == GGML_LOG_LEVEL_WARN) {
+        GOV_LOG("[llama.cpp WARN] %s", clean_text);
+    } else {
+        GOV_LOG("[llama.cpp] %s", clean_text);
+    }
+}
+
+// Progress callback for model loading
+static bool governor_load_progress_callback(float progress, void * user_data) {
+    (void)user_data;
+    GOV_LOG("[Governor] Model load progress: %.1f%%", progress * 100.0f);
+    return true;  // Continue loading
+}
 
 /**
  * Internal state for the Governor
@@ -379,25 +422,126 @@ int ethervox_governor_load_model(ethervox_governor_t* governor, const char* mode
         governor->current_kv_pos = 0;
     }
     
+    // Clear corruption flag before attempting load
+    g_model_corruption_detected = false;
+    
     GOV_LOG("[Governor] Loading model: %s", model_path);
     
     // Auto-detect chat template from model path
     governor->chat_template = chat_template_get(CHAT_TEMPLATE_AUTO, model_path);
     GOV_LOG("[Governor] Detected chat template type: %d", governor->chat_template->type);
     
-    // Initialize llama.cpp backend
-    llama_backend_init();
+    // Initialize llama.cpp backend (only once per process)
+    if (!g_llama_backend_initialized) {
+        GOV_LOG("[Governor] Initializing llama.cpp backend");
+        // Set up log callback to capture llama.cpp errors
+        ggml_log_set(governor_ggml_log_callback, NULL);
+        
+        // Enable verbose llama.cpp logging
+        llama_log_set(governor_ggml_log_callback, NULL);
+        
+        llama_backend_init();
+        
+        // CRITICAL: Load ggml backends (CPU, etc.)
+        GOV_LOG("[Governor] Loading ggml backends...");
+        ggml_backend_load_all();
+        int backend_count = ggml_backend_reg_count();
+        GOV_LOG("[Governor] Loaded %d ggml backends", backend_count);
+        
+        if (backend_count == 0) {
+            GOV_ERROR("[Governor] FATAL: No backends loaded! Cannot load models.");
+            return -1;
+        }
+        
+        g_llama_backend_initialized = true;
+    } else {
+        GOV_LOG("[Governor] llama.cpp backend already initialized, skipping");
+    }
     
-    // Model params - Use config.h defaults
+    // Model params - Use config.h defaults (platform-specific)
     struct llama_model_params model_params = llama_model_default_params();
     model_params.n_gpu_layers = ETHERVOX_GOVERNOR_GPU_LAYERS;
     model_params.use_mmap = ETHERVOX_GOVERNOR_USE_MMAP;
     model_params.use_mlock = false;  // Don't lock memory (let OS manage)
+    model_params.progress_callback = governor_load_progress_callback;
+    model_params.progress_callback_user_data = NULL;
+    
+    GOV_LOG("[Governor] Model params: n_gpu_layers=%d, use_mmap=%d", model_params.n_gpu_layers, model_params.use_mmap);
+    
+    // Verify file exists and is readable before trying to load
+    FILE* test_file = fopen(model_path, "rb");
+    if (!test_file) {
+        GOV_ERROR("Cannot open model file: %s (errno: %d - %s)", model_path, errno, strerror(errno));
+        return -1;
+    }
+    
+    // Get file size
+    fseek(test_file, 0, SEEK_END);
+    long file_size = ftell(test_file);
+    fseek(test_file, 0, SEEK_SET);
+    fclose(test_file);
+    
+    GOV_LOG("[Governor] Model file accessible: %ld bytes", file_size);
+    
+    // Double-check all parameters before loading
+    GOV_LOG("[Governor] Final check before load:");
+    GOV_LOG("  - model_path: %s", model_path);
+    GOV_LOG("  - n_gpu_layers: %d", model_params.n_gpu_layers);
+    GOV_LOG("  - use_mmap: %d", model_params.use_mmap);
+    GOV_LOG("  - use_mlock: %d", model_params.use_mlock);
+    GOV_LOG("  - vocab_only: %d", model_params.vocab_only);
+    GOV_LOG("  - check_tensors: %d", model_params.check_tensors);
     
     // Load model
+    // Additional debug: Check file one more time before load
+    FILE* f_test = fopen(model_path, "rb");
+    if (!f_test) {
+        GOV_ERROR("[Governor] CRITICAL: Cannot open file just before llama load: %s", strerror(errno));
+        return -1;
+    }
+    fclose(f_test);
+    GOV_LOG("[Governor] File test just before load: SUCCESS");
+    
+    // Check backend count one more time
+    int backend_count_preload = ggml_backend_reg_count();
+    GOV_LOG("[Governor] Backend count just before load: %d", backend_count_preload);
+    
+    if (backend_count_preload == 0) {
+        GOV_ERROR("[Governor] FATAL: Backends disappeared before load!");
+        return -1;
+    }
+    
+    GOV_LOG("[Governor] About to call llama_model_load_from_file...");
+    GOV_LOG("[Governor] Path: %s", model_path);
+    GOV_LOG("[Governor] Model params address: %p", (void*)&model_params);
+    
     governor->llm_model = llama_model_load_from_file(model_path, model_params);
+    
+    GOV_LOG("[Governor] llama_model_load_from_file returned: %p", (void*)governor->llm_model);
+    
+    if (!governor->llm_model) {
+        // Check if backends still there after failed load
+        int backend_count_postfail = ggml_backend_reg_count();
+        GOV_ERROR("[Governor] Load failed, backend count after: %d", backend_count_postfail);
+    }
+    
     if (!governor->llm_model) {
         GOV_ERROR("Failed to load model from %s", model_path);
+        GOV_ERROR("Model params used: n_gpu_layers=%d, use_mmap=%d, use_mlock=%d", 
+                  model_params.n_gpu_layers, model_params.use_mmap, model_params.use_mlock);
+        
+        // Try to understand why it failed
+        GOV_ERROR("Possible reasons:");
+        GOV_ERROR("  1. Incompatible GGUF version");
+        GOV_ERROR("  2. Corrupted model file");
+        GOV_ERROR("  3. Insufficient memory");
+        GOV_ERROR("  4. Missing backend support");
+        
+        // Return -2 if corruption was detected, -1 otherwise
+        if (g_model_corruption_detected) {
+            GOV_ERROR("[Governor] Model corruption detected - returning error code -2");
+            return -2;
+        }
         return -1;
     }
     
@@ -551,6 +695,91 @@ int ethervox_governor_load_model(ethervox_governor_t* governor, const char* mode
     
     return 0;
 #endif
+}
+
+/**
+ * Unload the Governor model to free memory
+ */
+int ethervox_governor_unload_model(ethervox_governor_t* governor) {
+    if (!governor) return -1;
+    
+    if (!governor->llm_loaded) {
+        GOV_LOG("[Governor] Model already unloaded");
+        return 0; // Already unloaded, success
+    }
+    
+#if !defined(ETHERVOX_WITH_LLAMA) || !LLAMA_HEADER_AVAILABLE
+    GOV_ERROR("llama.cpp not available");
+    return -1;
+#else
+    GOV_LOG("[Governor] Unloading model to free memory (keeping model path for reload)");
+    
+    // Free LLM context and model
+    if (governor->llm_ctx) {
+        llama_free(governor->llm_ctx);
+        governor->llm_ctx = NULL;
+    }
+    if (governor->llm_model) {
+        llama_model_free(governor->llm_model);
+        governor->llm_model = NULL;
+    }
+    
+    // Free pre-tokenized wrappers
+    if (governor->tool_result_prefix_tokens) {
+        free(governor->tool_result_prefix_tokens);
+        governor->tool_result_prefix_tokens = NULL;
+        governor->tool_result_prefix_len = 0;
+    }
+    if (governor->tool_result_suffix_tokens) {
+        free(governor->tool_result_suffix_tokens);
+        governor->tool_result_suffix_tokens = NULL;
+        governor->tool_result_suffix_len = 0;
+    }
+    
+    // Keep model_path for reload, but mark as unloaded
+    governor->llm_loaded = false;
+    governor->system_prompt_token_count = 0;
+    governor->current_kv_pos = 0;
+    
+    // Clear conversation history since KV cache is gone
+    cleanup_conversation_history(&governor->conversation_history);
+    init_conversation_history(&governor->conversation_history, 32);
+    governor->turn_counter = 0;
+    
+    GOV_LOG("[Governor] Model unloaded successfully (path preserved for reload)");
+    
+    return 0;
+#endif
+}
+
+/**
+ * Reload the Governor model using the previously saved model path
+ */
+int ethervox_governor_reload_model(ethervox_governor_t* governor) {
+    if (!governor) return -1;
+    
+    if (governor->llm_loaded) {
+        GOV_LOG("[Governor] Model already loaded");
+        return 0; // Already loaded, success
+    }
+    
+    if (!governor->model_path) {
+        GOV_ERROR("[Governor] Cannot reload - no previous model path saved");
+        return -1;
+    }
+    
+    GOV_LOG("[Governor] Reloading model from: %s", governor->model_path);
+    
+    // Use the existing load_model function with the saved path
+    return ethervox_governor_load_model(governor, governor->model_path);
+}
+
+/**
+ * Check if the Governor model is currently loaded
+ */
+bool ethervox_governor_is_loaded(ethervox_governor_t* governor) {
+    if (!governor) return false;
+    return governor->llm_loaded;
 }
 
 /**

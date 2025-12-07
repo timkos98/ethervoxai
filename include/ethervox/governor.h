@@ -243,6 +243,31 @@ int ethervox_governor_load_model(
 );
 
 /**
+ * Unload the Governor model to free memory
+ * Keeps the Governor structure intact so it can be reloaded later
+ * 
+ * @param governor Governor instance
+ * @return 0 on success, negative on error
+ */
+int ethervox_governor_unload_model(ethervox_governor_t* governor);
+
+/**
+ * Reload the Governor model using the previously saved model path
+ * 
+ * @param governor Governor instance
+ * @return 0 on success, negative on error
+ */
+int ethervox_governor_reload_model(ethervox_governor_t* governor);
+
+/**
+ * Check if the Governor model is currently loaded
+ * 
+ * @param governor Governor instance
+ * @return true if model is loaded, false otherwise
+ */
+bool ethervox_governor_is_loaded(ethervox_governor_t* governor);
+
+/**
  * Execute user query with tool orchestration
  * 
  * @param governor Governor instance

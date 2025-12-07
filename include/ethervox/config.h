@@ -304,7 +304,11 @@ extern "C" {
 #endif
 
 #ifndef ETHERVOX_GOVERNOR_USE_MMAP
-#define ETHERVOX_GOVERNOR_USE_MMAP false  // Original: load into RAM
+#ifdef __ANDROID__
+#define ETHERVOX_GOVERNOR_USE_MMAP true  // Android: use mmap for memory efficiency
+#else
+#define ETHERVOX_GOVERNOR_USE_MMAP false  // Desktop: load into RAM (iOS compatibility consideration)
+#endif
 #endif
 
 #ifndef ETHERVOX_GOVERNOR_KV_CACHE_TYPE
