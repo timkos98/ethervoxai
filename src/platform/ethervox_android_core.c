@@ -25,6 +25,9 @@
 #include "ethervox/voice_tools.h"
 #include "ethervox/platform.h"
 #include "ethervox/config.h"
+#include "ethervox/tool_prompt_optimizer.h"
+#include "ethervox/integration_tests.h"
+#include "ethervox/llm_tool_tests.h"
 
 #if ETHERVOX_WITH_LLAMA && LLAMA_CPP_AVAILABLE
 #include "llama.h"
@@ -78,6 +81,9 @@ static ethervox_stt_runtime_t* g_stt_runtime = NULL;
 static ethervox_platform_t* g_platform = NULL;
 static ethervox_dialogue_engine_t* g_dialogue_engine = NULL;
 static ethervox_memory_store_t* g_memory_store = NULL;
+
+// Android-specific files directory
+static char g_android_files_dir[512] = {0};
 
 // ===========================================================================
 // Utility Functions
@@ -232,6 +238,156 @@ Java_com_droid_ethervox_1core_NativeLib_getRegisteredPlugins(
     }
     
     return result;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_droid_ethervox_1core_NativeLib_optimizeToolPrompts(
+    JNIEnv* env, jobject thiz, jstring modelPath) {
+    (void)thiz;
+    
+    if (!g_dialogue_engine || !g_dialogue_engine->governor) {
+        LOGE("Governor not loaded - cannot optimize tool prompts");
+        return -1;
+    }
+    
+    const char* model_path = (*env)->GetStringUTFChars(env, modelPath, NULL);
+    if (!model_path) {
+        LOGE("Failed to get model path string");
+        return -1;
+    }
+    
+    ethervox_governor_t* governor = (ethervox_governor_t*)g_dialogue_engine->governor;
+    int result = ethervox_optimize_tool_prompts(governor, model_path);
+    
+    (*env)->ReleaseStringUTFChars(env, modelPath, model_path);
+    
+    if (result == 0) {
+        LOGI("Tool prompt optimization completed successfully");
+    } else {
+        LOGE("Tool prompt optimization failed with code: %d", result);
+    }
+    
+    return result;
+}
+
+JNIEXPORT jobject JNICALL
+Java_com_droid_ethervox_1core_NativeLib_loadOptimizedPrompts(
+    JNIEnv* env, jobject thiz, jstring modelPath) {
+    (void)thiz;
+    
+    const char* model_path = (*env)->GetStringUTFChars(env, modelPath, NULL);
+    if (!model_path) {
+        LOGE("Failed to get model path string");
+        return NULL;
+    }
+    
+    // Allocate buffers for instruction and examples
+    char instruction[4096] = {0};
+    char examples[8192] = {0};
+    
+    int result = ethervox_load_optimized_prompts(
+        model_path,
+        instruction,
+        sizeof(instruction),
+        examples,
+        sizeof(examples)
+    );
+    
+    (*env)->ReleaseStringUTFChars(env, modelPath, model_path);
+    
+    if (result != 0) {
+        // No optimized prompts found
+        return NULL;
+    }
+    
+    // Create OptimizedPrompts object
+    jclass optimizedPromptsClass = (*env)->FindClass(env, "com/droid/ethervox_core/OptimizedPrompts");
+    if (!optimizedPromptsClass) {
+        LOGE("Failed to find OptimizedPrompts class");
+        return NULL;
+    }
+    
+    jmethodID constructor = (*env)->GetMethodID(env, optimizedPromptsClass, "<init>", 
+                                                "(Ljava/lang/String;Ljava/lang/String;)V");
+    if (!constructor) {
+        LOGE("Failed to find OptimizedPrompts constructor");
+        return NULL;
+    }
+    
+    jstring instructionStr = (*env)->NewStringUTF(env, instruction);
+    jstring examplesStr = (*env)->NewStringUTF(env, examples);
+    
+    jobject optimizedPrompts = (*env)->NewObject(env, optimizedPromptsClass, constructor,
+                                                 instructionStr, examplesStr);
+    
+    (*env)->DeleteLocalRef(env, instructionStr);
+    (*env)->DeleteLocalRef(env, examplesStr);
+    (*env)->DeleteLocalRef(env, optimizedPromptsClass);
+    
+    return optimizedPrompts;
+}
+
+/**
+ * Run comprehensive integration tests
+ */
+JNIEXPORT void JNICALL
+Java_com_droid_ethervox_1core_NativeLib_runIntegrationTests(
+        JNIEnv* env,
+        jobject thiz) {
+    (void)env;
+    (void)thiz;
+    
+    LOGI("Running integration tests...");
+    run_integration_tests();
+    
+    // Log completion with test reports path
+    if (g_android_files_dir[0] != '\0') {
+        LOGI("Integration tests complete. Reports saved to: %s/tests/", g_android_files_dir);
+    } else {
+        LOGI("Integration tests complete");
+    }
+}
+
+/**
+ * Run LLM tool usage tests
+ */
+JNIEXPORT void JNICALL
+Java_com_droid_ethervox_1core_NativeLib_runLlmToolTests(
+        JNIEnv* env,
+        jobject thiz,
+        jstring modelPath,
+        jboolean verbose) {
+    (void)thiz;
+    
+    if (!g_dialogue_engine || !g_dialogue_engine->governor) {
+        LOGE("Governor not loaded - cannot run LLM tool tests");
+        return;
+    }
+    
+    if (!g_memory_store) {
+        LOGE("Memory store not initialized - cannot run LLM tool tests");
+        return;
+    }
+    
+    const char* model_path_str = (*env)->GetStringUTFChars(env, modelPath, NULL);
+    if (!model_path_str) {
+        LOGE("Failed to get model path string");
+        return;
+    }
+    
+    ethervox_governor_t* governor = (ethervox_governor_t*)g_dialogue_engine->governor;
+    
+    LOGI("Running LLM tool tests (verbose=%d)...", verbose);
+    run_llm_tool_tests(governor, g_memory_store, model_path_str, (bool)verbose);
+    
+    // Log completion with test reports path
+    if (g_android_files_dir[0] != '\0') {
+        LOGI("LLM tool tests complete. Reports saved to: %s/tests/", g_android_files_dir);
+    } else {
+        LOGI("LLM tool tests complete");
+    }
+    
+    (*env)->ReleaseStringUTFChars(env, modelPath, model_path_str);
 }
 
 JNIEXPORT jint JNICALL
@@ -1398,7 +1554,6 @@ Java_com_droid_ethervox_1core_NativeLib_getLlamaPerformanceMetrics(
 
 // Global voice session state for transcription
 static ethervox_voice_session_t* g_voice_session = NULL;
-static char g_android_files_dir[512] = {0};
 
 /**
  * Get Android-specific files directory (set from Kotlin)

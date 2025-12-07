@@ -20,6 +20,7 @@
 #include "ethervox/compute_tools.h"
 #include "ethervox/file_tools.h"
 #include "ethervox/logging.h"
+#include "ethervox/platform.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -28,6 +29,15 @@
 #include <setjmp.h>
 #include <sys/time.h>
 #include <sys/stat.h>
+#include <errno.h>
+
+// Platform-specific logging
+#ifdef __ANDROID__
+#include <android/log.h>
+#define LLM_TEST_LOG(fmt, ...) __android_log_print(ANDROID_LOG_INFO, "EthervoxLLMTests", fmt, ##__VA_ARGS__)
+#else
+#define LLM_TEST_LOG(fmt, ...) printf(fmt "\n", ##__VA_ARGS__)
+#endif
 #include <unistd.h>
 
 #ifdef _WIN32
@@ -1400,20 +1410,43 @@ void run_llm_tool_tests(ethervox_governor_t* governor,
     // Initialize test report file
     time_t report_time = time(NULL);
     
-    // Use ~/.ethervox/tests/ directory
-    const char* home = getenv("HOME");
+    // Determine test reports directory based on platform
     char report_dir[512];
+#ifdef __ANDROID__
+    // On Android, use app files directory
+    const char* android_files = ethervox_get_android_files_dir();
+    if (android_files && android_files[0] != '\0') {
+        snprintf(report_dir, sizeof(report_dir), "%s/tests", android_files);
+        LLM_TEST_LOG("Using Android files directory: %s", report_dir);
+    } else {
+        // Fallback to current directory if Android files dir not set
+        snprintf(report_dir, sizeof(report_dir), "./tests");
+        LLM_TEST_LOG("Android files dir not set, using fallback: %s", report_dir);
+    }
+#else
+    // On desktop, use ~/.ethervox/tests/ directory
+    const char* home = getenv("HOME");
     if (home) {
         snprintf(report_dir, sizeof(report_dir), "%s/.ethervox/tests", home);
     } else {
-        snprintf(report_dir, sizeof(report_dir), "./.ethervox/tests");
+        snprintf(report_dir, sizeof(report_dir), "./tests");
     }
+#endif
     
+    // Create directory if it doesn't exist
     #ifdef _WIN32
-        _mkdir(report_dir);
+        int mkdir_result = _mkdir(report_dir);
     #else
-        mkdir(report_dir, 0755);
+        int mkdir_result = mkdir(report_dir, 0755);
     #endif
+    
+    // Log directory creation result (ignore EEXIST - directory already exists)
+    if (mkdir_result != 0 && errno != EEXIST) {
+        LLM_TEST_LOG("Warning: mkdir(%s) failed with errno %d: %s", 
+                     report_dir, errno, strerror(errno));
+    } else {
+        LLM_TEST_LOG("Test directory ready: %s", report_dir);
+    }
     
     snprintf(g_test_report_path, sizeof(g_test_report_path),
              "%s/llm_test_report_%ld.log", report_dir, report_time);
@@ -1433,6 +1466,14 @@ void run_llm_tool_tests(ethervox_governor_t* governor,
         fflush(g_test_report_file);
         
         LLM_TEST_INFO("Test report: %s", g_test_report_path);
+#ifdef __ANDROID__
+        LLM_TEST_LOG("Test report created: %s", g_test_report_path);
+#endif
+    } else {
+        LLM_TEST_INFO("Failed to create test report file: %s", g_test_report_path);
+#ifdef __ANDROID__
+        LLM_TEST_LOG("ERROR: Failed to create test report: %s", g_test_report_path);
+#endif
     }
     
     // Install crash handlers

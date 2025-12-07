@@ -19,11 +19,22 @@
 #include "ethervox/governor.h"
 #include "ethervox/logging.h"
 #include "ethervox/chat_template.h"
+#include "ethervox/platform.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/stat.h>
+#include <errno.h>
+
+// Android logging support
+#ifdef __ANDROID__
+#include <android/log.h>
+#define INTEGRATION_LOG(fmt, ...) __android_log_print(ANDROID_LOG_INFO, "EthervoxIntegrationTests", fmt, ##__VA_ARGS__)
+#else
+#define INTEGRATION_LOG(fmt, ...) printf(fmt "\n", ##__VA_ARGS__)
+#endif
 
 // ANSI color codes for pretty output
 #define COLOR_RESET   "\033[0m"
@@ -43,6 +54,10 @@
 
 static int g_tests_passed = 0;
 static int g_tests_failed = 0;
+
+// Report file for test results
+static FILE* g_report_file = NULL;
+static char g_report_path[512] = {0};
 
 #define MAX_TEST_NAMES 50
 static char* g_passed_tests[MAX_TEST_NAMES];
@@ -332,7 +347,7 @@ static void test_system_prompt_generation(void) {
     // Build system prompt WITHOUT adaptive learning (NULL memory_store)
     TEST_SUBHEADER("Building system prompt without adaptive learning");
     char prompt_no_adapt[8192];
-    if (ethervox_tool_registry_build_system_prompt(&registry, template, prompt_no_adapt, sizeof(prompt_no_adapt), NULL) != 0) {
+    if (ethervox_tool_registry_build_system_prompt(&registry, template, prompt_no_adapt, sizeof(prompt_no_adapt), NULL, NULL) != 0) {
         TEST_FAIL("Failed to build system prompt");
         g_tests_failed++;
     } else {
@@ -344,7 +359,7 @@ static void test_system_prompt_generation(void) {
     // Build system prompt WITH adaptive learning
     TEST_SUBHEADER("Building system prompt with adaptive learning");
     char prompt_with_adapt[8192];
-    if (ethervox_tool_registry_build_system_prompt(&registry, template, prompt_with_adapt, sizeof(prompt_with_adapt), &memory_store) != 0) {
+    if (ethervox_tool_registry_build_system_prompt(&registry, template, prompt_with_adapt, sizeof(prompt_with_adapt), &memory_store, NULL) != 0) {
         TEST_FAIL("Failed to build adaptive system prompt");
         g_tests_failed++;
     } else {
@@ -675,20 +690,72 @@ static void test_file_append_tool(void) {
 
 // Main test runner
 void run_integration_tests(void) {
+    // Create test report file
+    time_t report_time = time(NULL);
+    char report_dir[512];
+    
+#ifdef __ANDROID__
+    const char* android_files = ethervox_get_android_files_dir();
+    if (android_files && android_files[0] != '\0') {
+        snprintf(report_dir, sizeof(report_dir), "%s/tests", android_files);
+        INTEGRATION_LOG("Using test directory: %s", report_dir);
+    } else {
+        snprintf(report_dir, sizeof(report_dir), "./tests");
+        INTEGRATION_LOG("Android files dir not set, using fallback: %s", report_dir);
+    }
+#else
+    const char* home = getenv("HOME");
+    if (home) {
+        snprintf(report_dir, sizeof(report_dir), "%s/.ethervox/tests", home);
+    } else {
+        snprintf(report_dir, sizeof(report_dir), "./.ethervox/tests");
+    }
+#endif
+    
+    // Create directory if it doesn't exist
+    int mkdir_result = mkdir(report_dir, 0755);
+    if (mkdir_result != 0 && errno != EEXIST) {
+        INTEGRATION_LOG("Warning: mkdir(%s) failed with errno %d: %s", 
+                       report_dir, errno, strerror(errno));
+    } else {
+        INTEGRATION_LOG("Test directory ready: %s", report_dir);
+    }
+    
+    snprintf(g_report_path, sizeof(g_report_path),
+             "%s/integration_test_report_%ld.log", report_dir, report_time);
+    
+    g_report_file = fopen(g_report_path, "w");
+    if (g_report_file) {
+        fprintf(g_report_file, "EthervoxAI Integration Test Report\n");
+        fprintf(g_report_file, "====================================\n\n");
+        fprintf(g_report_file, "Timestamp: %s", ctime(&report_time));
+        fprintf(g_report_file, "\n");
+        fflush(g_report_file);
+        INTEGRATION_LOG("Test report created: %s", g_report_path);
+    } else {
+        INTEGRATION_LOG("Warning: Failed to create test report: %s", g_report_path);
+    }
+    
     printf("\n");
     printf(COLOR_BOLD COLOR_MAGENTA);
     printf("╔═══════════════════════════════════════════════════════════════╗\n");
     printf("║                                                               ║\n");
     printf("║          ETHERVOXAI INTEGRATION TEST SUITE                   ║\n");
+#ifdef __ANDROID__
+    printf("║          Android Platform - Major Features                   ║\n");
+#else
     printf("║          macOS Desktop - Major Features                      ║\n");
+#endif
     printf("║                                                               ║\n");
     printf("╚═══════════════════════════════════════════════════════════════╝\n");
     printf(COLOR_RESET);
     
-    // Get git info
+    // Get git info (skip on Android as popen is not reliable)
     char git_repo[128] = "unknown";
     char git_branch[128] = "unknown";
     char git_commit[64] = "unknown";
+    
+#ifndef __ANDROID__
     FILE* fp;
     
     // Get repository name from remote URL
@@ -718,12 +785,31 @@ void run_integration_tests(void) {
         }
         pclose(fp);
     }
+#else
+    // On Android, use build-time git info if available
+    #ifdef ETHERVOX_GIT_BRANCH
+    strncpy(git_branch, ETHERVOX_GIT_BRANCH, sizeof(git_branch) - 1);
+    #endif
+    #ifdef ETHERVOX_GIT_COMMIT
+    strncpy(git_commit, ETHERVOX_GIT_COMMIT, sizeof(git_commit) - 1);
+    #endif
+    strncpy(git_repo, "ethervoxai-android", sizeof(git_repo) - 1);
+#endif
     
     printf("\n");
     printf(COLOR_CYAN "  Repository: " COLOR_RESET "%s\n", git_repo);
     printf(COLOR_CYAN "  Branch:     " COLOR_RESET "%s\n", git_branch);
     printf(COLOR_CYAN "  Commit:     " COLOR_RESET "%s\n", git_commit);
     printf("\n");
+    
+    // Write header to report
+    if (g_report_file) {
+        fprintf(g_report_file, "Repository: %s\n", git_repo);
+        fprintf(g_report_file, "Branch:     %s\n", git_branch);
+        fprintf(g_report_file, "Commit:     %s\n", git_commit);
+        fprintf(g_report_file, "\n");
+        fflush(g_report_file);
+    }
     
     time_t start_time = time(NULL);
     
@@ -800,11 +886,29 @@ void run_integration_tests(void) {
     printf(COLOR_CYAN "  Commit:        " COLOR_RESET "%s\n", git_commit);
     printf("\n");
     
+    // Also log summary to Android logcat
+#ifdef __ANDROID__
+    INTEGRATION_LOG("╔═══════════════════════════════════════╗");
+    INTEGRATION_LOG("║        TEST SUMMARY                   ║");
+    INTEGRATION_LOG("╚═══════════════════════════════════════╝");
+    INTEGRATION_LOG("Tests Passed:  %d", g_tests_passed);
+    INTEGRATION_LOG("Tests Failed:  %d", g_tests_failed);
+    INTEGRATION_LOG("Total Tests:   %d", total_tests);
+    INTEGRATION_LOG("Pass Rate:     %.1f%%", pass_rate);
+    INTEGRATION_LOG("Duration:      %.0f seconds", duration);
+    INTEGRATION_LOG("Repository:    %s", git_repo);
+    INTEGRATION_LOG("Branch:        %s", git_branch);
+    INTEGRATION_LOG("Commit:        %s", git_commit);
+#endif
+    
     // Show passed test names
     if (g_passed_count > 0) {
         printf(COLOR_GREEN "  Passed Tests:\n" COLOR_RESET);
         for (int i = 0; i < g_passed_count; i++) {
             printf(COLOR_GREEN "    ✓ %s\n" COLOR_RESET, g_passed_tests[i]);
+#ifdef __ANDROID__
+            INTEGRATION_LOG("  ✓ %s", g_passed_tests[i]);
+#endif
             free(g_passed_tests[i]);
         }
         printf("\n");
@@ -815,6 +919,9 @@ void run_integration_tests(void) {
         printf(COLOR_RED "  Failed Tests:\n" COLOR_RESET);
         for (int i = 0; i < g_failed_count; i++) {
             printf(COLOR_RED "    ✗ %s\n" COLOR_RESET, g_failed_tests[i]);
+#ifdef __ANDROID__
+            INTEGRATION_LOG("  ✗ %s", g_failed_tests[i]);
+#endif
             free(g_failed_tests[i]);
         }
         printf("\n");
@@ -824,10 +931,60 @@ void run_integration_tests(void) {
         printf(COLOR_BOLD COLOR_GREEN);
         printf("  ✓✓✓ ALL TESTS PASSED! ✓✓✓\n");
         printf(COLOR_RESET);
+#ifdef __ANDROID__
+        INTEGRATION_LOG("✓✓✓ ALL TESTS PASSED! ✓✓✓");
+#endif
     } else {
         printf(COLOR_BOLD COLOR_YELLOW);
         printf("  ⚠ Some tests failed - review output above\n");
         printf(COLOR_RESET);
+#ifdef __ANDROID__
+        INTEGRATION_LOG("⚠ Some tests failed - %d passed, %d failed", g_tests_passed, g_tests_failed);
+#endif
+    }
+    
+    // Write final summary to report file
+    if (g_report_file) {
+        fprintf(g_report_file, "\n");
+        fprintf(g_report_file, "═══════════════════════════════════════\n");
+        fprintf(g_report_file, "           TEST SUMMARY                 \n");
+        fprintf(g_report_file, "═══════════════════════════════════════\n");
+        fprintf(g_report_file, "Tests Passed:  %d\n", g_tests_passed);
+        fprintf(g_report_file, "Tests Failed:  %d\n", g_tests_failed);
+        fprintf(g_report_file, "Total Tests:   %d\n", total_tests);
+        fprintf(g_report_file, "Pass Rate:     %.1f%%\n", pass_rate);
+        fprintf(g_report_file, "Duration:      %.0f seconds\n", duration);
+        fprintf(g_report_file, "\nRepository:    %s\n", git_repo);
+        fprintf(g_report_file, "Branch:        %s\n", git_branch);
+        fprintf(g_report_file, "Commit:        %s\n", git_commit);
+        fprintf(g_report_file, "\n");
+        
+        if (g_passed_count > 0) {
+            fprintf(g_report_file, "Passed Tests:\n");
+            for (int i = 0; i < g_passed_count; i++) {
+                fprintf(g_report_file, "  ✓ %s\n", g_passed_tests[i]);
+            }
+            fprintf(g_report_file, "\n");
+        }
+        
+        if (g_failed_count > 0) {
+            fprintf(g_report_file, "Failed Tests:\n");
+            for (int i = 0; i < g_failed_count; i++) {
+                fprintf(g_report_file, "  ✗ %s\n", g_failed_tests[i]);
+            }
+            fprintf(g_report_file, "\n");
+        }
+        
+        if (g_tests_failed == 0) {
+            fprintf(g_report_file, "✓✓✓ ALL TESTS PASSED! ✓✓✓\n");
+        } else {
+            fprintf(g_report_file, "⚠ Some tests failed - %d passed, %d failed\n", 
+                   g_tests_passed, g_tests_failed);
+        }
+        
+        fclose(g_report_file);
+        g_report_file = NULL;
+        INTEGRATION_LOG("Test report saved to: %s", g_report_path);
     }
     
     printf("\n");

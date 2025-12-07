@@ -198,13 +198,15 @@ const ethervox_tool_t* ethervox_tool_registry_find(
  * @param buffer Output buffer for system prompt
  * @param buffer_size Size of output buffer
  * @param memory_store Optional memory store for adaptive learning (can be NULL)
+ * @param model_path Optional model path for loading optimized prompts (can be NULL)
  */
 int ethervox_tool_registry_build_system_prompt(
     const ethervox_tool_registry_t* registry,
     const chat_template_t* chat_template,
     char* buffer,
     size_t buffer_size,
-    void* memory_store
+    void* memory_store,
+    const char* model_path
 );
 
 /**

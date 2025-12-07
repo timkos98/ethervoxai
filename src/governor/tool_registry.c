@@ -109,7 +109,8 @@ int ethervox_tool_registry_build_system_prompt(
     const chat_template_t* chat_template,
     char* buffer,
     size_t buffer_size,
-    void* memory_store
+    void* memory_store,
+    const char* model_path  // Added parameter for optimized prompts
 ) {
     if (!registry || !chat_template || !buffer || buffer_size == 0) {
         return -1;
@@ -120,7 +121,6 @@ int ethervox_tool_registry_build_system_prompt(
     // Try to load model-specific optimized prompts first
     char custom_instructions[2048] = {0};
     char custom_examples[4096] = {0};
-    const char* model_path = NULL; // TODO: Pass model_path as parameter or get from context
     bool has_custom_prompts = false;
     
     if (model_path && ethervox_load_optimized_prompts(

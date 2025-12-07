@@ -155,6 +155,16 @@ int ethervox_platform_load_device_profile(ethervox_platform_t* platform, const c
 // // Platform-specific HAL registration
 int ethervox_platform_register_hal(ethervox_platform_t* platform);
 
+// Android-specific utilities
+#ifdef __ANDROID__
+/**
+ * Get Android application files directory
+ * Returns the path set via setAndroidFilesDir() from JNI
+ * @return Path to Android app files directory, or NULL if not set
+ */
+const char* ethervox_get_android_files_dir(void);
+#endif
+
 #ifdef __cplusplus
 }
 #endif
