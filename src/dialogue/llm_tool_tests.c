@@ -55,9 +55,27 @@
 #define COLOR_CYAN    "\033[36m"
 #define COLOR_BOLD    "\033[1m"
 
-#define LLM_TEST_PASS(msg, ...) printf(COLOR_GREEN "  ✓ " COLOR_RESET msg "\n", ##__VA_ARGS__)
-#define LLM_TEST_FAIL(msg, ...) printf(COLOR_RED "  ✗ " COLOR_RESET msg "\n", ##__VA_ARGS__)
-#define LLM_TEST_INFO(msg, ...) printf(COLOR_CYAN "  ℹ " COLOR_RESET msg "\n", ##__VA_ARGS__)
+#define LLM_TEST_PASS(msg, ...) do { \
+    printf(COLOR_GREEN "  ✓ " COLOR_RESET msg "\n", ##__VA_ARGS__); \
+    if (g_test_report_file) { \
+        fprintf(g_test_report_file, "  ✓ " msg "\n", ##__VA_ARGS__); \
+        fflush(g_test_report_file); \
+    } \
+} while(0)
+#define LLM_TEST_FAIL(msg, ...) do { \
+    printf(COLOR_RED "  ✗ " COLOR_RESET msg "\n", ##__VA_ARGS__); \
+    if (g_test_report_file) { \
+        fprintf(g_test_report_file, "  ✗ " msg "\n", ##__VA_ARGS__); \
+        fflush(g_test_report_file); \
+    } \
+} while(0)
+#define LLM_TEST_INFO(msg, ...) do { \
+    printf(COLOR_CYAN "  ℹ " COLOR_RESET msg "\n", ##__VA_ARGS__); \
+    if (g_test_report_file) { \
+        fprintf(g_test_report_file, "  ℹ " msg "\n", ##__VA_ARGS__); \
+        fflush(g_test_report_file); \
+    } \
+} while(0)
 #define LLM_TEST_WARN(msg, ...) printf(COLOR_YELLOW "  ⚠ " COLOR_RESET msg "\n", ##__VA_ARGS__)
 #define LLM_TEST_HEADER(msg, ...) printf("\n" COLOR_BOLD COLOR_BLUE "=== " msg " ===" COLOR_RESET "\n", ##__VA_ARGS__)
 #define LLM_TEST_SUBHEADER(msg, ...) printf("\n" COLOR_YELLOW "→ " msg COLOR_RESET "\n", ##__VA_ARGS__)
@@ -308,7 +326,7 @@ static void crash_handler(int sig) {
                  "%s/llm_test_crash_%ld.log", test_dir, time(NULL));
     } else {
         snprintf(crash_report_path, sizeof(crash_report_path), 
-                 "./.ethervox/tests/llm_test_crash_%ld.log", time(NULL));
+                 "./.ethervox/reports/llm_test_crash_%ld.log", time(NULL));
     }
     
     FILE* crash_file = fopen(crash_report_path, "w");
@@ -1424,10 +1442,10 @@ void run_llm_tool_tests(ethervox_governor_t* governor,
         LLM_TEST_LOG("Android files dir not set, using fallback: %s", report_dir);
     }
 #else
-    // On desktop, use ~/.ethervox/tests/ directory
+    // On desktop, use ~/.ethervox/reports/ directory
     const char* home = getenv("HOME");
     if (home) {
-        snprintf(report_dir, sizeof(report_dir), "%s/.ethervox/tests", home);
+        snprintf(report_dir, sizeof(report_dir), "%s/.ethervox/reports", home);
     } else {
         snprintf(report_dir, sizeof(report_dir), "./tests");
     }

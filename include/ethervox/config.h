@@ -456,7 +456,7 @@ static inline int ethervox_get_runtime_path(const char* subdir, char* out, size_
         const char* home = getenv("HOME");
         if (home) {
             if (subdir) {
-                snprintf(out, out_size, "%s%s%s", home, base + 1, subdir);
+                snprintf(out, out_size, "%s%s/%s", home, base + 1, subdir);
             } else {
                 snprintf(out, out_size, "%s%s", home, base + 1);
             }
@@ -465,7 +465,7 @@ static inline int ethervox_get_runtime_path(const char* subdir, char* out, size_
         }
     } else if (base) {
         if (subdir) {
-            snprintf(out, out_size, "%s%s", base, subdir);
+            snprintf(out, out_size, "%s/%s", base, subdir);
         } else {
             snprintf(out, out_size, "%s", base);
         }

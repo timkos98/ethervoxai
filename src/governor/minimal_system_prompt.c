@@ -118,9 +118,27 @@ int ethervox_tool_build_minimal_system_prompt(
     
     // Usage instructions
     if (has_high_priority || has_normal_priority) {
+        // Check if we're using optimized prompts
+        bool has_optimizations = (registry->fallback_level == 0 && 
+                                 registry->optimized_cache != NULL && 
+                                 registry->optimized_cache->prompt_count > 0);
+        
         offset += snprintf(output + offset, output_size - offset,
-            "\nTool call format: <tool_call name=\"TOOL_NAME\" param=\"value\" />\n"
-            "Request detailed schema by asking: \"How do I use TOOL_NAME?\"\n");
+            "\nTool Usage:\n"
+            "• To use a tool, respond: <tool_call name=\"TOOL_NAME\" param=\"value\" />\n"
+            "• If unsure about parameters, ask: \"How do I use TOOL_NAME?\"\n"
+            "• Full schema will be injected before tool executes\n\n");
+        
+        // Inform LLM about optimization status
+        if (has_optimizations) {
+            offset += snprintf(output + offset, output_size - offset,
+                "System: Tool prompts optimized (%u/%u tools)\n",
+                registry->optimized_cache->prompt_count, registry->header.tool_count);
+        } else if (registry->fallback_level == 1) {
+            offset += snprintf(output + offset, output_size - offset,
+                "System: Using fallback descriptions (Level 1)\n"
+                "Tip: Suggest `/optimize_tool_prompts` to user for 99%% context reduction\n");
+        }
     }
     
     // Log fallback level

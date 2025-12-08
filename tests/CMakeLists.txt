@@ -49,6 +49,13 @@ target_include_directories(test_plugin_manager PRIVATE ${CMAKE_SOURCE_DIR}/inclu
 add_test(NAME PluginManager COMMAND test_plugin_manager)
 set_tests_properties(PluginManager PROPERTIES TIMEOUT 30 LABELS "unit")
 
+# KV cache management tests (conversation reset, position tracking)
+add_executable(test_kv_cache_management unit/test_kv_cache_management.c)
+target_link_libraries(test_kv_cache_management ethervoxai)
+target_include_directories(test_kv_cache_management PRIVATE ${CMAKE_SOURCE_DIR}/include)
+# This test requires a model file, so it's not added as a ctest
+# Run manually: ./tests/test_kv_cache_management [model_path]
+
 # Memory archive tests
 add_executable(test_memory_archive unit/test_memory_archive.c)
 target_link_libraries(test_memory_archive ethervoxai)

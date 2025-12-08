@@ -85,6 +85,10 @@ struct ethervox_governor {
     llama_pos current_kv_pos;  // Track current position in KV cache
     char* model_path;
     
+    // Saved system prompt for recovery after nuclear clear
+    llama_token* system_prompt_tokens;
+    int system_prompt_tokens_len;
+    
     // Pre-tokenized static wrappers for speed optimization (from chat_template)
     llama_token* tool_result_prefix_tokens;  // chat_template->tool_result_start
     int tool_result_prefix_len;
@@ -102,6 +106,8 @@ struct ethervox_governor {
     uint32_t last_iteration_count;
     bool initialized;
     bool llm_loaded;
+    bool tool_execution_enabled;  // Allow disabling tool execution (for optimization)
+    bool system_prompt_lost;      // Track if nuclear clear wiped the system prompt
     
     // Context management
     context_manager_state_t context_manager;
@@ -286,12 +292,16 @@ static int execute_tool_call(
         "duration_seconds", "label", "hour", "minute",
         "decimal_places",
         // File tools
-        "directory", "file_path", "pattern", "recursive",
+        "directory", "file_path", "pattern", "recursive", "path",
+        "enable", "description",
         // Memory tools
         "text", "new_text", "content", "tags", "query", "limit", "window_size", "format",
         "importance", "min_importance", "max_age_hours", "is_user",
         "memory_id", "memory_ids", "filepath",
         "older_than_seconds", "importance_threshold",
+        "tag_filter", "focus_topic", "correction",
+        // Startup prompt tools
+        "prompt_text",
         NULL
     };
     
@@ -305,6 +315,7 @@ static int execute_tool_call(
             bool force_string = (strcmp(attrs[i], "memory_id") == 0 ||
                                strcmp(attrs[i], "file_path") == 0 ||
                                strcmp(attrs[i], "filepath") == 0 ||
+                               strcmp(attrs[i], "path") == 0 ||
                                strcmp(attrs[i], "tags") == 0 ||
                                strcmp(attrs[i], "query") == 0 ||
                                strcmp(attrs[i], "text") == 0 ||
@@ -313,7 +324,12 @@ static int execute_tool_call(
                                strcmp(attrs[i], "directory") == 0 ||
                                strcmp(attrs[i], "pattern") == 0 ||
                                strcmp(attrs[i], "format") == 0 ||
-                               strcmp(attrs[i], "label") == 0);
+                               strcmp(attrs[i], "label") == 0 ||
+                               strcmp(attrs[i], "description") == 0 ||
+                               strcmp(attrs[i], "prompt_text") == 0 ||
+                               strcmp(attrs[i], "tag_filter") == 0 ||
+                               strcmp(attrs[i], "focus_topic") == 0 ||
+                               strcmp(attrs[i], "correction") == 0);
             
             bool is_numeric = false;
             if (!force_string) {
@@ -620,6 +636,16 @@ int ethervox_governor_load_model(ethervox_governor_t* governor, const char* mode
     
     llama_tokenize(vocab, system_prompt, strlen(system_prompt), tokens, n_tokens, true, false);
     
+    // Save a copy of the system prompt tokens for recovery after nuclear clear
+    governor->system_prompt_tokens = malloc(n_tokens * sizeof(llama_token));
+    if (governor->system_prompt_tokens) {
+        memcpy(governor->system_prompt_tokens, tokens, n_tokens * sizeof(llama_token));
+        governor->system_prompt_tokens_len = n_tokens;
+        GOV_LOG("Saved system prompt tokens (%d tokens) for nuclear clear recovery", n_tokens);
+    } else {
+        GOV_ERROR("Failed to allocate memory for system prompt backup");
+    }
+    
     GOV_LOG("Processing %d system prompt tokens in chunks...", n_tokens);
     
     // Process in 1024-token chunks for speed (2x faster on high-end devices)
@@ -810,6 +836,10 @@ int ethervox_governor_init(
     gov->tool_registry = tool_registry;
     gov->initialized = true;
     gov->llm_loaded = false;
+    gov->tool_execution_enabled = true;  // Enabled by default
+    gov->system_prompt_lost = false;     // System prompt present until nuclear clear
+    gov->system_prompt_tokens = NULL;
+    gov->system_prompt_tokens_len = 0;
     
     // Initialize context manager
     memset(&gov->context_manager, 0, sizeof(context_manager_state_t));
@@ -876,24 +906,193 @@ ethervox_governor_status_t ethervox_governor_execute(
         GOV_LOG("KV cache clearing: removing positions %d to %d (was at %d%% capacity)", 
                 governor->system_prompt_token_count, max_pos, (max_pos * 100 / n_ctx));
         
-        // Clear everything after system prompt to reset conversation history
-        // Note: llama_memory_seq_rm marks cells as removed but doesn't defragment the cache
-        // The function always returns true in standard KV cache, so we don't check the return value
+        // ========================================================================
+        // CONTEXT SUMMARIZATION - Preserve conversation knowledge before clearing
+        // ========================================================================
+        
+        // Notify UI that summarization is starting
+        if (progress_callback) {
+            char summary_msg[256];
+            snprintf(summary_msg, sizeof(summary_msg), 
+                    "Context at %d%% - summarizing conversation before clearing...",
+                    (max_pos * 100 / n_ctx));
+            progress_callback(ETHERVOX_GOVERNOR_EVENT_CONTEXT_SUMMARIZING, summary_msg, user_data);
+        }
+        
+        // Generate a summary of the conversation using memory_store directly
+        GOV_LOG("Storing conversation context summary before clearing...");
+        
+        // Find memory_store tool to save context summary
+        ethervox_tool_t* memory_tool = NULL;
+        for (uint32_t i = 0; i < governor->tool_registry->tool_count; i++) {
+            if (strcmp(governor->tool_registry->tools[i].name, "memory_store") == 0) {
+                memory_tool = &governor->tool_registry->tools[i];
+                break;
+            }
+        }
+        
+        if (memory_tool) {
+            // Create a simple summary message about what was happening
+            char summary_content[512];
+            snprintf(summary_content, sizeof(summary_content),
+                    "Context cleared at position %d (%d%% full). "
+                    "Conversation history up to this point preserved. "
+                    "Turn count: %u. Use memory_search to recall earlier conversation if needed.",
+                    max_pos, (max_pos * 100 / n_ctx), governor->turn_counter);
+            
+            // Build JSON args for memory_store (uses "text" parameter)
+            char memory_args[1024];
+            snprintf(memory_args, sizeof(memory_args),
+                    "{\"text\":\"[Context Cleared] %s\","
+                    "\"importance\":0.85,"
+                    "\"tags\":[\"context_summary\",\"auto_generated\"]}",
+                    summary_content);
+            
+            char* store_result = NULL;
+            char* store_error = NULL;
+            
+            int store_status = memory_tool->execute(memory_args, &store_result, &store_error);
+            if (store_status == 0) {
+                GOV_LOG("Stored context marker in memory");
+            } else {
+                GOV_ERROR("Failed to store context marker: %s", store_error ? store_error : "unknown error");
+            }
+            
+            free(store_result);
+            free(store_error);
+        } else {
+            GOV_LOG("Warning: memory_store tool not available, context marker not persisted");
+        }
+        
+        // Now clear the KV cache
         llama_memory_seq_rm(mem, 0, governor->system_prompt_token_count, -1);
         
-        // After marking cells as removed, reset position to right after system prompt
-        // Don't trust seq_pos_max here - it may still report stale positions
-        governor->current_kv_pos = governor->system_prompt_token_count;
+        // CRITICAL: After removal, re-query the actual max position
+        // llama_memory_seq_rm doesn't immediately update internal position tracking
+        // We must verify what llama.cpp thinks the position is NOW
+        int32_t actual_max = llama_memory_seq_pos_max(mem, 0);
         
-        GOV_LOG("KV cache cleared: kept system prompt [0..%d), resuming at position %d", 
-                governor->system_prompt_token_count, governor->current_kv_pos);
+        // If llama.cpp still thinks we're beyond the system prompt, we have a problem
+        bool needed_nuclear_clear = false;
+        if (actual_max >= governor->system_prompt_token_count) {
+            GOV_ERROR("KV cache removal failed: max_pos still at %d after clearing", actual_max);
+            // Force-clear using llama_memory_clear (nuclear option - clears EVERYTHING)
+            llama_memory_clear(mem, true);  // Clear both metadata and data
+            actual_max = llama_memory_seq_pos_max(mem, 0);
+            needed_nuclear_clear = true;
+            GOV_LOG("Nuclear clear: completely wiped KV cache, max_pos now: %d", actual_max);
+        }
+        
+        // Use the actual max position from llama.cpp, or system_prompt_token_count if empty
+        if (needed_nuclear_clear) {
+            // ========================================================================
+            // RELIGHT SEQUENCE - Restore system prompt after catastrophic failure
+            // ========================================================================
+            // Like relighting a rocket engine after shutdown, we restore the governor
+            // to full operational state by reprocessing the saved system prompt
+            
+            GOV_LOG("Nuclear clear wiped KV cache - initiating RELIGHT sequence...");
+            
+            // Attempt to restore system prompt from saved tokens
+            if (governor->system_prompt_tokens && governor->system_prompt_tokens_len > 0) {
+                GOV_LOG("RELIGHT: Restoring system prompt (%d tokens)...", 
+                        governor->system_prompt_tokens_len);
+                
+                // Reprocess system prompt in chunks (same as initial load)
+                int chunk_size = 1024;
+                bool relight_successful = true;
+                
+                for (int i = 0; i < governor->system_prompt_tokens_len; i += chunk_size) {
+                    int chunk_len = (i + chunk_size > governor->system_prompt_tokens_len) 
+                                    ? (governor->system_prompt_tokens_len - i) 
+                                    : chunk_size;
+                    bool is_final_chunk = (i + chunk_size >= governor->system_prompt_tokens_len);
+                    
+                    // Create batch with explicit positions
+                    llama_batch batch = llama_batch_init(chunk_len, 0, 1);
+                    batch.n_tokens = chunk_len;
+                    for (int j = 0; j < chunk_len; j++) {
+                        batch.token[j] = governor->system_prompt_tokens[i + j];
+                        batch.pos[j] = i + j;
+                        batch.n_seq_id[j] = 1;
+                        batch.seq_id[j][0] = 0;
+                        batch.logits[j] = false;
+                    }
+                    // Compute logits only for the very last token
+                    if (is_final_chunk) {
+                        batch.logits[chunk_len - 1] = true;
+                    }
+                    
+                    if (llama_decode(governor->llm_ctx, batch) != 0) {
+                        GOV_ERROR("RELIGHT FAILED: Could not restore system prompt chunk at token %d", i);
+                        relight_successful = false;
+                        llama_batch_free(batch);
+                        break;
+                    }
+                    
+                    llama_batch_free(batch);
+                }
+                
+                if (relight_successful) {
+                    // System prompt successfully restored!
+                    governor->current_kv_pos = governor->system_prompt_token_count;
+                    governor->system_prompt_lost = false;
+                    GOV_LOG("RELIGHT COMPLETE: System prompt restored, tools re-enabled");
+                    GOV_LOG("KV cache restored to position %d (%d%% full)", 
+                            governor->current_kv_pos, 
+                            (governor->current_kv_pos * 100 / n_ctx));
+                    
+                    // Notify UI that recovery was successful
+                    if (progress_callback) {
+                        char relight_msg[256];
+                        snprintf(relight_msg, sizeof(relight_msg),
+                                "System recovered - full capabilities restored");
+                        progress_callback(ETHERVOX_GOVERNOR_EVENT_CONTEXT_CLEARED, relight_msg, user_data);
+                    }
+                } else {
+                    // Relight failed - governor remains in degraded state
+                    governor->current_kv_pos = 0;
+                    governor->system_prompt_lost = true;
+                    GOV_ERROR("RELIGHT FAILED: System prompt could not be restored");
+                    GOV_ERROR("Governor in degraded mode - tools disabled");
+                }
+            } else {
+                // No saved system prompt - cannot relight
+                governor->current_kv_pos = 0;
+                governor->system_prompt_lost = true;
+                GOV_ERROR("RELIGHT IMPOSSIBLE: No saved system prompt tokens");
+                GOV_ERROR("Governor in degraded mode - continuing without tools");
+            }
+        } else {
+            // Normal partial clear - system prompt is intact
+            governor->current_kv_pos = (actual_max >= 0) ? actual_max + 1 : governor->system_prompt_token_count;
+            GOV_LOG("KV cache cleared: kept system prompt [0..%d), resuming at position %d (verified: %d)", 
+                    governor->system_prompt_token_count, governor->current_kv_pos, actual_max);
+        }
+        
+        // Notify UI that clearing is complete
+        if (progress_callback) {
+            char clear_msg[256];
+            snprintf(clear_msg, sizeof(clear_msg),
+                    "Context cleared - conversation summary saved to memory (resuming from %d%%)",
+                    (governor->current_kv_pos * 100 / n_ctx));
+            progress_callback(ETHERVOX_GOVERNOR_EVENT_CONTEXT_CLEARED, clear_msg, user_data);
+        }
     } else if (max_pos >= governor->system_prompt_token_count) {
-        // Continue from where we left off
+        // Continue from where we left off (normal case with system prompt)
         governor->current_kv_pos = max_pos + 1;
         GOV_LOG("KV cache continuing: from position %d (%d%% full)",
                 governor->current_kv_pos, (governor->current_kv_pos * 100 / n_ctx));
+    } else if (governor->system_prompt_lost) {
+        // After nuclear clear: system prompt is gone, continue from actual position
+        // This applies to all iterations until model is reloaded
+        governor->current_kv_pos = (max_pos >= 0) ? max_pos + 1 : 0;
+        GOV_LOG("KV cache continuing (post-nuclear): from position %d (%d%% full, NO SYSTEM PROMPT)",
+                governor->current_kv_pos, (governor->current_kv_pos * 100 / n_ctx));
     } else {
         // First query - start after system prompt
+        GOV_LOG("KV position decision: max_pos=%d, current_kv_pos=%d, system_prompt=%d",
+                max_pos, governor->current_kv_pos, governor->system_prompt_token_count);
         governor->current_kv_pos = governor->system_prompt_token_count;
         GOV_LOG("KV cache initialized: starting at position %d",
                 governor->current_kv_pos);
@@ -1337,8 +1536,8 @@ ethervox_governor_status_t ethervox_governor_execute(
             metrics->tool_calls_made = num_tools;
         }
         
-        // Execute tools if present
-        if (num_tools > 0) {
+        // Execute tools if present and tool execution is enabled
+        if (num_tools > 0 && governor->tool_execution_enabled) {
             for (int i = 0; i < num_tools; i++) {
                 char* tool_result = NULL;
                 char* tool_error = NULL;
@@ -1719,6 +1918,12 @@ int ethervox_governor_reset_conversation(ethervox_governor_t* governor) {
     llama_memory_t mem = llama_get_memory(governor->llm_ctx);
     int32_t max_pos = llama_memory_seq_pos_max(mem, 0);
     
+    // If system prompt was lost (nuclear clear), we can't reset to it
+    if (governor->system_prompt_lost) {
+        GOV_ERROR("Cannot reset: system prompt was lost in nuclear clear");
+        return -1;
+    }
+    
     if (max_pos <= governor->system_prompt_token_count) {
         GOV_LOG("Conversation already clean (at position %d, system prompt is %d tokens)",
                 max_pos, governor->system_prompt_token_count);
@@ -1729,18 +1934,11 @@ int ethervox_governor_reset_conversation(ethervox_governor_t* governor) {
     GOV_LOG("Resetting conversation: max_pos=%d, system_prompt=%d (%d%% full)",
             max_pos, governor->system_prompt_token_count, (max_pos * 100 / n_ctx));
     
-    // The ONLY way to properly reset llama.cpp's position tracking is to clear
-    // the entire sequence and keep the system prompt in a separate sequence,
-    // OR clear everything and re-decode the system prompt.
-    // Since we don't have the system prompt tokens saved, we use sequence copy/remove
+    // Simply remove everything after the system prompt
+    // llama_memory_seq_rm properly updates internal position tracking when removing from end
+    llama_memory_seq_rm(mem, 0, governor->system_prompt_token_count, -1);
     
-    // Strategy: Copy system prompt to sequence 1, clear sequence 0, copy back to sequence 0
-    llama_memory_seq_cp(mem, 0, 1, 0, governor->system_prompt_token_count);  // Copy sys prompt to seq 1
-    llama_memory_seq_rm(mem, 0, 0, -1);  // Clear all of sequence 0
-    llama_memory_seq_cp(mem, 1, 0, 0, governor->system_prompt_token_count);  // Copy back to seq 0
-    llama_memory_seq_rm(mem, 1, 0, -1);  // Clean up sequence 1
-    
-    // Now sequence 0 only has positions 0 to system_prompt_token_count-1
+    // Update our tracking to match
     governor->current_kv_pos = governor->system_prompt_token_count;
     
     GOV_LOG("Conversation reset complete: KV cache now at position %d (system prompt only)",
@@ -1762,4 +1960,11 @@ int ethervox_governor_reset_conversation(ethervox_governor_t* governor) {
 
 ethervox_tool_registry_t* ethervox_governor_get_registry(ethervox_governor_t* governor) {
     return governor ? governor->tool_registry : NULL;
+}
+
+void ethervox_governor_set_tool_execution(ethervox_governor_t* governor, bool enabled) {
+    if (governor) {
+        governor->tool_execution_enabled = enabled;
+        GOV_LOG("Tool execution %s", enabled ? "enabled" : "disabled");
+    }
 }

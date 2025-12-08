@@ -173,7 +173,7 @@ static void print_help(void) {
     printf("  models/            Recommended location for GGUF model files\n");
     printf("  memory/            Conversation memory (persistent .jsonl files)\n");
     printf("  transcripts/       Voice recordings (saved by /stoptranscribe command)\n");
-    printf("  tests/             Test reports and crash logs\n");
+    printf("  reports/           Test reports, optimization logs, and crash logs\n");
     printf("  startup_prompt.txt Custom startup instruction\n");
     printf("  tool_prompts_*.json Optimized per-model tool descriptions\n");
     printf("\nPaste Mode: Type /paste to enter, then paste multi-line text.\n");
@@ -214,8 +214,8 @@ static void ensure_ethervox_directories(void) {
     mkdir(path, 0755);
     #endif
     
-    // Create ~/.ethervox/tests/
-    snprintf(path, sizeof(path), "%s/.ethervox/tests", home);
+    // Create ~/.ethervox/reports/
+    snprintf(path, sizeof(path), "%s/.ethervox/reports", home);
     #ifdef _WIN32
     _mkdir(path);
     #else
@@ -1341,6 +1341,8 @@ int main(int argc, char** argv) {
     bool interactive = true;
     
     bool run_tests = false;
+    bool run_llm_tests = false;  // LLM tests mode: engineering + /testllm
+    bool run_optimization = false;  // Tool optimization mode: engineering + /optimize_tool_prompts
     bool quiet_mode = true;  // Default to quiet mode
     bool no_persist = false;
     bool skip_startup_prompt = false;
@@ -1386,6 +1388,22 @@ int main(int argc, char** argv) {
             skip_startup_prompt = true;
         } else if (strcmp(argv[i], "--test") == 0) {
             run_tests = true;
+        } else if (strcmp(argv[i], "--testllm") == 0) {
+            run_llm_tests = true;
+            engineering_mode = true;
+            g_quiet_mode = false;
+            g_debug_enabled = true;
+            quiet_mode = false;
+            skip_startup_prompt = true;
+            interactive = false;
+        } else if (strcmp(argv[i], "--optimize_tool_prompts") == 0) {
+            run_optimization = true;
+            engineering_mode = true;
+            g_quiet_mode = false;
+            g_debug_enabled = true;
+            quiet_mode = false;
+            skip_startup_prompt = true;
+            interactive = false;
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             printf("Usage: %s [options]\n\n", argv[0]);
             printf("Options:\n");
@@ -1399,6 +1417,8 @@ int main(int argc, char** argv) {
             printf("  --quiet, -q        Disable debug logging (explicit quiet)\n");
             printf("  -engineering       Engineering mode: suppress help/startup, enable debug\n");
             printf("  --test             Run component tests before starting\n");
+            printf("  --testllm          Run LLM tool tests (engineering mode + /testllm)\n");
+            printf("  --optimize_tool_prompts  Optimize tool prompts (engineering mode + /optimize_tool_prompts)\n");
             printf("  --help, -h         Show this help message\n");
             printf("\n");
             return 0;
@@ -1850,6 +1870,95 @@ int main(int argc, char** argv) {
             }
             free(error);
         }
+    }
+    
+    // Run LLM tests if requested (--testllm mode)
+    if (run_llm_tests) {
+        printf("\n");
+        printf("═══════════════════════════════════════════════════════════════\n");
+        printf(" Running LLM Tool Tests (--testllm mode)\n");
+        printf("═══════════════════════════════════════════════════════════════\n");
+        printf("\n");
+        
+        if (strlen(g_loaded_model_path) == 0) {
+            fprintf(stderr, "ERROR: No model loaded. LLM tests require a loaded model.\n");
+            fprintf(stderr, "Use --model <path> with --testllm flag.\n");
+            return 1;
+        }
+        
+        // Run tests with verbose output
+        run_llm_tool_tests(governor, &memory, g_loaded_model_path, true);
+        
+        printf("\n");
+        printf("═══════════════════════════════════════════════════════════════\n");
+        printf(" LLM Tests Complete\n");
+        printf("═══════════════════════════════════════════════════════════════\n");
+        printf("\n");
+        
+        // Exit after tests
+        return 0;
+    }
+    
+    // Run tool prompt optimization if requested (--optimize_tool_prompts mode)
+    if (run_optimization) {
+        printf("\n");
+        printf("═══════════════════════════════════════════════════════════════\n");
+        printf(" Tool Prompt Optimization - Enhanced Version (JSON Output)\n");
+        printf("═══════════════════════════════════════════════════════════════\n");
+        printf("\n");
+        
+        if (strlen(g_loaded_model_path) == 0) {
+            fprintf(stderr, "ERROR: No model loaded. Optimization requires a loaded model.\n");
+            fprintf(stderr, "Use --model <path> with --optimize_tool_prompts flag.\n");
+            return 1;
+        }
+        
+        printf("Model: %s\n", g_loaded_model_path);
+        printf("\n");
+        printf("This will:\n");
+        printf("1. Export current tool registry to binary manifest\n");
+        printf("2. Ask the LLM to optimize each tool description (~15 words)\n");
+        printf("3. Save optimized prompts to JSON cache\n");
+        printf("4. Reduce system prompt from ~15K to ~150 tokens (99%% reduction!)\n");
+        printf("\n");
+        
+        // Step 1: Initialize manifest system
+        printf("Step 1: Initializing Tool Manifest System...\n");
+        if (ethervox_governor_init_with_manifest(governor, g_loaded_model_path, 
+                                                 &g_manifest_registry) != 0) {
+            printf("✗ Failed to initialize manifest system\n");
+            printf("  (Continuing anyway - will use runtime registry)\n");
+        } else {
+            printf("✓ Manifest exported and loaded: %u tools\n", 
+                   g_manifest_registry.header.tool_count);
+        }
+        
+        // Step 2: Run optimizer
+        printf("\nStep 2: Running optimization (this may take 30-60 seconds)...\n");
+        int ret = ethervox_optimize_tool_prompts_v2(governor, g_loaded_model_path,
+                                                     &g_manifest_registry);
+        
+        if (ret == 0) {
+            printf("\n✓ Optimization complete!\n");
+            printf("\nNext steps:\n");
+            printf("1. Restart EthervoxAI to use optimized prompts\n");
+            printf("2. Your system prompt will now use ~150 tokens instead of ~15K\n");
+            printf("3. Tool schemas will be injected on-demand only when called\n");
+        } else if (ret == -2) {
+            printf("\n⚠️  Optimization cancelled by user\n");
+        } else {
+            printf("\n✗ Optimization failed (code: %d)\n", ret);
+            printf("  The assistant will still work with fallback level 1 (binary one-liners)\n");
+        }
+        
+        printf("\n");
+        printf("═══════════════════════════════════════════════════════════════\n");
+        printf(" Optimization Complete\n");
+        printf("═══════════════════════════════════════════════════════════════\n");
+        printf("\n");
+        
+        // Exit after optimization
+        return 0;
     }
     
     // Main REPL loop

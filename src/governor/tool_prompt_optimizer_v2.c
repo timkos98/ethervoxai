@@ -12,6 +12,7 @@
 #include "ethervox/tool_prompt_optimizer.h"
 #include "ethervox/tool_manifest.h"
 #include "ethervox/governor.h"
+#include "ethervox/chat_template.h"
 #include "ethervox/config.h"
 #include "ethervox/logging.h"
 #include <stdio.h>
@@ -19,6 +20,7 @@
 #include <string.h>
 #include <time.h>
 #include <ctype.h>
+#include <signal.h>
 
 #ifdef _WIN32
 #include <direct.h>
@@ -29,6 +31,31 @@
 #endif
 
 #define BATCH_SIZE 5  // Process 5 tools per batch to avoid KV overflow
+
+// ANSI color codes
+#define COLOR_RESET   "\033[0m"
+#define COLOR_GREEN   "\033[32m"
+#define COLOR_RED     "\033[31m"
+#define COLOR_YELLOW  "\033[33m"
+#define COLOR_CYAN    "\033[36m"
+#define COLOR_BOLD    "\033[1m"
+
+// Global cancellation flag
+static volatile sig_atomic_t g_optimization_cancelled = 0;
+
+// Test report file
+static FILE* g_report_file = NULL;
+static char g_report_path[512] = {0};
+
+static void handle_sigint(int sig) {
+    (void)sig;
+    g_optimization_cancelled = 1;
+    printf("\n\n⚠️  Optimization cancelled by user (Ctrl+C)\n");
+    if (g_report_file) {
+        fprintf(g_report_file, "\n\n⚠️  Optimization cancelled by user (Ctrl+C)\n");
+        fflush(g_report_file);
+    }
+}
 
 // Extract clean model name (e.g., "granite-4.0-Q4_K_M.gguf" -> "granite-4.0")
 static void extract_model_name(const char* model_path, char* model_name, size_t max_len) {
@@ -163,6 +190,68 @@ int ethervox_optimize_tool_prompts_v2(
         return -1;
     }
     
+    // Set up signal handler for Ctrl+C
+    g_optimization_cancelled = 0;
+    struct sigaction sa;
+    sa.sa_handler = handle_sigint;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGINT, &sa, NULL);
+    
+    // Create test report file
+    char ethervox_dir[512];
+    if (ethervox_get_runtime_path("reports", ethervox_dir, sizeof(ethervox_dir)) == 0) {
+        // Ensure reports directory exists
+        #ifdef _WIN32
+        _mkdir(ethervox_dir);
+        #else
+        mkdir(ethervox_dir, 0755);
+        #endif
+        
+        time_t now = time(NULL);
+        snprintf(g_report_path, sizeof(g_report_path),
+                "%s/tool_optimization_%ld.txt", ethervox_dir, (long)now);
+        g_report_file = fopen(g_report_path, "w");
+        if (g_report_file) {
+            printf("Report: %s\n", g_report_path);
+            fprintf(g_report_file, "═══════════════════════════════════════════════════════════════\n");
+            fprintf(g_report_file, " Tool Prompt Optimization Report\n");
+            fprintf(g_report_file, "═══════════════════════════════════════════════════════════════\n\n");
+            fprintf(g_report_file, "Timestamp: %s", ctime(&now));
+            fprintf(g_report_file, "Model: %s\n\n", model_path);
+            fflush(g_report_file);
+        } else {
+            fprintf(stderr, "Warning: Failed to create report file at %s\n", g_report_path);
+        }
+    } else {
+        fprintf(stderr, "Warning: Failed to get reports directory path\n");
+    }
+    
+    // Detect chat template from model path to get tool call format
+    chat_template_type_t template_type = chat_template_detect(model_path);
+    const chat_template_t* template = chat_template_get(template_type, model_path);
+    if (!template) {
+        ETHERVOX_LOGW("Could not detect chat template, using default XML format");
+    }
+    
+    // Extract tool call format example from template's usage examples
+    // This ensures we're model-agnostic
+    char tool_call_example[256] = "<tool_call name=\"TOOL_NAME\" param=\"value\" />";
+    if (template && template->tool_usage_examples) {
+        // Try to extract the actual format used in examples
+        const char* example_start = strstr(template->tool_usage_examples, "<tool_call");
+        if (example_start) {
+            const char* example_end = strstr(example_start, "/>");
+            if (example_end) {
+                size_t len = (example_end - example_start) + 2;
+                if (len < sizeof(tool_call_example)) {
+                    strncpy(tool_call_example, example_start, len);
+                    tool_call_example[len] = '\0';
+                }
+            }
+        }
+    }
+    
     // Extract model name
     char model_name[128];
     extract_model_name(model_path, model_name, sizeof(model_name));
@@ -181,10 +270,7 @@ int ethervox_optimize_tool_prompts_v2(
              "%s/.ethervox/tools/optimized/%s.json", home, model_name);
     
     printf("\n");
-    printf("╔═══════════════════════════════════════════════════════════════╗\n");
-    printf("║          TOOL PROMPT OPTIMIZATION (JSON OUTPUT)               ║\n");
-    printf("╚═══════════════════════════════════════════════════════════════╝\n");
-    printf("\n");
+    printf("Starting optimization...\n");
     printf("Model: %s\n", model_name);
     printf("Tools: %u\n", manifest_registry->header.tool_count);
     printf("Output: %s\n", output_path);
@@ -213,18 +299,50 @@ int ethervox_optimize_tool_prompts_v2(
     
     // Process tools in batches
     for (uint32_t batch_start = 0; batch_start < total_tools; batch_start += BATCH_SIZE) {
+        if (g_optimization_cancelled) {
+            printf("\n⚠️  Optimization cancelled - cleaning up...\n");
+            if (g_report_file) {
+                fprintf(g_report_file, "\n⚠️  Optimization cancelled before completion\n");
+                fprintf(g_report_file, "Tools processed: %u/%u\n", tools_processed, total_tools);
+                fflush(g_report_file);
+                fclose(g_report_file);
+                printf("📄 Partial report saved: %s\n", g_report_path);
+            }
+            fclose(fp);
+            return -2;  // Special code for user cancellation
+        }
+        
         uint32_t batch_end = batch_start + BATCH_SIZE;
         if (batch_end > total_tools) batch_end = total_tools;
         
-        printf("\n[Batch %u/%u] Processing tools %u-%u...\n",
+        printf("\n[Batch %u/%u] Processing tools %u-%u... (Ctrl+C to cancel)\n",
                (batch_start / BATCH_SIZE) + 1,
                (total_tools + BATCH_SIZE - 1) / BATCH_SIZE,
                batch_start + 1, batch_end);
+        
+        if (g_report_file) {
+            fprintf(g_report_file, "\n[Batch %u/%u] Processing tools %u-%u\n",
+                   (batch_start / BATCH_SIZE) + 1,
+                   (total_tools + BATCH_SIZE - 1) / BATCH_SIZE,
+                   batch_start + 1, batch_end);
+            fflush(g_report_file);
+        }
         
         // Reset conversation to clear KV cache between batches
         ethervox_governor_reset_conversation(governor);
         
         for (uint32_t i = batch_start; i < batch_end; i++) {
+            if (g_optimization_cancelled) {
+                printf("\n⚠️  Optimization cancelled\n");
+                if (g_report_file) {
+                    fprintf(g_report_file, "\n⚠️  Optimization cancelled\n");
+                    fprintf(g_report_file, "Tools processed: %u/%u\n", tools_processed, total_tools);
+                    fflush(g_report_file);
+                    fclose(g_report_file);
+                }
+                fclose(fp);
+                return -2;
+            }
             const tool_index_entry_t* tool_idx = &manifest_registry->index[i];
             
             if (!tool_idx->enabled) {
@@ -243,18 +361,43 @@ int ethervox_optimize_tool_prompts_v2(
                 continue;
             }
             
-            // Build optimization query
+            // Build optimization query - model-agnostic
             char query[4096];
-            snprintf(query, sizeof(query),
+            int qoff = snprintf(query, sizeof(query),
                     "Tool: %s\n"
                     "Category: %s\n"
                     "Description: %s\n"
-                    "Parameters: %u\n\n"
-                    "In ONE concise sentence (max 15 words), explain WHEN to call this tool.\n"
-                    "Start with 'Call %s when...' and be specific about triggering scenarios.\n"
-                    "Focus on USER INTENT that triggers this tool, not implementation details.",
-                    tool_idx->name, tool_idx->category, detail.description,
-                    detail.param_count, tool_idx->name);
+                    "Parameters (%u):\n",
+                    tool_idx->name, tool_idx->category, detail.description, detail.param_count);
+            
+            // Add parameter list
+            for (uint8_t p = 0; p < param_count && qoff < (int)sizeof(query) - 500; p++) {
+                qoff += snprintf(query + qoff, sizeof(query) - qoff,
+                               "  - %s (%s, %s)\n",
+                               params[p].name, params[p].type,
+                               params[p].required ? "required" : "optional");
+            }
+            
+            // Build tool call format example using actual parameter names
+            char tool_format[512];
+            int foff = snprintf(tool_format, sizeof(tool_format),
+                              "<tool_call name=\"%s\"", tool_idx->name);
+            for (uint8_t p = 0; p < param_count && foff < (int)sizeof(tool_format) - 50; p++) {
+                foff += snprintf(tool_format + foff, sizeof(tool_format) - foff,
+                               " %s=\"value\"", params[p].name);
+            }
+            snprintf(tool_format + foff, sizeof(tool_format) - foff, " />");
+            
+            qoff += snprintf(query + qoff, sizeof(query) - qoff,
+                    "\nGenerate a concise optimized prompt (under 30 words) that includes:\n"
+                    "1. WHEN to call this tool (user intent/trigger scenarios)\n"
+                    "2. HOW to call it: %s\n\n"
+                    "Format: Start with 'Call %s when...' then show the exact tool call format.\n"
+                    "Be specific about triggering scenarios.",
+                    tool_format, tool_idx->name);
+            
+            // Disable tool execution so the LLM's example tool call isn't executed
+            ethervox_governor_set_tool_execution(governor, false);
             
             // Ask LLM
             char* response = NULL;
@@ -262,6 +405,9 @@ int ethervox_optimize_tool_prompts_v2(
             
             if (ethervox_governor_execute(governor, query, &response, &error,
                                          NULL, NULL, NULL, NULL) == 0 && response) {
+                // Re-enable tool execution
+                ethervox_governor_set_tool_execution(governor, true);
+                
                 // Extract optimized sentence
                 char optimized[256];
                 extract_optimized_sentence(response, optimized, sizeof(optimized));
@@ -277,12 +423,31 @@ int ethervox_optimize_tool_prompts_v2(
                 fprintf(fp, "      \"token_count\": %d\n", token_estimate);
                 fprintf(fp, "    }%s\n", (i < total_tools - 1) ? "," : "");
                 
-                printf("  ✓ %s: %s (%d tokens)\n", tool_idx->name, optimized, token_estimate);
+                printf("  " COLOR_GREEN "✓" COLOR_RESET " %s: %s (%d tokens)\n", 
+                       tool_idx->name, optimized, token_estimate);
+                
+                if (g_report_file) {
+                    fprintf(g_report_file, "  ✓ %s\n", tool_idx->name);
+                    fprintf(g_report_file, "    Optimized: %s\n", optimized);
+                    fprintf(g_report_file, "    Tokens: %d\n", token_estimate);
+                    fflush(g_report_file);
+                }
                 
                 tools_processed++;
             } else {
+                // Re-enable tool execution even on failure
+                ethervox_governor_set_tool_execution(governor, true);
+                
                 printf("  ✗ %s: optimization failed - %s\n", 
                        tool_idx->name, error ? error : "unknown");
+                       
+                if (g_report_file) {
+                    fprintf(g_report_file, "  ✗ %s: optimization failed\n", tool_idx->name);
+                    if (error) {
+                        fprintf(g_report_file, "    Error: %s\n", error);
+                    }
+                    fflush(g_report_file);
+                }
                        
                 // Write fallback entry using one-liner
                 fprintf(fp, "    {\n");
@@ -302,9 +467,29 @@ int ethervox_optimize_tool_prompts_v2(
     fprintf(fp, "}\n");
     fclose(fp);
     
-    printf("\n✓ Optimization complete!\n");
+    printf("\n" COLOR_GREEN "✓" COLOR_RESET " Optimization complete!\n");
     printf("  Tools processed: %u/%u\n", tools_processed, total_tools);
     printf("  Output file: %s\n", output_path);
+    
+    // Write final statistics to report
+    if (g_report_file) {
+        fprintf(g_report_file, "\n═══════════════════════════════════════════════════════════════\n");
+        fprintf(g_report_file, " Optimization Summary\n");
+        fprintf(g_report_file, "═══════════════════════════════════════════════════════════════\n\n");
+        fprintf(g_report_file, "Total tools: %u\n", total_tools);
+        fprintf(g_report_file, "Successfully optimized: %u\n", tools_processed);
+        fprintf(g_report_file, "Failed: %u\n", total_tools - tools_processed);
+        fprintf(g_report_file, "Success rate: %.1f%%\n\n", 
+               (tools_processed * 100.0) / total_tools);
+        fprintf(g_report_file, "Output file: %s\n", output_path);
+        fprintf(g_report_file, "\n═══════════════════════════════════════════════════════════════\n");
+        fprintf(g_report_file, " Optimization Complete\n");
+        fprintf(g_report_file, "═══════════════════════════════════════════════════════════════\n");
+        fflush(g_report_file);
+        fclose(g_report_file);
+        printf("\n" COLOR_CYAN "📄 Report saved: %s" COLOR_RESET "\n", g_report_path);
+    }
+    
     printf("\nRestart EthervoxAI to use optimized prompts.\n");
     
     return 0;

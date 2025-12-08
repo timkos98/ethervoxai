@@ -151,6 +151,8 @@ typedef enum {
     ETHERVOX_GOVERNOR_EVENT_TOOL_RESULT,       // Tool execution complete
     ETHERVOX_GOVERNOR_EVENT_TOOL_ERROR,        // Tool execution failed
     ETHERVOX_GOVERNOR_EVENT_CONFIDENCE_UPDATE, // Confidence level changed
+    ETHERVOX_GOVERNOR_EVENT_CONTEXT_SUMMARIZING, // Context being summarized before clearing
+    ETHERVOX_GOVERNOR_EVENT_CONTEXT_CLEARED,   // Context cleared, summary stored in memory
     ETHERVOX_GOVERNOR_EVENT_COMPLETE           // Final answer ready
 } ethervox_governor_event_type_t;
 
@@ -323,6 +325,16 @@ uint32_t ethervox_governor_get_last_iteration_count(ethervox_governor_t* governo
  * @return 0 on success, negative on error
  */
 int ethervox_governor_reset_conversation(ethervox_governor_t* governor);
+
+/**
+ * Enable or disable tool call execution
+ * When disabled, tool calls in LLM responses will be extracted but not executed.
+ * This is useful for optimization processes that need raw tool call templates.
+ * 
+ * @param governor Governor instance
+ * @param enabled true to enable tool execution (default), false to disable
+ */
+void ethervox_governor_set_tool_execution(ethervox_governor_t* governor, bool enabled);
 
 /**
  * Cleanup Governor (frees resources)
