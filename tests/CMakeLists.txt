@@ -76,3 +76,8 @@ target_link_libraries(test_tool_manifest ethervoxai)
 target_include_directories(test_tool_manifest PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME ToolManifest COMMAND test_tool_manifest)
 set_tests_properties(ToolManifest PROPERTIES TIMEOUT 30 LABELS "unit;tool_manifest")
+
+# Tool Manifest System benchmarks (not a test, run manually)
+add_executable(benchmark_tool_manifest benchmark_tool_manifest.c)
+target_link_libraries(benchmark_tool_manifest ethervoxai)
+target_include_directories(benchmark_tool_manifest PRIVATE ${CMAKE_SOURCE_DIR}/include)
