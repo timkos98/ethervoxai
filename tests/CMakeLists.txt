@@ -69,3 +69,10 @@ target_link_libraries(test_file_append ethervoxai)
 target_include_directories(test_file_append PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME FileAppend COMMAND test_file_append)
 set_tests_properties(FileAppend PROPERTIES TIMEOUT 30 LABELS "unit;file_tools")
+
+# Tool Manifest System tests
+add_executable(test_tool_manifest test_tool_manifest.c)
+target_link_libraries(test_tool_manifest ethervoxai)
+target_include_directories(test_tool_manifest PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME ToolManifest COMMAND test_tool_manifest)
+set_tests_properties(ToolManifest PROPERTIES TIMEOUT 30 LABELS "unit;tool_manifest")

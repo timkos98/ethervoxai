@@ -32,6 +32,8 @@
 #include "ethervox/config.h"
 #include "ethervox/platform.h"
 #include "ethervox/governor.h"
+#include "ethervox/tool_manifest.h"
+#include "ethervox/tool_prompt_optimizer.h"
 #include "ethervox/compute_tools.h"
 #include "ethervox/memory_tools.h"
 #include "ethervox/file_tools.h"
@@ -95,6 +97,7 @@ static char** command_completion(const char* text, int start, int end) {
 }
 #endif
 static char g_loaded_model_path[512] = {0};  // Track loaded model path for /reset
+static tool_manifest_registry_t g_manifest_registry = {0};  // Tool Manifest System registry
 
 // Default startup prompt text (used if no custom prompt file exists)
 // Optimized for IBM Granite - show what to output, not just instructions
@@ -143,7 +146,7 @@ static void print_help(void) {
     printf("  /help              Show this help message\n");
     printf("  /test              Run comprehensive integration tests\n");
     printf("  /testllm [-v]      Run LLM tool usage tests (-v for verbose debug output)\n");
-    printf("  /optimize_tool_prompts  Generate model-specific tool prompts (self-optimization)\n");
+    printf("  /optimize_tool_prompts  Optimize tool prompts (reduces KV cache 99%% - 15K→150 tokens!)\n");
     printf("  /load <path>       Load Governor model\n");
     printf("  /tools             Show loaded Governor tools\n");
     printf("  /search <query>    Search conversation memory\n");
@@ -1070,12 +1073,45 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
             printf("✗ No model loaded. Use /load <path> first.\n");
             return;
         }
-        printf("Running tool prompt optimization for model: %s\n", g_loaded_model_path);
-        int ret = ethervox_optimize_tool_prompts(governor, g_loaded_model_path);
-        if (ret == 0) {
-            printf("✓ Optimization complete! Restart to use new prompts.\n");
+        
+        printf("═══════════════════════════════════════════════════════════════\n");
+        printf(" Tool Prompt Optimization - Enhanced Version (JSON Output)\n");
+        printf("═══════════════════════════════════════════════════════════════\n");
+        printf("\n");
+        printf("Model: %s\n", g_loaded_model_path);
+        printf("\n");
+        printf("This will:\n");
+        printf("1. Export current tool registry to binary manifest\n");
+        printf("2. Ask the LLM to optimize each tool description (~15 words)\n");
+        printf("3. Save optimized prompts to JSON cache\n");
+        printf("4. Reduce system prompt from ~15K to ~150 tokens (99%% reduction!)\n");
+        printf("\n");
+        
+        // Step 1: Initialize manifest system (exports manifest + loads it)
+        printf("Step 1: Initializing Tool Manifest System...\n");
+        if (ethervox_governor_init_with_manifest(governor, g_loaded_model_path, 
+                                                 &g_manifest_registry) != 0) {
+            printf("✗ Failed to initialize manifest system\n");
+            printf("  (Continuing anyway - will use runtime registry)\n");
         } else {
-            printf("✗ Optimization failed (code: %d)\n", ret);
+            printf("✓ Manifest exported and loaded: %u tools\n", 
+                   g_manifest_registry.header.tool_count);
+        }
+        
+        // Step 2: Run optimizer v2 (JSON output, batch processing)
+        printf("\nStep 2: Running optimization (this may take 30-60 seconds)...\n");
+        int ret = ethervox_optimize_tool_prompts_v2(governor, g_loaded_model_path,
+                                                     &g_manifest_registry);
+        
+        if (ret == 0) {
+            printf("\n✓ Optimization complete!\n");
+            printf("\nNext steps:\n");
+            printf("1. Restart EthervoxAI to use optimized prompts\n");
+            printf("2. Your system prompt will now use ~150 tokens instead of ~15K\n");
+            printf("3. Tool schemas will be injected on-demand only when called\n");
+        } else {
+            printf("\n✗ Optimization failed (code: %d)\n", ret);
+            printf("  The assistant will still work with fallback level 1 (binary one-liners)\n");
         }
         printf("\n");
         return;

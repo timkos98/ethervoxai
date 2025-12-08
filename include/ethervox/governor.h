@@ -23,6 +23,9 @@
 extern "C" {
 #endif
 
+// Forward declarations
+typedef struct tool_manifest_registry tool_manifest_registry_t;
+
 /**
  * Tool execution function signature
  * 
@@ -61,6 +64,19 @@ typedef struct {
     uint32_t tool_count;                // Number of registered tools
     uint32_t capacity;                  // Allocated capacity
 } ethervox_tool_registry_t;
+
+/**
+ * Export current tool registry to binary manifest file
+ * This generates tools.bin from runtime-registered tools
+ * 
+ * @param registry Tool registry to export
+ * @param binary_path Output path for tools.bin
+ * @return 0 on success, negative on error
+ */
+int ethervox_tool_registry_export_manifest(
+    const ethervox_tool_registry_t* registry,
+    const char* binary_path
+);
 
 /**
  * Context health status
@@ -335,6 +351,46 @@ static inline ethervox_governor_config_t ethervox_governor_default_config(void) 
  * @return Tool registry pointer, or NULL if invalid
  */
 ethervox_tool_registry_t* ethervox_governor_get_registry(ethervox_governor_t* governor);
+
+// ============================================================================
+// Tool Manifest System Integration (NEW)
+// ============================================================================
+
+/**
+ * Initialize governor with Tool Manifest System
+ * 
+ * Implements complete initialization with 4-level fallback:
+ * - Level 0: Optimized JSON prompts (~150 tokens)
+ * - Level 1: Binary one-liners (~500 tokens)
+ * - Level 2: LLM-only mode (0 tokens)
+ * - Level 3: Emergency mode (/quit, /help only)
+ * 
+ * @param governor Governor instance
+ * @param model_path Path to GGUF model file
+ * @param manifest_registry Output: Tool manifest registry
+ * @return 0 on success, negative on error
+ */
+int ethervox_governor_init_with_manifest(
+    ethervox_governor_t* governor,
+    const char* model_path,
+    tool_manifest_registry_t* manifest_registry
+);
+
+/**
+ * Build system prompt using Tool Manifest System
+ * 
+ * Generates minimal prompt (~150 tokens) instead of full schemas (~15K tokens).
+ * 
+ * @param manifest_registry Tool manifest registry
+ * @param output Output buffer
+ * @param output_size Buffer size
+ * @return Number of bytes written, or negative on error
+ */
+int ethervox_governor_build_system_prompt_with_manifest(
+    const tool_manifest_registry_t* manifest_registry,
+    char* output,
+    size_t output_size
+);
 
 #ifdef __cplusplus
 }

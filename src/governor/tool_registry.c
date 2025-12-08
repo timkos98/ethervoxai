@@ -9,6 +9,7 @@
  */
 
 #include "ethervox/governor.h"
+#include "ethervox/tool_manifest.h"
 #include "ethervox/tool_prompt_optimizer.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -84,6 +85,102 @@ const ethervox_tool_t* ethervox_tool_registry_find(
     }
     
     return NULL;
+}
+
+int ethervox_tool_registry_export_manifest(
+    const ethervox_tool_registry_t* registry,
+    const char* binary_path
+) {
+    if (!registry || !binary_path) {
+        return -1;
+    }
+    
+    // Open output file
+    FILE* fp = fopen(binary_path, "wb");
+    if (!fp) {
+        fprintf(stderr, "Failed to create manifest: %s\n", binary_path);
+        return -1;
+    }
+    
+    // Write header
+    tool_manifest_header_t header = {0};
+    header.magic = TOOL_MANIFEST_MAGIC;
+    header.version = TOOL_MANIFEST_VERSION;
+    header.tool_count = registry->tool_count;
+    header.index_offset = sizeof(tool_manifest_header_t);
+    
+    // Calculate detail offset (after all index entries)
+    header.detail_offset = header.index_offset + 
+                          (registry->tool_count * sizeof(tool_index_entry_t));
+    header.checksum_type = 1; // CRC32
+    
+    if (fwrite(&header, sizeof(tool_manifest_header_t), 1, fp) != 1) {
+        fclose(fp);
+        return -1;
+    }
+    
+    // Write index entries and collect detail info
+    uint32_t current_detail_offset = header.detail_offset;
+    
+    for (uint32_t i = 0; i < registry->tool_count; i++) {
+        const ethervox_tool_t* tool = &registry->tools[i];
+        
+        tool_index_entry_t entry = {0};
+        strncpy(entry.name, tool->name, TOOL_NAME_MAX - 1);
+        strncpy(entry.one_line, tool->description, TOOL_DESC_MAX - 1);
+        strncpy(entry.category, "general", TOOL_CATEGORY_MAX - 1);
+        entry.priority = 5;
+        entry.enabled = 1;
+        
+        // Calculate detail size
+        tool_detail_header_t detail_hdr = {0};
+        uint16_t detail_size = sizeof(tool_detail_header_t);
+        
+        entry.detail_offset = current_detail_offset;
+        entry.detail_size = detail_size;
+        
+        if (fwrite(&entry, sizeof(tool_index_entry_t), 1, fp) != 1) {
+            fclose(fp);
+            return -1;
+        }
+        
+        current_detail_offset += detail_size;
+    }
+    
+    // Write detail sections
+    for (uint32_t i = 0; i < registry->tool_count; i++) {
+        const ethervox_tool_t* tool = &registry->tools[i];
+        
+        tool_detail_header_t detail = {0};
+        strncpy(detail.name, tool->name, TOOL_NAME_MAX - 1);
+        // Note: description and example are variable-length in the actual format
+        // For now just store basic info
+        detail.param_count = 0;
+        detail.trigger_count = 0;
+        
+        if (fwrite(&detail, sizeof(tool_detail_header_t), 1, fp) != 1) {
+            fclose(fp);
+            return -1;
+        }
+    }
+    
+    // Write CRC32 footer
+    fseek(fp, 0, SEEK_SET);
+    uint8_t* file_data = malloc(current_detail_offset);
+    if (file_data) {
+        size_t read = fread(file_data, 1, current_detail_offset, fp);
+        if (read == current_detail_offset) {
+            uint32_t crc = ethervox_tool_crc32(file_data, current_detail_offset);
+            fseek(fp, 0, SEEK_END);
+            fwrite(&crc, sizeof(uint32_t), 1, fp);
+        }
+        free(file_data);
+    }
+    
+    fclose(fp);
+    
+    printf("Exported %u tools to manifest: %s\n", registry->tool_count, binary_path);
+    return 0;
 }
 
 // Platform type detection helper

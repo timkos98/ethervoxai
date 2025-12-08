@@ -15,8 +15,9 @@
 extern "C" {
 #endif
 
-// Forward declaration
+// Forward declarations
 typedef struct ethervox_governor ethervox_governor_t;
+struct tool_manifest_registry;
 
 /**
  * Run the tool prompt optimization routine
@@ -30,6 +31,24 @@ typedef struct ethervox_governor ethervox_governor_t;
  * @return 0 on success, negative on error
  */
 int ethervox_optimize_tool_prompts(ethervox_governor_t* governor, const char* model_path);
+
+/**
+ * Optimize tool prompts with JSON output and batch processing (V2)
+ * 
+ * Generates model-specific optimized prompts in JSON format.
+ * Processes tools in batches (5 at a time) to avoid KV cache overflow.
+ * Output: ~/.ethervox/tools/optimized/<model>.json
+ * 
+ * @param governor Governor instance with loaded model
+ * @param model_path Path to the model file
+ * @param manifest_registry Tool manifest registry
+ * @return 0 on success, negative on error
+ */
+int ethervox_optimize_tool_prompts_v2(
+    ethervox_governor_t* governor,
+    const char* model_path,
+    struct tool_manifest_registry* manifest_registry
+);
 
 /**
  * Load previously optimized prompts for a model
