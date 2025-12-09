@@ -277,6 +277,7 @@ typedef struct {
     ethervox_governor_t* governor;
     tool_manifest_registry_t* manifest_registry;
     char model_path[512];
+    bool optimize_new_only;
     int result;
     bool completed;
     pthread_mutex_t mutex;
@@ -292,7 +293,8 @@ static void* optimization_thread_func(void* arg) {
     int result = ethervox_optimize_tool_prompts_v2(
         data->governor,
         data->model_path,
-        data->manifest_registry
+        data->manifest_registry,
+        data->optimize_new_only
     );
     
     // Update result atomically
@@ -312,7 +314,7 @@ static void* optimization_thread_func(void* arg) {
 
 JNIEXPORT jint JNICALL
 Java_com_droid_ethervox_1core_NativeLib_optimizeToolPrompts(
-    JNIEnv* env, jobject thiz, jstring modelPath) {
+    JNIEnv* env, jobject thiz, jstring modelPath, jboolean optimizeNewOnly) {
     (void)thiz;
     
     if (!g_governor) {
@@ -346,6 +348,7 @@ Java_com_droid_ethervox_1core_NativeLib_optimizeToolPrompts(
     thread_data->governor = g_governor;
     thread_data->manifest_registry = g_manifest_registry;
     snprintf(thread_data->model_path, sizeof(thread_data->model_path), "%s", model_path);
+    thread_data->optimize_new_only = (optimizeNewOnly == JNI_TRUE);
     thread_data->result = -999;  // Sentinel for "not completed"
     thread_data->completed = false;
     pthread_mutex_init(&thread_data->mutex, NULL);

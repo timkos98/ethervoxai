@@ -147,7 +147,7 @@ static void print_help(void) {
     printf("  /help              Show this help message\n");
     printf("  /test              Run comprehensive integration tests\n");
     printf("  /testllm [-v]      Run LLM tool usage tests (-v for verbose debug output)\n");
-    printf("  /optimize_tool_prompts  Optimize tool prompts (reduces KV cache 99%% - 15K→150 tokens!)\n");
+    printf("  /optimize_tool_prompts  Optimize tool prompts (incremental: only new tools, ~10s)\n");
     printf("  /load <path>       Load Governor model\n");
     printf("  /tools             Show loaded Governor tools\n");
     printf("  /search <query>    Search conversation memory\n");
@@ -1122,7 +1122,8 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         // Step 2: Run optimizer v2 (JSON output, batch processing)
         printf("\nStep 2: Running optimization (this may take 30-60 seconds)...\n");
         int ret = ethervox_optimize_tool_prompts_v2(governor, g_loaded_model_path,
-                                                     &g_manifest_registry);
+                                                     &g_manifest_registry,
+                                                     true);  // optimize_new_only = true (incremental)
         
         if (ret == 0) {
             printf("\n✓ Optimization complete!\n");
@@ -2017,7 +2018,8 @@ int main(int argc, char** argv) {
         // Step 2: Run optimizer
         printf("\nStep 2: Running optimization (this may take 30-60 seconds)...\n");
         int ret = ethervox_optimize_tool_prompts_v2(governor, g_loaded_model_path,
-                                                     &g_manifest_registry);
+                                                     &g_manifest_registry,
+                                                     true);  // optimize_new_only = true (incremental)
         
         if (ret == 0) {
             printf("\n✓ Optimization complete!\n");

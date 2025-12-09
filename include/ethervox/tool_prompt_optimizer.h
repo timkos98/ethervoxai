@@ -10,6 +10,7 @@
 #define ETHERVOX_TOOL_PROMPT_OPTIMIZER_H
 
 #include <stddef.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -42,12 +43,14 @@ int ethervox_optimize_tool_prompts(ethervox_governor_t* governor, const char* mo
  * @param governor Governor instance with loaded model
  * @param model_path Path to the model file
  * @param manifest_registry Tool manifest registry
+ * @param optimize_new_only If true, only optimize tools not already in the JSON file
  * @return 0 on success, negative on error
  */
 int ethervox_optimize_tool_prompts_v2(
     ethervox_governor_t* governor,
     const char* model_path,
-    struct tool_manifest_registry* manifest_registry
+    struct tool_manifest_registry* manifest_registry,
+    bool optimize_new_only
 );
 
 /**

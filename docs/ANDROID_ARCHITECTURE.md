@@ -213,6 +213,11 @@ Java_com_droid_ethervox_1core_NativeLib_methodName(
 - `processGovernorQuery(query)` - Synchronous query execution
 - `processGovernorQueryAsync(query, callback)` - Async query with streaming
 
+### Tool Optimization
+- `optimizeToolPrompts(modelPath, optimizeNewOnly)` - Optimize tool prompts for minimal KV cache
+  - `optimizeNewOnly = true`: Incremental mode - only optimize new tools (~10s for 1-2 tools)
+  - `optimizeNewOnly = false`: Full mode - re-optimize all tools (~60s for 30+ tools)
+
 ### Tool Inspection
 - `getToolsJSON()` - Get JSON list of registered tools
 - `getModelInfo()` - Get loaded model metadata
@@ -251,6 +256,76 @@ ethervox_governor_setup_manifest(g_governor, model_path, &g_manifest_registry);
 // 3. Build minimal system prompt
 ethervox_governor_build_system_prompt_with_manifest(g_manifest_registry, prompt, sizeof(prompt));
 ```
+
+## Tool Prompt Optimization (Incremental Mode)
+
+As of December 2025, the tool prompt optimizer supports incremental optimization to avoid re-optimizing tools that are already cached.
+
+### JNI Signature
+```c
+JNIEXPORT jint JNICALL
+Java_com_droid_ethervox_1core_NativeLib_optimizeToolPrompts(
+    JNIEnv* env, 
+    jobject thiz, 
+    jstring modelPath, 
+    jboolean optimizeNewOnly  // NEW: Controls incremental vs full optimization
+);
+```
+
+### Kotlin Usage
+```kotlin
+// Recommended: Incremental mode (only optimize new tools)
+val result = NativeLib.optimizeToolPrompts(modelPath, optimizeNewOnly = true)
+
+// Force full re-optimization (rarely needed)
+val result = NativeLib.optimizeToolPrompts(modelPath, optimizeNewOnly = false)
+```
+
+### Implementation Details
+The function runs optimization in a background thread to avoid blocking the UI:
+
+```c
+// 1. Create thread data with optimize_new_only flag
+thread_data->optimize_new_only = (optimizeNewOnly == JNI_TRUE);
+
+// 2. Run optimizer in background thread
+pthread_create(&thread, NULL, optimization_thread_func, thread_data);
+
+// 3. Optimizer parses existing JSON cache
+if (optimize_new_only) {
+    parse_existing_optimizations(output_path, &existing_entries, &existing_count);
+    // Only optimize tools not in existing_entries
+}
+```
+
+### Performance Benefits
+- **Incremental mode** (`optimizeNewOnly = true`):
+  - 30 existing tools + 2 new tools → ~10 seconds (only optimize 2)
+  - Time saved: ~86% reduction
+  - API calls saved: ~94% reduction
+  
+- **Full mode** (`optimizeNewOnly = false`):
+  - 32 tools → ~70 seconds (optimize all)
+  - Use when: first-time optimization, cache corrupted, prompts need regeneration
+
+### Background Thread Safety
+The optimization runs asynchronously:
+```kotlin
+lifecycleScope.launch {
+    val progressDialog = showProgressDialog("Optimizing tools...")
+    
+    val result = withContext(Dispatchers.IO) {
+        NativeLib.optimizeToolPrompts(modelPath, optimizeNewOnly = true)
+    }
+    
+    progressDialog.dismiss()
+    handleResult(result)
+}
+```
+
+### See Also
+- `docs/INCREMENTAL_TOOL_OPTIMIZATION.md` - Full technical details
+- `docs/JNI_SIGNATURE_UPDATE_OPTIMIZE_TOOL_PROMPTS.md` - Migration guide for Android developers
 
 ## Common Patterns
 

@@ -159,6 +159,138 @@ static int ensure_directory(const char* path) {
 }
 
 // Create ~/.ethervox/tools/optimized/ directory structure
+// Parse existing JSON file to get list of already optimized tools
+typedef struct {
+    char name[64];
+    char optimized_prompt[256];
+    int token_count;
+} optimized_tool_entry_t;
+
+static int parse_existing_optimizations(
+    const char* json_path,
+    optimized_tool_entry_t** entries_out,
+    uint32_t* count_out
+) {
+    FILE* fp = fopen(json_path, "r");
+    if (!fp) {
+        *entries_out = NULL;
+        *count_out = 0;
+        return -1;  // File doesn't exist yet
+    }
+    
+    // Read entire file
+    fseek(fp, 0, SEEK_END);
+    long file_size = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    
+    if (file_size <= 0 || file_size > 1024 * 1024) {  // Max 1MB
+        fclose(fp);
+        *entries_out = NULL;
+        *count_out = 0;
+        return -1;
+    }
+    
+    char* content = malloc(file_size + 1);
+    if (!content) {
+        fclose(fp);
+        return -1;
+    }
+    
+    fread(content, 1, file_size, fp);
+    content[file_size] = '\0';
+    fclose(fp);
+    
+    // Count tools in JSON (count occurrences of '"name":')
+    uint32_t tool_count = 0;
+    const char* p = content;
+    while ((p = strstr(p, "\"name\":")) != NULL) {
+        tool_count++;
+        p += 7;
+    }
+    
+    if (tool_count == 0) {
+        free(content);
+        *entries_out = NULL;
+        *count_out = 0;
+        return 0;
+    }
+    
+    // Allocate entries
+    optimized_tool_entry_t* entries = calloc(tool_count, sizeof(optimized_tool_entry_t));
+    if (!entries) {
+        free(content);
+        return -1;
+    }
+    
+    // Parse each tool entry
+    uint32_t idx = 0;
+    p = content;
+    while ((p = strstr(p, "\"name\":")) != NULL && idx < tool_count) {
+        p += 7;  // Skip past '"name":'
+        while (*p && isspace(*p)) p++;
+        if (*p != '"') continue;
+        p++;  // Skip opening quote
+        
+        // Extract name
+        const char* name_end = strchr(p, '"');
+        if (!name_end) continue;
+        size_t name_len = name_end - p;
+        if (name_len >= sizeof(entries[idx].name)) name_len = sizeof(entries[idx].name) - 1;
+        strncpy(entries[idx].name, p, name_len);
+        entries[idx].name[name_len] = '\0';
+        
+        // Extract optimized_prompt (optional)
+        const char* prompt_start = strstr(name_end, "\"optimized_prompt\":");
+        if (prompt_start && prompt_start < name_end + 500) {  // Must be in same object
+            prompt_start += 20;  // Skip past '"optimized_prompt":'
+            while (*prompt_start && isspace(*prompt_start)) prompt_start++;
+            if (*prompt_start == '"') {
+                prompt_start++;
+                const char* prompt_end = strchr(prompt_start, '"');
+                if (prompt_end) {
+                    size_t prompt_len = prompt_end - prompt_start;
+                    if (prompt_len >= sizeof(entries[idx].optimized_prompt)) {
+                        prompt_len = sizeof(entries[idx].optimized_prompt) - 1;
+                    }
+                    strncpy(entries[idx].optimized_prompt, prompt_start, prompt_len);
+                    entries[idx].optimized_prompt[prompt_len] = '\0';
+                }
+            }
+        }
+        
+        // Extract token_count (optional)
+        const char* token_start = strstr(name_end, "\"token_count\":");
+        if (token_start && token_start < name_end + 500) {
+            token_start += 15;  // Skip past '"token_count":'
+            while (*token_start && isspace(*token_start)) token_start++;
+            entries[idx].token_count = atoi(token_start);
+        }
+        
+        idx++;
+        p = name_end + 1;
+    }
+    
+    free(content);
+    *entries_out = entries;
+    *count_out = idx;
+    return 0;
+}
+
+// Check if a tool is already optimized
+static bool is_tool_optimized(
+    const char* tool_name,
+    const optimized_tool_entry_t* entries,
+    uint32_t entry_count
+) {
+    for (uint32_t i = 0; i < entry_count; i++) {
+        if (strcmp(tool_name, entries[i].name) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Create ~/.ethervox/tools/optimized/ directory structure
 static int create_optimized_dir(void) {
 #ifdef ETHERVOX_PLATFORM_ANDROID
     // On Android, use app files directory
@@ -201,7 +333,8 @@ static int create_optimized_dir(void) {
 int ethervox_optimize_tool_prompts_v2(
     ethervox_governor_t* governor,
     const char* model_path,
-    tool_manifest_registry_t* manifest_registry
+    tool_manifest_registry_t* manifest_registry,
+    bool optimize_new_only
 ) {
     if (!governor || !model_path || !manifest_registry) {
         return -1;
@@ -297,22 +430,72 @@ int ethervox_optimize_tool_prompts_v2(
              "%s/.ethervox/tools/optimized/%s.json", home, model_name);
 #endif
     
+    // Parse existing optimizations if in incremental mode
+    optimized_tool_entry_t* existing_entries = NULL;
+    uint32_t existing_count = 0;
+    uint32_t tools_to_optimize = manifest_registry->header.tool_count;
+    uint32_t tools_skipped = 0;
+    
+    if (optimize_new_only) {
+        int parse_result = parse_existing_optimizations(output_path, &existing_entries, &existing_count);
+        if (parse_result == 0 && existing_count > 0) {
+            printf("\nIncremental mode: Found %u existing optimizations\n", existing_count);
+            if (g_report_file) {
+                fprintf(g_report_file, "\nIncremental mode: Found %u existing optimizations\n", existing_count);
+                fprintf(g_report_file, "Will only optimize new tools\n\n");
+                fflush(g_report_file);
+            }
+            
+            // Count tools that need optimization
+            tools_to_optimize = 0;
+            for (uint32_t i = 0; i < manifest_registry->header.tool_count; i++) {
+                const tool_index_entry_t* tool_idx = &manifest_registry->index[i];
+                if (tool_idx->enabled && !is_tool_optimized(tool_idx->name, existing_entries, existing_count)) {
+                    tools_to_optimize++;
+                }
+            }
+            tools_skipped = manifest_registry->header.tool_count - tools_to_optimize;
+        } else {
+            printf("\nIncremental mode: No existing optimizations found, will optimize all tools\n");
+        }
+    }
+    
     printf("\n");
     printf("Starting optimization...\n");
     printf("Model: %s\n", model_name);
-    printf("Tools: %u\n", manifest_registry->header.tool_count);
+    printf("Total tools: %u\n", manifest_registry->header.tool_count);
+    if (optimize_new_only && existing_count > 0) {
+        printf("Already optimized: %u\n", tools_skipped);
+        printf("To optimize: %u\n", tools_to_optimize);
+    } else {
+        printf("To optimize: %u\n", tools_to_optimize);
+    }
     printf("Output: %s\n", output_path);
     printf("Batch size: %d tools/batch\n", BATCH_SIZE);
     printf("\n");
     printf("This will generate model-specific optimized prompts (~15 tokens/tool).\n");
-    printf("Estimated time: ~%d seconds\n", 
-           (manifest_registry->header.tool_count / BATCH_SIZE) * 10);
+    if (tools_to_optimize > 0) {
+        printf("Estimated time: ~%d seconds\n", 
+               (tools_to_optimize / BATCH_SIZE + 1) * 10);
+    }
     printf("\n");
+    
+    // If no new tools to optimize, we're done
+    if (tools_to_optimize == 0) {
+        printf(COLOR_GREEN "✓" COLOR_RESET " All tools already optimized!\n");
+        if (existing_entries) free(existing_entries);
+        if (g_report_file) {
+            fprintf(g_report_file, "\nAll tools already optimized - nothing to do\n");
+            fclose(g_report_file);
+        }
+        return 0;
+    }
     
     // Open output file
     FILE* fp = fopen(output_path, "w");
     if (!fp) {
         ETHERVOX_LOGE("Failed to open output file: %s", output_path);
+        if (existing_entries) free(existing_entries);
         return -1;
     }
     
@@ -321,6 +504,20 @@ int ethervox_optimize_tool_prompts_v2(
     fprintf(fp, "  \"model_name\": \"%s\",\n", model_name);
     fprintf(fp, "  \"optimized_at\": %ld,\n", (long)time(NULL));
     fprintf(fp, "  \"tools\": [\n");
+    
+    // First, write existing optimized tools (if in incremental mode)
+    bool first_entry = true;
+    if (optimize_new_only && existing_entries && existing_count > 0) {
+        for (uint32_t i = 0; i < existing_count; i++) {
+            if (!first_entry) fprintf(fp, ",\n");
+            fprintf(fp, "    {\n");
+            fprintf(fp, "      \"name\": \"%s\",\n", existing_entries[i].name);
+            fprintf(fp, "      \"optimized_prompt\": \"%s\",\n", existing_entries[i].optimized_prompt);
+            fprintf(fp, "      \"token_count\": %d\n", existing_entries[i].token_count);
+            fprintf(fp, "    }");
+            first_entry = false;
+        }
+    }
     
     uint32_t total_tools = manifest_registry->header.tool_count;
     uint32_t tools_processed = 0;
@@ -375,6 +572,17 @@ int ethervox_optimize_tool_prompts_v2(
             
             if (!tool_idx->enabled) {
                 printf("  ⊘ %s: disabled, skipping\n", tool_idx->name);
+                continue;
+            }
+            
+            // Skip if already optimized (in incremental mode)
+            if (optimize_new_only && existing_entries && 
+                is_tool_optimized(tool_idx->name, existing_entries, existing_count)) {
+                printf("  " COLOR_CYAN "↻" COLOR_RESET " %s: already optimized, skipping\n", tool_idx->name);
+                if (g_report_file) {
+                    fprintf(g_report_file, "  ↻ %s: already optimized, skipping\n", tool_idx->name);
+                    fflush(g_report_file);
+                }
                 continue;
             }
             
@@ -519,6 +727,11 @@ int ethervox_optimize_tool_prompts_v2(
     }
     
     printf("\nRestart EthervoxAI to use optimized prompts.\n");
+    
+    // Cleanup
+    if (existing_entries) {
+        free(existing_entries);
+    }
     
     return 0;
 }
