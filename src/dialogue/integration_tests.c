@@ -20,6 +20,7 @@
 #include "ethervox/logging.h"
 #include "ethervox/chat_template.h"
 #include "ethervox/platform.h"
+#include "ethervox/unit_conversion.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -27,6 +28,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <errno.h>
+#include <math.h>
 
 // Android logging support
 #ifdef __ANDROID__
@@ -688,6 +690,124 @@ static void test_file_append_tool(void) {
     unlink(test_file);
 }
 
+// Test 9: Unit Conversion Tool
+static void test_unit_conversion_tool(void) {
+    TEST_HEADER("Test 9: Unit Conversion Tool");
+    
+    double result;
+    char* error = NULL;
+    int ret;
+    
+    // Temperature conversion
+    ret = ethervox_unit_convert(100.0, "celsius", "fahrenheit", &result, &error);
+    if (ret != 0) {
+        TEST_FAIL("Temperature conversion failed: %s", error ? error : "unknown");
+        free(error);
+        g_tests_failed++;
+        return;
+    }
+    if (fabs(result - 212.0) > 0.001) {
+        TEST_FAIL("Temperature conversion incorrect: expected 212.0, got %.3f", result);
+        g_tests_failed++;
+        return;
+    }
+    TEST_PASS("Temperature: 100°C = 212°F");
+    
+    // Length conversion
+    ret = ethervox_unit_convert(5.0, "mile", "kilometer", &result, &error);
+    if (ret != 0 || fabs(result - 8.04672) > 0.001) {
+        TEST_FAIL("Length conversion failed");
+        free(error);
+        g_tests_failed++;
+        return;
+    }
+    TEST_PASS("Length: 5 miles ≈ 8.047 km");
+    
+    // Mass conversion
+    ret = ethervox_unit_convert(1.0, "kilogram", "pound", &result, &error);
+    if (ret != 0 || fabs(result - 2.20462) > 0.001) {
+        TEST_FAIL("Mass conversion failed");
+        free(error);
+        g_tests_failed++;
+        return;
+    }
+    TEST_PASS("Mass: 1 kg ≈ 2.205 lb");
+    
+    // Volume conversion
+    ret = ethervox_unit_convert(1.0, "gallon", "liter", &result, &error);
+    if (ret != 0 || fabs(result - 4.54609) > 0.001) {
+        TEST_FAIL("Volume conversion failed");
+        free(error);
+        g_tests_failed++;
+        return;
+    }
+    TEST_PASS("Volume: 1 imperial gallon ≈ 4.546 L");
+    
+    // Speed conversion
+    ret = ethervox_unit_convert(60.0, "mph", "km/h", &result, &error);
+    if (ret != 0 || fabs(result - 96.56) > 0.1) {
+        TEST_FAIL("Speed conversion failed");
+        free(error);
+        g_tests_failed++;
+        return;
+    }
+    TEST_PASS("Speed: 60 mph ≈ 96.56 km/h");
+    
+    // Pressure conversion
+    ret = ethervox_unit_convert(1.0, "atmosphere", "psi", &result, &error);
+    if (ret != 0 || fabs(result - 14.696) > 0.001) {
+        TEST_FAIL("Pressure conversion failed");
+        free(error);
+        g_tests_failed++;
+        return;
+    }
+    TEST_PASS("Pressure: 1 atm ≈ 14.696 psi");
+    
+    // Energy conversion
+    ret = ethervox_unit_convert(1.0, "kilowatt hour", "joule", &result, &error);
+    if (ret != 0 || fabs(result - 3.6e6) > 1.0) {
+        TEST_FAIL("Energy conversion failed");
+        free(error);
+        g_tests_failed++;
+        return;
+    }
+    TEST_PASS("Energy: 1 kWh = 3.6 MJ");
+    
+    // Data conversion
+    ret = ethervox_unit_convert(1024.0, "byte", "kibibyte", &result, &error);
+    if (ret != 0 || fabs(result - 1.0) > 0.001) {
+        TEST_FAIL("Data conversion failed");
+        free(error);
+        g_tests_failed++;
+        return;
+    }
+    TEST_PASS("Data: 1024 bytes = 1 KiB");
+    
+    // Error handling: incompatible units
+    ret = ethervox_unit_convert(10.0, "meter", "kilogram", &result, &error);
+    if (ret == 0) {
+        TEST_FAIL("Should reject incompatible units");
+        g_tests_failed++;
+        return;
+    }
+    free(error);
+    error = NULL;
+    TEST_PASS("Error handling: rejects incompatible units");
+    
+    // Error handling: unknown unit
+    ret = ethervox_unit_convert(10.0, "foobar", "meter", &result, &error);
+    if (ret == 0) {
+        TEST_FAIL("Should reject unknown units");
+        g_tests_failed++;
+        return;
+    }
+    free(error);
+    TEST_PASS("Error handling: rejects unknown units");
+    
+    g_tests_passed++;
+    TEST_PASS("Unit conversion integration test completed");
+}
+
 // Main test runner
 void run_integration_tests(void) {
     // Create test report file
@@ -859,6 +979,11 @@ void run_integration_tests(void) {
     test_file_append_tool();
     if (g_tests_failed > failed_before) record_test_result("File Append Tool", false);
     else if (g_tests_passed > passed_before) record_test_result("File Append Tool", true);
+    
+    passed_before = g_tests_passed; failed_before = g_tests_failed;
+    test_unit_conversion_tool();
+    if (g_tests_failed > failed_before) record_test_result("Unit Conversion Tool", false);
+    else if (g_tests_passed > passed_before) record_test_result("Unit Conversion Tool", true);
     
     time_t end_time = time(NULL);
     double duration = difftime(end_time, start_time);

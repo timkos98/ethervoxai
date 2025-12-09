@@ -84,6 +84,13 @@ target_include_directories(test_file_append PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME FileAppend COMMAND test_file_append)
 set_tests_properties(FileAppend PROPERTIES TIMEOUT 30 LABELS "unit;file_tools")
 
+# Unit conversion tests
+add_executable(test_unit_conversion unit/test_unit_conversion.c)
+target_link_libraries(test_unit_conversion ethervoxai m)
+target_include_directories(test_unit_conversion PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME UnitConversion COMMAND test_unit_conversion)
+set_tests_properties(UnitConversion PROPERTIES TIMEOUT 30 LABELS "unit;unit_conversion")
+
 # Tool Manifest System tests
 add_executable(test_tool_manifest test_tool_manifest.c)
 target_link_libraries(test_tool_manifest ethervoxai)

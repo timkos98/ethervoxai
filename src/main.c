@@ -38,6 +38,7 @@
 #include "ethervox/memory_tools.h"
 #include "ethervox/file_tools.h"
 #include "ethervox/voice_tools.h"
+#include "ethervox/unit_conversion.h"
 #include "ethervox/startup_prompt_tools.h"
 #include "ethervox/system_info_tools.h"
 #include "ethervox/logging.h"
@@ -1684,6 +1685,11 @@ int main(int argc, char** argv) {
     // Register path configuration tools
     if (ethervox_path_config_register(&registry, &path_config) == 0) {
         printf("Path Config Tools: Registered with Governor\n");
+    }
+    
+    // Register unit conversion tool
+    if (ethervox_unit_conversion_register(&registry) == 0) {
+        printf("Unit Conversion Tool: Registered with Governor\n");
     }
     
     // Register startup prompt tools

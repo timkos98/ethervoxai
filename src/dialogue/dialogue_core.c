@@ -28,6 +28,7 @@
 #include "ethervox/compute_tools.h"  // Compute tools
 #include "ethervox/timer_tools.h"    // Timer tools
 #include "ethervox/memory_tools.h"   // Memory tools
+#include "ethervox/unit_conversion.h" // Unit conversion tools
 #include "ethervox/config.h"         // For version information
 #include "ethervox/dialogue.h"
 #include "ethervox/governor.h"  // Governor orchestration
@@ -675,6 +676,16 @@ int ethervox_dialogue_init(ethervox_dialogue_engine_t* engine,
     ethervox_tool_registry_add(registry, ethervox_tool_timer_list());
     ethervox_tool_registry_add(registry, ethervox_tool_alarm_create());
     tool_count += 4;
+    
+    // Register unit conversion tool
+    if (ethervox_unit_conversion_register(registry) == 0) {
+      tool_count++;
+#ifdef ETHERVOX_PLATFORM_ANDROID
+      ETHERVOX_LOGI("Registered unit conversion tool with Governor");
+#else
+      printf("Registered unit conversion tool with Governor\n");
+#endif
+    }
     
     // Register memory tools if memory store is available
     if (g_dialogue_memory_store) {
