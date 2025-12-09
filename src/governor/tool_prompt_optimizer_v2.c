@@ -30,6 +30,11 @@
 #include <sys/types.h>
 #endif
 
+// Forward declaration for Android files directory getter
+#ifdef ETHERVOX_PLATFORM_ANDROID
+extern const char* ethervox_android_get_files_dir(void);
+#endif
+
 #define BATCH_SIZE 5  // Process 5 tools per batch to avoid KV overflow
 
 // ANSI color codes
@@ -155,6 +160,22 @@ static int ensure_directory(const char* path) {
 
 // Create ~/.ethervox/tools/optimized/ directory structure
 static int create_optimized_dir(void) {
+#ifdef ETHERVOX_PLATFORM_ANDROID
+    // On Android, use app files directory
+    const char* android_files_dir = ethervox_android_get_files_dir();
+    if (!android_files_dir || android_files_dir[0] == '\0') {
+        ETHERVOX_LOGE("Android files directory not set");
+        return -1;
+    }
+    
+    char dir1[512], dir2[512];
+    snprintf(dir1, sizeof(dir1), "%s/tools", android_files_dir);
+    snprintf(dir2, sizeof(dir2), "%s/tools/optimized", android_files_dir);
+    
+    ensure_directory(dir1);
+    ensure_directory(dir2);
+#else
+    // On desktop, use HOME environment variable
     const char* home = getenv("HOME");
     if (!home) {
         ETHERVOX_LOGE("HOME environment variable not set");
@@ -169,6 +190,7 @@ static int create_optimized_dir(void) {
     ensure_directory(dir1);
     ensure_directory(dir2);
     ensure_directory(dir3);
+#endif
     
     return 0;
 }
@@ -264,10 +286,16 @@ int ethervox_optimize_tool_prompts_v2(
     }
     
     // Build output path
-    const char* home = getenv("HOME");
     char output_path[512];
+#ifdef ETHERVOX_PLATFORM_ANDROID
+    const char* android_files_dir = ethervox_android_get_files_dir();
+    snprintf(output_path, sizeof(output_path),
+             "%s/tools/optimized/%s.json", android_files_dir, model_name);
+#else
+    const char* home = getenv("HOME");
     snprintf(output_path, sizeof(output_path),
              "%s/.ethervox/tools/optimized/%s.json", home, model_name);
+#endif
     
     printf("\n");
     printf("Starting optimization...\n");

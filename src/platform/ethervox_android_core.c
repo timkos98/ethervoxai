@@ -12,6 +12,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#include <pthread.h>
+#include <unistd.h>
+#include <sys/stat.h>
 #include <android/log.h>
 
 #include "ethervox/audio.h"
@@ -20,6 +23,7 @@
 #include "ethervox/llm.h"
 #include "ethervox/dialogue.h"
 #include "ethervox/governor.h"
+#include "ethervox/tool_manifest.h"
 #include "ethervox/timer_tools.h"
 #include "ethervox/memory_tools.h"
 #include "ethervox/voice_tools.h"
@@ -85,6 +89,11 @@ static ethervox_memory_store_t* g_memory_store = NULL;
 // Android-specific files directory
 static char g_android_files_dir[512] = {0};
 
+// Getter function for Android files directory (used by manifest system)
+const char* ethervox_android_get_files_dir(void) {
+    return g_android_files_dir;
+}
+
 // ===========================================================================
 // Utility Functions
 // ===========================================================================
@@ -128,6 +137,45 @@ Java_com_droid_ethervox_1core_NativeLib_loadGovernorModel(
     
     if (result == 0) {
         LOGI("[JNI] Governor model loaded successfully");
+        
+        // Initialize Tool Manifest System (after Governor model is loaded)
+        // This is optional - graceful fallback if it fails
+        if (!g_dialogue_engine->manifest_registry) {
+            LOGI("[JNI] Initializing manifest registry after model load");
+            
+            // Get the model path from JNI parameter (we need to get it again since we released it)
+            const char* model_path_for_manifest = (*env)->GetStringUTFChars(env, modelPath, NULL);
+            
+            tool_manifest_registry_t* manifest = malloc(sizeof(tool_manifest_registry_t));
+            if (manifest) {
+                memset(manifest, 0, sizeof(tool_manifest_registry_t));
+                
+                // Try to initialize with manifest
+                int manifest_result = ethervox_governor_init_with_manifest(governor, model_path_for_manifest, manifest);
+                LOGI("[JNI] Manifest init result: %d", manifest_result);
+                
+                if (manifest_result == 0) {
+                    g_dialogue_engine->manifest_registry = manifest;
+                    
+                    // Report manifest status
+                    if (manifest->tools_available) {
+                        if (manifest->optimized_cache) {
+                            LOGI("Manifest ready: Level 0 (optimized prompts loaded)");
+                        } else {
+                            LOGI("Manifest ready: Level 1 (binary one-liners)");
+                        }
+                    } else {
+                        LOGE("Manifest fallback: Level 2 (LLM-only, consider optimization)");
+                    }
+                } else {
+                    free(manifest);
+                    LOGE("Manifest unavailable - using runtime registry only");
+                }
+            }
+            
+            (*env)->ReleaseStringUTFChars(env, modelPath, model_path_for_manifest);
+        }
+        
         return JNI_TRUE;
     } else {
         if (result == -2) {
@@ -240,6 +288,44 @@ Java_com_droid_ethervox_1core_NativeLib_getRegisteredPlugins(
     return result;
 }
 
+// Thread data for optimization (to avoid blocking UI)
+typedef struct {
+    ethervox_governor_t* governor;
+    tool_manifest_registry_t* manifest_registry;
+    char model_path[512];
+    int result;
+    bool completed;
+    pthread_mutex_t mutex;
+} optimization_thread_data_t;
+
+// Optimization thread function
+static void* optimization_thread_func(void* arg) {
+    optimization_thread_data_t* data = (optimization_thread_data_t*)arg;
+    
+    LOGI("Optimization thread started for model: %s", data->model_path);
+    
+    // Run V2 optimizer (this can take 30-60 seconds)
+    int result = ethervox_optimize_tool_prompts_v2(
+        data->governor,
+        data->model_path,
+        data->manifest_registry
+    );
+    
+    // Update result atomically
+    pthread_mutex_lock(&data->mutex);
+    data->result = result;
+    data->completed = true;
+    pthread_mutex_unlock(&data->mutex);
+    
+    if (result == 0) {
+        LOGI("Optimization thread completed successfully");
+    } else {
+        LOGE("Optimization thread failed with code: %d", result);
+    }
+    
+    return NULL;
+}
+
 JNIEXPORT jint JNICALL
 Java_com_droid_ethervox_1core_NativeLib_optimizeToolPrompts(
     JNIEnv* env, jobject thiz, jstring modelPath) {
@@ -250,16 +336,73 @@ Java_com_droid_ethervox_1core_NativeLib_optimizeToolPrompts(
         return -1;
     }
     
+    if (!g_dialogue_engine->manifest_registry) {
+        LOGE("Manifest registry not initialized - ensure model is loaded first");
+        return -2;
+    }
+    
     const char* model_path = (*env)->GetStringUTFChars(env, modelPath, NULL);
     if (!model_path) {
         LOGE("Failed to get model path string");
-        return -1;
+        return -3;
     }
     
-    ethervox_governor_t* governor = (ethervox_governor_t*)g_dialogue_engine->governor;
-    int result = ethervox_optimize_tool_prompts(governor, model_path);
+    LOGI("Starting tool prompt optimization (V2) for model: %s", model_path);
+    LOGI("This may take 30-60 seconds and is memory-intensive");
+    
+    // Allocate thread data
+    optimization_thread_data_t* thread_data = malloc(sizeof(optimization_thread_data_t));
+    if (!thread_data) {
+        LOGE("Failed to allocate optimization thread data");
+        (*env)->ReleaseStringUTFChars(env, modelPath, model_path);
+        return -4;
+    }
+    
+    // Initialize thread data
+    thread_data->governor = (ethervox_governor_t*)g_dialogue_engine->governor;
+    thread_data->manifest_registry = (tool_manifest_registry_t*)g_dialogue_engine->manifest_registry;
+    snprintf(thread_data->model_path, sizeof(thread_data->model_path), "%s", model_path);
+    thread_data->result = -999;  // Sentinel for "not completed"
+    thread_data->completed = false;
+    pthread_mutex_init(&thread_data->mutex, NULL);
     
     (*env)->ReleaseStringUTFChars(env, modelPath, model_path);
+    
+    // Create optimization thread (to avoid blocking UI)
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, optimization_thread_func, thread_data) != 0) {
+        LOGE("Failed to create optimization thread");
+        pthread_mutex_destroy(&thread_data->mutex);
+        free(thread_data);
+        return -5;
+    }
+    
+    // Detach thread and wait for completion
+    pthread_detach(thread);
+    
+    // Wait for completion with periodic logging
+    while (!thread_data->completed) {
+        sleep(5);  // Check every 5 seconds
+        
+        pthread_mutex_lock(&thread_data->mutex);
+        bool is_completed = thread_data->completed;
+        pthread_mutex_unlock(&thread_data->mutex);
+        
+        if (!is_completed) {
+            static int wait_seconds = 0;
+            wait_seconds += 5;
+            LOGI("Optimization in progress... (%d seconds elapsed)", wait_seconds);
+        }
+    }
+    
+    // Get final result
+    pthread_mutex_lock(&thread_data->mutex);
+    int result = thread_data->result;
+    pthread_mutex_unlock(&thread_data->mutex);
+    
+    // Cleanup
+    pthread_mutex_destroy(&thread_data->mutex);
+    free(thread_data);
     
     if (result == 0) {
         LOGI("Tool prompt optimization completed successfully");
@@ -307,7 +450,7 @@ Java_com_droid_ethervox_1core_NativeLib_loadOptimizedPrompts(
         return NULL;
     }
     
-    jmethodID constructor = (*env)->GetMethodID(env, optimizedPromptsClass, "<init>", 
+    jmethodID constructor = (*env)->GetMethodID(env, optimizedPromptsClass, "<init>",
                                                 "(Ljava/lang/String;Ljava/lang/String;)V");
     if (!constructor) {
         LOGE("Failed to find OptimizedPrompts constructor");
@@ -325,6 +468,136 @@ Java_com_droid_ethervox_1core_NativeLib_loadOptimizedPrompts(
     (*env)->DeleteLocalRef(env, optimizedPromptsClass);
     
     return optimizedPrompts;
+}
+
+/**
+ * Get manifest registry information
+ * Returns JSON string with current manifest state
+ */
+JNIEXPORT jstring JNICALL
+Java_com_droid_ethervox_1core_NativeLib_getManifestInfo(
+    JNIEnv* env,
+    jobject thiz) {
+    (void)thiz;
+    
+    if (!g_dialogue_engine || !g_dialogue_engine->manifest_registry) {
+        // No manifest available - return minimal JSON
+        return (*env)->NewStringUTF(env, 
+            "{\"available\":false,\"tool_count\":0,\"fallback_level\":3,\"optimized_loaded\":false,\"tools_detected\":false,\"tools_loaded_count\":0}");
+    }
+    
+    tool_manifest_registry_t* manifest = 
+        (tool_manifest_registry_t*)g_dialogue_engine->manifest_registry;
+    
+    ETHERVOX_LOGI("DEBUG getManifestInfo: reading tools_loaded_count=%u", manifest->tools_loaded_count);
+    
+    // Build JSON response with guard status
+    char json[512];
+    snprintf(json, sizeof(json),
+        "{\"available\":%s,\"tool_count\":%u,\"fallback_level\":%u,\"optimized_loaded\":%s,\"tools_detected\":%s,\"tools_loaded_count\":%u}",
+        manifest->tools_available ? "true" : "false",
+        manifest->header.tool_count,
+        manifest->fallback_level,
+        manifest->optimization_loaded ? "true" : "false",
+        manifest->tools_detected ? "true" : "false",
+        manifest->tools_loaded_count
+    );
+    
+    return (*env)->NewStringUTF(env, json);
+}
+
+/**
+ * Get the optimized tool prompts directory path
+ * Returns the absolute path where optimized JSON files are stored/expected
+ */
+JNIEXPORT jstring JNICALL
+Java_com_droid_ethervox_1core_NativeLib_getOptimizedDir(
+    JNIEnv* env,
+    jobject thiz) {
+    (void)thiz;
+    
+    char optimized_dir[512];
+    
+    if (g_android_files_dir[0] != '\0') {
+        // Android: Use app files directory
+        snprintf(optimized_dir, sizeof(optimized_dir),
+                 "%s/tools/optimized", g_android_files_dir);
+    } else {
+        // Fallback (should not happen on Android)
+        const char* home = getenv("HOME");
+        snprintf(optimized_dir, sizeof(optimized_dir),
+                 "%s/.ethervox/tools/optimized", 
+                 home ? home : ".");
+    }
+    
+    return (*env)->NewStringUTF(env, optimized_dir);
+}
+
+/**
+ * Check if optimization file exists for a given model
+ * Returns true if the optimized JSON file exists on disk
+ */
+JNIEXPORT jboolean JNICALL
+Java_com_droid_ethervox_1core_NativeLib_optimizationFileExists(
+    JNIEnv* env,
+    jobject thiz,
+    jstring modelPath) {
+    (void)thiz;
+    
+    if (!modelPath) {
+        return JNI_FALSE;
+    }
+    
+    const char* model_path_str = (*env)->GetStringUTFChars(env, modelPath, NULL);
+    if (!model_path_str) {
+        return JNI_FALSE;
+    }
+    
+    // Extract model name from path (e.g., /path/to/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf -> Qwen2.5-0.5B-Instruct-Q4_K_M)
+    const char* filename = strrchr(model_path_str, '/');
+    if (!filename) {
+        filename = model_path_str;
+    } else {
+        filename++; // Skip the '/'
+    }
+    
+    // Remove .gguf extension
+    char model_name[256];
+    size_t i = 0;
+    while (filename[i] && filename[i] != '.' && i < sizeof(model_name) - 1) {
+        model_name[i] = filename[i];
+        i++;
+    }
+    model_name[i] = '\0';
+    
+    // Remove trailing dash if present
+    if (i > 0 && model_name[i-1] == '-') {
+        model_name[i-1] = '\0';
+    }
+    
+    (*env)->ReleaseStringUTFChars(env, modelPath, model_path_str);
+    
+    // Build path to optimization file
+    char optimized_path[512];
+    if (g_android_files_dir[0] != '\0') {
+        snprintf(optimized_path, sizeof(optimized_path),
+                 "%s/tools/optimized/%s.json", 
+                 g_android_files_dir, model_name);
+    } else {
+        const char* home = getenv("HOME");
+        snprintf(optimized_path, sizeof(optimized_path),
+                 "%s/.ethervox/tools/optimized/%s.json", 
+                 home ? home : ".", model_name);
+    }
+    
+    // Check if file exists
+    struct stat st;
+    jboolean exists = (stat(optimized_path, &st) == 0) ? JNI_TRUE : JNI_FALSE;
+    
+    ETHERVOX_LOGI("Checking optimization file: %s -> %s", 
+                  optimized_path, exists ? "EXISTS" : "NOT FOUND");
+    
+    return exists;
 }
 
 /**
@@ -519,6 +792,19 @@ Java_com_droid_ethervox_1core_NativeLib_initializeWithModel(
     LOGI("Initializing dialogue engine with model: %s (temp=%.2f, max_tokens=%d, top_p=%.2f, ctx=%d)",
          path, temperature, max_tokens, top_p, context_length);
     
+    // Create directories for manifest storage
+    if (g_android_files_dir) {
+        char tools_dir[512];
+        snprintf(tools_dir, sizeof(tools_dir), "%s/tools", g_android_files_dir);
+        mkdir(tools_dir, 0755);
+        
+        char optimized_dir[512];
+        snprintf(optimized_dir, sizeof(optimized_dir), "%s/tools/optimized", g_android_files_dir);
+        mkdir(optimized_dir, 0755);
+        
+        LOGI("Created manifest directories in: %s", g_android_files_dir);
+    }
+    
     // Clean up existing dialogue engine if any
     if (g_dialogue_engine) {
         ethervox_dialogue_cleanup(g_dialogue_engine);
@@ -544,6 +830,8 @@ Java_com_droid_ethervox_1core_NativeLib_initializeWithModel(
     llm_config.context_length = (uint32_t)context_length;
     llm_config.use_gpu = true;  // Force GPU acceleration ON
     llm_config.gpu_layers = 99;  // Offload entire model to GPU
+    
+    LOGI("[DEBUG] JNI: Before dialogue_init, llm_config.model_path=%s", llm_config.model_path ? llm_config.model_path : "NULL");
     
     // Initialize dialogue engine with LLM
     int result = ethervox_dialogue_init(g_dialogue_engine, &llm_config);
@@ -1028,8 +1316,29 @@ static void native_governor_progress_callback(
         case ETHERVOX_GOVERNOR_EVENT_TOOL_RESULT:
             event_str = "TOOL_RESULT";
             break;
+        case ETHERVOX_GOVERNOR_EVENT_TOOL_ERROR:
+            event_str = "TOOL_ERROR";
+            break;
         case ETHERVOX_GOVERNOR_EVENT_CONFIDENCE_UPDATE:
             event_str = "CONFIDENCE_UPDATE";
+            break;
+        case ETHERVOX_GOVERNOR_EVENT_CONTEXT_SUMMARIZING:
+            event_str = "CONTEXT_SUMMARIZING";
+            break;
+        case ETHERVOX_GOVERNOR_EVENT_CONTEXT_CLEARED:
+            event_str = "CONTEXT_CLEARED";
+            break;
+        case ETHERVOX_GOVERNOR_EVENT_MANIFEST_LOADING:
+            event_str = "MANIFEST_LOADING";
+            break;
+        case ETHERVOX_GOVERNOR_EVENT_MANIFEST_READY:
+            event_str = "MANIFEST_READY";
+            break;
+        case ETHERVOX_GOVERNOR_EVENT_MANIFEST_FALLBACK_LEVEL_1:
+            event_str = "MANIFEST_FALLBACK_LEVEL_1";
+            break;
+        case ETHERVOX_GOVERNOR_EVENT_MANIFEST_FALLBACK_LEVEL_2:
+            event_str = "MANIFEST_FALLBACK_LEVEL_2";
             break;
         case ETHERVOX_GOVERNOR_EVENT_COMPLETE:
             event_str = "COMPLETE";

@@ -138,6 +138,7 @@ typedef struct {
   // Governor integration (tool-aware LLM orchestration)
   void* governor;  // ethervox_governor_t*
   void* governor_tool_registry;  // ethervox_tool_registry_t*
+  void* manifest_registry;  // tool_manifest_registry_t* (binary manifest + optimized prompts cache)
   bool use_governor;  // Enable Governor for complex queries
 
   // Intent parsing patterns
@@ -204,6 +205,10 @@ void ethervox_dialogue_set_external_llm_callback(ethervox_dialogue_engine_t* eng
 // Memory store integration (forward declaration)
 struct ethervox_memory_store_t;
 void ethervox_dialogue_set_memory_store(struct ethervox_memory_store_t* store);
+
+// Tool manifest integration (forward declaration)
+struct tool_manifest_registry;
+int ethervox_dialogue_reload_manifest(ethervox_dialogue_engine_t* engine, const char* model_path);
 
 // Utility functions
 ethervox_llm_config_t ethervox_dialogue_get_default_llm_config(void);

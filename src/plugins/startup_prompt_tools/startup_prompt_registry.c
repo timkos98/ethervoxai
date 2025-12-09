@@ -93,22 +93,31 @@ static int tool_startup_prompt_update(const char* args_json, char** result, char
     }
     *dst = '\0';
     
-    // Determine file path
-    const char* home_dir = getenv("HOME");
+    // Determine file path - check for Android first
+    extern const char* ethervox_android_get_files_dir(void);
+    const char* android_files_dir = ethervox_android_get_files_dir();
     char prompt_file[512];
-    if (home_dir) {
-        snprintf(prompt_file, sizeof(prompt_file), "%s/.ethervox/startup_prompt.txt", home_dir);
-        
-        // Create .ethervox directory if it doesn't exist
-        char ethervox_dir[512];
-        snprintf(ethervox_dir, sizeof(ethervox_dir), "%s/.ethervox", home_dir);
-        #ifdef _WIN32
-        _mkdir(ethervox_dir);
-        #else
-        mkdir(ethervox_dir, 0755);
-        #endif
+    
+    if (android_files_dir) {
+        // Android: use files directory
+        snprintf(prompt_file, sizeof(prompt_file), "%s/.ethervox_startup_prompt.txt", android_files_dir);
     } else {
-        snprintf(prompt_file, sizeof(prompt_file), "./.ethervox_startup_prompt.txt");
+        // Desktop: use HOME directory
+        const char* home_dir = getenv("HOME");
+        if (home_dir) {
+            snprintf(prompt_file, sizeof(prompt_file), "%s/.ethervox/startup_prompt.txt", home_dir);
+            
+            // Create .ethervox directory if it doesn't exist
+            char ethervox_dir[512];
+            snprintf(ethervox_dir, sizeof(ethervox_dir), "%s/.ethervox", home_dir);
+            #ifdef _WIN32
+            _mkdir(ethervox_dir);
+            #else
+            mkdir(ethervox_dir, 0755);
+            #endif
+        } else {
+            snprintf(prompt_file, sizeof(prompt_file), "./.ethervox_startup_prompt.txt");
+        }
     }
     
     // Write prompt to file
@@ -143,13 +152,22 @@ static int tool_startup_prompt_read(const char* args_json, char** result, char**
         return -1;
     }
     
-    // Determine file path
-    const char* home_dir = getenv("HOME");
+    // Determine file path - check for Android first
+    extern const char* ethervox_android_get_files_dir(void);
+    const char* android_files_dir = ethervox_android_get_files_dir();
     char prompt_file[512];
-    if (home_dir) {
-        snprintf(prompt_file, sizeof(prompt_file), "%s/.ethervox/startup_prompt.txt", home_dir);
+    
+    if (android_files_dir) {
+        // Android: use files directory
+        snprintf(prompt_file, sizeof(prompt_file), "%s/.ethervox_startup_prompt.txt", android_files_dir);
     } else {
-        snprintf(prompt_file, sizeof(prompt_file), "./.ethervox_startup_prompt.txt");
+        // Desktop: use HOME directory
+        const char* home_dir = getenv("HOME");
+        if (home_dir) {
+            snprintf(prompt_file, sizeof(prompt_file), "%s/.ethervox/startup_prompt.txt", home_dir);
+        } else {
+            snprintf(prompt_file, sizeof(prompt_file), "./.ethervox_startup_prompt.txt");
+        }
     }
     
     // Try to read custom prompt

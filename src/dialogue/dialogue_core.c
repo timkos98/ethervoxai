@@ -31,6 +31,7 @@
 #include "ethervox/config.h"         // For version information
 #include "ethervox/dialogue.h"
 #include "ethervox/governor.h"  // Governor orchestration
+#include "ethervox/tool_manifest.h"  // Tool Manifest System
 #include "ethervox/llm.h"
 
 #ifndef ETHERVOX_UNUSED
@@ -539,9 +540,15 @@ int ethervox_dialogue_init(ethervox_dialogue_engine_t* engine,
 
   // Copy configuration
   if (config) {
+#ifdef ETHERVOX_PLATFORM_ANDROID
+    ETHERVOX_LOGI("[DEBUG] dialogue_init config: model_path=%s", config->model_path ? config->model_path : "NULL");
+#endif
     engine->llm_config = *config;
     if (config->model_path) {
       engine->llm_config.model_path = strdup(config->model_path);
+#ifdef ETHERVOX_PLATFORM_ANDROID
+      ETHERVOX_LOGI("[DEBUG] After strdup: engine->llm_config.model_path=%s", engine->llm_config.model_path);
+#endif
     }
     if (config->model_name) {
       engine->llm_config.model_name = strdup(config->model_name);
@@ -707,11 +714,15 @@ int ethervox_dialogue_init(ethervox_dialogue_engine_t* engine,
       engine->use_governor = true;
 
 #ifdef ETHERVOX_PLATFORM_ANDROID
-      ETHERVOX_LOGI(
-                          "Governor initialized successfully");
+      ETHERVOX_LOGI("Governor initialized successfully");
 #else
       printf("Governor initialized successfully\\n");
 #endif
+
+      // Manifest registry will be initialized after model is loaded
+      // (see loadGovernorModel JNI function for Android platform)
+      engine->manifest_registry = NULL;
+      
     } else {
 #ifdef ETHERVOX_PLATFORM_ANDROID
       ETHERVOX_LOGE( "Failed to initialize Governor");
@@ -751,6 +762,13 @@ void ethervox_dialogue_cleanup(ethervox_dialogue_engine_t* engine) {
     ethervox_tool_registry_cleanup((ethervox_tool_registry_t*)engine->governor_tool_registry);
     free(engine->governor_tool_registry);
     engine->governor_tool_registry = NULL;
+  }
+  
+  // Cleanup manifest registry
+  if (engine->manifest_registry) {
+    ethervox_tool_manifest_cleanup((tool_manifest_registry_t*)engine->manifest_registry);
+    free(engine->manifest_registry);
+    engine->manifest_registry = NULL;
   }
 
   // Cleanup contexts
@@ -2099,4 +2117,72 @@ void ethervox_dialogue_set_memory_store(struct ethervox_memory_store_t* store) {
 #else
   printf("Memory store set for dialogue engine\n");
 #endif
+}
+
+// Reload manifest registry (for model switching)
+int ethervox_dialogue_reload_manifest(ethervox_dialogue_engine_t* engine, const char* model_path) {
+  if (!engine || !model_path) {
+    return -1;
+  }
+  
+  if (!engine->governor || !engine->use_governor) {
+#ifdef ETHERVOX_PLATFORM_ANDROID
+    ETHERVOX_LOGW("Governor not initialized - cannot reload manifest");
+#else
+    printf("Governor not initialized - cannot reload manifest\n");
+#endif
+    return -2;
+  }
+  
+  // Cleanup existing manifest if any
+  if (engine->manifest_registry) {
+    ethervox_tool_manifest_cleanup((tool_manifest_registry_t*)engine->manifest_registry);
+    free(engine->manifest_registry);
+    engine->manifest_registry = NULL;
+  }
+  
+  // Allocate new manifest
+  tool_manifest_registry_t* manifest = malloc(sizeof(tool_manifest_registry_t));
+  if (!manifest) {
+#ifdef ETHERVOX_PLATFORM_ANDROID
+    ETHERVOX_LOGE("Failed to allocate manifest registry");
+#else
+    printf("Failed to allocate manifest registry\n");
+#endif
+    return -3;
+  }
+  
+  memset(manifest, 0, sizeof(tool_manifest_registry_t));
+  
+  // Initialize with new model
+#ifdef ETHERVOX_PLATFORM_ANDROID
+  ETHERVOX_LOGI("Reloading manifest for model: %s", model_path);
+#else
+  printf("Reloading manifest for model: %s\n", model_path);
+#endif
+  
+  if (ethervox_governor_init_with_manifest(
+          (ethervox_governor_t*)engine->governor, 
+          model_path, 
+          manifest) == 0) {
+    engine->manifest_registry = manifest;
+    
+#ifdef ETHERVOX_PLATFORM_ANDROID
+    ETHERVOX_LOGI("Manifest reloaded successfully (fallback level: %u)", 
+                 manifest->fallback_level);
+#else
+    printf("Manifest reloaded successfully (fallback level: %u)\n", 
+           manifest->fallback_level);
+#endif
+    return 0;
+  } else {
+    // Failed to reload - free and return error
+    free(manifest);
+#ifdef ETHERVOX_PLATFORM_ANDROID
+    ETHERVOX_LOGW("Failed to reload manifest - continuing without it");
+#else
+    printf("Failed to reload manifest - continuing without it\n");
+#endif
+    return -4;
+  }
 }

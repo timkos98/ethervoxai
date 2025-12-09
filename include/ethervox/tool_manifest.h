@@ -155,6 +155,11 @@ typedef struct tool_manifest_registry {
     bool needs_byte_swap;             // True if file endianness differs
     bool tools_available;             // True if manifest loaded successfully
     uint8_t fallback_level;           // 0=optimal, 1=one-liners, 2=LLM-only, 3=emergency
+    
+    // Guard system - tracks whether tools are actually usable
+    bool tools_detected;              // True if tools.bin was found (tools exist)
+    bool optimization_loaded;         // True if optimized JSON prompts loaded
+    uint16_t tools_loaded_count;      // Number of tools actually loaded into system prompt
 } tool_manifest_registry_t;
 
 // ============================================================================

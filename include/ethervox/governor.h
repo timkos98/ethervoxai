@@ -23,6 +23,11 @@
 extern "C" {
 #endif
 
+// Android platform helper (defined in ethervox_android_core.c)
+#ifdef ETHERVOX_PLATFORM_ANDROID
+const char* ethervox_android_get_files_dir(void);
+#endif
+
 // Forward declarations
 typedef struct tool_manifest_registry tool_manifest_registry_t;
 
@@ -153,6 +158,10 @@ typedef enum {
     ETHERVOX_GOVERNOR_EVENT_CONFIDENCE_UPDATE, // Confidence level changed
     ETHERVOX_GOVERNOR_EVENT_CONTEXT_SUMMARIZING, // Context being summarized before clearing
     ETHERVOX_GOVERNOR_EVENT_CONTEXT_CLEARED,   // Context cleared, summary stored in memory
+    ETHERVOX_GOVERNOR_EVENT_MANIFEST_LOADING,  // Manifest system initializing
+    ETHERVOX_GOVERNOR_EVENT_MANIFEST_READY,    // Manifest loaded successfully (optimal state)
+    ETHERVOX_GOVERNOR_EVENT_MANIFEST_FALLBACK_LEVEL_1,  // Binary manifest one-liners (good fallback)
+    ETHERVOX_GOVERNOR_EVENT_MANIFEST_FALLBACK_LEVEL_2,  // LLM-only mode (degraded, suggest optimization)
     ETHERVOX_GOVERNOR_EVENT_COMPLETE           // Final answer ready
 } ethervox_governor_event_type_t;
 

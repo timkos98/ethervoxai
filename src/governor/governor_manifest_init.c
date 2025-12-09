@@ -51,22 +51,37 @@ int ethervox_governor_init_with_manifest(
         return -1;
     }
     
-    // === STEP 1: Export manifest from runtime registry ===
-    const char* home = getenv("HOME");
-    char manifest_path[512];
+    // Get Android files directory once for all path operations (used in STEP 1 and STEP 4)
+#ifdef ETHERVOX_PLATFORM_ANDROID
+    const char* android_files_dir = ethervox_android_get_files_dir();
+    if (!android_files_dir || android_files_dir[0] == '\0') {
+        ETHERVOX_LOGE("Android files directory not set!");
+        return -1;
+    }
+#endif
     
+    // === STEP 1: Export manifest from runtime registry ===
+    char manifest_path[512];
+    char tools_dir[512];
+    
+#ifdef ETHERVOX_PLATFORM_ANDROID
+    // On Android, use app files directory (already retrieved and validated above)
+    snprintf(manifest_path, sizeof(manifest_path),
+            "%s/tools/tools.bin", android_files_dir);
+    snprintf(tools_dir, sizeof(tools_dir), "%s/tools", android_files_dir);
+#else
+    // On desktop, use HOME environment variable
+    const char* home = getenv("HOME");
     if (home) {
         snprintf(manifest_path, sizeof(manifest_path),
                 "%s/.ethervox/tools/tools.bin", home);
+        snprintf(tools_dir, sizeof(tools_dir), "%s/.ethervox/tools", home);
     } else {
         snprintf(manifest_path, sizeof(manifest_path),
                 "./.ethervox/tools/tools.bin");
+        snprintf(tools_dir, sizeof(tools_dir), "./.ethervox/tools");
     }
-    
-    // Create directory if needed
-    char tools_dir[512];
-    snprintf(tools_dir, sizeof(tools_dir), "%s/.ethervox/tools", 
-             home ? home : ".");
+#endif
     
     #ifdef _WIN32
     _mkdir(tools_dir);
@@ -83,6 +98,11 @@ int ethervox_governor_init_with_manifest(
     }
     
     // === STEP 2: Load binary manifest ===
+    // Initialize guard flags
+    manifest_registry->tools_detected = false;
+    manifest_registry->optimization_loaded = false;
+    manifest_registry->tools_loaded_count = 0;
+    
     if (ethervox_tool_manifest_init(manifest_registry, manifest_path) != 0) {
         // Level 2 fallback: LLM-only mode
         ETHERVOX_LOGW("═══════════════════════════════════════════════════════");
@@ -91,11 +111,16 @@ int ethervox_governor_init_with_manifest(
         ETHERVOX_LOGW("═══════════════════════════════════════════════════════");
         
         manifest_registry->tools_available = false;
+        manifest_registry->tools_detected = false;
         manifest_registry->fallback_level = 2;
         
         // Still functional - deterministic toolkit always available
         return 0;
     }
+    
+    // Tools binary manifest was found and loaded
+    manifest_registry->tools_detected = true;
+    ETHERVOX_LOGI("✓ Tools detected: %u tools in manifest", runtime_registry->tool_count);
     
     // === STEP 3: Detect model name ===
     // Extract model name from path (e.g., "granite-4.0-Q4_K_M.gguf" -> "granite-4.0")
@@ -125,22 +150,43 @@ int ethervox_governor_init_with_manifest(
     
     // === STEP 4: Load optimized JSON prompts ===
     char optimized_path[512];
+    
+#ifdef ETHERVOX_PLATFORM_ANDROID
+    // On Android, use app files directory (already retrieved and validated at function start)
+    snprintf(optimized_path, sizeof(optimized_path),
+             "%s/tools/optimized/%s.json", 
+             android_files_dir, model_name);
+#else
     snprintf(optimized_path, sizeof(optimized_path),
              "%s/.ethervox/tools/optimized/%s.json", 
              home ? home : ".", model_name);
+#endif
     
     if (ethervox_tool_manifest_load_optimized(manifest_registry, optimized_path) == 0) {
         // Level 0: Optimal - using optimized JSON prompts
-        ETHERVOX_LOGI("✓ Loaded optimized prompts: %s (~150 tokens)",
-                      ethervox_tool_fallback_level_name(0));
+        manifest_registry->optimization_loaded = true;
         manifest_registry->fallback_level = 0;
+        manifest_registry->tools_loaded_count = manifest_registry->header.tool_count;
+        manifest_registry->tools_available = true;
+        ETHERVOX_LOGI("✓ Loaded optimized prompts: %s",
+                      ethervox_tool_fallback_level_name(0));
+        ETHERVOX_LOGI("  Tools will be available for use");
+        ETHERVOX_LOGI("  DEBUG: Set tools_loaded_count=%u from header.tool_count=%u",
+                      manifest_registry->tools_loaded_count, manifest_registry->header.tool_count);
     } else {
-        // Level 1: Good - using binary one-liners
-        ETHERVOX_LOGI("ℹ Optimized prompts not found, using binary one-liners");
-        ETHERVOX_LOGI("  Run /optimize_tool_prompts to generate them");
-        ETHERVOX_LOGI("✓ Fallback level: %s (~500 tokens)",
-                      ethervox_tool_fallback_level_name(1));
-        manifest_registry->fallback_level = 1;
+        // GUARD: Optimization file missing - do NOT load tools
+        manifest_registry->optimization_loaded = false;
+        manifest_registry->fallback_level = 3;  // Emergency mode - no tools loaded
+        
+        ETHERVOX_LOGW("═══════════════════════════════════════════════════════");
+        ETHERVOX_LOGW("⚠️  OPTIMIZATION FILE NOT FOUND");
+        ETHERVOX_LOGW("Tools detected but NOT loaded into system prompt");
+        ETHERVOX_LOGW("Run optimization to enable %u tools", runtime_registry->tool_count);
+        ETHERVOX_LOGW("Path: %s", optimized_path);
+        ETHERVOX_LOGW("═══════════════════════════════════════════════════════");
+        
+        // Mark tools as unavailable for system prompt generation
+        manifest_registry->tools_available = false;
     }
     
     // === STEP 5: Validate manifest ===
@@ -148,8 +194,14 @@ int ethervox_governor_init_with_manifest(
         ETHERVOX_LOGW("Manifest validation failed, but continuing...");
     }
     
-    ETHERVOX_LOGI("Tool Manifest System initialized successfully");
-    ETHERVOX_LOGI("  Tools available: %u", manifest_registry->header.tool_count);
+    ETHERVOX_LOGI("Tool Manifest System initialized");
+    ETHERVOX_LOGI("  Tools detected: %s (%u)", 
+                  manifest_registry->tools_detected ? "YES" : "NO",
+                  manifest_registry->tools_detected ? manifest_registry->header.tool_count : 0);
+    ETHERVOX_LOGI("  Optimization loaded: %s", 
+                  manifest_registry->optimization_loaded ? "YES" : "NO");
+    ETHERVOX_LOGI("  Tools available for use: %s",
+                  manifest_registry->tools_available ? "YES" : "NO");
     ETHERVOX_LOGI("  Fallback level: %u (%s)",
                   manifest_registry->fallback_level,
                   ethervox_tool_fallback_level_name(manifest_registry->fallback_level));
@@ -187,7 +239,7 @@ int ethervox_governor_build_system_prompt_with_manifest(
         return -1;
     }
     
-    // Add tool index (minimal prompt)
+    // Add tool index (minimal prompt) - uses optimized prompts (Level 0) or one-liners (Level 1)
     if (manifest_registry && manifest_registry->tools_available) {
         int tool_prompt_len = ethervox_tool_build_minimal_system_prompt(
             manifest_registry,
@@ -200,7 +252,9 @@ int ethervox_governor_build_system_prompt_with_manifest(
             offset += tool_prompt_len;
         }
     } else {
-        // Level 2/3: No dynamic tools, show basic commands
+        // Level 2/3: No dynamic tools
+#ifndef ETHERVOX_PLATFORM_ANDROID
+        // Terminal-specific: show slash commands
         int cmd_len = snprintf(output + offset, output_size - offset,
             "Available commands:\n"
             "• /help - Show this help\n"
@@ -212,6 +266,7 @@ int ethervox_governor_build_system_prompt_with_manifest(
         if (cmd_len > 0) {
             offset += cmd_len;
         }
+#endif
     }
     
     ETHERVOX_LOGI("System prompt generated: %d bytes", offset);
