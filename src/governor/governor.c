@@ -1498,8 +1498,9 @@ ethervox_governor_status_t ethervox_governor_execute(
             generated_count++;
             
             // Early stopping conditions to prevent hallucination
-            // 1. Stop immediately after tool_call closing tag
-            if (strstr(llm_response_buffer, "<tool_call") && strstr(llm_response_buffer, "/>")) {
+            // 1. Stop immediately after tool_call closing tag (only if tool execution is enabled)
+            if (governor->tool_execution_enabled && 
+                strstr(llm_response_buffer, "<tool_call") && strstr(llm_response_buffer, "/>")) {
                 GOV_LOG("Early stop: Tool call completed (%d tokens)", generated_count);
                 break;  // Tool call complete, stop immediately
             }

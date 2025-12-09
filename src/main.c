@@ -63,7 +63,7 @@ static volatile sig_atomic_t g_sigint_stop_transcribe = 0;
 static const char* commands[] = {
     "/help", "/test", "/testllm", "/testwhisper", "/optimize_tool_prompts", "/load", "/tools",
     "/search", "/summary", "/export", "/archive", "/stats", "/startup", "/debug",
-    "/markdown", "/clear", "/reset", "/paste", "/paths", "/setpath", "/safemode", "/secret",
+    "/markdown", "/toggle_tool_calls", "/clear", "/reset", "/paste", "/paths", "/setpath", "/safemode", "/secret",
     "/transcribe", "/stoptranscribe", "/setlang", "/translate", "/quit", NULL
 };
 
@@ -166,6 +166,7 @@ static void print_help(void) {
     printf("  /startup <cmd>     Manage startup prompt (edit/show/reset)\n");
     printf("  /debug             Toggle debug logging on/off\n");
     printf("  /markdown          Toggle markdown formatting on/off\n");
+    printf("  /toggle_tool_calls Toggle tool execution on/off (for meta-prompting)\n");
     printf("  /secret            Toggle secret mode (disable memory logging for privacy)\n");
     printf("  /clear             Clear conversation memory\n");
     printf("  /reset             Reset conversation (reload model)\n");
@@ -904,6 +905,18 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         return;
     }
     
+    if (strcmp(line, "/toggle_tool_calls") == 0) {
+        static bool tool_execution_enabled = true;
+        tool_execution_enabled = !tool_execution_enabled;
+        ethervox_governor_set_tool_execution(governor, tool_execution_enabled);
+        printf("Tool execution: %s\n", tool_execution_enabled ? "ENABLED" : "DISABLED");
+        if (!tool_execution_enabled) {
+            printf("  Tools will be shown in responses but not executed\n");
+            printf("  Use this when asking LLM to write tool syntax examples\n");
+        }
+        return;
+    }
+    
     if (strcmp(line, "/secret") == 0) {
         static bool secret_mode_enabled = false;
         secret_mode_enabled = !secret_mode_enabled;
@@ -1335,8 +1348,42 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
             printf("[Error: Governor execution failed]\n\n");
         }
     } else {
+        // TIMEOUT, NEED_CLARIFICATION, USER_DENIED, etc.
         printf("\033[0m");  // Reset color before status message
-        printf("[Status: %d - Response may be incomplete]\n\n", status);
+        
+        // Print partial response if available (common with TIMEOUT)
+        if (response && response[0] != '\0') {
+            if (g_markdown_enabled) {
+                char* formatted = markdown_to_ansi(response);
+                if (formatted) {
+                    printf("\033[36m%s\033[0m\n\n", formatted);
+                    free(formatted);
+                } else {
+                    printf("\033[36m%s\033[0m\n\n", response);
+                }
+            } else {
+                printf("\033[36m%s\033[0m\n\n", response);
+            }
+            store_message(memory, response, false, 0.7f);  // Lower confidence for partial
+        }
+        
+        // Show status message
+        const char* status_msg = "Unknown status";
+        switch (status) {
+            case ETHERVOX_GOVERNOR_NEED_CLARIFICATION:
+                status_msg = "Need clarification";
+                break;
+            case ETHERVOX_GOVERNOR_TIMEOUT:
+                status_msg = "Response truncated (iteration/context limit)";
+                break;
+            case ETHERVOX_GOVERNOR_USER_DENIED:
+                status_msg = "Tool execution denied by user";
+                break;
+            default:
+                break;
+        }
+        printf("[Status: %s]\n\n", status_msg);
+        
         if (response) free(response);
         if (error) free(error);
     }
