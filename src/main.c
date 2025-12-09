@@ -62,7 +62,7 @@ static volatile sig_atomic_t g_sigint_stop_transcribe = 0;
 static const char* commands[] = {
     "/help", "/test", "/testllm", "/testwhisper", "/optimize_tool_prompts", "/load", "/tools",
     "/search", "/summary", "/export", "/archive", "/stats", "/startup", "/debug",
-    "/markdown", "/clear", "/reset", "/paste", "/paths", "/setpath", "/safemode",
+    "/markdown", "/clear", "/reset", "/paste", "/paths", "/setpath", "/safemode", "/secret",
     "/transcribe", "/stoptranscribe", "/setlang", "/translate", "/quit", NULL
 };
 
@@ -165,6 +165,7 @@ static void print_help(void) {
     printf("  /startup <cmd>     Manage startup prompt (edit/show/reset)\n");
     printf("  /debug             Toggle debug logging on/off\n");
     printf("  /markdown          Toggle markdown formatting on/off\n");
+    printf("  /secret            Toggle secret mode (disable memory logging for privacy)\n");
     printf("  /clear             Clear conversation memory\n");
     printf("  /reset             Reset conversation (reload model)\n");
     printf("  /paste             Enter paste mode for multi-line input\n");
@@ -902,6 +903,25 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         return;
     }
     
+    if (strcmp(line, "/secret") == 0) {
+        static bool secret_mode_enabled = false;
+        secret_mode_enabled = !secret_mode_enabled;
+        
+        ethervox_memory_set_privacy_mode(secret_mode_enabled);
+        
+        if (secret_mode_enabled) {
+            printf("🔒 SECRET MODE: ENABLED\n");
+            printf("   Conversations will NOT be saved to memory.\n");
+            printf("   This session is private - nothing will be logged to disk.\n");
+            printf("   Use /secret again to return to normal mode.\n");
+        } else {
+            printf("💾 SECRET MODE: DISABLED\n");
+            printf("   Normal memory logging resumed.\n");
+            printf("   Conversations will be saved to ~/.ethervox/memory/\n");
+        }
+        return;
+    }
+    
     if (strcmp(line, "/safemode") == 0) {
         if (!file_config) {
             printf("✗ File tools not initialized\n");
@@ -1347,6 +1367,11 @@ int main(int argc, char** argv) {
     bool no_persist = false;
     bool skip_startup_prompt = false;
     bool engineering_mode = false;  // Engineering mode: no help, no startup, debug on
+    bool minimal_mode = false;  // Minimal mode: fast loading, tools disabled
+    
+    // Track explicit flag usage for conflict detection
+    bool debug_flag_set = false;
+    bool quiet_flag_set = false;
 
     // Dafualt to auto-load model unless --noautoload specified
     bool auto_load_model = true;
@@ -1372,10 +1397,12 @@ int main(int argc, char** argv) {
             quiet_mode = false;
             g_quiet_mode = false;
             g_debug_enabled = true;
+            debug_flag_set = true;
         } else if (strcmp(argv[i], "--quiet") == 0 || strcmp(argv[i], "-q") == 0) {
             quiet_mode = true;
             g_quiet_mode = true;  // Set global flag
             g_debug_enabled = false;
+            quiet_flag_set = true;
         } else if (strcmp(argv[i], "-engineering") == 0) {
             engineering_mode = true;
             g_quiet_mode = false;
@@ -1386,6 +1413,9 @@ int main(int argc, char** argv) {
             startup_prompt_file = argv[++i];
         } else if (strcmp(argv[i], "--no-startup-prompt") == 0) {
             skip_startup_prompt = true;
+        } else if (strcmp(argv[i], "--minimal") == 0) {
+            minimal_mode = true;
+            printf("⚡ Minimal mode enabled - fast loading, tools disabled\n");
         } else if (strcmp(argv[i], "--test") == 0) {
             run_tests = true;
         } else if (strcmp(argv[i], "--testllm") == 0) {
@@ -1413,6 +1443,7 @@ int main(int argc, char** argv) {
             printf("  --no-persist       Run in memory-only mode (no files)\n");
             printf("  --startup-prompt <file>  Custom startup prompt file\n");
             printf("  --no-startup-prompt      Skip automatic startup prompt\n");
+            printf("  --minimal          Fast loading mode (~50 tokens, tools disabled, 90%% faster)\n");
             printf("  --debug, -d        Enable debug logging (default: off)\n");
             printf("  --quiet, -q        Disable debug logging (explicit quiet)\n");
             printf("  -engineering       Engineering mode: suppress help/startup, enable debug\n");
@@ -1423,6 +1454,33 @@ int main(int argc, char** argv) {
             printf("\n");
             return 0;
         }
+    }
+    
+    // Validate flag combinations
+    if (minimal_mode && run_llm_tests) {
+        fprintf(stderr, "Error: --minimal and --testllm are incompatible\n");
+        fprintf(stderr, "  --minimal disables tools, but --testllm requires tools to test\n");
+        fprintf(stderr, "  Please use one or the other.\n");
+        return 1;
+    }
+    
+    if (minimal_mode && run_optimization) {
+        fprintf(stderr, "Error: --minimal and --optimize_tool_prompts are incompatible\n");
+        fprintf(stderr, "  --minimal disables tools, but --optimize_tool_prompts requires tools\n");
+        fprintf(stderr, "  Please use one or the other.\n");
+        return 1;
+    }
+    
+    if (minimal_mode && engineering_mode) {
+        printf("⚠️  Warning: Combining --minimal (fast mode) with -engineering (debug mode)\n");
+        printf("   Minimal mode: tools disabled, brief system prompt\n");
+        printf("   Engineering mode: verbose logging, startup prompt skipped\n");
+        printf("   Both will be applied - you'll get fast loading with debug output\n\n");
+    }
+    
+    if (debug_flag_set && quiet_flag_set) {
+        printf("⚠️  Warning: --debug and --quiet are contradictory\n");
+        printf("   Last flag wins: using %s mode\n\n", quiet_mode ? "quiet" : "debug");
     }
     
     // Set initial log level based on quiet mode
@@ -1550,7 +1608,15 @@ int main(int argc, char** argv) {
         return 1;
     }
     
-    if (ethervox_governor_init(&governor, NULL, &registry) != 0) {
+    // Initialize Governor with config (apply minimal mode if requested)
+    ethervox_governor_config_t gov_config = ethervox_governor_default_config();
+    if (minimal_mode) {
+        gov_config.system_prompt_mode = ETHERVOX_GOVERNOR_MODE_MINIMAL;
+        printf("⚡ Minimal mode: Using brief system prompt (~50 tokens vs ~1200)\n");
+        printf("   Tools disabled for maximum loading speed\n");
+    }
+    
+    if (ethervox_governor_init(&governor, &gov_config, &registry) != 0) {
         fprintf(stderr, "Failed to initialize Governor\n");
         ethervox_tool_registry_cleanup(&registry);
         ethervox_memory_cleanup(&memory);
@@ -1832,7 +1898,13 @@ int main(int argc, char** argv) {
             close(dev_null);
         }
         
-        // Execute the startup prompt silently
+        // Execute the startup prompt silently IN SECRET MODE (don't save to memory)
+        // Save current privacy mode state
+        bool original_privacy_mode = ethervox_memory_get_privacy_mode();
+        
+        // Enable privacy mode temporarily for startup prompt
+        ethervox_memory_set_privacy_mode(true);
+        
         char* response = NULL;
         char* error = NULL;
         
@@ -1846,6 +1918,9 @@ int main(int argc, char** argv) {
             NULL,  // No token callback
             NULL   // No user data
         );
+        
+        // Restore original privacy mode state
+        ethervox_memory_set_privacy_mode(original_privacy_mode);
         
         // Restore stderr
         if (stderr_backup != -1) {

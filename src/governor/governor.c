@@ -108,6 +108,7 @@ struct ethervox_governor {
     bool llm_loaded;
     bool tool_execution_enabled;  // Allow disabling tool execution (for optimization)
     bool system_prompt_lost;      // Track if nuclear clear wiped the system prompt
+    bool tools_available;          // Track if tools are enabled (false in minimal mode)
     
     // Context management
     context_manager_state_t context_manager;
@@ -563,6 +564,10 @@ int ethervox_governor_load_model(ethervox_governor_t* governor, const char* mode
     
     GOV_LOG("[Governor] Model loaded successfully");
     
+    // Set privacy mode based on config (secret mode)
+    extern void ethervox_memory_set_privacy_mode(bool disable_logging);
+    ethervox_memory_set_privacy_mode(governor->config.disable_memory_logging);
+    
     // Context params - Use config.h defaults
     struct llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx = ETHERVOX_GOVERNOR_CONTEXT_SIZE;
@@ -591,25 +596,53 @@ int ethervox_governor_load_model(ethervox_governor_t* governor, const char* mode
         GOV_LOG("  Tool %u: %s", i, governor->tool_registry->tools[i].name);
     }
     
-    // Build system prompt from tool registry
-    // Increased to 16KB to accommodate all tools and examples
+    // Build system prompt based on mode (full vs minimal)
+    // Increased to 16KB to accommodate all tools and examples (full mode)
     char system_prompt[16384];
-    if (ethervox_tool_registry_build_system_prompt(governor->tool_registry,
-                                                   governor->chat_template,
-                                                   system_prompt, sizeof(system_prompt),
-                                                   NULL,  // TODO: Wire memory_store for adaptive learning
-                                                   governor->model_path) != 0) {
-        GOV_ERROR("Failed to build system prompt");
-        llama_free(governor->llm_ctx);
-        llama_model_free(governor->llm_model);
-        governor->llm_ctx = NULL;
-        governor->llm_model = NULL;
-        return -1;
+    
+    if (governor->config.system_prompt_mode == ETHERVOX_GOVERNOR_MODE_MINIMAL) {
+        // Minimal mode: brief prompt without tools for fast mobile loading
+        GOV_LOG("Building MINIMAL system prompt (fast mobile mode, tools unavailable)");
+        
+        // Ultra-brief system prompt - optimized for mobile startup speed
+        // ~50 tokens vs ~1200 tokens in full mode (96% reduction)
+        const char* minimal_prompt = 
+            "You are EthervoxAI, a helpful and concise voice assistant. "
+            "Your tools are currently unavailable, so provide direct answers based on your knowledge. "
+            "Be brief, accurate, and conversational.";
+        
+        strncpy(system_prompt, minimal_prompt, sizeof(system_prompt) - 1);
+        system_prompt[sizeof(system_prompt) - 1] = '\0';
+        
+        GOV_LOG("Minimal system prompt (%zu chars) - tools disabled", strlen(system_prompt));
+        
+        // Mark tools as unavailable in governor state
+        governor->tools_available = false;
+        
+    } else {
+        // Full mode: complete system prompt with all tools and capabilities
+        GOV_LOG("Building FULL system prompt (all tools available)");
+        
+        if (ethervox_tool_registry_build_system_prompt(governor->tool_registry,
+                                                       governor->chat_template,
+                                                       system_prompt, sizeof(system_prompt),
+                                                       NULL,  // TODO: Wire memory_store for adaptive learning
+                                                       governor->model_path) != 0) {
+            GOV_ERROR("Failed to build system prompt");
+            llama_free(governor->llm_ctx);
+            llama_model_free(governor->llm_model);
+            governor->llm_ctx = NULL;
+            governor->llm_model = NULL;
+            return -1;
+        }
+        
+        GOV_LOG("Full system prompt built (%zu chars)", strlen(system_prompt));
+        
+        // Mark tools as available in governor state
+        governor->tools_available = true;
     }
     
     GOV_LOG("System prompt (%zu chars):\n%s", strlen(system_prompt), system_prompt);
-    
-    GOV_LOG("System prompt built (%zu chars)", strlen(system_prompt));
     
     // Tokenize system prompt
     const struct llama_vocab* vocab = llama_model_get_vocab(governor->llm_model);
@@ -838,6 +871,7 @@ int ethervox_governor_init(
     gov->llm_loaded = false;
     gov->tool_execution_enabled = true;  // Enabled by default
     gov->system_prompt_lost = false;     // System prompt present until nuclear clear
+    gov->tools_available = true;         // Tools available by default (changes in minimal mode)
     gov->system_prompt_tokens = NULL;
     gov->system_prompt_tokens_len = 0;
     

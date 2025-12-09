@@ -35,6 +35,13 @@ target_include_directories(test_memory_tools PRIVATE ${CMAKE_SOURCE_DIR}/include
 add_test(NAME MemoryTools COMMAND test_memory_tools)
 set_tests_properties(MemoryTools PROPERTIES TIMEOUT 30 LABELS "unit")
 
+# Secret mode / privacy mode tests
+add_executable(test_secret_mode unit/test_secret_mode.c)
+target_link_libraries(test_secret_mode ethervoxai)
+target_include_directories(test_secret_mode PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME SecretMode COMMAND test_secret_mode)
+set_tests_properties(SecretMode PROPERTIES TIMEOUT 30 LABELS "unit")
+
 # Adaptive memory tests (corrections and patterns)
 add_executable(test_adaptive_memory unit/test_adaptive_memory.c)
 target_link_libraries(test_adaptive_memory ethervoxai)
@@ -88,3 +95,10 @@ set_tests_properties(ToolManifest PROPERTIES TIMEOUT 30 LABELS "unit;tool_manife
 add_executable(benchmark_tool_manifest benchmark_tool_manifest.c)
 target_link_libraries(benchmark_tool_manifest ethervoxai)
 target_include_directories(benchmark_tool_manifest PRIVATE ${CMAKE_SOURCE_DIR}/include)
+
+# Mobile optimization features tests (minimal mode, secret mode)
+add_executable(test_mobile_optimization unit/test_mobile_optimization.c)
+target_link_libraries(test_mobile_optimization ethervoxai)
+target_include_directories(test_mobile_optimization PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME MobileOptimization COMMAND test_mobile_optimization)
+set_tests_properties(MobileOptimization PROPERTIES TIMEOUT 30 LABELS "unit;mobile")

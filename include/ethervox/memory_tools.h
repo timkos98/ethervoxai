@@ -423,6 +423,31 @@ int ethervox_memory_tools_register(
     ethervox_memory_store_t* store
 );
 
+/**
+ * Set privacy mode for memory logging (secret mode)
+ * When enabled, memory_store and related tools will skip actual storage
+ * but return success to avoid disrupting the LLM flow.
+ * 
+ * @param disable_logging true to enable secret mode (no logging), false for normal operation
+ */
+void ethervox_memory_set_privacy_mode(bool disable_logging);
+
+/**
+ * Get current privacy mode state
+ * 
+ * @return true if privacy mode is enabled (secret mode), false if normal operation
+ */
+bool ethervox_memory_get_privacy_mode(void);
+
+
+/**
+ * Get current privacy mode state
+ * 
+ * @return true if privacy mode is enabled (secret mode), false if normal operation
+ */
+bool ethervox_memory_get_privacy_mode(void);
+
+
 #ifdef __cplusplus
 }
 #endif

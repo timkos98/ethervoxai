@@ -877,7 +877,15 @@ int ethervox_voice_tools_stop_listen(ethervox_voice_session_t* session,
     }
   }
 
-  *transcript_out = session->full_transcript;
+  // Ensure we always return a valid string (never NULL)
+  if (session->full_transcript && session->full_transcript[0] != '\0') {
+    *transcript_out = session->full_transcript;
+  } else {
+    // Return empty string if no transcript (silence or error)
+    static const char* empty_transcript = "";
+    *transcript_out = empty_transcript;
+    LOG_WARN("No transcript generated (silence or error) - returning empty string");
+  }
 
   LOG_INFO("Voice recording session stopped - %zu chars transcribed", session->transcript_len);
 

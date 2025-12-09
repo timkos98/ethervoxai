@@ -18,6 +18,9 @@
 // Note: Not thread-safe, but sufficient for single-threaded CLI
 static ethervox_memory_store_t* g_memory_store = NULL;
 
+// Global privacy flag for secret mode (when true, memory logging is disabled)
+static bool g_disable_memory_logging = false;
+
 // JSON parsing helper (simplified - would use cJSON in production)
 static int parse_json_string(const char* json, const char* key, char* value, size_t value_len) {
     char search[128];
@@ -144,6 +147,14 @@ static int tool_memory_store_wrapper(
     char** result,
     char** error
 ) {
+    // SECRET MODE: Skip memory logging if privacy flag is set
+    if (g_disable_memory_logging) {
+        char* res = malloc(256);
+        snprintf(res, 256, "{\"success\":true,\"memory_id\":0,\"note\":\"Secret mode - memory not saved\"}");
+        *result = res;
+        return 0;  // Success, but no actual storage
+    }
+    
     ethervox_memory_store_t* store = g_memory_store;
     char text[ETHERVOX_MEMORY_MAX_TEXT_LEN];
     float importance = 0.5f;
@@ -888,3 +899,25 @@ int ethervox_memory_tools_register(
     
     return ret;
 }
+
+/**
+ * Set privacy mode for memory logging (secret mode)
+ */
+void ethervox_memory_set_privacy_mode(bool disable_logging) {
+    g_disable_memory_logging = disable_logging;
+    if (disable_logging) {
+        ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
+                    "SECRET MODE enabled - memory logging disabled for privacy");
+    } else {
+        ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
+                    "Normal mode - memory logging enabled");
+    }
+}
+
+/**
+ * Get current privacy mode state
+ */
+bool ethervox_memory_get_privacy_mode(void) {
+    return g_disable_memory_logging;
+}
+

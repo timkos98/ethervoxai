@@ -273,3 +273,64 @@ int ethervox_governor_build_system_prompt_with_manifest(
     
     return offset;
 }
+
+/**
+ * Initialize manifest registry for a loaded governor model
+ * 
+ * This centralizes the manifest initialization pattern used by both
+ * desktop (main.c) and Android (ethervox_android_core.c) to eliminate
+ * code duplication.
+ * 
+ * @param governor Governor instance (must have model loaded)
+ * @param model_path Path to model file (for finding manifest)
+ * @param manifest_out Receives allocated manifest on success (caller must free on error)
+ * @return 0=success, negative=error
+ */
+int ethervox_governor_setup_manifest(
+    ethervox_governor_t* governor,
+    const char* model_path,
+    tool_manifest_registry_t** manifest_out
+) {
+    if (!governor || !model_path || !manifest_out) {
+        ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__,
+                    "Invalid parameters to manifest setup");
+        return -1;
+    }
+    
+    tool_manifest_registry_t* manifest = malloc(sizeof(tool_manifest_registry_t));
+    if (!manifest) {
+        ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__,
+                    "Failed to allocate manifest registry");
+        return -1;
+    }
+    
+    memset(manifest, 0, sizeof(tool_manifest_registry_t));
+    
+    int result = ethervox_governor_init_with_manifest(governor, model_path, manifest);
+    
+    if (result == 0) {
+        *manifest_out = manifest;
+        
+        // Log manifest level for diagnostic purposes
+        if (manifest->tools_available) {
+            if (manifest->optimized_cache) {
+                ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
+                            "Manifest ready: Level 0 (optimized prompts loaded)");
+            } else {
+                ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
+                            "Manifest ready: Level 1 (binary one-liners)");
+            }
+        } else {
+            ethervox_log(ETHERVOX_LOG_LEVEL_WARN, __FILE__, __LINE__, __func__,
+                        "Manifest fallback: Level 2 (LLM-only, consider optimization)");
+        }
+        
+        return 0;
+    } else {
+        free(manifest);
+        *manifest_out = NULL;
+        ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__,
+                    "Manifest initialization failed - using runtime registry only");
+        return result;
+    }
+}

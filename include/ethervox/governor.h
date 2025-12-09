@@ -180,6 +180,14 @@ typedef void (*ethervox_governor_progress_callback)(
 );
 
 /**
+ * System prompt loading mode
+ */
+typedef enum {
+    ETHERVOX_GOVERNOR_MODE_FULL,     // Full prompt with all tools (slower load, full capabilities)
+    ETHERVOX_GOVERNOR_MODE_MINIMAL   // Brief prompt without tools (fast load, limited capabilities)
+} ethervox_governor_system_prompt_mode_t;
+
+/**
  * Governor configuration
  */
 typedef struct {
@@ -188,6 +196,10 @@ typedef struct {
     uint32_t max_tool_calls_per_iteration; // Max tool calls per iteration (default: 10)
     uint32_t timeout_seconds;           // Total execution timeout (default: 30)
     uint32_t max_tokens_per_response;   // Max tokens to generate per LLM response (default: 2048)
+    
+    // Mobile optimization and privacy features
+    ethervox_governor_system_prompt_mode_t system_prompt_mode;  // Full or minimal prompt (default: FULL)
+    bool disable_memory_logging;        // Secret mode - disable conversation logging (default: false)
 } ethervox_governor_config_t;
 
 /**
@@ -360,7 +372,9 @@ static inline ethervox_governor_config_t ethervox_governor_default_config(void) 
         .max_iterations = 5,
         .max_tool_calls_per_iteration = 10,
         .timeout_seconds = 30,
-        .max_tokens_per_response = 2048
+        .max_tokens_per_response = 2048,
+        .system_prompt_mode = ETHERVOX_GOVERNOR_MODE_FULL,  // Default to full capabilities
+        .disable_memory_logging = false  // Default to normal memory logging
     };
     return config;
 }
@@ -395,6 +409,23 @@ int ethervox_governor_init_with_manifest(
     ethervox_governor_t* governor,
     const char* model_path,
     tool_manifest_registry_t* manifest_registry
+);
+
+/**
+ * Setup manifest registry for a loaded governor model (convenience wrapper)
+ * 
+ * This is a higher-level helper that allocates and initializes the manifest
+ * registry, centralizing the pattern used by both desktop and Android platforms.
+ * 
+ * @param governor Governor instance (must have model loaded)
+ * @param model_path Path to model file (for finding manifest)
+ * @param manifest_out Receives allocated manifest on success (caller must free)
+ * @return 0=success, negative=error
+ */
+int ethervox_governor_setup_manifest(
+    ethervox_governor_t* governor,
+    const char* model_path,
+    tool_manifest_registry_t** manifest_out
 );
 
 /**
