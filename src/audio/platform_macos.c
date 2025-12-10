@@ -103,8 +103,7 @@ static int macos_audio_init(ethervox_audio_runtime_t* runtime,
   pthread_mutex_init(&state->lock, NULL);
 
   runtime->platform_data = state;
-  printf("macOS CoreAudio driver initialized (%u Hz, %u ch)\n", 
-         state->sample_rate, state->channels);
+  // Debug message removed - too verbose for normal startup
   return 0;
 }
 

@@ -340,8 +340,10 @@ int ethervox_optimize_tool_prompts_v2(
         return -1;
     }
     
-    if (!manifest_registry->tools_available) {
-        ETHERVOX_LOGE("No tools available in manifest");
+    // Check tool count instead of tools_available flag
+    // (tools_available may be false when optimization file doesn't exist yet)
+    if (manifest_registry->header.tool_count == 0) {
+        ETHERVOX_LOGE("No tools in manifest (count: 0)");
         return -1;
     }
     
@@ -615,14 +617,35 @@ int ethervox_optimize_tool_prompts_v2(
             }
             
             // Build tool call format example using actual parameter names
+            // Detect tool format from chat template
+            const chat_template_t* chat_template = ethervox_governor_get_chat_template(governor);
+            tool_format_type_t tool_fmt = chat_template ? 
+                chat_template_get_tool_format(chat_template) : TOOL_FORMAT_XML_ATTR;
+            
             char tool_format[512];
-            int foff = snprintf(tool_format, sizeof(tool_format),
-                              "<tool_call name=\"%s\"", tool_idx->name);
-            for (uint8_t p = 0; p < param_count && foff < (int)sizeof(tool_format) - 50; p++) {
-                foff += snprintf(tool_format + foff, sizeof(tool_format) - foff,
-                               " %s=\"value\"", params[p].name);
+            if (tool_fmt == TOOL_FORMAT_JSON_IN_XML) {
+                // Granite 4.0 format: <tool_call>{"name":"...","arguments":{...}}</tool_call>
+                int foff = snprintf(tool_format, sizeof(tool_format),
+                                  "<tool_call>\n{\"name\": \"%s\", \"arguments\": {",
+                                  tool_idx->name);
+                for (uint8_t p = 0; p < param_count && foff < (int)sizeof(tool_format) - 100; p++) {
+                    if (p > 0) {
+                        foff += snprintf(tool_format + foff, sizeof(tool_format) - foff, ", ");
+                    }
+                    foff += snprintf(tool_format + foff, sizeof(tool_format) - foff,
+                                   "\"%s\": \"value\"", params[p].name);
+                }
+                snprintf(tool_format + foff, sizeof(tool_format) - foff, "}}\n</tool_call>");
+            } else {
+                // XML attribute format (Qwen, Llama, Phi)
+                int foff = snprintf(tool_format, sizeof(tool_format),
+                                  "<tool_call name=\"%s\"", tool_idx->name);
+                for (uint8_t p = 0; p < param_count && foff < (int)sizeof(tool_format) - 50; p++) {
+                    foff += snprintf(tool_format + foff, sizeof(tool_format) - foff,
+                                   " %s=\"value\"", params[p].name);
+                }
+                snprintf(tool_format + foff, sizeof(tool_format) - foff, " />");
             }
-            snprintf(tool_format + foff, sizeof(tool_format) - foff, " />");
             
             qoff += snprintf(query + qoff, sizeof(query) - qoff,
                     "\nGenerate a concise optimized prompt (under 30 words) that includes:\n"

@@ -250,7 +250,10 @@ int ethervox_tool_get_detail(
         return -1;
     }
     
-    if (!registry->tools_available || !registry->manifest_file) {
+    // Check if manifest file is available (not tools_available flag)
+    // The tools_available flag may be false during optimization when
+    // the optimization file doesn't exist yet
+    if (!registry->manifest_file) {
         return -1;
     }
     

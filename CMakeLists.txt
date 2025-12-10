@@ -413,6 +413,11 @@ file(GLOB VOICE_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/voice_too
 list(APPEND ETHERVOXAI_CORE_SOURCES ${VOICE_TOOLS_SOURCES})
 message(STATUS "Voice tools plugin sources included")
 
+# Add meta tools plugin sources (get_tool_info for dynamic schema loading)
+file(GLOB META_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/meta_tools/*.c")
+list(APPEND ETHERVOXAI_CORE_SOURCES ${META_TOOLS_SOURCES})
+message(STATUS "Meta tools plugin sources included")
+
 # Add dialogue sources (including integration tests)
 file(GLOB DIALOGUE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/dialogue/*.c")
 list(FILTER DIALOGUE_SOURCES EXCLUDE REGEX ".*test_.*\\.c$")  # Exclude test_ files

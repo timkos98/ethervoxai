@@ -156,6 +156,58 @@ static int extract_tool_calls(const char* response, char** tool_calls, int max_c
     return count;
 }
 
+/**
+ * Extract JSON-format tool calls from LLM response (Granite 4.0 format)
+ * Looks for <tool_call>\n{"name": "...", "arguments": {...}}\n</tool_call>
+ * 
+ * Returns: Number of tool calls found, fills tool_calls array with JSON strings
+ */
+static int extract_tool_calls_json(const char* response, char** tool_calls, int max_calls) {
+    if (!response || !tool_calls) return 0;
+    
+    int count = 0;
+    const char* pos = response;
+    
+    while (count < max_calls) {
+        // Find opening tag
+        const char* start = strstr(pos, "<tool_call>");
+        if (!start) break;
+        
+        const char* json_start = start + 11;  // Skip "<tool_call>"
+        
+        // Find closing tag
+        const char* end = strstr(json_start, "</tool_call>");
+        if (!end) break;
+        
+        // Skip whitespace at start of JSON
+        while (json_start < end && (*json_start == ' ' || *json_start == '\n' || *json_start == '\r' || *json_start == '\t')) {
+            json_start++;
+        }
+        
+        // Find actual JSON end (skip trailing whitespace)
+        const char* json_end = end;
+        while (json_end > json_start && (*(json_end-1) == ' ' || *(json_end-1) == '\n' || *(json_end-1) == '\r' || *(json_end-1) == '\t')) {
+            json_end--;
+        }
+        
+        // Extract JSON content
+        size_t json_len = json_end - json_start;
+        if (json_len > 0) {
+            tool_calls[count] = malloc(json_len + 1);
+            if (!tool_calls[count]) break;
+            
+            strncpy(tool_calls[count], json_start, json_len);
+            tool_calls[count][json_len] = '\0';
+            
+            count++;
+        }
+        
+        pos = end + 12;  // Move past "</tool_call>"
+    }
+    
+    return count;
+}
+
 // ============================================================================
 // Context Management Helper Functions
 // ============================================================================
@@ -251,7 +303,149 @@ static char* parse_attribute(const char* tag, const char* attr_name) {
 }
 
 /**
- * Execute a single tool call
+ * Execute a single tool call (JSON format for Granite 4.0)
+ * Input: JSON string like {"name": "calculator_compute", "arguments": {"expression": "17*23"}}
+ * Extracts name and arguments, calls tool
+ */
+static int execute_tool_call_json(
+    const char* tool_call_json,
+    ethervox_tool_registry_t* registry,
+    char** result,
+    char** error
+) {
+    if (!tool_call_json || !registry || !result || !error) {
+        if (error) *error = strdup("Invalid parameters passed to execute_tool_call_json");
+        return -1;
+    }
+    
+    // Simple JSON parsing - find "name" field
+    const char* name_start = strstr(tool_call_json, "\"name\"");
+    if (!name_start) {
+        *error = strdup("Missing 'name' field in JSON tool call");
+        return -1;
+    }
+    
+    // Find the value after "name":
+    const char* name_value_start = strchr(name_start, ':');
+    if (!name_value_start) {
+        *error = strdup("Malformed 'name' field in JSON tool call");
+        return -1;
+    }
+    name_value_start++;
+    
+    // Skip whitespace and opening quote
+    while (*name_value_start == ' ' || *name_value_start == '\t' || *name_value_start == '\n') {
+        name_value_start++;
+    }
+    if (*name_value_start == '"') name_value_start++;
+    
+    // Find end quote
+    const char* name_value_end = strchr(name_value_start, '"');
+    if (!name_value_end) {
+        *error = strdup("Malformed 'name' value in JSON tool call");
+        return -1;
+    }
+    
+    // Extract tool name
+    size_t name_len = name_value_end - name_value_start;
+    char* tool_name = malloc(name_len + 1);
+    if (!tool_name) {
+        *error = strdup("Memory allocation failed for tool name");
+        return -1;
+    }
+    strncpy(tool_name, name_value_start, name_len);
+    tool_name[name_len] = '\0';
+    
+    // Find tool in registry
+    const ethervox_tool_t* tool = ethervox_tool_registry_find(registry, tool_name);
+    if (!tool) {
+        char err_msg[256];
+        snprintf(err_msg, sizeof(err_msg), "Unknown tool: %s", tool_name);
+        *error = strdup(err_msg);
+        free(tool_name);
+        return -1;
+    }
+    
+    // Find "arguments" field
+    const char* args_start = strstr(tool_call_json, "\"arguments\"");
+    char json_input[65536] = "{}";  // Default empty object
+    
+    if (args_start) {
+        const char* args_value_start = strchr(args_start, ':');
+        if (args_value_start) {
+            args_value_start++;
+            
+            // Skip whitespace
+            while (*args_value_start == ' ' || *args_value_start == '\t' || *args_value_start == '\n') {
+                args_value_start++;
+            }
+            
+            // Find the opening brace
+            if (*args_value_start == '{') {
+                int brace_count = 0;
+                const char* p = args_value_start;
+                const char* args_end = NULL;
+                
+                // Find matching closing brace
+                while (*p) {
+                    if (*p == '{') brace_count++;
+                    else if (*p == '}') {
+                        brace_count--;
+                        if (brace_count == 0) {
+                            args_end = p + 1;
+                            break;
+                        }
+                    }
+                    p++;
+                }
+                
+                if (args_end) {
+                    size_t args_len = args_end - args_value_start;
+                    if (args_len < sizeof(json_input)) {
+                        strncpy(json_input, args_value_start, args_len);
+                        json_input[args_len] = '\0';
+                    }
+                }
+            }
+        }
+    }
+    
+    GOV_LOG("Executing tool '%s' with JSON: %s", tool->name, json_input);
+    
+    free(tool_name);
+    
+    // Safety checks before execution
+    if (!tool->execute) {
+        *error = strdup("Tool has NULL execute pointer");
+        return -1;
+    }
+    
+    if (!result || !error) {
+        GOV_ERROR("Invalid result or error pointers passed to execute_tool_call_json");
+        return -1;
+    }
+    
+    // Execute the tool
+    int exec_result = tool->execute(json_input, result, error);
+    
+    if (exec_result != 0) {
+        if (!*error) {
+            *error = strdup("Tool execution failed (no error message provided)");
+        }
+        GOV_ERROR("Tool '%s' failed: %s", tool->name, *error);
+        return -1;
+    }
+    
+    if (!*result) {
+        *result = strdup("(no output)");
+    }
+    
+    GOV_LOG("Tool '%s' succeeded: %s", tool->name, *result);
+    return 0;
+}
+
+/**
+ * Execute a single tool call (XML attribute format)
  * Parses the XML tag, extracts attributes, builds JSON, calls tool
  */
 static int execute_tool_call(
@@ -1403,7 +1597,9 @@ ethervox_governor_status_t ethervox_governor_execute(
                     break;
                 }
                 
-                // Check if we're entering or exiting a tool call
+                // Check if we're entering or exiting a tool call (format-aware)
+                tool_format_type_t tool_format = chat_template_get_tool_format(governor->chat_template);
+                
                 if (!inside_tool_call && strstr(llm_response_buffer, "<tool_call")) {
                     inside_tool_call = true;
                 }
@@ -1411,9 +1607,17 @@ ethervox_governor_status_t ethervox_governor_execute(
                 // Determine if we should stream this token
                 bool should_stream = false;
                 if (inside_tool_call) {
-                    // Inside tool call - check if we're exiting
-                    if (strstr(llm_response_buffer, "/>")) {
-                        inside_tool_call = false;
+                    // Inside tool call - check if we're exiting (format-specific)
+                    if (tool_format == TOOL_FORMAT_JSON_IN_XML) {
+                        // JSON format: wait for </tool_call>
+                        if (strstr(llm_response_buffer, "</tool_call>")) {
+                            inside_tool_call = false;
+                        }
+                    } else {
+                        // XML attribute format: wait for />
+                        if (strstr(llm_response_buffer, "/>")) {
+                            inside_tool_call = false;
+                        }
                     }
                     // Don't stream anything while inside tool call
                     should_stream = false;
@@ -1563,9 +1767,27 @@ ethervox_governor_status_t ethervox_governor_execute(
             metrics->tool_calls_made = 0;
         }
         
-        // Extract tool calls
+        // Extract tool calls based on model's tool format
         char* tool_calls[10];
-        int num_tools = extract_tool_calls(llm_response, tool_calls, 10);
+        int num_tools = 0;
+        tool_format_type_t tool_format = chat_template_get_tool_format(governor->chat_template);
+        
+        if (tool_format == TOOL_FORMAT_JSON_IN_XML) {
+            // Granite 4.0 format: <tool_call>\n{"name": "...", "arguments": {...}}\n</tool_call>
+            num_tools = extract_tool_calls_json(llm_response, tool_calls, 10);
+        } else {
+            // XML attribute format: <tool_call name="..." attr="..." />
+            num_tools = extract_tool_calls(llm_response, tool_calls, 10);
+        }
+        
+        // Debug: Log tool extraction result
+        if (num_tools > 0) {
+            GOV_LOG("Found %d tool call(s) in response", num_tools);
+        } else {
+            GOV_LOG("No tool calls found in response (length: %zu)", strlen(llm_response));
+            ETHERVOX_LOGD("LLM response without tool calls: %.200s%s", 
+                          llm_response, strlen(llm_response) > 200 ? "..." : "");
+        }
         
         if (metrics) {
             metrics->tool_calls_made = num_tools;
@@ -1577,20 +1799,54 @@ ethervox_governor_status_t ethervox_governor_execute(
                 char* tool_result = NULL;
                 char* tool_error = NULL;
                 
-                // Extract tool name for progress notification
-                char* tool_name = parse_attribute(tool_calls[i], "name");
+                // Extract tool name for progress notification (format-specific)
+                char* tool_name = NULL;
+                if (tool_format == TOOL_FORMAT_JSON_IN_XML) {
+                    // Parse JSON to get name
+                    const char* name_start = strstr(tool_calls[i], "\"name\"");
+                    if (name_start) {
+                        const char* value_start = strchr(name_start, ':');
+                        if (value_start) {
+                            value_start++;
+                            while (*value_start == ' ' || *value_start == '"') value_start++;
+                            const char* value_end = strchr(value_start, '"');
+                            if (value_end) {
+                                size_t len = value_end - value_start;
+                                tool_name = malloc(len + 1);
+                                if (tool_name) {
+                                    strncpy(tool_name, value_start, len);
+                                    tool_name[len] = '\0';
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    tool_name = parse_attribute(tool_calls[i], "name");
+                }
+                
                 if (tool_name && progress_callback) {
                     char tool_msg[256];
                     snprintf(tool_msg, sizeof(tool_msg), "Calling tool: %s", tool_name);
                     progress_callback(ETHERVOX_GOVERNOR_EVENT_TOOL_CALL, tool_msg, user_data);
                 }
                 
-                int status = execute_tool_call(
-                    tool_calls[i],
-                    governor->tool_registry,
-                    &tool_result,
-                    &tool_error
-                );
+                // Execute tool using format-specific handler
+                int status;
+                if (tool_format == TOOL_FORMAT_JSON_IN_XML) {
+                    status = execute_tool_call_json(
+                        tool_calls[i],
+                        governor->tool_registry,
+                        &tool_result,
+                        &tool_error
+                    );
+                } else {
+                    status = execute_tool_call(
+                        tool_calls[i],
+                        governor->tool_registry,
+                        &tool_result,
+                        &tool_error
+                    );
+                }
                 
                 if (status == 0 && tool_result) {
                     GOV_LOG("Tool '%s' called and e successfully, result length: %zu", 
@@ -1995,6 +2251,10 @@ int ethervox_governor_reset_conversation(ethervox_governor_t* governor) {
 
 ethervox_tool_registry_t* ethervox_governor_get_registry(ethervox_governor_t* governor) {
     return governor ? governor->tool_registry : NULL;
+}
+
+const chat_template_t* ethervox_governor_get_chat_template(ethervox_governor_t* governor) {
+    return governor ? governor->chat_template : NULL;
 }
 
 void ethervox_governor_set_tool_execution(ethervox_governor_t* governor, bool enabled) {

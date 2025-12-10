@@ -39,6 +39,7 @@
 #include "ethervox/file_tools.h"
 #include "ethervox/voice_tools.h"
 #include "ethervox/unit_conversion.h"
+#include "ethervox/get_tool_info.h"
 #include "ethervox/startup_prompt_tools.h"
 #include "ethervox/system_info_tools.h"
 #include "ethervox/logging.h"
@@ -103,7 +104,7 @@ static tool_manifest_registry_t g_manifest_registry = {0};  // Tool Manifest Sys
 // Default startup prompt text (used if no custom prompt file exists)
 // Optimized for IBM Granite - show what to output, not just instructions
 static const char* DEFAULT_STARTUP_PROMPT = 
-    "Greet the user and show today's date/time and any reminders.";
+    "Greet the user with a short creative greeting.";
 
 static void signal_handler(int sig) {
     if (sig == SIGINT && g_cli_voice_session &&
@@ -122,24 +123,28 @@ static void print_banner(void) {
     printf("║                     EthervoxAI v%s                        ║\n", ETHERVOX_VERSION_STRING);
     printf("║          Governor LLM with Memory Tools Plugin               ║\n");
     printf("╚══════════════════════════════════════════════════════════════╝\n");
+    printf("Type \\help for a list of commands. \n");
     printf("\n");
-    
+    if (g_debug_enabled) {
+        printf("\n");
+        
 #ifdef ETHERVOX_PLATFORM_RPI
-    printf("Platform: Raspberry Pi\n");
+        printf("Platform: Raspberry Pi\n");
 #elif defined(ETHERVOX_PLATFORM_ESP32)
-    printf("Platform: ESP32\n");
+        printf("Platform: ESP32\n");
 #elif defined(ETHERVOX_PLATFORM_MACOS)
-    printf("Platform: macOS\n");
+        printf("Platform: macOS\n");
 #elif defined(ETHERVOX_PLATFORM_LINUX)
-    printf("Platform: Linux\n");
+        printf("Platform: Linux\n");
 #elif defined(ETHERVOX_PLATFORM_WINDOWS)
-    printf("Platform: Windows\n");
+        printf("Platform: Windows\n");
 #elif defined(ETHERVOX_PLATFORM_ANDROID)
-    printf("Platform: Android\n");
+        printf("Platform: Android\n");
 #else
-    printf("Platform: Unknown\n");
+        printf("Platform: Unknown\n");
 #endif
-    printf("\n");
+        printf("\n");
+    }
 }
 
 static void print_help(void) {
@@ -890,7 +895,8 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         g_ethervox_debug_enabled = g_debug_enabled;  // Also control legacy debug flag
         if (g_debug_enabled) {
             ethervox_log_set_level(ETHERVOX_LOG_LEVEL_DEBUG);
-            printf("Debug logging: ENABLED\n");
+            printf("Debug logging: ENABLED (level=%d)\n", ethervox_log_get_level());
+            fprintf(stderr, "[TEST] If you see this, stderr logging works\n");
         } else {
             // Restore to INFO if not in quiet mode, OFF if in quiet mode
             ethervox_log_set_level(g_quiet_mode ? ETHERVOX_LOG_LEVEL_OFF : ETHERVOX_LOG_LEVEL_INFO);
@@ -1122,15 +1128,26 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         printf("\n");
         
         // Step 1: Initialize manifest system (exports manifest + loads it)
+        // Only initialize if not already loaded (avoid wiping existing file pointer)
         printf("Step 1: Initializing Tool Manifest System...\n");
-        if (ethervox_governor_init_with_manifest(governor, g_loaded_model_path, 
-                                                 &g_manifest_registry) != 0) {
-            printf("✗ Failed to initialize manifest system\n");
-            printf("  (Continuing anyway - will use runtime registry)\n");
+        if (!g_manifest_registry.manifest_file) {
+            ethervox_governor_init_with_manifest(governor, g_loaded_model_path, 
+                                                &g_manifest_registry);
+            
+            // Check if manifest was actually loaded
+            if (!g_manifest_registry.manifest_file) {
+                printf("✗ Failed to load manifest file\n");
+                printf("  Cannot run optimization without manifest\n");
+                printf("\n");
+                return;
+            }
         } else {
-            printf("✓ Manifest exported and loaded: %u tools\n", 
+            printf("✓ Using existing manifest: %u tools\n", 
                    g_manifest_registry.header.tool_count);
         }
+        
+        // Set manifest for get_tool_info meta-tool
+        ethervox_get_tool_info_set_manifest(&g_manifest_registry);
         
         // Step 2: Run optimizer v2 (JSON output, batch processing)
         printf("\nStep 2: Running optimization (this may take 30-60 seconds)...\n");
@@ -1159,6 +1176,13 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         int ret = ethervox_governor_load_model(governor, model_path);
         if (ret == 0) {
             snprintf(g_loaded_model_path, sizeof(g_loaded_model_path), "%s", model_path);
+            
+            // Initialize manifest system after model load
+            if (ethervox_governor_init_with_manifest(governor, g_loaded_model_path, &g_manifest_registry) == 0) {
+                // Set manifest for get_tool_info meta-tool
+                ethervox_get_tool_info_set_manifest(&g_manifest_registry);
+            }
+            
             printf("✓ Model loaded successfully\n");
         } else {
             printf("✗ Failed to load model (code: %d)\n", ret);
@@ -1283,9 +1307,9 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
     // Store user message
     store_message(memory, line, true, 0.8f);
     
-    // Suppress llama.cpp/ggml stderr logs in quiet mode
+    // Suppress llama.cpp/ggml stderr logs in quiet mode (but not when debug is enabled)
     int stderr_backup = -1;
-    if (g_quiet_mode) {
+    if (g_quiet_mode && !g_debug_enabled) {
         stderr_backup = dup(STDERR_FILENO);
         int dev_null = open("/dev/null", O_WRONLY);
         if (dev_null != -1) {
@@ -1311,7 +1335,7 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
     );
     
     // Restore stderr if we redirected it
-    if (g_quiet_mode && stderr_backup != -1) {
+    if (g_quiet_mode && !g_debug_enabled && stderr_backup != -1) {
         fflush(stderr);  // Flush any pending stderr output before restoring
         dup2(stderr_backup, STDERR_FILENO);
         close(stderr_backup);
@@ -1600,48 +1624,49 @@ int main(int argc, char** argv) {
     }
     
     if (memory_dir) {
-        printf("Memory: Persistent storage at %s\n", memory.storage_filepath);
-        printf("Memory: Current entry count before load: %u\n", memory.entry_count);
-        
         // Use platform-agnostic function to load previous session
         // This handles all the complexity of finding the most recent file,
         // preserving tags, IDs, and adding the "imported" tag
         uint32_t turns_loaded = 0;
         int load_result = ethervox_memory_load_previous_session(&memory, &turns_loaded);
         
-        printf("Memory: Load result = %d, turns_loaded = %u\n", load_result, turns_loaded);
-        printf("Memory: Current entry count after load: %u\n", memory.entry_count);
-        
-        if (load_result == 0 && turns_loaded > 0) {
-            printf("Memory: Successfully loaded %u previous memories from last session\n", turns_loaded);
+        if (g_debug_enabled) {
+            printf("Memory: Persistent storage at %s\n", memory.storage_filepath);
+            printf("Memory: Current entry count before load: %u\n", memory.entry_count);
+            printf("Memory: Load result = %d, turns_loaded = %u\n", load_result, turns_loaded);
+            printf("Memory: Current entry count after load: %u\n", memory.entry_count);
             
-            // Show a sample of what was loaded (first 10 entries)
-            uint32_t show_count = memory.entry_count < 10 ? memory.entry_count : 10;
-            for (uint32_t i = 0; i < show_count; i++) {
-                printf("  Entry %u (id=%llu): [", i, (unsigned long long)memory.entries[i].memory_id);
-                for (uint32_t t = 0; t < memory.entries[i].tag_count; t++) {
-                    printf("%s%s", t > 0 ? "," : "", memory.entries[i].tags[t]);
+            if (load_result == 0 && turns_loaded > 0) {
+                printf("Memory: Successfully loaded %u previous memories from last session\n", turns_loaded);
+                
+                // Show a sample of what was loaded (first 10 entries)
+                uint32_t show_count = memory.entry_count < 10 ? memory.entry_count : 10;
+                for (uint32_t i = 0; i < show_count; i++) {
+                    printf("  Entry %u (id=%llu): [", i, (unsigned long long)memory.entries[i].memory_id);
+                    for (uint32_t t = 0; t < memory.entries[i].tag_count; t++) {
+                        printf("%s%s", t > 0 ? "," : "", memory.entries[i].tags[t]);
+                    }
+                    // Replace newlines with spaces for display
+                    printf("] \"");
+                    for (const char* p = memory.entries[i].text; *p && (p - memory.entries[i].text) < 100; p++) {
+                        if (*p == '\n') printf("\\n");
+                        else if (*p == '\r') printf("\\r");
+                        else if (*p == '\t') printf("\\t");
+                        else putchar(*p);
+                    }
+                    if (strlen(memory.entries[i].text) > 100) printf("...");
+                    printf("\"\n");
                 }
-                // Replace newlines with spaces for display
-                printf("] \"");
-                for (const char* p = memory.entries[i].text; *p && (p - memory.entries[i].text) < 100; p++) {
-                    if (*p == '\n') printf("\\n");
-                    else if (*p == '\r') printf("\\r");
-                    else if (*p == '\t') printf("\\t");
-                    else putchar(*p);
+                if (memory.entry_count > 10) {
+                    printf("  ... and %u more entries\n", memory.entry_count - 10);
                 }
-                if (strlen(memory.entries[i].text) > 100) printf("...");
-                printf("\"\n");
+            } else if (load_result != 0) {
+                printf("Memory: Failed to load previous session (error %d)\n", load_result);
+            } else {
+                printf("Memory: No previous session to load\n");
             }
-            if (memory.entry_count > 10) {
-                printf("  ... and %u more entries\n", memory.entry_count - 10);
-            }
-        } else if (load_result != 0) {
-            printf("Memory: Failed to load previous session (error %d)\n", load_result);
-        } else {
-            printf("Memory: No previous session to load\n");
         }
-    } else {
+    } else if (g_debug_enabled) {
         printf("Memory: In-memory only (no persistence)\n");
     }
     
@@ -1672,16 +1697,18 @@ int main(int argc, char** argv) {
         return 1;
     }
     
-    printf("Governor: Initialized\n");
+    if (g_debug_enabled) {
+        printf("Governor: Initialized\n");
+    }
     
     // Register compute tools with Governor
     int compute_count = ethervox_compute_tools_register_all(&registry);
-    if (compute_count > 0) {
+    if (g_debug_enabled && compute_count > 0) {
         printf("Compute Tools: Registered %d tools with Governor\n", compute_count);
     }
     
     // Register memory tools with Governor
-    if (ethervox_memory_tools_register(&registry, &memory) == 0) {
+    if (ethervox_memory_tools_register(&registry, &memory) == 0 && g_debug_enabled) {
         printf("Memory Tools: Registered with Governor\n");
     }
     
@@ -1720,7 +1747,7 @@ int main(int argc, char** argv) {
         ethervox_file_tools_add_filter(&file_config, ".sh");
         
         // Register with Governor
-        if (ethervox_file_tools_register(&registry, &file_config) == 0) {
+        if (ethervox_file_tools_register(&registry, &file_config) == 0 && g_debug_enabled) {
             const char* mode_icon = (file_config.access_mode == ETHERVOX_FILE_ACCESS_READ_ONLY) ? "🔒" : "🔓";
             const char* mode_str = (file_config.access_mode == ETHERVOX_FILE_ACCESS_READ_ONLY) ? "read-only (safe mode)" : "read-write";
             printf("File Tools: Registered with Governor (%s %s: .txt/.md/.org/.c/.cpp/.h/.sh)\n", mode_icon, mode_str);
@@ -1731,22 +1758,27 @@ int main(int argc, char** argv) {
     }
     
     // Register path configuration tools
-    if (ethervox_path_config_register(&registry, &path_config) == 0) {
+    if (ethervox_path_config_register(&registry, &path_config) == 0 && g_debug_enabled) {
         printf("Path Config Tools: Registered with Governor\n");
     }
     
     // Register unit conversion tool
-    if (ethervox_unit_conversion_register(&registry) == 0) {
+    if (ethervox_unit_conversion_register(&registry) == 0 && g_debug_enabled) {
         printf("Unit Conversion Tool: Registered with Governor\n");
     }
     
+    // Register get_tool_info meta-tool (for dynamic schema loading)
+    if (ethervox_get_tool_info_register(&registry) == 0 && g_debug_enabled) {
+        printf("Get Tool Info: Registered with Governor\n");
+    }
+    
     // Register startup prompt tools
-    if (ethervox_startup_prompt_tools_register(&registry) == 0) {
+    if (ethervox_startup_prompt_tools_register(&registry) == 0 && g_debug_enabled) {
         printf("Startup Prompt Tools: Registered with Governor\n");
     }
     
     // Register system info tools
-    if (ethervox_system_info_tools_register(&registry) == 0) {
+    if (ethervox_system_info_tools_register(&registry) == 0 && g_debug_enabled) {
         printf("System Info Tools: Registered with Governor\n");
     }
     
@@ -1755,12 +1787,14 @@ int main(int argc, char** argv) {
         if (ethervox_voice_tools_register(&registry, &voice_state) == 0) {
             voice_session = &voice_state;
             g_cli_voice_session = &voice_state;
-            printf("Voice Tools: Registered with Governor (Whisper STT with speaker detection)\n");
-            printf("             Use /transcribe and /stoptranscribe commands\n");
-        } else {
+            if (g_debug_enabled) {
+                printf("Voice Tools: Registered with Governor (Whisper STT with speaker detection)\n");
+                printf("             Use /transcribe and /stoptranscribe commands\n");
+            }
+        } else if (g_debug_enabled) {
             printf("⚠️  Voice Tools: Failed to register with Governor\n");
         }
-    } else {
+    } else if (g_debug_enabled) {
         printf("⚠️  Voice Tools: Failed to initialize (check whisper model at ~/.ethervox/models/whisper/base.bin or base.en.bin)\n");
     }
     
@@ -1876,6 +1910,13 @@ int main(int argc, char** argv) {
             int ret = ethervox_governor_load_model(governor, resolved_path);
             if (ret == 0) {
                 snprintf(g_loaded_model_path, sizeof(g_loaded_model_path), "%s", resolved_path);
+                
+                // Initialize manifest system after model load
+                if (ethervox_governor_init_with_manifest(governor, g_loaded_model_path, &g_manifest_registry) == 0) {
+                    // Set manifest for get_tool_info meta-tool
+                    ethervox_get_tool_info_set_manifest(&g_manifest_registry);
+                }
+                
                 if (!quiet_mode) {
                     printf("[INFO] ✓ Model loaded successfully\n");
                 }
@@ -1899,7 +1940,7 @@ int main(int argc, char** argv) {
         printf("Recommended: granite-4.0-h-tiny-Q4_K_M.gguf (will search in ~/.ethervox/models/)\n\n");
     }
     
-    if (!engineering_mode) {
+    if (!engineering_mode && g_debug_enabled) {
         print_help();
     }
     
@@ -2350,9 +2391,9 @@ int main(int argc, char** argv) {
     
     printf("Cleaning up...\n");
     
-    // Suppress llama.cpp cleanup logs in quiet mode
+    // Suppress llama.cpp cleanup logs in quiet mode (but not when debug is enabled)
     int stderr_backup = -1;
-    if (g_quiet_mode) {
+    if (g_quiet_mode && !g_debug_enabled) {
         stderr_backup = dup(STDERR_FILENO);
         int dev_null = open("/dev/null", O_WRONLY);
         if (dev_null != -1) {
@@ -2367,7 +2408,7 @@ int main(int argc, char** argv) {
     ethervox_memory_cleanup(&memory);
     
     // Restore stderr if we redirected it
-    if (g_quiet_mode && stderr_backup != -1) {
+    if (g_quiet_mode && !g_debug_enabled && stderr_backup != -1) {
         dup2(stderr_backup, STDERR_FILENO);
         close(stderr_backup);
     }

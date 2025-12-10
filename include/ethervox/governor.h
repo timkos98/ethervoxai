@@ -387,6 +387,14 @@ static inline ethervox_governor_config_t ethervox_governor_default_config(void) 
  */
 ethervox_tool_registry_t* ethervox_governor_get_registry(ethervox_governor_t* governor);
 
+/**
+ * Get chat template from Governor instance
+ * 
+ * @param governor Governor instance
+ * @return Chat template pointer, or NULL if invalid
+ */
+const chat_template_t* ethervox_governor_get_chat_template(ethervox_governor_t* governor);
+
 // ============================================================================
 // Tool Manifest System Integration (NEW)
 // ============================================================================

@@ -65,7 +65,7 @@ static int time_get_current_execute(const char* args_json, char** result, char**
 }
 
 static ethervox_tool_t time_get_current_tool = {
-    .name = "time_get_current",
+    .name = "get_time",
     .description = "Get current time. Use when user asks 'what time is it' or needs to know the current time.",
     .parameters_json_schema = "{}",
     .execute = time_get_current_execute,
@@ -118,7 +118,7 @@ static int time_get_date_execute(const char* args_json, char** result, char** er
 }
 
 static ethervox_tool_t time_get_date_tool = {
-    .name = "time_get_date",
+    .name = "get_date",
     .description = "Get current date (day/month/year). Use to get today's date. Use when user asks 'what's the date', needs today's date for calculations, or asks about days until/since an event.",
     .parameters_json_schema = "{}",
     .execute = time_get_date_execute,
@@ -171,7 +171,7 @@ static int time_get_day_of_week_execute(const char* args_json, char** result, ch
 }
 
 static ethervox_tool_t time_get_day_of_week_tool = {
-    .name = "time_get_day_of_week",
+    .name = "get_day",
     .description = "Get the current day of the week. Use when user asks 'what day is it' or 'what day of the week'.",
     .parameters_json_schema = "{}",
     .execute = time_get_day_of_week_execute,
