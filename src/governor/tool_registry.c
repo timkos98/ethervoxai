@@ -263,6 +263,10 @@ int ethervox_tool_registry_build_system_prompt(
         sizeof(custom_examples)
     ) == 0) {
         has_custom_prompts = true;
+        ETHERVOX_LOG_INFO("Using optimized prompts for this model");
+    } else {
+        ETHERVOX_LOG_WARN("No optimized prompts found - tool usage may be inefficient");
+        ETHERVOX_LOG_WARN("Run optimization via Settings to improve performance");
     }
     
     int written = 0;
@@ -272,10 +276,23 @@ int ethervox_tool_registry_build_system_prompt(
     // Format differs significantly between XML and JSON tool formats
     if (tool_format == TOOL_FORMAT_JSON_IN_XML) {
         // Granite 4.0 format: system prompt with JSON tools in <tools></tools>
+        // Add optimization warning first if prompts not customized
+        const char* optimization_warning = has_custom_prompts ? "" :
+            "⚠️ WARNING: Tools are NOT optimized for this model!\n"
+            "This means:\n"
+            "- Tool calls may be SLOW and use EXCESSIVE tokens\n"
+            "- You MUST be VERY SELECTIVE about tool usage\n"
+            "- ONLY call tools when absolutely necessary\n"
+            "- For simple questions, answer directly WITHOUT tools\n"
+            "- DO NOT call get_tool_info unless the user explicitly asks about a tool\n"
+            "- DO NOT chain multiple tool calls unless critical\n"
+            "- MINIMIZE tool usage to avoid performance issues\n\n";
+        
         written = snprintf(ptr, remaining,
-            "%sYou are a helpful assistant with access to the following tools. "
+            "%s%sYou are a helpful assistant with access to the following tools. "
             "You are provided with function signatures within <tools></tools> XML tags:\n<tools>\n",
-            chat_template->system_start);
+            chat_template->system_start,
+            optimization_warning);
         
         if (written < 0 || (size_t)written >= remaining) return -1;
         ptr += written;
@@ -328,11 +345,24 @@ int ethervox_tool_registry_build_system_prompt(
               "NEVER calculate mentally or guess - ALWAYS call the appropriate tool.\n"
               "Tool call format: <tool_call name=\"tool_name\" param=\"value\" />\n");
         
+        // Add critical warning about non-optimized tools to prevent loops
+        const char* optimization_warning = has_custom_prompts ? "" :
+            "\n⚠️ WARNING: Tools are NOT optimized for this model!\n"
+            "This means:\n"
+            "- Tool calls may be SLOW and use EXCESSIVE tokens\n"
+            "- You MUST be VERY SELECTIVE about tool usage\n"
+            "- ONLY call tools when absolutely necessary\n"
+            "- For simple questions, answer directly WITHOUT tools\n"
+            "- DO NOT call get_tool_info unless the user explicitly asks about a tool\n"
+            "- DO NOT chain multiple tool calls unless critical\n"
+            "- MINIMIZE tool usage to avoid performance issues\n\n";
+        
         written = snprintf(ptr, remaining,
             "%s"
-            "%s\n",
+            "%s%s\n",
             chat_template->system_start,
-            platform_context
+            platform_context,
+            optimization_warning
         );
         
         if (written < 0 || (size_t)written >= remaining) return -1;

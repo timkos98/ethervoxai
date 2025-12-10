@@ -27,6 +27,7 @@
 #include "ethervox/timer_tools.h"
 #include "ethervox/memory_tools.h"
 #include "ethervox/voice_tools.h"
+#include "ethervox/compute_tools.h"
 #include "ethervox/platform.h"
 #include "ethervox/config.h"
 #include "ethervox/tool_prompt_optimizer.h"
@@ -39,6 +40,7 @@
 
 #define LOGI(...) ETHERVOX_LOGI(__VA_ARGS__)
 #define LOGE(...) ETHERVOX_LOGE(__VA_ARGS__)
+#define LOGW(...) ETHERVOX_LOGE(__VA_ARGS__)
 
 // Global debug mode flag (defined in logging.c, referenced here)
 extern int g_ethervox_debug_enabled;
@@ -133,6 +135,7 @@ Java_com_droid_ethervox_1core_NativeLib_loadGovernorModel(
     
     LOGI("[JNI] Loading Governor model from: %s", path);
     
+    int result = ethervox_governor_load_model(g_governor, path);
     
     (*env)->ReleaseStringUTFChars(env, modelPath, path);
     
@@ -152,7 +155,7 @@ Java_com_droid_ethervox_1core_NativeLib_loadGovernorModel(
             
             // Use the centralized manifest setup helper
             tool_manifest_registry_t* manifest = NULL;
-            int manifest_result = ethervox_governor_setup_manifest(governor, model_path_for_manifest, &manifest);
+            int manifest_result = ethervox_governor_setup_manifest(g_governor, model_path_for_manifest, &manifest);
             
             if (manifest_result == 0 && manifest) {
                 g_manifest_registry = manifest;
@@ -729,25 +732,49 @@ Java_com_droid_ethervox_1core_NativeLib_platformInit(
     
     LOGI("Total tools registered: %d", tool_count);
     
-    // Initialize Governor with default config
-    ethervox_governor_config_t gov_config = ethervox_governor_default_config();
-    if (ethervox_governor_init(&g_governor, &gov_config, g_registry) != 0) {
-        LOGE("Failed to initialize Governor");
-        ethervox_tool_registry_cleanup(g_registry);
-        free(g_registry);
-        g_registry = NULL;
-        if (g_memory_store) {
-            ethervox_memory_cleanup(g_memory_store);
-            free(g_memory_store);
-            g_memory_store = NULL;
-        }
-        ethervox_platform_cleanup(g_platform);
-        free(g_platform);
-        g_platform = NULL;
+    // NOTE: Governor initialization moved to platformInitGovernor()
+    // This allows user to choose minimal vs full mode before governor init
+    
+    LOGI("Platform, memory store, and tool registry initialized successfully (Governor pending user choice)");
+    
+    return 0;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_droid_ethervox_1core_NativeLib_platformInitGovernor(
+        JNIEnv* env,
+        jobject thiz,
+        jboolean minimal_mode) {
+    (void)env;
+    (void)thiz;
+    
+    if (g_governor) {
+        LOGI("Governor already initialized");
+        return 0;
+    }
+    
+    if (!g_platform || !g_registry) {
+        LOGE("Platform not initialized - call platformInit() first");
         return -1;
     }
     
-    LOGI("Platform, memory store, tool registry, and Governor initialized successfully");
+    // Initialize Governor with chosen config (minimal or full)
+    ethervox_governor_config_t gov_config = ethervox_governor_default_config();
+    
+    if (minimal_mode) {
+        gov_config.system_prompt_mode = ETHERVOX_GOVERNOR_MODE_MINIMAL;
+        LOGI("Initializing Governor in MINIMAL MODE (fast loading, tools disabled)");
+    } else {
+        gov_config.system_prompt_mode = ETHERVOX_GOVERNOR_MODE_FULL;
+        LOGI("Initializing Governor in FULL MODE (all tools available)");
+    }
+    
+    if (ethervox_governor_init(&g_governor, &gov_config, g_registry) != 0) {
+        LOGE("Failed to initialize Governor");
+        return -1;
+    }
+    
+    LOGI("Governor initialized successfully (mode: %s)", minimal_mode ? "MINIMAL" : "FULL");
     
     return 0;
 }
@@ -828,6 +855,8 @@ Java_com_droid_ethervox_1core_NativeLib_initializeWithModel(
     return JNI_FALSE;
 }
 
+// DEPRECATED: Old dialogue engine API - runtime param updates not supported by governor
+// Governor uses config set at initialization time only
 JNIEXPORT jboolean JNICALL
 Java_com_droid_ethervox_1core_NativeLib_updateLLMParams(
         JNIEnv* env,
@@ -837,44 +866,13 @@ Java_com_droid_ethervox_1core_NativeLib_updateLLMParams(
         jfloat top_p) {
     (void)env;
     (void)thiz;
+    (void)temperature;
+    (void)max_tokens;
+    (void)top_p;
     
-    if (!g_governor || !g_governor->llm_backend) {
-        LOGE("LLM backend not initialized");
-        return JNI_FALSE;
-    }
-    
-    LOGI("Updating LLM params: temp=%.2f, max_tokens=%d, top_p=%.2f", 
-         temperature, max_tokens, top_p);
-    
-    // Create config with new parameters
-    ethervox_llm_config_t config = {0};
-    config.temperature = temperature;
-    config.max_tokens = (uint32_t)max_tokens;
-    config.top_p = top_p;
-    
-    // Use the backend's update_config function if available
-    ethervox_llm_backend_t* backend = g_governor->llm_backend;
-    if (!backend) {
-        LOGE("Backend is null");
-        return JNI_FALSE;
-    }
-    
-    if (backend->update_config) {
-        int result = backend->update_config(backend, &config);
-        if (result == 0) {
-            LOGI("LLM params updated successfully via backend function");
-            return JNI_TRUE;
-        } else {
-            LOGE("Failed to update LLM params via backend function");
-            return JNI_FALSE;
-        }
-    } else {
-        LOGE("Backend does not support runtime config updates");
-        return JNI_FALSE;
-    }
-    
-    LOGI("LLM params updated successfully");
-    return JNI_TRUE;
+    LOGW("updateLLMParams() deprecated - governor does not support runtime param updates");
+    LOGW("LLM parameters are set at initialization time only");
+    return JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL
@@ -884,17 +882,12 @@ Java_com_droid_ethervox_1core_NativeLib_isLlmLoaded(
     (void)env;
     (void)thiz;
     
-    if (!g_governor || !g_governor->llm_backend) {
+    if (!g_governor) {
         return JNI_FALSE;
     }
     
-    // Check if LLM backend is loaded and available
-    ethervox_llm_backend_t* backend = g_governor->llm_backend;
-    if (backend && backend->is_loaded) {
-        return JNI_TRUE;
-    }
-    
-    return JNI_FALSE;
+    // Use governor API to check if model is loaded
+    return ethervox_governor_is_loaded(g_governor) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jstring JNICALL
@@ -1169,23 +1162,31 @@ Java_com_droid_ethervox_1core_NativeLib_processDialogue(
     
     LOGI("Processing dialogue (legacy): '%s'", text);
     
-    // Process with governor directly
-    char response_buffer[1024] = {0};
-    int result = ethervox_governor_process_query(g_governor, text, response_buffer, sizeof(response_buffer));
+    // Process with governor execute API
+    char* response = NULL;
+    char* error = NULL;
+    ethervox_governor_status_t status = ethervox_governor_execute(
+        g_governor, text, &response, &error, NULL, NULL, NULL, NULL);
     
     (*env)->ReleaseStringUTFChars(env, user_text, text);
     
-    if (result != 0) {
-        LOGE("Failed to process query");
-        return create_jstring(env, "[ERROR] Failed to generate response");
+    if (status != ETHERVOX_GOVERNOR_SUCCESS || !response) {
+        LOGE("Failed to process query: %s", error ? error : "Unknown error");
+        jstring result = create_jstring(env, "[ERROR] Failed to generate response");
+        if (response) free(response);
+        if (error) free(error);
+        return result;
     }
     
     // Format response with confidence placeholder for backwards compatibility
-    char formatted_response[1024];
-    snprintf(formatted_response, sizeof(formatted_response), "%s|100|false", 
-             response_buffer[0] ? response_buffer : "No response");
+    char formatted_response[4096];
+    snprintf(formatted_response, sizeof(formatted_response), "%s|100|false", response);
     
-    return create_jstring(env, formatted_response);
+    jstring result = create_jstring(env, formatted_response);
+    free(response);
+    if (error) free(error);
+    
+    return result;
 }
 
 // Global callback context for streaming
@@ -1290,8 +1291,7 @@ static void native_governor_progress_callback(
     (*ctx->env)->DeleteLocalRef(ctx->env, j_message);
 }
 
-// DEPRECATED: Legacy dialogue streaming - needs reimplementation with governor streaming API
-// TODO: Implement using ethervox_governor_process_query_streaming when available
+// Governor streaming dialogue - uses token_callback for real-time token streaming
 JNIEXPORT void JNICALL
 Java_com_droid_ethervox_1core_NativeLib_processDialogueStreamingNative(
         JNIEnv* env,
@@ -1317,36 +1317,66 @@ Java_com_droid_ethervox_1core_NativeLib_processDialogueStreamingNative(
     
     const char* text = (*env)->GetStringUTFChars(env, user_text, NULL);
     
-    LOGI("Processing dialogue (streaming - DEPRECATED): '%s'", text);
+    LOGI("Processing dialogue (streaming): '%s'", text);
     
     // Get callback methods
     jclass callback_class = (*env)->GetObjectClass(env, callback);
+    jmethodID on_token = (*env)->GetMethodID(env, callback_class, "onToken", "(Ljava/lang/String;)V");
     jmethodID on_complete = (*env)->GetMethodID(env, callback_class, "onComplete", "(Z)V");
     jmethodID on_error = (*env)->GetMethodID(env, callback_class, "onError", "(Ljava/lang/String;)V");
+    jmethodID on_governor_progress = (*env)->GetMethodID(env, callback_class, "onGovernorProgress", 
+                                                         "(Ljava/lang/String;Ljava/lang/String;)V");
     
-    // For now, fall back to non-streaming governor query
-    char response_buffer[1024] = {0};
-    int result = ethervox_governor_process_query(g_governor, text, response_buffer, sizeof(response_buffer));
+    // Setup streaming context
+    jni_stream_context_t stream_ctx = {
+        .env = env,
+        .callback_obj = callback,
+        .on_token_method = on_token,
+        .on_complete_method = on_complete,
+        .on_error_method = on_error,
+        .on_governor_progress_method = on_governor_progress,
+        .conversation_ended = false
+    };
+    
+    // Execute with streaming token callback
+    char* response = NULL;
+    char* error = NULL;
+    ethervox_governor_status_t status = ethervox_governor_execute(
+        g_governor, 
+        text, 
+        &response, 
+        &error, 
+        NULL,  // metrics (optional)
+        native_governor_progress_callback,  // progress callback
+        native_token_callback,  // token callback for streaming
+        &stream_ctx  // user data
+    );
     
     (*env)->ReleaseStringUTFChars(env, user_text, text);
     
-    if (result != 0) {
-        LOGE("Failed to process query");
+    if (status != ETHERVOX_GOVERNOR_SUCCESS || !response) {
+        LOGE("Failed to process query: %s", error ? error : "Unknown error");
         if (on_error) {
-            jstring error_msg = create_jstring(env, "Failed to generate response");
+            jstring error_msg = create_jstring(env, error ? error : "Failed to generate response");
             (*env)->CallVoidMethod(env, callback, on_error, error_msg);
             (*env)->DeleteLocalRef(env, error_msg);
         }
+        if (response) free(response);
+        if (error) free(error);
     } else {
-        // Call complete callback
+        // Call complete callback - conversation ended if response ends with stop sequence
         if (on_complete) {
-            (*env)->CallVoidMethod(env, callback, on_complete, (jboolean)false);
+            (*env)->CallVoidMethod(env, callback, on_complete, (jboolean)stream_ctx.conversation_ended);
         }
+        free(response);
+        if (error) free(error);
     }
     
-    LOGW("Streaming dialogue API deprecated - implement governor streaming support");
+    LOGI("Streaming dialogue complete");
 }
 
+// DEPRECATED: Old dialogue engine API - cancellation not yet implemented for governor
+// TODO: Add governor cancellation support using llama_cancel flag
 JNIEXPORT void JNICALL
 Java_com_droid_ethervox_1core_NativeLib_cancelProcessing(
         JNIEnv* env,
@@ -1354,35 +1384,8 @@ Java_com_droid_ethervox_1core_NativeLib_cancelProcessing(
     (void)env;
     (void)thiz;
     
-    if (!g_governor || !g_governor->llm_backend) {
-        LOGE("Governor or LLM backend not initialized");
-        return;
-    }
-    
-    // Get the LLM backend handle
-    ethervox_llm_backend_t* backend = g_governor->llm_backend;
-    if (backend && backend->handle) {
-        // Access llama context and set cancel flag
-        typedef struct {
-            void* model;
-            void* ctx;
-            uint32_t n_ctx;
-            uint32_t n_predict;
-            float temperature;
-            float top_p;
-            uint32_t n_gpu_layers;
-            uint32_t n_threads;
-            uint32_t seed;
-            char* loaded_model_path;
-            bool use_mlock;
-            bool use_mmap;
-            volatile bool cancel_requested;
-        } llama_ctx_t;
-        
-        llama_ctx_t* llama_ctx = (llama_ctx_t*)backend->handle;
-        llama_ctx->cancel_requested = true;
-        LOGI("LLM processing cancellation requested");
-    }
+    LOGW("cancelProcessing() deprecated - governor cancellation not yet implemented");
+    LOGW("TODO: Add governor-level cancellation support");
 }
 
 // DEPRECATED: Language handling is now done by the governor's language detection
@@ -1931,6 +1934,15 @@ Java_com_droid_ethervox_1core_NativeLib_setPrivacyMode(
 }
 
 JNIEXPORT jboolean JNICALL
+Java_com_droid_ethervox_1core_NativeLib_getPrivacyMode(
+    JNIEnv* env, jobject thiz) {
+    (void)env;
+    (void)thiz;
+    
+    return ethervox_memory_get_privacy_mode() ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
 Java_com_droid_ethervox_1core_NativeLib_loadGovernorModelMinimal(
     JNIEnv* env, jobject thiz, jstring modelPath) {
     (void)thiz;
@@ -1945,19 +1957,21 @@ Java_com_droid_ethervox_1core_NativeLib_loadGovernorModelMinimal(
     LOGI("[JNI] Loading Governor model in MINIMAL MODE (fast mobile loading)");
     LOGI("[JNI] Model path: %s", path);
     
-    // Set governor config to minimal mode BEFORE loading
-    g_governor->config.system_prompt_mode = ETHERVOX_GOVERNOR_MODE_MINIMAL;
+    // NOTE: Minimal mode must be set during platformInit() via governor config
+    // Cannot change config after governor is initialized
+    // This function is now equivalent to loadGovernorModel
+    // TODO: Add proper API to change governor mode at runtime
     
     int result = ethervox_governor_load_model(g_governor, path);
     
     (*env)->ReleaseStringUTFChars(env, modelPath, path);
     
     if (result == 0) {
-        LOGI("[JNI] Governor model loaded successfully (MINIMAL MODE)");
-        LOGI("[JNI] Tools disabled, ~50 tokens vs ~1200 (96%% reduction)");
+        LOGI("[JNI] Governor model loaded successfully");
+        LOGW("[JNI] MINIMAL MODE must be set via config in platformInit - cannot change at load time");
         return JNI_TRUE;
     } else {
-        LOGE("Failed to load Governor model in minimal mode");
+        LOGE("Failed to load Governor model");
         return JNI_FALSE;
     }
 }
