@@ -123,7 +123,7 @@ static void print_banner(void) {
     printf("║                     EthervoxAI v%s                        ║\n", ETHERVOX_VERSION_STRING);
     printf("║          Governor LLM with Memory Tools Plugin               ║\n");
     printf("╚══════════════════════════════════════════════════════════════╝\n");
-    printf("Type \\help for a list of commands. \n");
+    printf("Type /help for a list of commands. \n");
     printf("\n");
     if (g_debug_enabled) {
         printf("\n");

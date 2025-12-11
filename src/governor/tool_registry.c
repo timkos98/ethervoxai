@@ -313,22 +313,44 @@ int ethervox_tool_registry_build_system_prompt(
             remaining -= tool_written;
         }
         
-        // Close tools and add calling instructions
+        // Close tools and add list of ALL available tools
+        int tools_list_written = snprintf(ptr, remaining, "</tools>\n\nOther available tools (use get_tool_info to learn about these):\n");
+        if (tools_list_written < 0 || (size_t)tools_list_written >= remaining) return -1;
+        ptr += tools_list_written;
+        remaining -= tools_list_written;
+        
+        // List all non-fast-path tools by name only
+        for (uint32_t i = 0; i < registry->tool_count; i++) {
+            const ethervox_tool_t* tool = &registry->tools[i];
+            if (is_fast_path_tool(tool->name)) continue;  // Skip fast-path tools already listed
+            
+            int name_written = snprintf(ptr, remaining, "  - %s\n", tool->name);
+            if (name_written < 0 || (size_t)name_written >= remaining) return -1;
+            ptr += name_written;
+            remaining -= name_written;
+        }
+        
+        // Add calling instructions
         int instr_written = snprintf(ptr, remaining,
-            "</tools>\n\n"
-            "For each tool call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n"
+            "\nFor each tool call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n"
             "<tool_call>\n"
             "{\"name\": <function-name>, \"arguments\": <args-json-object>}\n"
             "</tool_call>\n\n"
             "CRITICAL RULES:\n"
             "1. For ALL math/calculations, you MUST call calculator_compute - never calculate mentally\n"
             "2. For time/date queries, you MUST use get_date or get_time\n"
-            "3. Always call tools before answering - do not guess or answer from memory\n\n"
+            "3. For tools in the <tools> section above, call them directly with their parameters\n"
+            "4. For other tools listed, call get_tool_info first to learn their parameters, then call the tool\n"
+            "5. Always call tools before answering - do not guess or answer from memory\n\n"
             "Examples:\n\n"
             "User: What's 17 times 23?\n"
             "Assistant: <tool_call>\n{\"name\": \"calculator_compute\", \"arguments\": {\"expression\": \"17*23\"}}\n</tool_call>\n\n"
             "User: What's the current date?\n"
-            "Assistant: <tool_call>\n{\"name\": \"get_date\", \"arguments\": {}}\n</tool_call>\n"
+            "Assistant: <tool_call>\n{\"name\": \"get_date\", \"arguments\": {}}\n</tool_call>\n\n"
+            "User: Read the startup prompt\n"
+            "Assistant: <tool_call>\n{\"name\": \"get_tool_info\", \"arguments\": {\"tool_name\": \"startup_prompt_get_current\"}}\n</tool_call>\n"
+            "[After learning parameters...]\n"
+            "Assistant: <tool_call>\n{\"name\": \"startup_prompt_get_current\", \"arguments\": {}}\n</tool_call>\n"
             "%s",
             chat_template->system_end);
             

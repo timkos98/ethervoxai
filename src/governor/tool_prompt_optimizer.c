@@ -254,9 +254,9 @@ int ethervox_optimize_tool_prompts(ethervox_governor_t* governor, const char* mo
     fprintf(fp, "{\n");
     fprintf(fp, "  \"model_path\": \"%s\",\n", model_path);
     fprintf(fp, "  \"generated_at\": %ld,\n", time(NULL));
-    fprintf(fp, "  \"preferences\": \"");
+    fprintf(fp, "  \"instruction\": \"");
     
-    // Escape and write preferences
+    // Escape and write preferences as instruction
     for (const char* p = pref_response; *p; p++) {
         if (*p == '"') fputs("\\\"", fp);
         else if (*p == '\\') fputs("\\\\", fp);
@@ -296,7 +296,26 @@ int ethervox_optimize_tool_prompts(ethervox_governor_t* governor, const char* mo
             fputs("\n    }\n", fp);
         }
     }
-    fprintf(fp, "  ]\n");
+    fprintf(fp, "  ],\n");
+    
+    // Add combined examples field for compatibility with loader
+    fprintf(fp, "  \"examples\": \"");
+    fprintf(fp, "Tool usage examples:\\n\\n");
+    for (uint32_t i = 0; i < registry->tool_count && i < 5; i++) {
+        // Include first 5 tool examples
+        if (tool_examples[i] && strlen(tool_examples[i]) > 0 &&
+            strcmp(tool_examples[i], "No example available.") != 0) {
+            for (const char* p = tool_examples[i]; *p; p++) {
+                if (*p == '"') fputs("\\\"", fp);
+                else if (*p == '\\') fputs("\\\\", fp);
+                else if (*p == '\n') fputs("\\n", fp);
+                else fputc(*p, fp);
+            }
+            fprintf(fp, "\\n\\n");
+        }
+    }
+    fprintf(fp, "\"\n");
+    
     fprintf(fp, "}\n");
     fclose(fp);
     
@@ -396,9 +415,12 @@ int ethervox_load_optimized_prompts(
     char prompt_file[512];
     get_prompt_file_path(model_path, prompt_file, sizeof(prompt_file));
     
+    OPT_LOG("Attempting to load optimized prompts from: %s", prompt_file);
+    
     FILE* fp = fopen(prompt_file, "r");
     if (!fp) {
         // File doesn't exist - use defaults
+        OPT_LOG("Optimized prompts file not found (tried: %s)", prompt_file);
         return -1;
     }
     

@@ -68,9 +68,13 @@ static int tool_file_list_wrapper(
     char directory[ETHERVOX_FILE_MAX_PATH];
     bool recursive = false;
     
+    // Try both "directory" and "path" for compatibility with LLM optimized calls
     if (parse_json_string(args_json, "directory", directory, sizeof(directory)) != 0) {
-        *error = strdup("Missing 'directory' parameter");
-        return -1;
+        // Fall back to "path" parameter
+        if (parse_json_string(args_json, "path", directory, sizeof(directory)) != 0) {
+            *error = strdup("Missing 'directory' or 'path' parameter");
+            return -1;
+        }
     }
     
     parse_json_bool(args_json, "recursive", &recursive);
@@ -778,8 +782,9 @@ int ethervox_file_tools_register(
         .parameters_json_schema =
             "{\"type\":\"object\",\"properties\":{"
             "\"directory\":{\"type\":\"string\",\"description\":\"Directory path to list (use '.' for current directory)\"},"
+            "\"path\":{\"type\":\"string\",\"description\":\"Directory path to list (alternative to 'directory')\"},"
             "\"recursive\":{\"type\":\"boolean\",\"description\":\"Recurse into subdirectories\"}"
-            "},\"required\":[\"directory\"]}",
+            "}}",
         .execute = tool_file_list_wrapper,
         .is_deterministic = true,
         .requires_confirmation = false,
