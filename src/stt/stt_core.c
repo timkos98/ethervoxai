@@ -13,13 +13,6 @@
 #include "ethervox/stt.h"
 #include "ethervox/logging.h"
 
-// Placeholder for Vosk integration (will be implemented with actual Vosk lib)
-typedef struct {
-  void* model;
-  void* recognizer;
-  char* last_result;
-} vosk_context_t;
-
 // Default configuration - use Whisper as default since it's implemented
 ethervox_stt_config_t ethervox_stt_get_default_config(void) {
   ethervox_stt_config_t config = {.backend = ETHERVOX_STT_BACKEND_WHISPER,
@@ -64,19 +57,10 @@ int ethervox_stt_init(ethervox_stt_runtime_t* runtime, const ethervox_stt_config
   // Initialize backend
   switch (runtime->config.backend) {
     case ETHERVOX_STT_BACKEND_VOSK: {
-      // TODO: Initialize actual Vosk library
-      // For now, placeholder
-      vosk_context_t* ctx = (vosk_context_t*)calloc(1, sizeof(vosk_context_t));
-      if (!ctx) {
+      if (ethervox_stt_vosk_init(runtime) != 0) {
         free(runtime->audio_accumulator);
         return -1;
       }
-
-      ETHERVOX_LOG_INFO("STT: Vosk backend initialized (placeholder - requires vosk library)");
-      ETHERVOX_LOG_INFO("STT: Model path: %s", runtime->config.model_path);
-      ETHERVOX_LOG_INFO("STT: Language: %s", runtime->config.language);
-
-      runtime->backend_context = ctx;
       break;
     }
 
@@ -111,9 +95,7 @@ int ethervox_stt_start(ethervox_stt_runtime_t* runtime) {
       return ethervox_stt_whisper_start(runtime);
     
     case ETHERVOX_STT_BACKEND_VOSK:
-      // TODO: Implement Vosk backend
-      ETHERVOX_LOG_ERROR("Vosk backend not yet implemented");
-      return -1;
+      return ethervox_stt_vosk_start(runtime);
     
     default:
       ETHERVOX_LOG_ERROR("Unknown STT backend: %d", runtime->config.backend);
@@ -137,9 +119,7 @@ int ethervox_stt_process(ethervox_stt_runtime_t* runtime,
       return ethervox_stt_whisper_process(runtime, audio_buffer, result);
     
     case ETHERVOX_STT_BACKEND_VOSK:
-      // TODO: Implement Vosk backend
-      ETHERVOX_LOG_ERROR("Vosk backend not yet implemented - use ETHERVOX_STT_BACKEND_WHISPER");
-      return -1;
+      return ethervox_stt_vosk_process(runtime, audio_buffer, result);
     
     default:
       ETHERVOX_LOG_ERROR("Unknown STT backend: %d", runtime->config.backend);
@@ -161,9 +141,7 @@ int ethervox_stt_finalize(ethervox_stt_runtime_t* runtime, ethervox_stt_result_t
       return ethervox_stt_whisper_finalize(runtime, result);
     
     case ETHERVOX_STT_BACKEND_VOSK:
-      // TODO: Implement Vosk backend
-      ETHERVOX_LOG_ERROR("Vosk backend not yet implemented");
-      return -1;
+      return ethervox_stt_vosk_finalize(runtime, result);
     
     default:
       ETHERVOX_LOG_ERROR("Unknown STT backend: %d", runtime->config.backend);
@@ -187,7 +165,7 @@ void ethervox_stt_stop(ethervox_stt_runtime_t* runtime) {
       break;
     
     case ETHERVOX_STT_BACKEND_VOSK:
-      // TODO: Implement Vosk backend
+      ethervox_stt_vosk_stop(runtime);
       break;
     
     default:
@@ -222,8 +200,10 @@ void ethervox_stt_cleanup(ethervox_stt_runtime_t* runtime) {
   // Delegate to backend-specific cleanup
   if (runtime->config.backend == ETHERVOX_STT_BACKEND_WHISPER) {
     ethervox_stt_whisper_cleanup(runtime);
+  } else if (runtime->config.backend == ETHERVOX_STT_BACKEND_VOSK) {
+    ethervox_stt_vosk_cleanup(runtime);
   } else if (runtime->backend_context) {
-    // Vosk or other backend cleanup
+    // Other backend cleanup
     free(runtime->backend_context);
     runtime->backend_context = NULL;
   }
@@ -236,19 +216,10 @@ void ethervox_stt_cleanup(ethervox_stt_runtime_t* runtime) {
     free((void*)runtime->config.language);
   }
 
-  if (runtime->backend_context) {
-    if (runtime->config.backend == ETHERVOX_STT_BACKEND_VOSK) {
-      vosk_context_t* ctx = (vosk_context_t*)runtime->backend_context;
-      if (ctx->last_result) {
-        free(ctx->last_result);
-      }
-    }
-    free(runtime->backend_context);
-  }
-
   runtime->is_initialized = false;
   ETHERVOX_LOG_INFO("STT engine cleaned up");
 }
+
 /**
  * Set language (hot-switch without re-init)
  */

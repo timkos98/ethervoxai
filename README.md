@@ -294,6 +294,81 @@ Once running, the Governor CLI supports the following commands:
 - `/help` - Show available commands
 - `/quit` or `/exit` - Exit the application
 
+**Model Management:**
+- `/models` - List all available models with status and disk usage
+- `/modelstatus <type>` - Check status of models (governor/whisper/vosk/piper)
+- `/modeldownload <type> <name>` - Download a specific model
+- `/modeldelete <type> <name>` - Delete a model to free disk space
+
+### Model Management
+
+EthervoxAI includes a comprehensive model management system for all AI components:
+
+**Check Available Models:**
+```bash
+> /models
+Total disk usage: 1847.23 MB
+
+━━━ Governor LLM ━━━
+✅ granite-3.0-2b-instruct-Q4_K_M.gguf [DEFAULT]
+   Status: Found, Size: 1464.84 MB
+
+━━━ Whisper STT ━━━
+❌ ggml-base.en.bin [DEFAULT]
+   Status: Not Found, Expected: 70.57 MB
+```
+
+**Download Models:**
+```bash
+# Download recommended Whisper model
+> /modeldownload whisper ggml-base.en.bin
+
+# Download Vosk for real-time conversation
+> /modeldownload vosk vosk-model-small-en-us-0.15
+
+# Download Piper TTS voice
+> /modeldownload piper en_US-lessac-medium.onnx
+```
+
+**Supported Model Types:**
+- **Governor LLM**: Language models for conversation and tool orchestration
+  - granite-3.0-2b-instruct (1.5GB, recommended)
+  - granite-3.0-8b-instruct (5GB, higher quality)
+- **Whisper STT**: Speech-to-text for transcription
+  - ggml-base.en.bin (74MB, fast and accurate)
+  - ggml-small.en.bin (244MB, better accuracy)
+- **Vosk STT**: Real-time speech recognition for conversations
+  - vosk-model-small-en-us-0.15 (40MB, 10x faster than Whisper)
+  - vosk-model-en-us-0.22 (1.8GB, best accuracy)
+- **Piper TTS**: Text-to-speech for natural voice output
+  - en_US-lessac-medium.onnx (17MB, natural voice)
+
+**Storage Location:**
+All models are stored in `~/.ethervox/models/` with subdirectories by type.
+
+**API Integration:**
+```c
+#include "ethervox/model_downloader.h"
+
+// Check if model exists
+ethervox_model_status_t status = ethervox_model_whisper_status("ggml-base.en.bin");
+if (status == ETHERVOX_MODEL_STATUS_NOT_FOUND) {
+    // Download the model
+    ethervox_model_download(ETHERVOX_MODEL_TYPE_WHISPER, "ggml-base.en.bin", NULL, NULL);
+}
+
+// List all available models
+ethervox_model_info_t* models = NULL;
+uint32_t count = 0;
+ethervox_model_list(ETHERVOX_MODEL_TYPE_GOVERNOR, &models, &count);
+for (uint32_t i = 0; i < count; i++) {
+    printf("%s - %s\n", models[i].name, models[i].description);
+}
+free(models);
+```
+
+See [docs/MODEL_MANAGEMENT.md](docs/MODEL_MANAGEMENT.md) for complete documentation.
+
 ### Available Tools
 
 The Governor has access to the following tools for enhanced functionality:

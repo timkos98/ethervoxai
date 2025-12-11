@@ -109,3 +109,24 @@ target_link_libraries(test_mobile_optimization ethervoxai)
 target_include_directories(test_mobile_optimization PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME MobileOptimization COMMAND test_mobile_optimization)
 set_tests_properties(MobileOptimization PROPERTIES TIMEOUT 30 LABELS "unit;mobile")
+
+# Wake word detection tests
+add_executable(test_wake_word unit/test_wake_word.c)
+target_link_libraries(test_wake_word ethervoxai)
+target_include_directories(test_wake_word PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME WakeWord COMMAND test_wake_word)
+set_tests_properties(WakeWord PROPERTIES TIMEOUT 30 LABELS "unit;wake_word")
+
+# Voice conversation tests
+add_executable(test_voice_conversation unit/test_voice_conversation.c)
+target_link_libraries(test_voice_conversation ethervoxai)
+target_include_directories(test_voice_conversation PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME VoiceConversation COMMAND test_voice_conversation)
+set_tests_properties(VoiceConversation PROPERTIES TIMEOUT 30 LABELS "unit;conversation")
+
+# Audio integration tests
+add_executable(test_audio_integration unit/test_audio_integration.c)
+target_link_libraries(test_audio_integration ethervoxai)
+target_include_directories(test_audio_integration PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME AudioIntegration COMMAND test_audio_integration)
+set_tests_properties(AudioIntegration PROPERTIES TIMEOUT 30 LABELS "integration;audio")

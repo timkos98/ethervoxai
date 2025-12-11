@@ -101,6 +101,19 @@ int ethervox_wake_process(ethervox_wake_runtime_t* runtime,
                           ethervox_wake_result_t* result);
 
 /**
+ * Record a reference template for wake word matching
+ * 
+ * Call this function while the user says the wake word to create
+ * a reference template for improved accuracy.
+ *
+ * @param runtime Wake word runtime
+ * @param audio_buffer Audio containing the wake word
+ * @return 0 on success, -1 on error
+ */
+int ethervox_wake_record_template(ethervox_wake_runtime_t* runtime,
+                                   const ethervox_audio_buffer_t* audio_buffer);
+
+/**
  * Reset wake word detector state
  */
 void ethervox_wake_reset(ethervox_wake_runtime_t* runtime);

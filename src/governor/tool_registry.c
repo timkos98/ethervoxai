@@ -277,6 +277,7 @@ int ethervox_tool_registry_build_system_prompt(
     if (tool_format == TOOL_FORMAT_JSON_IN_XML) {
         // Granite 4.0 format: system prompt with JSON tools in <tools></tools>
         // Add optimization warning first if prompts not customized
+        // TODO: Move into the optimizer backend s.t. the prompts get the right format
         const char* optimization_warning = has_custom_prompts ? "" :
             "⚠️ WARNING: Tools are NOT optimized for this model!\n"
             "This means:\n"

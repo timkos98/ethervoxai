@@ -350,6 +350,8 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 set(COMMON_SOURCES
     src/common/error.c
     src/common/logging.c
+    src/common/settings_menu.c
+    src/common/model_downloader.c
 )
 
 # Collect core source files (non-platform specific)
@@ -362,6 +364,8 @@ file(GLOB ETHERVOXAI_CORE_SOURCES
     "src/plugins/compute_tools/*.c"
     "src/plugins/timer_tools/*.c"
 )
+
+# Note: src/dialogue/voice_conversation.c is included via GLOB above
 
 # Exclude test files from the main library
 list(FILTER ETHERVOXAI_CORE_SOURCES EXCLUDE REGEX ".*test_.*\\.c$")
@@ -478,7 +482,10 @@ set(ETHERVOXAI_SOURCES ${COMMON_SOURCES} ${ETHERVOXAI_CORE_SOURCES} ${PLATFORM_S
 
 # Add JNI wrapper for Android
 if(ANDROID)
-    list(APPEND ETHERVOXAI_SOURCES src/platform/ethervox_android_core.c)
+    list(APPEND ETHERVOXAI_SOURCES 
+        src/platform/ethervox_android_core.c
+        src/platform/model_management_jni.c
+    )
 endif()
 
 # Debug: Print sources being compiled
@@ -627,9 +634,25 @@ if(NOT ANDROID)
         else()
             message(WARNING "Readline library not found - command history will be disabled")
         endif()
+        
+        # Add ncurses for settings menu
+        find_library(NCURSES_LIBRARY ncurses)
+        if(NCURSES_LIBRARY)
+            target_link_libraries(ethervoxai_app PRIVATE ${NCURSES_LIBRARY})
+            message(STATUS "Ncurses library found: ${NCURSES_LIBRARY}")
+        else()
+            message(WARNING "Ncurses library not found - settings menu will be disabled")
+        endif()
     endif()
     
     set_target_properties(ethervoxai_app PROPERTIES OUTPUT_NAME ethervoxai)
+endif()
+
+# Direct microphone test (standalone)
+if(NOT ANDROID AND TARGET_PLATFORM STREQUAL "MACOS")
+    add_executable(test_mic_direct test_mic_direct.c)
+    target_link_libraries(test_mic_direct PRIVATE ethervoxai)
+    target_include_directories(test_mic_direct PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 endif()
 
 # Optional: Examples and tests (if directories exist and not Android)

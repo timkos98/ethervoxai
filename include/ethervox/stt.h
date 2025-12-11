@@ -149,6 +149,16 @@ int ethervox_stt_whisper_finalize(ethervox_stt_runtime_t* runtime, ethervox_stt_
 void ethervox_stt_whisper_stop(ethervox_stt_runtime_t* runtime);
 void ethervox_stt_whisper_cleanup(ethervox_stt_runtime_t* runtime);
 
+// Vosk backend functions
+int ethervox_stt_vosk_init(ethervox_stt_runtime_t* runtime);
+int ethervox_stt_vosk_start(ethervox_stt_runtime_t* runtime);
+int ethervox_stt_vosk_process(ethervox_stt_runtime_t* runtime,
+                               const ethervox_audio_buffer_t* audio_buffer,
+                               ethervox_stt_result_t* result);
+int ethervox_stt_vosk_finalize(ethervox_stt_runtime_t* runtime, ethervox_stt_result_t* result);
+void ethervox_stt_vosk_stop(ethervox_stt_runtime_t* runtime);
+void ethervox_stt_vosk_cleanup(ethervox_stt_runtime_t* runtime);
+
 // Testing utilities
 /**
  * Test Whisper with a WAV file

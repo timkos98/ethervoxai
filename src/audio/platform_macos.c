@@ -133,7 +133,14 @@ static int macos_audio_start_capture(ethervox_audio_runtime_t* runtime) {
                                        NULL, kCFRunLoopCommonModes, 0,
                                        &state->queue);
   if (status != noErr) {
-    fprintf(stderr, "Failed to create audio input queue: %d\n", status);
+    if (status == kAudioQueueErr_InvalidDevice) {
+      fprintf(stderr, "Failed to create audio input queue: Invalid device\n");
+    } else if (status == kAudioQueueErr_Permissions || status == -50) {
+      fprintf(stderr, "Failed to create audio input queue: Permission denied or device busy (error %d)\n", status);
+      fprintf(stderr, "Tip: Make sure microphone permissions are granted and no other app is using the mic\n");
+    } else {
+      fprintf(stderr, "Failed to create audio input queue: %d\n", status);
+    }
     return -1;
   }
   

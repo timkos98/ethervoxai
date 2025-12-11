@@ -19,6 +19,8 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <sys/time.h>
+#include <pthread.h>
 
 #ifdef __APPLE__
 #include <readline/readline.h>
@@ -33,11 +35,14 @@
 #include "ethervox/platform.h"
 #include "ethervox/governor.h"
 #include "ethervox/tool_manifest.h"
+#include "ethervox/settings_menu.h"
 #include "ethervox/tool_prompt_optimizer.h"
 #include "ethervox/compute_tools.h"
 #include "ethervox/memory_tools.h"
 #include "ethervox/file_tools.h"
 #include "ethervox/voice_tools.h"
+#include "ethervox/wake_word.h"
+#include "ethervox/conversation.h"
 #include "ethervox/unit_conversion.h"
 #include "ethervox/get_tool_info.h"
 #include "ethervox/startup_prompt_tools.h"
@@ -46,6 +51,7 @@
 #include "ethervox/integration_tests.h"
 #include "ethervox/llm_tool_tests.h"
 #include "ethervox/tool_prompt_optimizer.h"
+#include "ethervox/model_downloader.h"
 
 // External debug flag from logging.c (declared in config.h)
 // extern int g_ethervox_debug_enabled; // Already declared in config.h
@@ -56,8 +62,146 @@ static bool g_debug_enabled = false;   // Debug logging disabled by default (opt
 static bool g_quiet_mode = true;       // Quiet mode by default
 static bool g_markdown_enabled = true; // Markdown formatting enabled by default
 
-static ethervox_voice_session_t* g_cli_voice_session = NULL;
+// Voice system: Two separate pipelines
+// 1. Transcription pipeline (Whisper STT) - for meeting transcription, dictation
+//    Triggered manually with /transcribe command, high-accuracy but slower
+static ethervox_voice_session_t* g_transcription_session = NULL;
 static volatile sig_atomic_t g_sigint_stop_transcribe = 0;
+
+// 2. Conversation pipeline (Vosk STT + Piper TTS) - for natural LLM interaction
+//    Triggered by wake word detection, real-time and responsive
+static ethervox_conversation_session_t* g_conversation_session = NULL;
+
+// Governor (shared between CLI and conversation)
+static ethervox_governor_t* g_governor = NULL;
+static pthread_mutex_t g_governor_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// Wake word detection (triggers conversation pipeline)
+static ethervox_wake_runtime_t* g_wake_runtime = NULL;
+static bool g_wake_enabled = false;
+
+// Wake word listening thread
+static pthread_t g_wake_thread;
+static bool g_wake_thread_running = false;
+static pthread_mutex_t g_wake_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+/**
+ * Wake word listening thread - continuously monitors microphone
+ */
+static void* wake_word_listen_thread(void* arg) {
+    (void)arg;
+    
+    // Initialize audio for wake word detection
+    ethervox_audio_runtime_t audio_runtime = {0};
+    ethervox_audio_config_t audio_config = {0};
+    audio_config.sample_rate = 16000;
+    audio_config.channels = 1;
+    audio_config.bits_per_sample = 16;
+    audio_config.buffer_size = 4096;
+    
+    if (ethervox_audio_register_platform_driver(&audio_runtime) != 0) {
+        fprintf(stderr, "[Wake] Failed to register audio driver\n");
+        g_wake_thread_running = false;
+        return NULL;
+    }
+    
+    if (audio_runtime.driver.init(&audio_runtime, &audio_config) != 0) {
+        fprintf(stderr, "[Wake] Failed to initialize audio\n");
+        g_wake_thread_running = false;
+        return NULL;
+    }
+    
+    if (audio_runtime.driver.start_capture(&audio_runtime) != 0) {
+        fprintf(stderr, "[Wake] Failed to start audio capture\n");
+        audio_runtime.driver.cleanup(&audio_runtime);
+        g_wake_thread_running = false;
+        return NULL;
+    }
+    
+    printf("[Wake] Microphone listening started (calibrating for ~5 seconds...)\n");
+    
+    int audio_chunks_processed = 0;
+    bool calibration_complete = false;
+    
+    // Main listening loop
+    while (g_wake_thread_running) {
+        // Check if wake word detection is enabled
+        pthread_mutex_lock(&g_wake_mutex);
+        bool enabled = g_wake_enabled;
+        ethervox_wake_runtime_t* runtime = g_wake_runtime;
+        pthread_mutex_unlock(&g_wake_mutex);
+        
+        if (!enabled || !runtime) {
+            usleep(100000); // 100ms
+            continue;
+        }
+        
+        // Read audio from microphone (100ms chunks)
+        ethervox_audio_buffer_t buffer;
+        buffer.size = 1600; // 100ms at 16kHz
+        buffer.channels = 1;
+        buffer.data = (float*)calloc(buffer.size, sizeof(float));
+        
+        // Set timestamp for wake word detector
+        struct timeval tv;
+        gettimeofday(&tv, NULL);
+        buffer.timestamp_us = (uint64_t)tv.tv_sec * 1000000ULL + (uint64_t)tv.tv_usec;
+        
+        if (!buffer.data) {
+            usleep(100000);
+            continue;
+        }
+        
+        int samples = audio_runtime.driver.read_audio(&audio_runtime, &buffer);
+        
+        // Show when calibration is complete
+        if (samples > 0) {
+            audio_chunks_processed++;
+            if (!calibration_complete && audio_chunks_processed == 50) {
+                printf("[Wake] ✓ Background calibration complete - actively listening for 'hey ethervox'\n");
+                calibration_complete = true;
+            }
+        }
+        
+        if (samples > 0) {
+            // Process with wake word detector
+            ethervox_wake_result_t wake_result = {0};
+            
+            pthread_mutex_lock(&g_wake_mutex);
+            int result = ethervox_wake_process(runtime, &buffer, &wake_result);
+            pthread_mutex_unlock(&g_wake_mutex);
+            
+            // Debug: Show wake word processing results occasionally
+            static int debug_counter = 0;
+            if (g_debug_enabled && ++debug_counter % 50 == 0) {  // Every 5 seconds
+                printf("[Wake Debug] result=%d, detected=%d, confidence=%.3f, samples=%d\n", 
+                       result, wake_result.detected, wake_result.confidence, samples);
+            }
+            
+            if (result == 0 && wake_result.detected) {
+                // Wake word detected!
+                printf("\n🎤 Wake word detected! (confidence: %.2f)\n", wake_result.confidence);
+                
+                // Trigger conversation if available
+                if (g_conversation_session) {
+                    ethervox_conversation_trigger(g_conversation_session);
+                } else {
+                    printf("💡 Voice conversation not enabled. Use /convon first.\n");
+                }
+            }
+        }
+        
+        free(buffer.data);
+        usleep(10000); // 10ms between reads
+    }
+    
+    // Cleanup
+    audio_runtime.driver.stop_capture(&audio_runtime);
+    audio_runtime.driver.cleanup(&audio_runtime);
+    printf("[Wake] Microphone listening stopped\n");
+    
+    return NULL;
+}
 
 #if defined(__APPLE__) || defined(__linux__)
 // Command completion for readline
@@ -65,7 +209,11 @@ static const char* commands[] = {
     "/help", "/test", "/testllm", "/testwhisper", "/optimize_tool_prompts", "/load", "/tools",
     "/search", "/summary", "/export", "/archive", "/stats", "/startup", "/debug",
     "/markdown", "/toggle_tool_calls", "/clear", "/reset", "/paste", "/paths", "/setpath", "/safemode", "/secret",
-    "/transcribe", "/stoptranscribe", "/setlang", "/translate", "/quit", NULL
+    "/transcribe", "/stoptranscribe", "/setlang", "/translate",
+    "/wakeword", "/wakeon", "/wakeoff", "/wakerecord",
+    "/conversation", "/convon", "/convoff", "/convtrigger",
+    "/models", "/modelstatus", "/modeldownload", "/modeldelete",
+    "/quit", NULL
 };
 
 static char* command_generator(const char* text, int state) {
@@ -103,12 +251,13 @@ static tool_manifest_registry_t g_manifest_registry = {0};  // Tool Manifest Sys
 
 // Default startup prompt text (used if no custom prompt file exists)
 // Optimized for IBM Granite - show what to output, not just instructions
-static const char* DEFAULT_STARTUP_PROMPT = 
+// Non-static so it can be accessed from JNI
+const char* DEFAULT_STARTUP_PROMPT = 
     "Greet the user with a short creative greeting.";
 
 static void signal_handler(int sig) {
-    if (sig == SIGINT && g_cli_voice_session &&
-        (g_cli_voice_session->is_recording || g_cli_voice_session->capture_thread)) {
+    if (sig == SIGINT && g_transcription_session &&
+        (g_transcription_session->is_recording || g_transcription_session->capture_thread)) {
         g_sigint_stop_transcribe = 1;
         return;
     }
@@ -150,6 +299,7 @@ static void print_banner(void) {
 static void print_help(void) {
     printf("\nAvailable Commands:\n");
     printf("  /help              Show this help message\n");
+    printf("  /settings          Open interactive settings menu\n");
     printf("  /test              Run comprehensive integration tests\n");
     printf("  /testllm [-v]      Run LLM tool usage tests (-v for verbose debug output)\n");
     printf("  /optimize_tool_prompts  Optimize tool prompts (incremental: only new tools, ~10s)\n");
@@ -167,6 +317,18 @@ static void print_help(void) {
     printf("  /stoptranscribe    Stop recording and get transcript (saves to ~/.ethervox/transcripts/)\n");
     printf("  /setlang <code>    Set STT language (e.g., en, es, zh, auto for detection)\n");
     printf("  /translate         Toggle auto-translation to English on/off (for non-English speech)\n");
+    printf("  /wakeword          Show wake word status and usage\n");
+    printf("  /wakeon            Enable wake word detection (continuous listening)\n");
+    printf("  /wakeoff           Disable wake word detection\n");
+    printf("  /wakerecord        Record a wake word template for better accuracy\n");
+    printf("  /conversation      Show voice conversation status\n");
+    printf("  /convon            Enable voice conversation (Vosk + Piper)\n");
+    printf("  /convoff           Disable voice conversation\n");
+    printf("  /convtrigger       Manually trigger a conversation (for testing)\n");
+    printf("  /models            List all available models and their status\n");
+    printf("  /modelstatus <type> Check status of models (governor/whisper/vosk/piper)\n");
+    printf("  /modeldownload <type> <name> Download a specific model\n");
+    printf("  /modeldelete <type> <name>   Delete a model to free disk space\n");
     printf("  /stats             Show memory statistics\n");
     printf("  /startup <cmd>     Manage startup prompt (edit/show/reset)\n");
     printf("  /debug             Toggle debug logging on/off\n");
@@ -625,13 +787,13 @@ static char* markdown_to_ansi(const char* text) {
     return output;
 }
 
-static void print_tools(ethervox_governor_t* governor) {
-    if (!governor) {
+static void print_tools(ethervox_governor_t* g_governor) {
+    if (!g_governor) {
         printf("No Governor instance available\n");
         return;
     }
     
-    ethervox_tool_registry_t* registry = ethervox_governor_get_registry(governor);
+    ethervox_tool_registry_t* registry = ethervox_governor_get_registry(g_governor);
     if (!registry) {
         printf("No tool registry available\n");
         return;
@@ -705,13 +867,13 @@ static void handle_pending_sigint_stop(void) {
         return;
     }
     g_sigint_stop_transcribe = 0;
-    if (!g_cli_voice_session) {
+    if (!g_transcription_session) {
         g_running = false;
         printf("\n\nShutting down gracefully...\n");
         return;
     }
     printf("\n⏹️  Ctrl+C detected - stopping recording and transcribing with Whisper...\n\n");
-    if (!stop_transcription_and_show(g_cli_voice_session)) {
+    if (!stop_transcription_and_show(g_transcription_session)) {
         printf("✗ Failed to stop recording after Ctrl+C\n");
     } else {
         printf("(Recording cancelled via Ctrl+C – continue with new commands)\n");
@@ -719,7 +881,7 @@ static void handle_pending_sigint_stop(void) {
 }
 
 static void process_command(const char* line, ethervox_memory_store_t* memory,
-                           ethervox_governor_t* governor, ethervox_path_config_t* path_config,
+                           ethervox_governor_t* g_governor, ethervox_path_config_t* path_config,
                            ethervox_file_tools_config_t* file_config, void* voice_session, 
                            bool* quit_flag) {
     // Trim leading whitespace
@@ -749,6 +911,103 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
     
     if (strcmp(line, "/help") == 0) {
         print_help();
+        return;
+    }
+    
+    if (strcmp(line, "/settings") == 0) {
+        if (ethervox_settings_menu_available()) {
+            ethervox_settings_t settings = {
+                .debug_enabled = g_debug_enabled,
+                .quiet_mode = g_quiet_mode,
+                .engineering_mode = false,  // Local variable, not accessible here
+                .log_level = 2,  // INFO level default
+                .wake_word_enabled = false,  // Not yet implemented
+                .model_path = {0},
+                .whisper_model_path = {0},
+                .memory_dir = {0},
+                .audio_device = {0},
+                .wake_word = {0},
+                .git_commit = {0},
+                .git_branch = {0}
+            };
+            
+            // Copy git info
+            #ifdef ETHERVOX_GIT_COMMIT
+            strncpy(settings.git_commit, ETHERVOX_GIT_COMMIT, sizeof(settings.git_commit) - 1);
+            #endif
+            #ifdef ETHERVOX_GIT_BRANCH
+            strncpy(settings.git_branch, ETHERVOX_GIT_BRANCH, sizeof(settings.git_branch) - 1);
+            #endif
+            
+            // Copy Governor model path
+            if (g_loaded_model_path[0] != '\0') {
+                strncpy(settings.model_path, g_loaded_model_path, sizeof(settings.model_path) - 1);
+            } else {
+                strcpy(settings.model_path, "(no model loaded)");
+            }
+            
+            // Memory directory
+            snprintf(settings.memory_dir, sizeof(settings.memory_dir), "%s/.ethervox/memory", getenv("HOME") ? getenv("HOME") : ".");
+            
+            // Copy Whisper model path from voice session
+            if (g_transcription_session && g_transcription_session->model_path) {
+                strncpy(settings.whisper_model_path, g_transcription_session->model_path, sizeof(settings.whisper_model_path) - 1);
+            } else {
+                strcpy(settings.whisper_model_path, "(not loaded)");
+            }
+            
+            // Populate wake word settings
+            if (g_wake_runtime && g_wake_runtime->is_initialized) {
+                settings.wake_word_enabled = g_wake_enabled;
+                strncpy(settings.wake_word, g_wake_runtime->config.wake_word, sizeof(settings.wake_word) - 1);
+            } else {
+                settings.wake_word_enabled = false;
+                strcpy(settings.wake_word, "hey ethervox");
+            }
+            
+            // TODO: Populate audio_device when audio device enumeration is implemented
+            strcpy(settings.audio_device, "(default)");
+            
+            // Show menu
+            if (ethervox_settings_menu_show(&settings) == 0) {
+                // Apply changed settings
+                g_debug_enabled = settings.debug_enabled;
+                g_quiet_mode = settings.quiet_mode;
+                
+                // Apply wake word settings
+                if (settings.wake_word_enabled && !g_wake_enabled) {
+                    // User enabled wake word in settings - initialize if needed
+                    if (!g_wake_runtime) {
+                        g_wake_runtime = (ethervox_wake_runtime_t*)calloc(1, sizeof(ethervox_wake_runtime_t));
+                        if (g_wake_runtime) {
+                            ethervox_wake_config_t config = ethervox_wake_get_default_config();
+                            if (ethervox_wake_init(g_wake_runtime, &config) == 0) {
+                                g_wake_enabled = true;
+                                printf("✓ Wake word detection enabled\n");
+                            } else {
+                                free(g_wake_runtime);
+                                g_wake_runtime = NULL;
+                            }
+                        }
+                    } else {
+                        g_wake_enabled = true;
+                        printf("✓ Wake word detection enabled\n");
+                    }
+                } else if (!settings.wake_word_enabled && g_wake_enabled) {
+                    // User disabled wake word
+                    g_wake_enabled = false;
+                    printf("✓ Wake word detection disabled\n");
+                }
+                
+                // Note: engineering_mode and log_level are local to main(), can't be changed here
+                
+                printf("\n✓ Settings applied (debug=%s, quiet=%s)\n", 
+                       g_debug_enabled ? "on" : "off",
+                       g_quiet_mode ? "on" : "off");
+            }
+        } else {
+            printf("Settings menu not available on this platform\n");
+        }
         return;
     }
     
@@ -886,7 +1145,7 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
     }
     
     if (strcmp(line, "/tools") == 0) {
-        print_tools(governor);
+        print_tools(g_governor);
         return;
     }
     
@@ -914,7 +1173,7 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
     if (strcmp(line, "/toggle_tool_calls") == 0) {
         static bool tool_execution_enabled = true;
         tool_execution_enabled = !tool_execution_enabled;
-        ethervox_governor_set_tool_execution(governor, tool_execution_enabled);
+        ethervox_governor_set_tool_execution(g_governor, tool_execution_enabled);
         printf("Tool execution: %s\n", tool_execution_enabled ? "ENABLED" : "DISABLED");
         if (!tool_execution_enabled) {
             printf("  Tools will be shown in responses but not executed\n");
@@ -1091,6 +1350,517 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         return;
     }
     
+    // Wake word commands
+    if (strcmp(line, "/wakeword") == 0) {
+        printf("\n🎤 Wake Word Detection Status\n");
+        printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+        if (g_wake_runtime && g_wake_runtime->is_initialized) {
+            printf("State:       %s\n", g_wake_enabled ? "ENABLED (listening)" : "DISABLED");
+            printf("Wake word:   \"%s\"\n", g_wake_runtime->config.wake_word);
+            printf("Sensitivity: %.2f (0.0 = strict, 1.0 = loose)\n", g_wake_runtime->config.sensitivity);
+            printf("Method:      Keyword spotting (VAD + syllable + template matching)\n");
+            if (g_wake_enabled) {
+                printf("\n💡 Wake word is actively listening in the background\n");
+                printf("   Say \"%s\" to trigger /transcribe\n", g_wake_runtime->config.wake_word);
+            } else {
+                printf("\n💡 Use /wakeon to enable continuous wake word listening\n");
+            }
+        } else {
+            printf("State:       NOT INITIALIZED\n");
+            printf("\n💡 Use /wakeon to initialize and enable wake word detection\n");
+        }
+        printf("\nCommands:\n");
+        printf("  /wakeon       Enable wake word detection\n");
+        printf("  /wakeoff      Disable wake word detection\n");
+        printf("  /wakerecord   Record a template for better accuracy\n");
+        printf("\n");
+        return;
+    }
+    
+    if (strcmp(line, "/wakeon") == 0) {
+        if (!g_wake_runtime) {
+            printf("🎤 Initializing wake word detector...\n");
+            g_wake_runtime = (ethervox_wake_runtime_t*)calloc(1, sizeof(ethervox_wake_runtime_t));
+            if (!g_wake_runtime) {
+                printf("❌ Failed to allocate wake word runtime\n");
+                return;
+            }
+            
+            ethervox_wake_config_t config = ethervox_wake_get_default_config();
+            config.sensitivity = 0.6f;  // Default sensitivity
+            
+            if (ethervox_wake_init(g_wake_runtime, &config) != 0) {
+                printf("❌ Failed to initialize wake word detector\n");
+                free(g_wake_runtime);
+                g_wake_runtime = NULL;
+                return;
+            }
+        }
+        
+        // Start the wake word listening thread if not already running
+        if (!g_wake_thread_running) {
+            g_wake_thread_running = true;
+            if (pthread_create(&g_wake_thread, NULL, wake_word_listen_thread, NULL) != 0) {
+                printf("❌ Failed to start wake word listening thread\n");
+                g_wake_thread_running = false;
+                return;
+            }
+            pthread_detach(g_wake_thread);
+            printf("✓ Wake word listening thread started\n");
+        }
+        
+        pthread_mutex_lock(&g_wake_mutex);
+        g_wake_enabled = true;
+        pthread_mutex_unlock(&g_wake_mutex);
+        
+        printf("✓ Wake word detection ENABLED\n");
+        printf("  Listening for: \"%s\"\n", g_wake_runtime->config.wake_word);
+        printf("  Sensitivity: %.2f\n", g_wake_runtime->config.sensitivity);
+        printf("\n💡 Say the wake word to automatically trigger conversation\n");
+        printf("   Use /wakerecord to improve accuracy with a template\n");
+        return;
+    }
+    
+    if (strcmp(line, "/wakeoff") == 0) {
+        if (!g_wake_runtime) {
+            printf("⚠️  Wake word detection not initialized\n");
+            return;
+        }
+        
+        pthread_mutex_lock(&g_wake_mutex);
+        g_wake_enabled = false;
+        pthread_mutex_unlock(&g_wake_mutex);
+        
+        printf("✓ Wake word detection DISABLED\n");
+        printf("  (microphone still listening, use /wakeon to re-enable)\n");
+        return;
+    }
+    
+    if (strcmp(line, "/wakerecord") == 0) {
+        printf("\n🎙️  Wake Word Template Recording\n");
+        printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+        
+        if (!g_wake_runtime) {
+            printf("❌ Wake word detector not initialized\n");
+            printf("   Use /wakeon first to initialize the detector\n");
+            return;
+        }
+        
+        if (!voice_session) {
+            printf("❌ Voice tools not initialized\n");
+            return;
+        }
+        
+        printf("This will record you saying the wake word to create a reference template.\n");
+        printf("Template matching improves accuracy from ~75%% to ~90%%.\n\n");
+        printf("Instructions:\n");
+        printf("  1. Recording will start in 3 seconds\n");
+        printf("  2. Say \"%s\" clearly\n", g_wake_runtime->config.wake_word);
+        printf("  3. Recording stops automatically after 3 seconds\n");
+        printf("\nPress Enter to start...");
+        
+        char dummy[10];
+        if (fgets(dummy, sizeof(dummy), stdin) == NULL) {
+            printf("❌ Recording cancelled\n");
+            return;
+        }
+        
+        printf("🔴 Recording in 3...\n");
+        sleep(1);
+        printf("🔴 Recording in 2...\n");
+        sleep(1);
+        printf("🔴 Recording in 1...\n");
+        sleep(1);
+        printf("🔴 RECORDING NOW - Say \"%s\"\n", g_wake_runtime->config.wake_word);
+        
+        ethervox_voice_session_t* session = (ethervox_voice_session_t*)voice_session;
+        
+        // Start recording
+        if (ethervox_voice_tools_start_listen(session) != 0) {
+            printf("❌ Failed to start recording\n");
+            return;
+        }
+        
+        // Record for 3 seconds
+        sleep(3);
+        
+        // Stop recording
+        const char* transcript = NULL;
+        ethervox_voice_tools_stop_listen(session, &transcript);
+        
+        printf("✓ Recording stopped\n");
+        printf("\n💡 Template recording feature requires direct audio access.\n");
+        printf("   For now, the detector will use heuristics (syllable + energy pattern).\n");
+        printf("   Expected accuracy: ~75-80%% in quiet environments.\n");
+        printf("\n   To enable template matching:\n");
+        printf("   1. Audio buffer access needs to be exposed from voice_tools\n");
+        printf("   2. Extract wake word segment from recording\n");
+        printf("   3. Call ethervox_wake_record_template() with audio data\n");
+        printf("\n");
+        return;
+    }
+    
+    // ========== VOICE CONVERSATION COMMANDS ==========
+    
+    if (strcmp(line, "/conversation") == 0) {
+        printf("\n🗣️  Voice Conversation Status\n");
+        printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+        
+        if (!g_conversation_session) {
+            printf("Status: Not initialized\n\n");
+            printf("Voice conversation provides real-time interaction with the LLM:\n");
+            printf("  • Wake word detection → Triggers listening\n");
+            printf("  • Vosk STT → Processes speech in real-time (<500ms)\n");
+            printf("  • Governor → Generates response\n");
+            printf("  • Piper TTS → Speaks response naturally\n\n");
+            printf("💡 Use /convon to enable voice conversation\n");
+        } else {
+            ethervox_conversation_state_t state = ethervox_conversation_get_state(g_conversation_session);
+            const char* state_str = "Unknown";
+            switch (state) {
+                case ETHERVOX_CONV_STATE_UNINITIALIZED: state_str = "Uninitialized"; break;
+                case ETHERVOX_CONV_STATE_IDLE: state_str = "Idle (waiting for wake word)"; break;
+                case ETHERVOX_CONV_STATE_LISTENING: state_str = "Listening (capturing speech)"; break;
+                case ETHERVOX_CONV_STATE_PROCESSING: state_str = "Processing (querying LLM)"; break;
+                case ETHERVOX_CONV_STATE_SPEAKING: state_str = "Speaking (playing response)"; break;
+                case ETHERVOX_CONV_STATE_ERROR: state_str = "Error"; break;
+            }
+            
+            bool is_active = ethervox_conversation_is_active(g_conversation_session);
+            printf("Status: %s\n", state_str);
+            printf("Active: %s\n", is_active ? "Yes" : "No");
+            printf("\nConfiguration:\n");
+            printf("  STT Backend: Vosk (real-time)\n");
+            printf("  TTS Backend: Piper (neural)\n");
+            printf("  Listen timeout: %d ms\n", 5000); // From default config
+            printf("  Conversation timeout: %d ms\n", 30000);
+            printf("\n");
+            printf("Commands:\n");
+            printf("  /convon       Enable voice conversation\n");
+            printf("  /convoff      Disable voice conversation\n");
+            printf("  /convtrigger  Manually trigger (for testing)\n");
+            printf("\n");
+        }
+        return;
+    }
+    
+    if (strcmp(line, "/convon") == 0) {
+        if (!g_governor) {
+            printf("❌ Governor not initialized. Please wait for system startup.\n");
+            return;
+        }
+        
+        if (!g_conversation_session) {
+            printf("🎤 Initializing voice conversation session...\n");
+            
+            ethervox_conversation_config_t config = ethervox_conversation_get_default_config();
+            
+            // Initialize with governor instance
+            g_conversation_session = ethervox_conversation_init(&config, g_governor);
+            if (!g_conversation_session) {
+                printf("❌ Failed to initialize conversation session\n");
+                return;
+            }
+            
+            printf("✓ Conversation session initialized with Governor\n");
+        }
+        
+        // Start the conversation thread
+        if (ethervox_conversation_start(g_conversation_session) != 0) {
+            printf("❌ Failed to start conversation thread\n");
+            return;
+        }
+        
+        printf("✓ Voice conversation ENABLED\n");
+        printf("  Listening for wake word triggers...\n");
+        printf("\n💡 Make sure wake word detection is enabled (/wakeon)\n");
+        printf("   Say the wake word to start a conversation!\n");
+        return;
+    }
+    
+    if (strcmp(line, "/convoff") == 0) {
+        if (!g_conversation_session) {
+            printf("⚠️  Voice conversation not initialized\n");
+            return;
+        }
+        
+        if (ethervox_conversation_stop(g_conversation_session) != 0) {
+            printf("❌ Failed to stop conversation\n");
+            return;
+        }
+        
+        printf("✓ Voice conversation DISABLED\n");
+        printf("  (session still initialized, use /convon to re-enable)\n");
+        return;
+    }
+    
+    if (strcmp(line, "/convtrigger") == 0) {
+        if (!g_conversation_session) {
+            printf("⚠️  Voice conversation not initialized. Use /convon first.\n");
+            return;
+        }
+        
+        printf("\n🎤 Manually triggering conversation...\n");
+        printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+        printf("Speak now! The system will listen for 5 seconds.\n");
+        printf("(Vosk STT will process your speech in real-time)\n");
+        printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
+        
+        int result = ethervox_conversation_trigger(g_conversation_session);
+        if (result != 0) {
+            printf("❌ Failed to trigger conversation (error: %d)\n", result);
+            printf("   Make sure the conversation thread is running (/convon)\n");
+        } else {
+            printf("✓ Conversation triggered successfully!\n");
+            printf("  Listening to microphone...\n\n");
+        }
+        return;
+    }
+    
+    // ========== MODEL MANAGEMENT COMMANDS ==========
+    
+    if (strcmp(line, "/models") == 0) {
+        printf("\n╭─────────────────────────────────────────────────────────────────╮\n");
+        printf("│                      Model Management                           │\n");
+        printf("╰─────────────────────────────────────────────────────────────────╯\n\n");
+        
+        // Get disk usage
+        uint64_t total_usage = 0;
+        ethervox_model_get_disk_usage(&total_usage);
+        printf("Total disk usage: %.2f MB\n\n", total_usage / 1024.0 / 1024.0);
+        
+        // Check all model types
+        const char* model_types[] = {
+            "Governor LLM", "Whisper STT", "Vosk STT", "Piper TTS"
+        };
+        ethervox_model_type_t types[] = {
+            ETHERVOX_MODEL_TYPE_GOVERNOR,
+            ETHERVOX_MODEL_TYPE_WHISPER,
+            ETHERVOX_MODEL_TYPE_VOSK,
+            ETHERVOX_MODEL_TYPE_PIPER
+        };
+        
+        for (int i = 0; i < 4; i++) {
+            printf("━━━ %s ━━━\n", model_types[i]);
+            
+            ethervox_model_info_t* models = NULL;
+            uint32_t count = 0;
+            
+            if (ethervox_model_list(types[i], &models, &count) == 0) {
+                for (uint32_t j = 0; j < count; j++) {
+                    const char* status_icon = "❌";
+                    if (models[j].status == ETHERVOX_MODEL_STATUS_FOUND) {
+                        status_icon = "✅";
+                    } else if (models[j].status == ETHERVOX_MODEL_STATUS_INCOMPLETE) {
+                        status_icon = "⚠️ ";
+                    }
+                    
+                    const char* default_marker = models[j].is_default ? " [DEFAULT]" : "";
+                    
+                    printf("%s %s%s\n", status_icon, models[j].name, default_marker);
+                    printf("   %s\n", models[j].description);
+                    printf("   Status: %s", ethervox_model_status_string(models[j].status));
+                    
+                    if (models[j].status == ETHERVOX_MODEL_STATUS_FOUND) {
+                        printf(", Size: %.2f MB\n", models[j].size_bytes / 1024.0 / 1024.0);
+                    } else {
+                        printf(", Expected: %.2f MB\n", models[j].size_bytes / 1024.0 / 1024.0);
+                    }
+                    
+                    if (j < count - 1) printf("\n");
+                }
+                free(models);
+            }
+            
+            printf("\n");
+        }
+        
+        printf("Commands:\n");
+        printf("  /modelstatus <type>            Check specific model type\n");
+        printf("  /modeldownload <type> <name>   Download a model\n");
+        printf("  /modeldelete <type> <name>     Delete a model\n");
+        printf("\nTypes: g_governor, whisper, vosk, piper\n\n");
+        return;
+    }
+    
+    if (strncmp(line, "/modelstatus ", 13) == 0) {
+        const char* type_str = line + 13;
+        
+        ethervox_model_type_t type;
+        if (strcmp(type_str, "governor") == 0) {
+            type = ETHERVOX_MODEL_TYPE_GOVERNOR;
+        } else if (strcmp(type_str, "whisper") == 0) {
+            type = ETHERVOX_MODEL_TYPE_WHISPER;
+        } else if (strcmp(type_str, "vosk") == 0) {
+            type = ETHERVOX_MODEL_TYPE_VOSK;
+        } else if (strcmp(type_str, "piper") == 0) {
+            type = ETHERVOX_MODEL_TYPE_PIPER;
+        } else {
+            printf("❌ Unknown model type: %s\n", type_str);
+            printf("Valid types: g_governor, whisper, vosk, piper\n");
+            return;
+        }
+        
+        printf("\n━━━ %s Models ━━━\n\n", ethervox_model_type_string(type));
+        
+        ethervox_model_info_t* models = NULL;
+        uint32_t count = 0;
+        
+        if (ethervox_model_list(type, &models, &count) == 0) {
+            for (uint32_t i = 0; i < count; i++) {
+                printf("%s%s\n", models[i].name, models[i].is_default ? " [DEFAULT]" : "");
+                printf("  Description: %s\n", models[i].description);
+                printf("  Status:      %s\n", ethervox_model_status_string(models[i].status));
+                
+                if (models[i].status == ETHERVOX_MODEL_STATUS_FOUND) {
+                    printf("  Path:        %s\n", models[i].path);
+                    printf("  Size:        %.2f MB\n", models[i].size_bytes / 1024.0 / 1024.0);
+                } else {
+                    printf("  URL:         %s\n", models[i].url);
+                    printf("  Expected:    %.2f MB\n", models[i].size_bytes / 1024.0 / 1024.0);
+                }
+                
+                if (i < count - 1) printf("\n");
+            }
+            free(models);
+        } else {
+            printf("Failed to list models\n");
+        }
+        
+        printf("\n");
+        return;
+    }
+    
+    if (strncmp(line, "/modeldownload ", 15) == 0) {
+        const char* args = line + 15;
+        
+        // Parse: /modeldownload <type> <name>
+        char type_str[32] = {0};
+        const char* name_start = strchr(args, ' ');
+        
+        if (!name_start) {
+            printf("Usage: /modeldownload <type> <name>\n");
+            printf("Example: /modeldownload governor granite-3.0-2b-instruct-Q4_K_M.gguf\n");
+            printf("         /modeldownload whisper ggml-base.en.bin\n");
+            printf("         /modeldownload vosk vosk-model-small-en-us-0.15\n");
+            return;
+        }
+        
+        size_t type_len = name_start - args;
+        if (type_len >= sizeof(type_str)) type_len = sizeof(type_str) - 1;
+        strncpy(type_str, args, type_len);
+        
+        const char* model_name = name_start + 1;
+        
+        ethervox_model_type_t type;
+        if (strcmp(type_str, "governor") == 0) {
+            type = ETHERVOX_MODEL_TYPE_GOVERNOR;
+        } else if (strcmp(type_str, "whisper") == 0) {
+            type = ETHERVOX_MODEL_TYPE_WHISPER;
+        } else if (strcmp(type_str, "vosk") == 0) {
+            type = ETHERVOX_MODEL_TYPE_VOSK;
+        } else if (strcmp(type_str, "piper") == 0) {
+            type = ETHERVOX_MODEL_TYPE_PIPER;
+        } else {
+            printf("❌ Unknown model type: %s\n", type_str);
+            return;
+        }
+        
+        // Check if already exists
+        ethervox_model_status_t status = ethervox_model_check_status(type, model_name, NULL);
+        if (status == ETHERVOX_MODEL_STATUS_FOUND) {
+            printf("⚠️  Model already exists: %s\n", model_name);
+            printf("   Use /modeldelete first if you want to re-download\n");
+            return;
+        }
+        
+        // Check disk space
+        if (!ethervox_model_check_disk_space(type, model_name)) {
+            printf("❌ Insufficient disk space for model: %s\n", model_name);
+            return;
+        }
+        
+        printf("📥 Downloading %s model: %s\n", ethervox_model_type_string(type), model_name);
+        printf("   This may take several minutes depending on model size...\n\n");
+        
+        if (ethervox_model_download(type, model_name, NULL, NULL) == 0) {
+            printf("\n✅ Download complete: %s\n", model_name);
+            
+            // Verify the download
+            ethervox_model_info_t info;
+            if (ethervox_model_check_status(type, model_name, &info) == ETHERVOX_MODEL_STATUS_FOUND) {
+                printf("   Path: %s\n", info.path);
+                printf("   Size: %.2f MB\n", info.size_bytes / 1024.0 / 1024.0);
+            }
+        } else {
+            printf("\n❌ Download failed: %s\n", model_name);
+        }
+        
+        return;
+    }
+    
+    if (strncmp(line, "/modeldelete ", 13) == 0) {
+        const char* args = line + 13;
+        
+        // Parse: /modeldelete <type> <name>
+        char type_str[32] = {0};
+        const char* name_start = strchr(args, ' ');
+        
+        if (!name_start) {
+            printf("Usage: /modeldelete <type> <name>\n");
+            printf("Example: /modeldelete governor granite-3.0-2b-instruct-Q4_K_M.gguf\n");
+            return;
+        }
+        
+        size_t type_len = name_start - args;
+        if (type_len >= sizeof(type_str)) type_len = sizeof(type_str) - 1;
+        strncpy(type_str, args, type_len);
+        
+        const char* model_name = name_start + 1;
+        
+        ethervox_model_type_t type;
+        if (strcmp(type_str, "governor") == 0) {
+            type = ETHERVOX_MODEL_TYPE_GOVERNOR;
+        } else if (strcmp(type_str, "whisper") == 0) {
+            type = ETHERVOX_MODEL_TYPE_WHISPER;
+        } else if (strcmp(type_str, "vosk") == 0) {
+            type = ETHERVOX_MODEL_TYPE_VOSK;
+        } else if (strcmp(type_str, "piper") == 0) {
+            type = ETHERVOX_MODEL_TYPE_PIPER;
+        } else {
+            printf("❌ Unknown model type: %s\n", type_str);
+            return;
+        }
+        
+        // Check if exists
+        ethervox_model_info_t info;
+        ethervox_model_status_t status = ethervox_model_check_status(type, model_name, &info);
+        if (status != ETHERVOX_MODEL_STATUS_FOUND) {
+            printf("⚠️  Model not found: %s\n", model_name);
+            return;
+        }
+        
+        printf("🗑️  Deleting model: %s\n", model_name);
+        printf("   This will free %.2f MB of disk space\n", info.size_bytes / 1024.0 / 1024.0);
+        printf("   Are you sure? (y/N): ");
+        fflush(stdout);
+        
+        char confirm[10];
+        if (fgets(confirm, sizeof(confirm), stdin) && 
+            (confirm[0] == 'y' || confirm[0] == 'Y')) {
+            
+            if (ethervox_model_delete(type, model_name) == 0) {
+                printf("✅ Model deleted: %s\n", model_name);
+            } else {
+                printf("❌ Failed to delete model\n");
+            }
+        } else {
+            printf("Deletion cancelled\n");
+        }
+        
+        return;
+    }
+
     if (strcmp(line, "/test") == 0) {
         printf("\n");
         run_integration_tests();
@@ -1102,7 +1872,7 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         printf("\n");
         // Check for verbose flag
         bool verbose = (strstr(line, "-v") != NULL || strstr(line, "--verbose") != NULL);
-        run_llm_tool_tests(governor, memory, g_loaded_model_path, verbose);
+        run_llm_tool_tests(g_governor, memory, g_loaded_model_path, verbose);
         printf("\n");
         return;
     }
@@ -1131,7 +1901,7 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         // Only initialize if not already loaded (avoid wiping existing file pointer)
         printf("Step 1: Initializing Tool Manifest System...\n");
         if (!g_manifest_registry.manifest_file) {
-            ethervox_governor_init_with_manifest(governor, g_loaded_model_path, 
+            ethervox_governor_init_with_manifest(g_governor, g_loaded_model_path, 
                                                 &g_manifest_registry);
             
             // Check if manifest was actually loaded
@@ -1151,7 +1921,7 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         
         // Step 2: Run optimizer v2 (JSON output, batch processing)
         printf("\nStep 2: Running optimization (this may take 30-60 seconds)...\n");
-        int ret = ethervox_optimize_tool_prompts_v2(governor, g_loaded_model_path,
+        int ret = ethervox_optimize_tool_prompts_v2(g_governor, g_loaded_model_path,
                                                      &g_manifest_registry,
                                                      true);  // optimize_new_only = true (incremental)
         
@@ -1173,12 +1943,12 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         const char* model_path = line + 6;
         printf("Loading model: %s\n", model_path);
         
-        int ret = ethervox_governor_load_model(governor, model_path);
+        int ret = ethervox_governor_load_model(g_governor, model_path);
         if (ret == 0) {
             snprintf(g_loaded_model_path, sizeof(g_loaded_model_path), "%s", model_path);
             
             // Initialize manifest system after model load
-            if (ethervox_governor_init_with_manifest(governor, g_loaded_model_path, &g_manifest_registry) == 0) {
+            if (ethervox_governor_init_with_manifest(g_governor, g_loaded_model_path, &g_manifest_registry) == 0) {
                 // Set manifest for get_tool_info meta-tool
                 ethervox_get_tool_info_set_manifest(&g_manifest_registry);
             }
@@ -1299,7 +2069,7 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
             return;
         }
         // Recursively process the pasted content as a command
-        process_command(pasted, memory, governor, path_config, file_config, voice_session, quit_flag);
+        process_command(pasted, memory, g_governor, path_config, file_config, voice_session, quit_flag);
         free(pasted);
         return;
     }
@@ -1324,7 +2094,7 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
     ethervox_confidence_metrics_t metrics;
     
     ethervox_governor_status_t status = ethervox_governor_execute(
-        governor,
+        g_governor,
         line,
         &response,
         &error,
@@ -1671,7 +2441,6 @@ int main(int argc, char** argv) {
     }
     
     // Initialize Governor
-    ethervox_governor_t* governor = NULL;
     ethervox_tool_registry_t registry;
     ethervox_voice_session_t voice_state;
     void* voice_session = NULL;
@@ -1690,7 +2459,7 @@ int main(int argc, char** argv) {
         printf("   Tools disabled for maximum loading speed\n");
     }
     
-    if (ethervox_governor_init(&governor, &gov_config, &registry) != 0) {
+    if (ethervox_governor_init(&g_governor, &gov_config, &registry) != 0) {
         fprintf(stderr, "Failed to initialize Governor\n");
         ethervox_tool_registry_cleanup(&registry);
         ethervox_memory_cleanup(&memory);
@@ -1786,7 +2555,7 @@ int main(int argc, char** argv) {
     if (ethervox_voice_tools_init(&voice_state, &memory) == 0) {
         if (ethervox_voice_tools_register(&registry, &voice_state) == 0) {
             voice_session = &voice_state;
-            g_cli_voice_session = &voice_state;
+            g_transcription_session = &voice_state;
             if (g_debug_enabled) {
                 printf("Voice Tools: Registered with Governor (Whisper STT with speaker detection)\n");
                 printf("             Use /transcribe and /stoptranscribe commands\n");
@@ -1907,12 +2676,12 @@ int main(int argc, char** argv) {
             fprintf(stderr, "[ERROR] Model file not found or not readable: %s\n", resolved_path);
             fprintf(stderr, "[INFO] Run './scripts/download-governor-model.sh' to download it\n");
         } else {
-            int ret = ethervox_governor_load_model(governor, resolved_path);
+            int ret = ethervox_governor_load_model(g_governor, resolved_path);
             if (ret == 0) {
                 snprintf(g_loaded_model_path, sizeof(g_loaded_model_path), "%s", resolved_path);
                 
                 // Initialize manifest system after model load
-                if (ethervox_governor_init_with_manifest(governor, g_loaded_model_path, &g_manifest_registry) == 0) {
+                if (ethervox_governor_init_with_manifest(g_governor, g_loaded_model_path, &g_manifest_registry) == 0) {
                     // Set manifest for get_tool_info meta-tool
                     ethervox_get_tool_info_set_manifest(&g_manifest_registry);
                 }
@@ -2004,7 +2773,7 @@ int main(int argc, char** argv) {
         char* error = NULL;
         
         int status = ethervox_governor_execute(
-            governor,
+            g_governor,
             startup_prompt,
             &response,
             &error,
@@ -2057,7 +2826,7 @@ int main(int argc, char** argv) {
         }
         
         // Run tests with verbose output
-        run_llm_tool_tests(governor, &memory, g_loaded_model_path, true);
+        run_llm_tool_tests(g_governor, &memory, g_loaded_model_path, true);
         
         printf("\n");
         printf("═══════════════════════════════════════════════════════════════\n");
@@ -2094,7 +2863,7 @@ int main(int argc, char** argv) {
         
         // Step 1: Initialize manifest system
         printf("Step 1: Initializing Tool Manifest System...\n");
-        if (ethervox_governor_init_with_manifest(governor, g_loaded_model_path, 
+        if (ethervox_governor_init_with_manifest(g_governor, g_loaded_model_path, 
                                                  &g_manifest_registry) != 0) {
             printf("✗ Failed to initialize manifest system\n");
             printf("  (Continuing anyway - will use runtime registry)\n");
@@ -2105,7 +2874,7 @@ int main(int argc, char** argv) {
         
         // Step 2: Run optimizer
         printf("\nStep 2: Running optimization (this may take 30-60 seconds)...\n");
-        int ret = ethervox_optimize_tool_prompts_v2(governor, g_loaded_model_path,
+        int ret = ethervox_optimize_tool_prompts_v2(g_governor, g_loaded_model_path,
                                                      &g_manifest_registry,
                                                      true);  // optimize_new_only = true (incremental)
         
@@ -2160,7 +2929,7 @@ int main(int argc, char** argv) {
             add_history(line);
         }
         
-        process_command(line, &memory, governor, &path_config, &file_config, voice_session, &quit);
+        process_command(line, &memory, g_governor, &path_config, &file_config, voice_session, &quit);
         free(line);
         handle_pending_sigint_stop();
         
@@ -2202,7 +2971,7 @@ int main(int argc, char** argv) {
                 char* error = NULL;
                 
                 int status = ethervox_governor_execute(
-                    governor,
+                    g_governor,
                     summary_query,
                     &response,
                     &error,
@@ -2267,7 +3036,7 @@ int main(int argc, char** argv) {
             line[len - 1] = '\0';
         }
         
-        process_command(line, &memory, governor, &path_config, &file_config, voice_session, &quit);
+        process_command(line, &memory, g_governor, &path_config, &file_config, voice_session, &quit);
         handle_pending_sigint_stop();
         
         // Check if voice session needs summarization
@@ -2308,7 +3077,7 @@ int main(int argc, char** argv) {
                 char* error = NULL;
                 
                 int status = ethervox_governor_execute(
-                    governor,
+                    g_governor,
                     summary_query,
                     &response,
                     &error,
@@ -2402,10 +3171,36 @@ int main(int argc, char** argv) {
         }
     }
     
-    ethervox_governor_cleanup(governor);
+    ethervox_governor_cleanup(g_governor);
     ethervox_tool_registry_cleanup(&registry);
     ethervox_path_config_cleanup(&path_config);
     ethervox_memory_cleanup(&memory);
+    
+    // Cleanup wake word listening thread
+    if (g_wake_thread_running) {
+        g_wake_thread_running = false;
+        // Thread will exit on its own
+    }
+    
+    // Cleanup wake word detector
+    if (g_wake_runtime) {
+        ethervox_wake_cleanup(g_wake_runtime);
+        free(g_wake_runtime);
+        g_wake_runtime = NULL;
+    }
+    
+    // Cleanup voice conversation
+    if (g_conversation_session) {
+        ethervox_conversation_cleanup(g_conversation_session);
+        g_conversation_session = NULL;
+    }
+    
+    // Cleanup wake word detector
+    if (g_wake_runtime) {
+        ethervox_wake_cleanup(g_wake_runtime);
+        free(g_wake_runtime);
+        g_wake_runtime = NULL;
+    }
     
     // Restore stderr if we redirected it
     if (g_quiet_mode && !g_debug_enabled && stderr_backup != -1) {

@@ -106,11 +106,109 @@ const char* ethervox_android_get_files_dir(void) {
 // Utility Functions
 // ===========================================================================
 
+// Default startup prompt (defined here for JNI access, same as main.c)
+static const char* DEFAULT_STARTUP_PROMPT = 
+    "Greet the user with a short creative greeting.";
+
+// Validate and truncate UTF-8 string at incomplete multi-byte sequences
+// This is needed because llama.cpp token streaming can split emoji bytes
+static bool validate_and_fix_utf8(const char* str, size_t* out_valid_len) {
+    if (!str) {
+        *out_valid_len = 0;
+        return true;
+    }
+    
+    size_t len = strlen(str);
+    *out_valid_len = 0;
+    bool is_valid = true;
+    
+    for (size_t i = 0; i < len; ) {
+        unsigned char c = (unsigned char)str[i];
+        int expected_bytes = 0;
+        
+        if (c <= 0x7F) {
+            // ASCII - 1 byte
+            expected_bytes = 1;
+        } else if ((c & 0xE0) == 0xC0) {
+            // 2-byte sequence: 110xxxxx
+            expected_bytes = 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            // 3-byte sequence: 1110xxxx
+            expected_bytes = 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            // 4-byte sequence: 11110xxx (emojis!)
+            expected_bytes = 4;
+        } else {
+            // Invalid start byte
+            is_valid = false;
+            break;
+        }
+        
+        // Check if we have all the bytes for this character
+        if (i + expected_bytes > len) {
+            // Incomplete sequence at end - truncate here
+            __android_log_print(ANDROID_LOG_DEBUG, "EthervoxJNI", 
+                "Incomplete UTF-8 sequence at end: need %d bytes, have %zu", 
+                expected_bytes, len - i);
+            is_valid = false;
+            break;
+        }
+        
+        // Verify continuation bytes (should be 10xxxxxx)
+        for (int j = 1; j < expected_bytes; j++) {
+            if ((str[i + j] & 0xC0) != 0x80) {
+                __android_log_print(ANDROID_LOG_WARN, "EthervoxJNI", 
+                    "Invalid continuation byte at position %zu", i + j);
+                is_valid = false;
+                break;
+            }
+        }
+        
+        if (!is_valid) break;
+        
+        i += expected_bytes;
+        *out_valid_len = i;
+    }
+    
+    return is_valid;
+}
+
 static jstring create_jstring(JNIEnv* env, const char* str) {
     if (!str) {
         return (*env)->NewStringUTF(env, "");
     }
-    return (*env)->NewStringUTF(env, str);
+    
+    size_t valid_len = 0;
+    bool is_valid = validate_and_fix_utf8(str, &valid_len);
+    
+    if (is_valid) {
+        // String is completely valid UTF-8
+        return (*env)->NewStringUTF(env, str);
+    } else {
+        // String has invalid or incomplete UTF-8
+        // Create truncated string with only valid portion
+        if (valid_len == 0) {
+            __android_log_print(ANDROID_LOG_WARN, "EthervoxJNI", 
+                "Completely invalid UTF-8 string, returning empty");
+            return (*env)->NewStringUTF(env, "");
+        }
+        
+        char* valid_str = malloc(valid_len + 1);
+        if (!valid_str) {
+            return (*env)->NewStringUTF(env, "");
+        }
+        
+        memcpy(valid_str, str, valid_len);
+        valid_str[valid_len] = '\0';
+        
+        __android_log_print(ANDROID_LOG_DEBUG, "EthervoxJNI", 
+            "Truncated UTF-8 string from %zu to %zu bytes (incomplete sequence at end)", 
+            strlen(str), valid_len);
+        
+        jstring result = (*env)->NewStringUTF(env, valid_str);
+        free(valid_str);
+        return result;
+    }
 }
 
 // ===========================================================================
@@ -1198,6 +1296,8 @@ typedef struct {
     jmethodID on_error_method;
     jmethodID on_governor_progress_method;  // New: Governor progress callback
     bool conversation_ended;
+    char utf8_buffer[4];  // Buffer for incomplete UTF-8 sequences (max 4 bytes)
+    int utf8_buffer_len;  // Number of bytes currently in buffer
 } jni_stream_context_t;
 
 // Native callback function that will be called from C
@@ -1215,9 +1315,55 @@ static void native_token_callback(const char* token, void* user_data) {
     // Log each token for debugging streaming issues
     __android_log_print(ANDROID_LOG_DEBUG, "EthervoxJNI", "Streaming token: '%s'", token);
     
-    jstring j_token = create_jstring(ctx->env, token);
-    (*ctx->env)->CallVoidMethod(ctx->env, ctx->callback_obj, ctx->on_token_method, j_token);
-    (*ctx->env)->DeleteLocalRef(ctx->env, j_token);
+    // Combine buffered incomplete UTF-8 bytes with new token
+    size_t token_len = strlen(token);
+    size_t combined_len = ctx->utf8_buffer_len + token_len;
+    char* combined = malloc(combined_len + 1);
+    if (!combined) {
+        __android_log_print(ANDROID_LOG_ERROR, "EthervoxJNI", "Failed to allocate buffer");
+        return;
+    }
+    
+    // Copy buffered bytes + new token
+    if (ctx->utf8_buffer_len > 0) {
+        memcpy(combined, ctx->utf8_buffer, ctx->utf8_buffer_len);
+        __android_log_print(ANDROID_LOG_DEBUG, "EthervoxJNI", 
+            "Prepending %d buffered bytes to token", ctx->utf8_buffer_len);
+    }
+    memcpy(combined + ctx->utf8_buffer_len, token, token_len);
+    combined[combined_len] = '\0';
+    
+    // Validate and find how much is valid UTF-8
+    size_t valid_len = 0;
+    bool is_valid = validate_and_fix_utf8(combined, &valid_len);
+    
+    if (!is_valid && valid_len < combined_len) {
+        // There are incomplete bytes at the end - buffer them for next token
+        ctx->utf8_buffer_len = combined_len - valid_len;
+        memcpy(ctx->utf8_buffer, combined + valid_len, ctx->utf8_buffer_len);
+        __android_log_print(ANDROID_LOG_DEBUG, "EthervoxJNI", 
+            "Buffering %d incomplete UTF-8 bytes for next token", ctx->utf8_buffer_len);
+    } else {
+        // Everything is valid or we used all bytes
+        ctx->utf8_buffer_len = 0;
+    }
+    
+    // Send only the valid portion to Java
+    if (valid_len > 0) {
+        char* valid_str = malloc(valid_len + 1);
+        if (valid_str) {
+            memcpy(valid_str, combined, valid_len);
+            valid_str[valid_len] = '\0';
+            
+            jstring j_token = (*ctx->env)->NewStringUTF(ctx->env, valid_str);
+            (*ctx->env)->CallVoidMethod(ctx->env, ctx->callback_obj, ctx->on_token_method, j_token);
+            (*ctx->env)->DeleteLocalRef(ctx->env, j_token);
+            
+            free(valid_str);
+        }
+    }
+    
+    free(combined);
 }
 
 // Governor progress callback function
@@ -1277,6 +1423,10 @@ static void native_governor_progress_callback(
             break;
         case ETHERVOX_GOVERNOR_EVENT_COMPLETE:
             event_str = "COMPLETE";
+            // Also call onComplete callback when governor finishes
+            if (ctx->on_complete_method) {
+                (*ctx->env)->CallVoidMethod(ctx->env, ctx->callback_obj, ctx->on_complete_method, (jboolean)ctx->conversation_ended);
+            }
             break;
         default:
             event_str = "UNKNOWN";
@@ -1335,7 +1485,8 @@ Java_com_droid_ethervox_1core_NativeLib_processDialogueStreamingNative(
         .on_complete_method = on_complete,
         .on_error_method = on_error,
         .on_governor_progress_method = on_governor_progress,
-        .conversation_ended = false
+        .conversation_ended = false,
+        .utf8_buffer_len = 0
     };
     
     // Execute with streaming token callback
@@ -1364,10 +1515,10 @@ Java_com_droid_ethervox_1core_NativeLib_processDialogueStreamingNative(
         if (response) free(response);
         if (error) free(error);
     } else {
-        // Call complete callback - conversation ended if response ends with stop sequence
-        if (on_complete) {
-            (*env)->CallVoidMethod(env, callback, on_complete, (jboolean)stream_ctx.conversation_ended);
-        }
+        // NOTE: onComplete is already called via native_governor_progress_callback
+        // from inside ethervox_governor_execute when it sends ETHERVOX_GOVERNOR_EVENT_COMPLETE.
+        // DO NOT call it again here, as that causes a double-invocation and crashes.
+        // Just clean up the response memory.
         free(response);
         if (error) free(error);
     }
@@ -1498,6 +1649,14 @@ Java_com_droid_ethervox_1core_NativeLib_getDefaultLlmConfig(
 
     (*env)->DeleteLocalRef(env, llmConfigClass);
     return llmConfigObj;
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_droid_ethervox_1core_NativeLib_getDefaultStartupPrompt(
+        JNIEnv* env,
+        jobject thiz) {
+    (void)thiz;
+    return (*env)->NewStringUTF(env, DEFAULT_STARTUP_PROMPT);
 }
 
 JNIEXPORT jobjectArray JNICALL
