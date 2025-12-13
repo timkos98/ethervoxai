@@ -163,20 +163,23 @@ Java_com_droid_ethervox_1core_NativeLib_checkModelStatus(
         name = (*env)->GetStringUTFChars(env, modelName, NULL);
     }
     
+    LOGI("checkModelStatus called with type=%d, modelName=%s", type, name ? name : "null");
+    
     ethervox_model_info_t info;
     memset(&info, 0, sizeof(info));
     
     ethervox_model_status_t status = ethervox_model_check_status(
         (ethervox_model_type_t)type, name, &info);
     
+    LOGI("checkModelStatus returned: type=%d, status=%d, path=%s", info.type, info.status, info.path);
+    
     if (modelName != NULL) {
         (*env)->ReleaseStringUTFChars(env, modelName, name);
     }
     
-    if (status == ETHERVOX_MODEL_STATUS_NOT_FOUND) {
-        return NULL;
-    }
-    
+    // The C function fills the info structure completely, including status
+    // Always return a ModelInfo object, even for NOT_FOUND
+    // This allows Kotlin code to distinguish between NOT_FOUND and other statuses
     return create_model_info_object(env, &info);
 }
 

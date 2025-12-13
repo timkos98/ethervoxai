@@ -8,6 +8,7 @@
 
 #include "ethervox/model_downloader.h"
 #include "ethervox/logging.h"
+#include "ethervox/platform.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -57,11 +58,18 @@ static const model_definition_t GOVERNOR_MODELS[] = {
 // Whisper STT models
 static const model_definition_t WHISPER_MODELS[] = {
     {
-        "ggml-base.en.bin",
-        "Whisper Base English (Recommended) - Fast, accurate for English",
-        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin",
+        "ggml-tiny.bin",
+        "Whisper Tiny Multilingual (Default) - Very fast, compact, 99 languages",
+        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
         74000000,  // ~74MB
         true
+    },
+    {
+        "ggml-base.en.bin",
+        "Whisper Base English - Fast, accurate for English",
+        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin",
+        74000000,  // ~74MB
+        false
     },
     {
         "ggml-small.en.bin",
@@ -233,6 +241,25 @@ int ethervox_model_get_base_dir(char* buffer, size_t buffer_size) {
         return -1;
     }
     
+#ifdef __ANDROID__
+    // On Android, use the files directory set by Java
+    const char* android_dir = ethervox_get_android_files_dir();
+    if (!android_dir || android_dir[0] == '\0') {
+        ETHERVOX_LOG_ERROR("Android files directory not set");
+        return -2;
+    }
+    
+    int written = snprintf(buffer, buffer_size, "%s/models", android_dir);
+    if (written < 0 || (size_t)written >= buffer_size) {
+        return -3;
+    }
+    
+    // Ensure directory exists
+    mkdir(buffer, 0755);
+    ETHERVOX_LOG_DEBUG("Android base directory: %s", buffer);
+    
+    return 0;
+#else
     const char* home = getenv("HOME");
     if (!home) {
         return -2;
@@ -251,6 +278,7 @@ int ethervox_model_get_base_dir(char* buffer, size_t buffer_size) {
     mkdir(buffer, 0755);
     
     return 0;
+#endif
 }
 
 ethervox_model_status_t ethervox_model_check_status(
@@ -258,12 +286,16 @@ ethervox_model_status_t ethervox_model_check_status(
     const char* model_name,
     ethervox_model_info_t* info
 ) {
+    ETHERVOX_LOG_DEBUG("ethervox_model_check_status: type=%d, model_name=%s", type, model_name ? model_name : "NULL");
     char base_dir[512];
     if (ethervox_model_get_base_dir(base_dir, sizeof(base_dir)) != 0) {
+        ETHERVOX_LOG_ERROR("Failed to get base directory");
         return ETHERVOX_MODEL_STATUS_UNKNOWN;
     }
+    ETHERVOX_LOG_DEBUG("Base directory: %s", base_dir);
     
     const model_definition_t* def = get_model_definition(type, model_name, NULL);
+    ETHERVOX_LOG_DEBUG("Model definition: %p", (void*)def);
     
     // Build model path
     char model_path[1024];
@@ -289,9 +321,18 @@ ethervox_model_status_t ethervox_model_check_status(
     
     if (model_name) {
         snprintf(model_path, sizeof(model_path), "%s/%s/%s", base_dir, subdir, model_name);
+        ETHERVOX_LOG_DEBUG("Built model path from name: %s", model_path);
     } else if (def) {
         snprintf(model_path, sizeof(model_path), "%s/%s/%s", base_dir, subdir, def->name);
+        ETHERVOX_LOG_DEBUG("Built model path from default: %s", model_path);
     } else {
+        ETHERVOX_LOG_WARN("No model name and no default for type %d", type);
+        // No model name and no default - fill info with NOT_FOUND status
+        if (info) {
+            memset(info, 0, sizeof(*info));
+            info->type = type;
+            info->status = ETHERVOX_MODEL_STATUS_NOT_FOUND;
+        }
         return ETHERVOX_MODEL_STATUS_NOT_FOUND;
     }
     
@@ -313,7 +354,10 @@ ethervox_model_status_t ethervox_model_check_status(
         }
     }
     
+    ETHERVOX_LOG_DEBUG("Model check: path=%s, exists=%d, size=%llu", model_path, exists, (unsigned long long)size);
+    
     if (!exists) {
+        ETHERVOX_LOG_INFO("Model not found: %s", model_path);
         if (info) {
             memset(info, 0, sizeof(*info));
             info->type = type;
@@ -347,6 +391,8 @@ ethervox_model_status_t ethervox_model_check_status(
     
     // Fill info structure
     if (info) {
+        ETHERVOX_LOG_INFO("Model found: %s (type=%d, status=%d, size=%llu)", 
+                         model_path, type, status, (unsigned long long)size);
         memset(info, 0, sizeof(*info));
         info->type = type;
         info->status = status;
