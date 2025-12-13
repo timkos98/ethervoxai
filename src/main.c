@@ -52,6 +52,7 @@
 #include "ethervox/llm_tool_tests.h"
 #include "ethervox/tool_prompt_optimizer.h"
 #include "ethervox/model_downloader.h"
+#include "ethervox/settings.h"
 
 // External debug flag from logging.c (declared in config.h)
 // extern int g_ethervox_debug_enabled; // Already declared in config.h
@@ -75,6 +76,9 @@ static ethervox_conversation_session_t* g_conversation_session = NULL;
 // Governor (shared between CLI and conversation)
 static ethervox_governor_t* g_governor = NULL;
 static pthread_mutex_t g_governor_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// Global persistent settings (Whisper/conversation/wake word)
+static ethervox_persistent_settings_t g_settings;
 
 // Wake word detection (triggers conversation pipeline)
 static ethervox_wake_runtime_t* g_wake_runtime = NULL;
@@ -213,6 +217,7 @@ static const char* commands[] = {
     "/wakeword", "/wakeon", "/wakeoff", "/wakerecord",
     "/conversation", "/convon", "/convoff", "/convtrigger",
     "/models", "/modelstatus", "/modeldownload", "/modeldelete",
+    "/config",
     "/quit", NULL
 };
 
@@ -300,6 +305,7 @@ static void print_help(void) {
     printf("\nAvailable Commands:\n");
     printf("  /help              Show this help message\n");
     printf("  /settings          Open interactive settings menu\n");
+    printf("  /config            View/manage persistent configuration (Whisper, conversation, wake word)\n");
     printf("  /test              Run comprehensive integration tests\n");
     printf("  /testllm [-v]      Run LLM tool usage tests (-v for verbose debug output)\n");
     printf("  /optimize_tool_prompts  Optimize tool prompts (incremental: only new tools, ~10s)\n");
@@ -1007,6 +1013,52 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
             }
         } else {
             printf("Settings menu not available on this platform\n");
+        }
+        return;
+    }
+    
+    if (strcmp(line, "/config") == 0) {
+        ethervox_settings_print(&g_settings);
+        printf("Settings file: %s\n", ethervox_settings_get_default_path());
+        printf("\nCommands:\n");
+        printf("  /config save       Save current settings to file\n");
+        printf("  /config load       Reload settings from file\n");
+        printf("  /config reset      Reset to default settings\n");
+        printf("  /config export     Export settings as JSON\n");
+        return;
+    }
+    
+    if (strncmp(line, "/config ", 8) == 0) {
+        const char* subcmd = line + 8;
+        
+        if (strcmp(subcmd, "save") == 0) {
+            if (ethervox_settings_save(&g_settings, NULL) == 0) {
+                printf("✓ Settings saved to %s\n", ethervox_settings_get_default_path());
+            } else {
+                printf("✗ Failed to save settings\n");
+            }
+        } else if (strcmp(subcmd, "load") == 0) {
+            if (ethervox_settings_load(&g_settings, NULL) == 0) {
+                printf("✓ Settings loaded from %s\n", ethervox_settings_get_default_path());
+                ethervox_settings_print(&g_settings);
+            } else {
+                printf("✗ Failed to load settings\n");
+            }
+        } else if (strcmp(subcmd, "reset") == 0) {
+            g_settings = ethervox_settings_get_defaults();
+            printf("✓ Settings reset to defaults\n");
+            ethervox_settings_print(&g_settings);
+        } else if (strcmp(subcmd, "export") == 0) {
+            char* json = ethervox_settings_export(&g_settings);
+            if (json) {
+                printf("\n%s\n", json);
+                free(json);
+            } else {
+                printf("✗ Failed to export settings\n");
+            }
+        } else {
+            printf("Unknown /config subcommand: %s\n", subcmd);
+            printf("Try: save, load, reset, or export\n");
         }
         return;
     }
@@ -2438,6 +2490,17 @@ int main(int argc, char** argv) {
         }
     } else if (g_debug_enabled) {
         printf("Memory: In-memory only (no persistence)\n");
+    }
+    
+    // Load persistent settings
+    if (ethervox_settings_load(&g_settings, NULL) != 0) {
+        // Failed to load - use defaults
+        g_settings = ethervox_settings_get_defaults();
+        if (g_debug_enabled) {
+            printf("Using default settings (no saved settings file found)\n");
+        }
+    } else if (g_debug_enabled) {
+        printf("✓ Loaded settings from %s\n", ethervox_settings_get_default_path());
     }
     
     // Initialize Governor

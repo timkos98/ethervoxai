@@ -18,6 +18,7 @@
 #include <errno.h>
 #include <time.h>
 #include <unistd.h>
+#include <math.h>
 
 /**
  * @brief Internal conversation session structure
@@ -222,27 +223,48 @@ static void* conversation_thread(void* arg) {
             int samples_read = session->audio_runtime.driver.read_audio(&session->audio_runtime, &read_buffer);
             
             if (samples_read > 0) {
-                // Process audio with Vosk
-                ethervox_stt_result_t result;
-                memset(&result, 0, sizeof(result));
+                // Calculate audio energy to detect actual speech
+                float energy = 0.0f;
+                for (int i = 0; i < samples_read; i++) {
+                    energy += read_buffer.data[i] * read_buffer.data[i];
+                }
+                energy = sqrtf(energy / samples_read);
                 
-                int ret = ethervox_stt_process(&session->stt_runtime, &read_buffer, &result);
-                
-                if (ret == 0) {
-                    if (result.is_final && result.text && strlen(result.text) > 0) {
-                        // Got final result - conversation complete
-                        strncpy(recognized_text, result.text, sizeof(recognized_text) - 1);
-                        speech_detected = true;
-                        ETHERVOX_LOG_INFO("Final recognition: %s", result.text);
-                        free(result.text);
-                        free(read_buffer.data);
-                        break;
-                    } else if (result.is_partial && result.text && strlen(result.text) > 0) {
-                        // Partial result - keep listening
-                        ETHERVOX_LOG_DEBUG("Partial: %s", result.text);
-                        last_audio_time = get_time_ms();
-                        free(result.text);
+                // Only process if there's significant audio energy
+                if (energy > 0.01f) {  // Threshold to ignore silence
+                    // Process audio with STT
+                    ethervox_stt_result_t result;
+                    memset(&result, 0, sizeof(result));
+                    
+                    int ret = ethervox_stt_process(&session->stt_runtime, &read_buffer, &result);
+                    
+                    if (ret == 0) {
+                        if (result.is_final && result.text && strlen(result.text) > 0) {
+                            // Filter out Whisper hallucinations
+                            if (strstr(result.text, "Transcribed by") != NULL ||
+                                strstr(result.text, "R.A.R.E.") != NULL ||
+                                strstr(result.text, "Thank you") == result.text) {
+                                // Skip hallucination
+                                ETHERVOX_LOG_DEBUG("Filtered Whisper hallucination: %s", result.text);
+                                free(result.text);
+                            } else {
+                                // Got final result - conversation complete
+                                strncpy(recognized_text, result.text, sizeof(recognized_text) - 1);
+                                speech_detected = true;
+                                ETHERVOX_LOG_INFO("Final recognition: %s", result.text);
+                                free(result.text);
+                                free(read_buffer.data);
+                                break;
+                            }
+                        } else if (result.is_partial && result.text && strlen(result.text) > 0) {
+                            // Partial result - keep listening
+                            ETHERVOX_LOG_DEBUG("Partial: %s", result.text);
+                            last_audio_time = get_time_ms();
+                            free(result.text);
+                        }
                     }
+                } else {
+                    ETHERVOX_LOG_DEBUG("Audio energy too low (%.6f), skipping STT", energy);
                 }
                 
                 total_samples_captured += samples_read;

@@ -223,6 +223,18 @@ option(ENABLE_DEBUG "Enable debug logging" OFF)
 option(WITH_LLAMA "Enable Llama.cpp backend support" ON)
 option(WITH_TINYLLAMA "Enable TinyLlama backend support" ON)
 
+# Fetch cJSON for settings persistence
+include(FetchContent)
+FetchContent_Declare(
+    cJSON
+    GIT_REPOSITORY https://github.com/DaveGamble/cJSON.git
+    GIT_TAG v1.7.18
+    PATCH_COMMAND sed -i.bak "s/cmake_minimum_required(VERSION 3.0)/cmake_minimum_required(VERSION 3.16)/" CMakeLists.txt || true
+)
+set(ENABLE_CJSON_TEST OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_AND_STATIC_LIBS OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(cJSON)
+
 if(ENABLE_DEBUG)
     add_definitions(-DDEBUG_ENABLED=1)
 endif()
@@ -352,6 +364,7 @@ set(COMMON_SOURCES
     src/common/logging.c
     src/common/settings_menu.c
     src/common/model_downloader.c
+    src/config/settings.c
 )
 
 # Collect core source files (non-platform specific)
@@ -553,6 +566,15 @@ if(WITH_WHISPER)
     else()
         message(WARNING "whisper target not found - Voice features will be limited")
     endif()
+endif()
+
+# Link cJSON for settings persistence
+if(TARGET cjson)
+    target_link_libraries(ethervoxai PUBLIC cjson)
+    target_include_directories(ethervoxai PRIVATE ${cjson_SOURCE_DIR})
+    message(STATUS "Linked cJSON library to ethervoxai")
+else()
+    message(WARNING "cJSON target not found - settings persistence will fail")
 endif()
 
 # Platform-specific linking for library consumers

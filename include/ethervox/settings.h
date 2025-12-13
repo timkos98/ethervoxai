@@ -1,0 +1,122 @@
+/**
+ * @file settings.h
+ * @brief Persistent settings management for EthervoxAI
+ *
+ * Provides JSON-based configuration persistence for Whisper STT,
+ * conversation parameters, and other runtime settings.
+ */
+
+#ifndef ETHERVOX_SETTINGS_H
+#define ETHERVOX_SETTINGS_H
+
+#include <stdint.h>
+#include <stdbool.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/**
+ * @brief Whisper STT configuration settings
+ */
+typedef struct {
+    char model_name[64];           /**< Model filename (e.g., "base.bin") */
+    char language[8];              /**< Language code ("auto", "en", "es", etc.) */
+    float temperature;             /**< Sampling temperature (0.0-1.0) */
+    int beam_size;                 /**< Beam search width (1-10) */
+    bool translate_to_english;     /**< Translate to English if true */
+    int n_threads;                 /**< Number of threads (-1 = auto) */
+    bool use_gpu;                  /**< Enable GPU acceleration if available */
+} ethervox_whisper_settings_t;
+
+/**
+ * @brief Voice conversation configuration settings
+ */
+typedef struct {
+    uint32_t listen_timeout_ms;        /**< Max listening duration (ms) */
+    uint32_t conversation_timeout_ms;  /**< Max conversation duration (ms) */
+    uint32_t silence_timeout_ms;       /**< Silence threshold to stop listening (ms) */
+    float audio_energy_threshold;      /**< Minimum audio energy to process (0.0-1.0) */
+    bool filter_hallucinations;        /**< Filter known Whisper hallucinations */
+    int max_audio_chunk_size;          /**< Audio chunk size for STT (samples) */
+} ethervox_conversation_settings_t;
+
+/**
+ * @brief Wake word detection settings
+ */
+typedef struct {
+    char wake_phrase[64];          /**< Wake phrase (e.g., "hey ethervox") */
+    float detection_threshold;     /**< Correlation threshold (0.0-1.0) */
+    int expected_syllables;        /**< Expected syllable count */
+    int min_syllables;             /**< Minimum syllables to accept */
+    int max_syllables;             /**< Maximum syllables to accept */
+    float vad_energy_threshold;    /**< Voice activity energy threshold */
+    float vad_zcr_min;             /**< Zero-crossing rate minimum */
+    float vad_zcr_max;             /**< Zero-crossing rate maximum */
+    uint32_t cooldown_ms;          /**< Cooldown period after detection (ms) */
+} ethervox_wake_word_settings_t;
+
+/**
+ * @brief Complete application settings
+ */
+typedef struct {
+    uint32_t version;                              /**< Settings format version */
+    ethervox_whisper_settings_t whisper;           /**< Whisper STT settings */
+    ethervox_conversation_settings_t conversation; /**< Conversation settings */
+    ethervox_wake_word_settings_t wake_word;       /**< Wake word settings */
+} ethervox_persistent_settings_t;
+
+/**
+ * @brief Get default settings with recommended values
+ * @return Default settings structure
+ */
+ethervox_persistent_settings_t ethervox_settings_get_defaults(void);
+
+/**
+ * @brief Load settings from JSON file
+ * @param settings Output settings structure
+ * @param filepath Path to JSON settings file (NULL = default location)
+ * @return 0 on success, -1 on error
+ */
+int ethervox_settings_load(ethervox_persistent_settings_t* settings, const char* filepath);
+
+/**
+ * @brief Save settings to JSON file
+ * @param settings Settings to save
+ * @param filepath Path to JSON settings file (NULL = default location)
+ * @return 0 on success, -1 on error
+ */
+int ethervox_settings_save(const ethervox_persistent_settings_t* settings, const char* filepath);
+
+/**
+ * @brief Get default settings file path
+ * @return Path string (static buffer, do not free)
+ */
+const char* ethervox_settings_get_default_path(void);
+
+/**
+ * @brief Import settings from JSON string
+ * @param settings Output settings structure
+ * @param json_string JSON string containing settings
+ * @return 0 on success, -1 on error
+ */
+int ethervox_settings_import(ethervox_persistent_settings_t* settings, const char* json_string);
+
+/**
+ * @brief Export settings to JSON string
+ * @param settings Settings to export
+ * @return JSON string (caller must free), or NULL on error
+ */
+char* ethervox_settings_export(const ethervox_persistent_settings_t* settings);
+
+/**
+ * @brief Print settings to console in human-readable format
+ * @param settings Settings to display
+ */
+void ethervox_settings_print(const ethervox_persistent_settings_t* settings);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // ETHERVOX_SETTINGS_H
