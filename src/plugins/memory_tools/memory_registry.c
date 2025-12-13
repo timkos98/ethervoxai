@@ -162,10 +162,16 @@ static int tool_memory_store_wrapper(
     char tags[8][32];
     uint32_t tag_count = 0;
 
-    // Parse arguments
-    if (parse_json_string(args_json, "text", text, sizeof(text)) != 0) {
-        *error = strdup("Missing 'text' parameter");
-        return -1;
+    // Parse arguments - support 'key', 'text', or 'value' as parameter name
+    if (parse_json_string(args_json, "key", text, sizeof(text)) != 0) {
+        // Try 'text' as fallback parameter name
+        if (parse_json_string(args_json, "text", text, sizeof(text)) != 0) {
+            // Try 'value' as alternative parameter name
+            if (parse_json_string(args_json, "value", text, sizeof(text)) != 0) {
+                *error = strdup("Missing 'key', 'text', or 'value' parameter");
+                return -1;
+            }
+        }
     }
     parse_json_float(args_json, "importance", &importance);
     parse_json_bool(args_json, "is_user", &is_user);
@@ -755,12 +761,14 @@ int ethervox_memory_tools_register(
             "{"
             "  \"type\": \"object\","
             "  \"properties\": {"
-            "    \"text\": {\"type\": \"string\", \"description\": \"Content to remember. For reminders, include deadline/time info in the text.\"},"
+            "    \"text\": {\"type\": \"string\", \"description\": \"Content to remember. For reminders, include deadline/time info in the text. (Aliases: 'key' or 'value' also work)\"},"
+            "    \"key\": {\"type\": \"string\", \"description\": \"Alternative to 'text': content to remember.\"},"
+            "    \"value\": {\"type\": \"string\", \"description\": \"Alternative to 'text': content to remember.\"},"
             "    \"tags\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}, \"description\": \"Labels like 'reminder', 'important', 'urgent', etc.\"},"
             "    \"importance\": {\"type\": \"number\", \"minimum\": 0, \"maximum\": 1, \"description\": \"0.0=low to 1.0=critical. Use 0.9+ for urgent reminders.\"},"
             "    \"is_user\": {\"type\": \"boolean\", \"description\": \"True if this is user input, false if assistant generated\"}"
             "  },"
-            "  \"required\": [\"text\"]"
+            "  \"required\": []"
             "}",
         .execute = tool_memory_store_wrapper,
         .is_deterministic = false,
