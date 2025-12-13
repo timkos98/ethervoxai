@@ -235,6 +235,14 @@ set(ENABLE_CJSON_TEST OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_AND_STATIC_LIBS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(cJSON)
 
+# Find libcurl for bug reporter
+find_package(CURL REQUIRED)
+if(CURL_FOUND)
+    message(STATUS "Found CURL: ${CURL_LIBRARIES}")
+else()
+    message(FATAL_ERROR "CURL not found - required for bug reporter")
+endif()
+
 if(ENABLE_DEBUG)
     add_definitions(-DDEBUG_ENABLED=1)
 endif()
@@ -364,6 +372,7 @@ set(COMMON_SOURCES
     src/common/logging.c
     src/common/settings_menu.c
     src/common/model_downloader.c
+    src/common/bug_reporter.c
     src/config/settings.c
 )
 
@@ -631,13 +640,14 @@ elseif(ANDROID)
     endif()
     
 elseif(UNIX AND NOT APPLE)
-    set(ETHERVOXAI_PLATFORM_LIBS asound pthread curl ssl crypto m)
+    set(ETHERVOXAI_PLATFORM_LIBS asound pthread ${CURL_LIBRARIES} ssl crypto m)
 elseif(APPLE)
-    set(ETHERVOXAI_PLATFORM_LIBS "-framework CoreAudio" "-framework AudioToolbox" "-framework AudioUnit" "-framework CoreFoundation" pthread curl)
+    set(ETHERVOXAI_PLATFORM_LIBS "-framework CoreAudio" "-framework AudioToolbox" "-framework AudioUnit" "-framework CoreFoundation" pthread ${CURL_LIBRARIES})
 endif()
 
 if(ETHERVOXAI_PLATFORM_LIBS)
     target_link_libraries(ethervoxai PUBLIC ${ETHERVOXAI_PLATFORM_LIBS})
+    target_include_directories(ethervoxai PRIVATE ${CURL_INCLUDE_DIRS})
 endif()
 
 set_property(GLOBAL PROPERTY ETHERVOXAI_PLATFORM_LIBS "${ETHERVOXAI_PLATFORM_LIBS}")

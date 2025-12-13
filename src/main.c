@@ -53,6 +53,7 @@
 #include "ethervox/tool_prompt_optimizer.h"
 #include "ethervox/model_downloader.h"
 #include "ethervox/settings.h"
+#include "ethervox/bug_reporter.h"
 
 // External debug flag from logging.c (declared in config.h)
 // extern int g_ethervox_debug_enabled; // Already declared in config.h
@@ -217,7 +218,7 @@ static const char* commands[] = {
     "/wakeword", "/wakeon", "/wakeoff", "/wakerecord",
     "/conversation", "/convon", "/convoff", "/convtrigger",
     "/models", "/modelstatus", "/modeldownload", "/modeldelete",
-    "/config",
+    "/config", "/report",
     "/quit", NULL
 };
 
@@ -306,6 +307,7 @@ static void print_help(void) {
     printf("  /help              Show this help message\n");
     printf("  /settings          Open interactive settings menu\n");
     printf("  /config            View/manage persistent configuration (Whisper, conversation, wake word)\n");
+    printf("  /report            Submit bug report or feature request to GitHub\n");
     printf("  /test              Run comprehensive integration tests\n");
     printf("  /testllm [-v]      Run LLM tool usage tests (-v for verbose debug output)\n");
     printf("  /optimize_tool_prompts  Optimize tool prompts (incremental: only new tools, ~10s)\n");
@@ -1059,6 +1061,84 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         } else {
             printf("Unknown /config subcommand: %s\n", subcmd);
             printf("Try: save, load, reset, or export\n");
+        }
+        return;
+    }
+    
+    if (strcmp(line, "/report") == 0) {
+        printf("\n╔═══════════════════════════════════╗\n");
+        printf("║  Bug & Feature Report Submission  ║\n");
+        printf("╚═══════════════════════════════════╝\n\n");
+        
+        // Prompt for type
+        char type_input[10];
+        printf("Report type - (b)ug or (f)eature? ");
+        fflush(stdout);
+        if (!fgets(type_input, sizeof(type_input), stdin)) {
+            printf("✗ Input cancelled\n");
+            return;
+        }
+        
+        ethervox_report_type_t type = (type_input[0] == 'f' || type_input[0] == 'F') 
+            ? ETHERVOX_REPORT_FEATURE : ETHERVOX_REPORT_BUG;
+        
+        // Get title
+        char title[128];
+        printf("Title: ");
+        fflush(stdout);
+        if (!fgets(title, sizeof(title), stdin)) {
+            printf("✗ Input cancelled\n");
+            return;
+        }
+        title[strcspn(title, "\n")] = 0; // Remove newline
+        
+        if (strlen(title) == 0) {
+            printf("✗ Title cannot be empty\n");
+            return;
+        }
+        
+        // Get description (multi-line)
+        printf("\nDescription (type /end on its own line to finish):\n");
+        char description[2048] = {0};
+        char line_buf[256];
+        while (fgets(line_buf, sizeof(line_buf), stdin)) {
+            if (strcmp(line_buf, "/end\n") == 0) break;
+            size_t remaining = sizeof(description) - strlen(description) - 1;
+            if (remaining > 0) {
+                strncat(description, line_buf, remaining);
+            }
+        }
+        
+        if (strlen(description) == 0) {
+            printf("✗ Description cannot be empty\n");
+            return;
+        }
+        
+        // Ask about system info
+        char include_sys[10];
+        printf("\nInclude system information? (Y/n): ");
+        fflush(stdout);
+        if (!fgets(include_sys, sizeof(include_sys), stdin)) {
+            include_sys[0] = 'Y'; // Default to yes if cancelled
+        }
+        bool include_info = (include_sys[0] != 'n' && include_sys[0] != 'N');
+        
+        // Submit report
+        printf("\n🚀 Submitting %s report...\n", 
+               type == ETHERVOX_REPORT_BUG ? "bug" : "feature");
+        
+        ethervox_report_result_t result;
+        if (ethervox_report_submit(type, title, description, include_info, &result) == 0) {
+            printf("\n✓ Report submitted successfully!\n");
+            printf("  Issue URL: %s\n\n", result.issue_url);
+            printf("Thank you for helping improve EthervoxAI! 🙏\n");
+        } else {
+            printf("\n✗ Failed to submit report: %s\n", result.error_message);
+            if (result.http_status > 0) {
+                printf("  HTTP Status: %d\n", result.http_status);
+            }
+            printf("\nPlease try again or send an email to Tim with details: timkos@live.at\n");
+            printf("\nInclude any details that might help reproduce the issue along with the version number.\n");
         }
         return;
     }

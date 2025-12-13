@@ -287,6 +287,13 @@ ethervox_model_status_t ethervox_model_check_status(
     ethervox_model_info_t* info
 ) {
     ETHERVOX_LOG_DEBUG("ethervox_model_check_status: type=%d, model_name=%s", type, model_name ? model_name : "NULL");
+    
+    // Always set the type first, before any early returns
+    if (info) {
+        info->type = type;
+        info->status = ETHERVOX_MODEL_STATUS_UNKNOWN;
+    }
+    
     char base_dir[512];
     if (ethervox_model_get_base_dir(base_dir, sizeof(base_dir)) != 0) {
         ETHERVOX_LOG_ERROR("Failed to get base directory");
