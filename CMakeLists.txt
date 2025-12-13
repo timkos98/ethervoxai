@@ -235,12 +235,16 @@ set(ENABLE_CJSON_TEST OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_AND_STATIC_LIBS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(cJSON)
 
-# Find libcurl for bug reporter
-find_package(CURL REQUIRED)
-if(CURL_FOUND)
-    message(STATUS "Found CURL: ${CURL_LIBRARIES}")
+# Find libcurl for bug reporter (not needed on Android - uses Kotlin BugReporter instead)
+if(NOT TARGET_PLATFORM STREQUAL "ANDROID")
+    find_package(CURL REQUIRED)
+    if(CURL_FOUND)
+        message(STATUS "Found CURL: ${CURL_LIBRARIES}")
+    else()
+        message(FATAL_ERROR "CURL not found - required for bug reporter")
+    endif()
 else()
-    message(FATAL_ERROR "CURL not found - required for bug reporter")
+    message(STATUS "Skipping CURL (Android uses Kotlin BugReporter)")
 endif()
 
 if(ENABLE_DEBUG)
@@ -372,9 +376,13 @@ set(COMMON_SOURCES
     src/common/logging.c
     src/common/settings_menu.c
     src/common/model_downloader.c
-    src/common/bug_reporter.c
     src/config/settings.c
 )
+
+# Add bug_reporter.c only for non-Android platforms (Android uses Kotlin BugReporter)
+if(NOT TARGET_PLATFORM STREQUAL "ANDROID")
+    list(APPEND COMMON_SOURCES src/common/bug_reporter.c)
+endif()
 
 # Collect core source files (non-platform specific)
 file(GLOB ETHERVOXAI_CORE_SOURCES 

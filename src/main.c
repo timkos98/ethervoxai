@@ -2351,8 +2351,8 @@ int main(int argc, char** argv) {
     // Dafualt to auto-load model unless --noautoload specified
     bool auto_load_model = true;
     if (!model_path) {
-        // Default model filename - will be searched in ~/.ethervox/models/ first
-        model_path = "granite-4.0-h-tiny-Q4_K_M.gguf";
+        // Default model filename - will be searched in ~/.ethervox/models/governor/ first
+        model_path = "governor/granite-4.0-h-tiny-Q4_K_M.gguf";
     }
     
     for (int i = 1; i < argc; i++) {

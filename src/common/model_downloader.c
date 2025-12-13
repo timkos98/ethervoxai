@@ -7,6 +7,7 @@
  */
 
 #include "ethervox/model_downloader.h"
+#include "ethervox/config.h"
 #include "ethervox/logging.h"
 #include "ethervox/platform.h"
 
@@ -40,11 +41,18 @@ typedef struct {
 // Governor LLM models
 static const model_definition_t GOVERNOR_MODELS[] = {
     {
+        "granite-4.0-h-1b-Q4_K_M.gguf",
+        "IBM Granite 4.0 1B (Recommended) - 4-bit quantized, very fast, compact",
+        "https://huggingface.co/bartowski/granite-4.0-h-1b-GGUF/resolve/main/granite-4.0-h-1b-Q4_K_M.gguf",
+        900000000,  // ~900MB
+        true
+    },
+    {
         "granite-3.0-2b-instruct-Q4_K_M.gguf",
-        "IBM Granite 3.0 2B (Recommended) - 4-bit quantized, fast",
+        "IBM Granite 3.0 2B - Good balance of speed and quality",
         "https://huggingface.co/second-state/Granite-3.0-2B-Instruct-GGUF/resolve/main/granite-3.0-2b-instruct-Q4_K_M.gguf",
         1536000000,  // ~1.5GB
-        true
+        false
     },
     {
         "granite-3.0-8b-instruct-Q4_K_M.gguf",
@@ -310,19 +318,19 @@ ethervox_model_status_t ethervox_model_check_status(
     
     switch (type) {
         case ETHERVOX_MODEL_TYPE_GOVERNOR:
-            subdir = "governor";
+            subdir = ETHERVOX_GOVERNOR_SUBDIR;
             break;
         case ETHERVOX_MODEL_TYPE_WHISPER:
-            subdir = "whisper";
+            subdir = ETHERVOX_WHISPER_SUBDIR;
             break;
         case ETHERVOX_MODEL_TYPE_VOSK:
-            subdir = "vosk";
+            subdir = ETHERVOX_VOSK_SUBDIR;
             break;
         case ETHERVOX_MODEL_TYPE_PIPER:
-            subdir = "piper";
+            subdir = ETHERVOX_PIPER_SUBDIR;
             break;
         case ETHERVOX_MODEL_TYPE_WAKE_TEMPLATE:
-            subdir = "wake_templates";
+            subdir = ETHERVOX_WAKE_TEMPLATE_SUBDIR;
             break;
     }
     
