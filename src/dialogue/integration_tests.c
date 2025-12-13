@@ -30,6 +30,11 @@
 #include <errno.h>
 #include <math.h>
 
+// Include llama.cpp headers for cache inspection
+#if defined(ETHERVOX_WITH_LLAMA) && LLAMA_HEADER_AVAILABLE
+#include "llama.h"
+#endif
+
 // Android logging support
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -808,8 +813,167 @@ static void test_unit_conversion_tool(void) {
     TEST_PASS("Unit conversion integration test completed");
 }
 
+// Test 10: Cache Summarization with Real LLM
+static void test_cache_summarization_live(ethervox_governor_t* governor) {
+    TEST_HEADER("Test 10: Cache Summarization with Live LLM");
+    
+#if !defined(ETHERVOX_WITH_LLAMA) || !LLAMA_HEADER_AVAILABLE
+    TEST_INFO("Skipping - llama.cpp not available");
+    return;
+#else
+    
+    if (!governor) {
+        TEST_FAIL("Governor not provided - skipping live test");
+        g_tests_failed++;
+        record_test_result("Cache Summarization (Live)", false);
+        return;
+    }
+    
+    // Check if model is loaded
+    if (!governor->llm_ctx || governor->system_prompt_token_count == 0) {
+        TEST_INFO("No model loaded - this test requires a loaded LLM model");
+        TEST_INFO("Skipping live cache summarization test");
+        return;
+    }
+    
+    TEST_INFO("Model loaded with %d system prompt tokens", governor->system_prompt_token_count);
+    
+    // Simulate a conversation by adding some turns to the history
+    TEST_SUBHEADER("Simulating conversation history");
+    
+    if (!governor->conversation_history.turns) {
+        TEST_FAIL("Conversation history not initialized");
+        g_tests_failed++;
+        record_test_result("Cache Summarization (Live)", false);
+        return;
+    }
+    
+    // Add test conversation turns
+    const char* user_messages[] = {
+        "What's the weather like today?",
+        "Can you help me convert 10 miles to kilometers?",
+        "Tell me about quantum computing",
+        "What are the best practices for memory management in C?",
+        "How does the KV cache work in LLM inference?"
+    };
+    
+    const char* assistant_responses[] = {
+        "I'd need to know your location to provide accurate weather information.",
+        "10 miles is approximately 16.09 kilometers.",
+        "Quantum computing uses quantum bits (qubits) that can exist in superposition states.",
+        "Always free allocated memory, avoid memory leaks, use valgrind for debugging.",
+        "The KV cache stores key-value attention states to avoid recomputing past tokens."
+    };
+    
+    for (int i = 0; i < 5; i++) {
+        if (governor->conversation_history.turn_count >= governor->conversation_history.capacity) {
+            TEST_INFO("Conversation history full, skipping remaining turns");
+            break;
+        }
+        
+        conversation_turn_t* turn = &governor->conversation_history.turns[governor->conversation_history.turn_count];
+        turn->is_user = true;
+        strncpy(turn->preview, user_messages[i], sizeof(turn->preview) - 1);
+        turn->preview[sizeof(turn->preview) - 1] = '\0';
+        turn->token_count = strlen(user_messages[i]) / 4; // Rough estimate
+        governor->conversation_history.turn_count++;
+        
+        if (governor->conversation_history.turn_count >= governor->conversation_history.capacity) {
+            break;
+        }
+        
+        turn = &governor->conversation_history.turns[governor->conversation_history.turn_count];
+        turn->is_user = false;
+        strncpy(turn->preview, assistant_responses[i], sizeof(turn->preview) - 1);
+        turn->preview[sizeof(turn->preview) - 1] = '\0';
+        turn->token_count = strlen(assistant_responses[i]) / 4;
+        governor->conversation_history.turn_count++;
+    }
+    
+    TEST_PASS("Added %u conversation turns", governor->conversation_history.turn_count);
+    
+    // Test summarization
+    TEST_SUBHEADER("Testing manual cache summarization");
+    
+    llama_memory_t mem = llama_get_memory(governor->llm_ctx);
+    int32_t pos_before = llama_memory_seq_pos_max(mem, 0);
+    TEST_INFO("KV cache position before: %d tokens", pos_before);
+    
+    // Force summarization even if cache isn't full
+    int ret = ethervox_governor_summarize_and_clear_cache(governor, true);
+    
+    if (ret != 0) {
+        TEST_FAIL("Summarization failed with error code %d", ret);
+        g_tests_failed++;
+        record_test_result("Cache Summarization (Live)", false);
+        return;
+    }
+    
+    TEST_PASS("Summarization completed successfully");
+    
+    int32_t pos_after = llama_memory_seq_pos_max(mem, 0);
+    TEST_INFO("KV cache position after: %d tokens", pos_after);
+    
+    // Verify cache was cleared back to system prompt
+    if (pos_after <= governor->system_prompt_token_count + 100) {  // Allow some buffer for summary
+        TEST_PASS("Cache cleared correctly (pos=%d, system_prompt=%d)", 
+                 pos_after, governor->system_prompt_token_count);
+    } else {
+        TEST_FAIL("Cache not cleared properly (pos=%d, expected ~%d)", 
+                 pos_after, governor->system_prompt_token_count);
+        g_tests_failed++;
+        record_test_result("Cache Summarization (Live)", false);
+        return;
+    }
+    
+    // Verify summary was stored in memory
+    TEST_SUBHEADER("Verifying summary storage");
+    
+    ethervox_tool_t* memory_search_tool = NULL;
+    for (uint32_t i = 0; i < governor->tool_registry->tool_count; i++) {
+        if (strcmp(governor->tool_registry->tools[i].name, "memory_search") == 0) {
+            memory_search_tool = &governor->tool_registry->tools[i];
+            break;
+        }
+    }
+    
+    if (!memory_search_tool) {
+        TEST_INFO("memory_search tool not available - skipping summary verification");
+    } else {
+        char search_args[512];
+        snprintf(search_args, sizeof(search_args),
+            "{\"query\":null,"
+            "\"tag_filter\":[\"context_summary\",\"manual_clear\"],"
+            "\"limit\":1}");
+        
+        char* search_result = NULL;
+        char* search_error = NULL;
+        
+        int search_status = memory_search_tool->execute(search_args, &search_result, &search_error);
+        if (search_status == 0 && search_result) {
+            TEST_PASS("Summary found in memory: %.100s...", search_result);
+        } else {
+            TEST_FAIL("Summary not found in memory");
+            g_tests_failed++;
+            record_test_result("Cache Summarization (Live)", false);
+            free(search_result);
+            free(search_error);
+            return;
+        }
+        
+        free(search_result);
+        free(search_error);
+    }
+    
+    g_tests_passed++;
+    record_test_result("Cache Summarization (Live)", true);
+    TEST_PASS("Cache summarization integration test completed");
+    
+#endif // ETHERVOX_WITH_LLAMA
+}
+
 // Main test runner
-void run_integration_tests(void) {
+void run_integration_tests(ethervox_governor_t* governor) {
     // Create test report file
     time_t report_time = time(NULL);
     char report_dir[512];
@@ -984,6 +1148,16 @@ void run_integration_tests(void) {
     test_unit_conversion_tool();
     if (g_tests_failed > failed_before) record_test_result("Unit Conversion Tool", false);
     else if (g_tests_passed > passed_before) record_test_result("Unit Conversion Tool", true);
+    
+    // Test 10: Cache summarization with live LLM (requires loaded model)
+    if (governor) {
+        passed_before = g_tests_passed; failed_before = g_tests_failed;
+        test_cache_summarization_live(governor);
+        if (g_tests_failed > failed_before) record_test_result("Cache Summarization (Live)", false);
+        else if (g_tests_passed > passed_before) record_test_result("Cache Summarization (Live)", true);
+    } else {
+        TEST_INFO("Skipping cache summarization test - no governor available");
+    }
     
     time_t end_time = time(NULL);
     double duration = difftime(end_time, start_time);

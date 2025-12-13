@@ -212,7 +212,7 @@ static void* wake_word_listen_thread(void* arg) {
 // Command completion for readline
 static const char* commands[] = {
     "/help", "/test", "/testllm", "/testwhisper", "/optimize_tool_prompts", "/load", "/tools",
-    "/search", "/summary", "/export", "/archive", "/stats", "/startup", "/debug",
+    "/search", "/summary", "/summarizeCache", "/export", "/archive", "/stats", "/startup", "/debug",
     "/markdown", "/toggle_tool_calls", "/clear", "/reset", "/paste", "/paths", "/setpath", "/safemode", "/secret",
     "/transcribe", "/stoptranscribe", "/setlang", "/translate",
     "/wakeword", "/wakeon", "/wakeoff", "/wakerecord",
@@ -315,6 +315,7 @@ static void print_help(void) {
     printf("  /tools             Show loaded Governor tools\n");
     printf("  /search <query>    Search conversation memory\n");
     printf("  /summary [n]       Summarize last n turns (default: 10)\n");
+    printf("  /summarizeCache    Generate conversation summary and clear KV cache\n");
     printf("  /export <file>     Export memory to JSON file\n");
     printf("  /archive           Move old session files to archive/\n");
     printf("  /paths             List configured user paths\n");
@@ -1995,7 +1996,7 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
 
     if (strcmp(line, "/test") == 0) {
         printf("\n");
-        run_integration_tests();
+        run_integration_tests(g_governor);
         printf("\n");
         return;
     }
@@ -2121,6 +2122,26 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
     if (strcmp(line, "/reset") == 0) {
         printf("To reset conversation history, restart the application.\n");
         printf("The KV cache maintains conversation context across queries.\n");
+        return;
+    }
+    
+    if (strcmp(line, "/summarizeCache") == 0) {
+        if (!g_governor) {
+            printf("❌ Governor not initialized\n");
+            return;
+        }
+        
+        printf("\n📝 Generating conversation summary and clearing KV cache...\n");
+        
+        int result = ethervox_governor_summarize_and_clear_cache(g_governor, true);
+        
+        if (result == 0) {
+            printf("✓ Cache summarized and cleared successfully\n");
+            printf("  Summary has been stored in memory with tags: [context_summary, manual_clear]\n");
+            printf("  Use /search to find it later\n\n");
+        } else {
+            printf("✗ Failed to summarize cache\n\n");
+        }
         return;
     }
     

@@ -36,6 +36,13 @@ static bool g_llama_backend_initialized = false;
 // Global flag to detect model corruption from llama.cpp error messages
 static bool g_model_corruption_detected = false;
 
+// Forward declarations for helper functions (defined after struct definition)
+#if defined(ETHERVOX_WITH_LLAMA) && LLAMA_HEADER_AVAILABLE
+static bool parse_memory_search_text(const char* json_result, char* text_out, size_t text_out_size);
+static int load_tokens_to_kv_cache(struct ethervox_governor* governor, const llama_token* tokens, int n_tokens, const char* log_prefix);
+static int load_conversation_summary(struct ethervox_governor* governor, const char* tag_filter_json, const char* context_prefix, const char* log_prefix);
+#endif
+
 // GGML log callback to capture llama.cpp errors
 static void governor_ggml_log_callback(enum ggml_log_level level, const char * text, void * user_data) {
     (void)user_data;
@@ -118,6 +125,244 @@ struct ethervox_governor {
     // Chat template for formatting
     const chat_template_t* chat_template;
 };
+
+// ============================================================================
+// Helper Function Implementations (Summary Loading)
+// ============================================================================
+
+#if defined(ETHERVOX_WITH_LLAMA) && LLAMA_HEADER_AVAILABLE
+
+/**
+ * Parse JSON memory search result to extract the "text" field
+ * Format: {"results":[{"text":"...", "relevance":0.95}], "count":1}
+ */
+static bool parse_memory_search_text(const char* json_result, char* text_out, size_t text_out_size) {
+    if (!json_result || !text_out || text_out_size == 0) {
+        return false;
+    }
+    
+    text_out[0] = '\0';
+    
+    char* text_start = strstr(json_result, "\"text\":\"");
+    if (!text_start) {
+        return false;
+    }
+    
+    text_start += 8; // Skip past "text":"
+    char* text_end = strstr(text_start, "\",\"relevance\"");
+    if (!text_end) {
+        text_end = strstr(text_start, "\"}");
+    }
+    
+    if (text_end) {
+        size_t len = text_end - text_start;
+        if (len < text_out_size) {
+            strncpy(text_out, text_start, len);
+            text_out[len] = '\0';
+            return true;
+        }
+    }
+    
+    return false;
+}
+
+/**
+ * Load tokenized text into KV cache in chunks
+ * Returns number of tokens loaded, or -1 on error
+ */
+static int load_tokens_to_kv_cache(
+    struct ethervox_governor* governor,
+    const llama_token* tokens,
+    int n_tokens,
+    const char* log_prefix
+) {
+    if (!governor || !tokens || n_tokens <= 0) {
+        return -1;
+    }
+    
+    int chunk_size = 512;
+    for (int i = 0; i < n_tokens; i += chunk_size) {
+        int chunk_len = (i + chunk_size > n_tokens) ? (n_tokens - i) : chunk_size;
+        
+        llama_batch batch = llama_batch_init(chunk_len, 0, 1);
+        batch.n_tokens = chunk_len;
+        for (int j = 0; j < chunk_len; j++) {
+            batch.token[j] = tokens[i + j];
+            batch.pos[j] = governor->current_kv_pos + i + j;  // Account for outer loop position
+            batch.n_seq_id[j] = 1;
+            batch.seq_id[j][0] = 0;
+            batch.logits[j] = false;
+        }
+        
+        int decode_result = llama_decode(governor->llm_ctx, batch);
+        llama_batch_free(batch);
+        
+        if (decode_result != 0) {
+            GOV_ERROR("%s: Failed to decode chunk %d/%d (error %d, tokens %d-%d/%d)", 
+                      log_prefix, i / chunk_size + 1, (n_tokens + chunk_size - 1) / chunk_size,
+                      decode_result, i, i + chunk_len - 1, n_tokens);
+            return -1;
+        }
+    }
+    
+    // Update position after all chunks processed
+    governor->current_kv_pos += n_tokens;
+    return n_tokens;
+}
+
+/**
+ * Search memory for conversation summary and load into KV cache
+ * Returns 0 on success (even if no summary found), -1 on error
+ */
+static int load_conversation_summary(
+    struct ethervox_governor* governor,
+    const char* tag_filter_json,
+    const char* context_prefix,
+    const char* log_prefix
+) {
+    if (!governor || !tag_filter_json || !context_prefix || !log_prefix) {
+        return -1;
+    }
+    
+    // Find memory_search tool
+    ethervox_tool_t* memory_search_tool = NULL;
+    for (uint32_t i = 0; i < governor->tool_registry->tool_count; i++) {
+        if (strcmp(governor->tool_registry->tools[i].name, "memory_search") == 0) {
+            memory_search_tool = &governor->tool_registry->tools[i];
+            break;
+        }
+    }
+    
+    if (!memory_search_tool) {
+        GOV_LOG("%s: memory_search tool not available", log_prefix);
+        return 0;  // Not an error, just unavailable
+    }
+    
+    // Build search args
+    char search_args[512];
+    snprintf(search_args, sizeof(search_args),
+        "{\"query\":null,"
+        "\"tag_filter\":%s,"
+        "\"limit\":1}",
+        tag_filter_json);
+    
+    char* search_result = NULL;
+    char* search_error = NULL;
+    
+    int search_status = memory_search_tool->execute(search_args, &search_result, &search_error);
+    
+    if (search_status != 0 || !search_result) {
+        GOV_LOG("%s: No previous conversation summary found", log_prefix);
+        free(search_result);
+        free(search_error);
+        return 0;  // Not an error
+    }
+    
+    // Parse JSON to extract text
+    char summary_text[4096];
+    if (!parse_memory_search_text(search_result, summary_text, sizeof(summary_text))) {
+        GOV_LOG("%s: No valid summary found in memory (empty or malformed)", log_prefix);
+        free(search_result);
+        free(search_error);
+        return 0;
+    }
+    
+    free(search_result);
+    free(search_error);
+    
+    // Strip metadata header if present (e.g., "[Manual Cache Clear - Context Summary]\\n\\n")
+    char* actual_summary = summary_text;
+    if (summary_text[0] == '[') {
+        // Look for end of header (]\n\n or ]\\ n\\ n for escaped)
+        char* header_end = strstr(summary_text, "]\\n\\n");
+        if (header_end) {
+            actual_summary = header_end + 5;  // Skip "]\n\n" (with escapes: 5 chars)
+        } else {
+            header_end = strstr(summary_text, "]\n\n");
+            if (header_end) {
+                actual_summary = header_end + 3;  // Skip "]\n\n"
+            }
+        }
+    }
+    
+    // Additional validation: check summary length is reasonable
+    size_t summary_len = strlen(actual_summary);
+    if (summary_len < 10) {
+        GOV_ERROR("%s: Summary too short (%zu chars), likely corrupt", log_prefix, summary_len);
+        return 0;
+    }
+    if (summary_len > 3500) {
+        GOV_LOG("%s: Warning - summary unusually long (%zu chars)", log_prefix, summary_len);
+    }
+    
+    GOV_LOG("%s: Found conversation summary (%zu chars)", log_prefix, summary_len);
+    
+    // Build context restoration prompt
+    char context_restore_prompt[8192];
+    snprintf(context_restore_prompt, sizeof(context_restore_prompt),
+        "%s\n%s\n\n%s",
+        context_prefix,
+        actual_summary,  // Use stripped summary without metadata header
+        strcmp(log_prefix, "STARTUP") == 0 
+            ? "Ready to continue our conversation."
+            : "Continue conversation naturally based on this context.");
+    
+    // Tokenize
+    llama_token* restore_tokens = (llama_token*)malloc(2048 * sizeof(llama_token));
+    if (!restore_tokens) {
+        GOV_ERROR("%s: Failed to allocate token buffer", log_prefix);
+        return -1;
+    }
+    
+    const struct llama_vocab* vocab = llama_model_get_vocab(governor->llm_model);
+    int n_restore = llama_tokenize(
+        vocab,
+        context_restore_prompt,
+        strlen(context_restore_prompt),
+        restore_tokens,
+        2048,
+        true,   // add_special
+        false   // parse_special
+    );
+    
+    if (n_restore <= 0) {
+        GOV_ERROR("%s: Failed to tokenize summary (returned %d)", log_prefix, n_restore);
+        free(restore_tokens);
+        return 0;  // Not a fatal error
+    }
+    
+    if (n_restore >= 2048) {
+        GOV_ERROR("%s: Summary tokenized to maximum buffer size (%d), likely truncated", log_prefix, n_restore);
+        free(restore_tokens);
+        return 0;
+    }
+    
+    // Sanity check: reasonable token count for a summary
+    if (n_restore < 5) {
+        GOV_ERROR("%s: Summary produced too few tokens (%d), likely corrupt", log_prefix, n_restore);
+        free(restore_tokens);
+        return 0;
+    }
+    
+    GOV_LOG("%s: Tokenized summary into %d tokens", log_prefix, n_restore);
+    
+    // Load into KV cache
+    int loaded = load_tokens_to_kv_cache(governor, restore_tokens, n_restore, log_prefix);
+    free(restore_tokens);
+    
+    if (loaded > 0) {
+        GOV_LOG("%s: Loaded %d context tokens into KV cache", log_prefix, loaded);
+        GOV_LOG("%s: Context restoration complete", log_prefix);
+    }
+    
+    return loaded > 0 ? 0 : -1;
+}
+
+#endif // ETHERVOX_WITH_LLAMA
+
+// ============================================================================
+// End Helper Function Implementations
+// ============================================================================
 
 /**
  * Extract tool calls from LLM response
@@ -945,6 +1190,22 @@ int ethervox_governor_load_model(ethervox_governor_t* governor, const char* mode
     GOV_LOG("System prompt processed into KV cache (%d tokens)", n_tokens);
     GOV_LOG("Pre-tokenized wrappers: prefix=%d tokens, suffix=%d tokens",
             governor->tool_result_prefix_len, governor->tool_result_suffix_len);
+    
+    // ========================================================================
+    // STARTUP CONTEXT RESTORATION - Load most recent conversation summary
+    // ========================================================================
+    // Provides conversation continuity across sessions by restoring context
+    // from previous conversations. This is similar to the RELIGHT sequence
+    // but happens at initial model load instead of after KV cache clear.
+    
+    GOV_LOG("STARTUP: Checking for previous conversation context...");
+    load_conversation_summary(
+        governor,
+        "[\"context_summary\"]",
+        "[Previous Session Context]",
+        "STARTUP"
+    );
+    
     GOV_LOG("[Governor] Model loaded and ready");;
     
     return 0;
@@ -1147,10 +1408,133 @@ ethervox_governor_status_t ethervox_governor_execute(
             progress_callback(ETHERVOX_GOVERNOR_EVENT_CONTEXT_SUMMARIZING, summary_msg, user_data);
         }
         
-        // Generate a summary of the conversation using memory_store directly
-        GOV_LOG("Storing conversation context summary before clearing...");
+        // Generate an LLM-based summary of the recent conversation
+        GOV_LOG("Generating conversation summary before clearing...");
         
-        // Find memory_store tool to save context summary
+        // Build conversation context from history
+        char conversation_context[4096] = {0};
+        int ctx_len = 0;
+        
+        // Include recent turns (last 10 or all if fewer)
+        uint32_t start_turn = (governor->conversation_history.turn_count > 10) 
+                              ? (governor->conversation_history.turn_count - 10) : 0;
+        
+        for (uint32_t i = start_turn; i < governor->conversation_history.turn_count; i++) {
+            conversation_turn_t* turn = &governor->conversation_history.turns[i];
+            int remaining = sizeof(conversation_context) - ctx_len - 1;
+            
+            if (remaining > 200) {  // Need space for role + preview
+                int written = snprintf(conversation_context + ctx_len, remaining,
+                    "%s: %s\n",
+                    turn->is_user ? "User" : "Assistant",
+                    turn->preview);
+                if (written > 0 && written < remaining) {
+                    ctx_len += written;
+                }
+            }
+        }
+        
+        // Create summarization prompt
+        char summary_prompt[5120];
+        snprintf(summary_prompt, sizeof(summary_prompt),
+            "Summarize this conversation in 2-3 concise sentences, capturing key topics, "
+            "decisions, and context that should be remembered:\n\n%s\n\n"
+            "Summary (2-3 sentences):",
+            conversation_context);
+        
+        // Tokenize and generate summary
+        llama_token* summary_tokens = (llama_token*)malloc(1024 * sizeof(llama_token));
+        if (!summary_tokens) {
+            GOV_ERROR("Failed to allocate summary tokens");
+            goto skip_llm_summary;
+        }
+        
+        int n_summary_tokens = llama_tokenize(
+            governor->llm_model,
+            summary_prompt,
+            strlen(summary_prompt),
+            summary_tokens,
+            1024,
+            true,   // add_special
+            false   // parse_special
+        );
+        
+        if (n_summary_tokens < 0) {
+            GOV_ERROR("Failed to tokenize summary prompt");
+            free(summary_tokens);
+            goto skip_llm_summary;
+        }
+        
+        // Generate summary (max 100 tokens)
+        char llm_summary[1024] = {0};
+        int summary_len = 0;
+        bool summary_complete = false;
+        
+        // Create temporary sampler for summary generation
+        struct llama_sampler* temp_sampler = llama_sampler_chain_init(llama_sampler_chain_default_params());
+        llama_sampler_chain_add(temp_sampler, llama_sampler_init_temp(0.3f));  // Low temp for focused summary
+        llama_sampler_chain_add(temp_sampler, llama_sampler_init_dist(0));
+        
+        llama_token last_token = summary_tokens[n_summary_tokens - 1];
+        
+        for (int i = 0; i < 100 && !summary_complete; i++) {
+            // Decode next token
+            llama_batch batch = llama_batch_init(1, 0, 1);
+            batch.n_tokens = 1;
+            batch.token[0] = last_token;
+            batch.pos[0] = governor->current_kv_pos + i;
+            batch.n_seq_id[0] = 1;
+            batch.seq_id[0][0] = 0;
+            batch.logits[0] = true;
+            
+            if (llama_decode(governor->llm_ctx, batch) != 0) {
+                llama_batch_free(batch);
+                break;
+            }
+            
+            llama_batch_free(batch);
+            
+            // Sample next token
+            llama_token next_token = llama_sampler_sample(temp_sampler, governor->llm_ctx, -1);
+            llama_sampler_accept(temp_sampler, next_token);
+            
+            // Check for EOS or newline
+            const struct llama_vocab* vocab_check = llama_model_get_vocab(governor->llm_model);
+            if (next_token == llama_token_eos(governor->llm_model) || 
+                next_token == llama_vocab_nl(vocab_check)) {
+                summary_complete = true;
+            } else {
+                // Decode token to text
+                const struct llama_vocab* vocab = llama_model_get_vocab(governor->llm_model);
+                char piece[32];
+                int n_chars = llama_token_to_piece(
+                    vocab,
+                    next_token,
+                    piece,
+                    sizeof(piece),
+                    0,
+                    false
+                );
+                
+                if (n_chars > 0 && summary_len + n_chars < sizeof(llm_summary) - 1) {
+                    memcpy(llm_summary + summary_len, piece, n_chars);
+                    summary_len += n_chars;
+                    llm_summary[summary_len] = '\0';
+                }
+            }
+            
+            last_token = next_token;
+        }
+        
+        llama_sampler_free(temp_sampler);
+        free(summary_tokens);
+        
+        GOV_LOG("Generated conversation summary: %s", llm_summary[0] ? llm_summary : "(empty)");
+        
+        skip_llm_summary:
+        ;  // Empty statement to avoid C23 extension warning
+        
+        // Store the summary in memory
         ethervox_tool_t* memory_tool = NULL;
         for (uint32_t i = 0; i < governor->tool_registry->tool_count; i++) {
             if (strcmp(governor->tool_registry->tools[i].name, "memory_store") == 0) {
@@ -1160,36 +1544,59 @@ ethervox_governor_status_t ethervox_governor_execute(
         }
         
         if (memory_tool) {
-            // Create a simple summary message about what was happening
-            char summary_content[512];
-            snprintf(summary_content, sizeof(summary_content),
+            // Use LLM summary if available, otherwise fallback to simple marker
+            char summary_content[2048];
+            if (llm_summary[0] != '\0') {
+                snprintf(summary_content, sizeof(summary_content),
+                    "[Conversation Summary - Context Cleared at %d%% capacity]\n\n%s\n\n"
+                    "Turn count: %u. Full conversation history preserved in memory.",
+                    (max_pos * 100 / n_ctx), llm_summary, governor->turn_counter);
+            } else {
+                snprintf(summary_content, sizeof(summary_content),
                     "Context cleared at position %d (%d%% full). "
                     "Conversation history up to this point preserved. "
                     "Turn count: %u. Use memory_search to recall earlier conversation if needed.",
                     max_pos, (max_pos * 100 / n_ctx), governor->turn_counter);
+            }
             
-            // Build JSON args for memory_store (uses "text" parameter)
-            char memory_args[1024];
+            // Escape quotes for JSON
+            char escaped_summary[4096];
+            int esc_idx = 0;
+            for (int i = 0; summary_content[i] && esc_idx < sizeof(escaped_summary) - 2; i++) {
+                if (summary_content[i] == '"' || summary_content[i] == '\\') {
+                    escaped_summary[esc_idx++] = '\\';
+                }
+                if (summary_content[i] == '\n') {
+                    escaped_summary[esc_idx++] = '\\';
+                    escaped_summary[esc_idx++] = 'n';
+                } else {
+                    escaped_summary[esc_idx++] = summary_content[i];
+                }
+            }
+            escaped_summary[esc_idx] = '\0';
+            
+            // Build JSON args for memory_store
+            char memory_args[8192];
             snprintf(memory_args, sizeof(memory_args),
-                    "{\"text\":\"[Context Cleared] %s\","
-                    "\"importance\":0.85,"
-                    "\"tags\":[\"context_summary\",\"auto_generated\"]}",
-                    summary_content);
+                    "{\"text\":\"%s\","
+                    "\"importance\":0.90,"
+                    "\"tags\":[\"context_summary\",\"auto_generated\",\"kv_cleared\"]}",
+                    escaped_summary);
             
             char* store_result = NULL;
             char* store_error = NULL;
             
             int store_status = memory_tool->execute(memory_args, &store_result, &store_error);
             if (store_status == 0) {
-                GOV_LOG("Stored context marker in memory");
+                GOV_LOG("Stored conversation summary in memory");
             } else {
-                GOV_ERROR("Failed to store context marker: %s", store_error ? store_error : "unknown error");
+                GOV_ERROR("Failed to store conversation summary: %s", store_error ? store_error : "unknown error");
             }
             
             free(store_result);
             free(store_error);
         } else {
-            GOV_LOG("Warning: memory_store tool not available, context marker not persisted");
+            GOV_LOG("Warning: memory_store tool not available, summary not persisted");
         }
         
         // Now clear the KV cache
@@ -1270,11 +1677,20 @@ ethervox_governor_status_t ethervox_governor_execute(
                             governor->current_kv_pos, 
                             (governor->current_kv_pos * 100 / n_ctx));
                     
+                    // Load conversation summary from memory to restore context
+                    GOV_LOG("RELIGHT: Loading conversation summary from memory...");
+                    load_conversation_summary(
+                        governor,
+                        "[\"context_summary\",\"kv_cleared\"]",
+                        "[Context Restored] Previous conversation summary:",
+                        "RELIGHT"
+                    );
+                    
                     // Notify UI that recovery was successful
                     if (progress_callback) {
                         char relight_msg[256];
                         snprintf(relight_msg, sizeof(relight_msg),
-                                "System recovered - full capabilities restored");
+                                "System recovered - full capabilities restored with conversation context");
                         progress_callback(ETHERVOX_GOVERNOR_EVENT_CONTEXT_CLEARED, relight_msg, user_data);
                     }
                 } else {
@@ -2262,4 +2678,242 @@ void ethervox_governor_set_tool_execution(ethervox_governor_t* governor, bool en
         governor->tool_execution_enabled = enabled;
         GOV_LOG("Tool execution %s", enabled ? "enabled" : "disabled");
     }
+}
+
+int ethervox_governor_summarize_and_clear_cache(ethervox_governor_t* governor, bool force_clear) {
+    if (!governor) {
+        return -1;
+    }
+    
+#if !defined(ETHERVOX_WITH_LLAMA) || !LLAMA_HEADER_AVAILABLE
+    return -1;
+#else
+    if (!governor->llm_ctx || governor->system_prompt_token_count == 0) {
+        GOV_LOG("Cannot summarize: model not loaded");
+        return -1;
+    }
+    
+    llama_memory_t mem = llama_get_memory(governor->llm_ctx);
+    int32_t max_pos = llama_memory_seq_pos_max(mem, 0);
+    int n_ctx = llama_n_ctx(governor->llm_ctx);
+    
+    // Check if we need to clear
+    if (!force_clear && max_pos <= governor->system_prompt_token_count) {
+        GOV_LOG("Cache already clean (at position %d, system prompt is %d tokens)",
+                max_pos, governor->system_prompt_token_count);
+        return 0;
+    }
+    
+    if (!force_clear && max_pos <= (n_ctx / 2)) {
+        GOV_LOG("Cache only at %d%% capacity - not clearing (use force_clear=true to override)",
+                (max_pos * 100 / n_ctx));
+        return 0;
+    }
+    
+    GOV_LOG("Manual cache summarization: max_pos=%d, system_prompt=%d (%d%% full)",
+            max_pos, governor->system_prompt_token_count, (max_pos * 100 / n_ctx));
+    
+    // Build conversation context from history
+    char conversation_context[4096] = {0};
+    int ctx_len = 0;
+    
+    // Include recent turns (last 10 or all if fewer)
+    uint32_t start_turn = (governor->conversation_history.turn_count > 10) 
+                          ? (governor->conversation_history.turn_count - 10) : 0;
+    
+    for (uint32_t i = start_turn; i < governor->conversation_history.turn_count; i++) {
+        conversation_turn_t* turn = &governor->conversation_history.turns[i];
+        int remaining = sizeof(conversation_context) - ctx_len - 1;
+        
+        if (remaining > 200) {
+            int written = snprintf(conversation_context + ctx_len, remaining,
+                "%s: %s\n",
+                turn->is_user ? "User" : "Assistant",
+                turn->preview);
+            if (written > 0 && written < remaining) {
+                ctx_len += written;
+            }
+        }
+    }
+    
+    // Create summarization prompt
+    char summary_prompt[5120];
+    snprintf(summary_prompt, sizeof(summary_prompt),
+        "Summarize this conversation in 2-3 concise sentences, capturing key topics, "
+        "decisions, and context that should be remembered:\n\n%s\n\n"
+        "Summary (2-3 sentences):",
+        conversation_context);
+    
+    // Tokenize
+    llama_token* summary_tokens = (llama_token*)malloc(1024 * sizeof(llama_token));
+    if (!summary_tokens) {
+        GOV_ERROR("Failed to allocate summary tokens");
+        return -1;
+    }
+    
+    const struct llama_vocab* vocab = llama_model_get_vocab(governor->llm_model);
+    int n_summary_tokens = llama_tokenize(
+        vocab,
+        summary_prompt,
+        strlen(summary_prompt),
+        summary_tokens,
+        1024,
+        true,
+        false
+    );
+    
+    if (n_summary_tokens < 0) {
+        GOV_ERROR("Failed to tokenize summary prompt");
+        free(summary_tokens);
+        return -1;
+    }
+    
+    GOV_LOG("Processing summary prompt (%d tokens)...", n_summary_tokens);
+    
+    // First, evaluate the prompt tokens through the model in chunks
+    int chunk_size = 512;
+    for (int i = 0; i < n_summary_tokens; i += chunk_size) {
+        int chunk_len = (i + chunk_size > n_summary_tokens) ? (n_summary_tokens - i) : chunk_size;
+        bool is_last_chunk = (i + chunk_size >= n_summary_tokens);
+        
+        llama_batch batch = llama_batch_init(chunk_len, 0, 1);
+        batch.n_tokens = chunk_len;
+        for (int j = 0; j < chunk_len; j++) {
+            batch.token[j] = summary_tokens[i + j];
+            batch.pos[j] = governor->current_kv_pos + i + j;
+            batch.n_seq_id[j] = 1;
+            batch.seq_id[j][0] = 0;
+            batch.logits[j] = false;
+        }
+        // Only compute logits for the last token of the last chunk
+        if (is_last_chunk) {
+            batch.logits[chunk_len - 1] = true;
+        }
+        
+        if (llama_decode(governor->llm_ctx, batch) != 0) {
+            GOV_ERROR("Failed to process summary prompt chunk at token %d", i);
+            llama_batch_free(batch);
+            free(summary_tokens);
+            return -1;
+        }
+        
+        llama_batch_free(batch);
+    }
+    
+    GOV_LOG("Summary prompt processed, generating response...");
+    
+    // Generate summary
+    char llm_summary[1024] = {0};
+    int summary_len = 0;
+    bool summary_complete = false;
+    
+    struct llama_sampler* temp_sampler = llama_sampler_chain_init(llama_sampler_chain_default_params());
+    llama_sampler_chain_add(temp_sampler, llama_sampler_init_temp(0.3f));
+    llama_sampler_chain_add(temp_sampler, llama_sampler_init_dist(0));
+    
+    int current_gen_pos = governor->current_kv_pos + n_summary_tokens;
+    
+    for (int i = 0; i < 100 && !summary_complete; i++) {
+        llama_token next_token = llama_sampler_sample(temp_sampler, governor->llm_ctx, -1);
+        llama_sampler_accept(temp_sampler, next_token);
+        
+        const struct llama_vocab* vocab_check = llama_model_get_vocab(governor->llm_model);
+        if (next_token == llama_vocab_eos(vocab_check) || 
+            next_token == llama_vocab_nl(vocab_check)) {
+            summary_complete = true;
+        } else {
+            const struct llama_vocab* vocab = llama_model_get_vocab(governor->llm_model);
+            char piece[32];
+            int n_chars = llama_token_to_piece(vocab, next_token, piece, sizeof(piece), 0, false);
+            
+            if (n_chars > 0 && summary_len + n_chars < sizeof(llm_summary) - 1) {
+                memcpy(llm_summary + summary_len, piece, n_chars);
+                summary_len += n_chars;
+                llm_summary[summary_len] = '\0';
+            }
+            
+            // Feed the token back for next iteration
+            llama_batch batch = llama_batch_init(1, 0, 1);
+            batch.n_tokens = 1;
+            batch.token[0] = next_token;
+            batch.pos[0] = current_gen_pos + i;
+            batch.n_seq_id[0] = 1;
+            batch.seq_id[0][0] = 0;
+            batch.logits[0] = true;
+            
+            if (llama_decode(governor->llm_ctx, batch) != 0) {
+                llama_batch_free(batch);
+                break;
+            }
+            
+            llama_batch_free(batch);
+        }
+    }
+    
+    llama_sampler_free(temp_sampler);
+    free(summary_tokens);
+    
+    GOV_LOG("Generated summary: %s", llm_summary[0] ? llm_summary : "(empty)");
+    
+    // Store in memory
+    ethervox_tool_t* memory_tool = NULL;
+    for (uint32_t i = 0; i < governor->tool_registry->tool_count; i++) {
+        if (strcmp(governor->tool_registry->tools[i].name, "memory_store") == 0) {
+            memory_tool = &governor->tool_registry->tools[i];
+            break;
+        }
+    }
+    
+    if (memory_tool && llm_summary[0] != '\0') {
+        char summary_content[2048];
+        snprintf(summary_content, sizeof(summary_content),
+            "[Manual Cache Clear - Context Summary]\n\n%s\n\n"
+            "Turn count: %u. Cache cleared manually at %d%% capacity.",
+            llm_summary, governor->turn_counter, (max_pos * 100 / n_ctx));
+        
+        // Escape for JSON
+        char escaped_summary[4096];
+        int esc_idx = 0;
+        for (int i = 0; summary_content[i] && esc_idx < sizeof(escaped_summary) - 2; i++) {
+            if (summary_content[i] == '"' || summary_content[i] == '\\') {
+                escaped_summary[esc_idx++] = '\\';
+            }
+            if (summary_content[i] == '\n') {
+                escaped_summary[esc_idx++] = '\\';
+                escaped_summary[esc_idx++] = 'n';
+            } else {
+                escaped_summary[esc_idx++] = summary_content[i];
+            }
+        }
+        escaped_summary[esc_idx] = '\0';
+        
+        char memory_args[8192];
+        snprintf(memory_args, sizeof(memory_args),
+                "{\"text\":\"%s\","
+                "\"importance\":0.90,"
+                "\"tags\":[\"context_summary\",\"manual_clear\",\"auto_generated\"]}",
+                escaped_summary);
+        
+        char* store_result = NULL;
+        char* store_error = NULL;
+        
+        if (memory_tool->execute(memory_args, &store_result, &store_error) == 0) {
+            GOV_LOG("Stored conversation summary in memory");
+        } else {
+            GOV_ERROR("Failed to store summary: %s", store_error ? store_error : "unknown");
+        }
+        
+        free(store_result);
+        free(store_error);
+    }
+    
+    // Clear the cache
+    llama_memory_seq_rm(mem, 0, governor->system_prompt_token_count, -1);
+    governor->current_kv_pos = governor->system_prompt_token_count;
+    
+    GOV_LOG("Cache cleared: now at position %d (%d%% full)",
+            governor->current_kv_pos, (governor->current_kv_pos * 100 / n_ctx));
+    
+    return 0;
+#endif
 }

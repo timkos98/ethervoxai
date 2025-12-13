@@ -348,6 +348,19 @@ uint32_t ethervox_governor_get_last_iteration_count(ethervox_governor_t* governo
 int ethervox_governor_reset_conversation(ethervox_governor_t* governor);
 
 /**
+ * Manually trigger conversation summarization and KV cache clearing
+ * 
+ * Generates an LLM-based summary of recent conversation history, stores it in memory,
+ * then clears the KV cache back to the system prompt. Useful for testing or when
+ * you want to free up context space manually.
+ * 
+ * @param governor Governor instance
+ * @param force_clear If true, clears cache regardless of usage level
+ * @return 0 on success, negative on error
+ */
+int ethervox_governor_summarize_and_clear_cache(ethervox_governor_t* governor, bool force_clear);
+
+/**
  * Enable or disable tool call execution
  * When disabled, tool calls in LLM responses will be extracted but not executed.
  * This is useful for optimization processes that need raw tool call templates.
