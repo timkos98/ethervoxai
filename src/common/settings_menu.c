@@ -389,6 +389,14 @@ int ethervox_settings_menu_show(ethervox_settings_t* settings) {
             .action_data = NULL
         },
         {
+            .label = "Token Streaming",
+            .description = "Display LLM response as tokens are generated (real-time)",
+            .type = MENU_ITEM_TOGGLE,
+            .value_ptr = &settings->streaming_enabled,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
             .label = "Engineering Mode",
             .description = "Enable advanced features and detailed stats",
             .type = MENU_ITEM_TOGGLE,

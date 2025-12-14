@@ -23,6 +23,7 @@ extern "C" {
 typedef struct {
     bool debug_enabled;
     bool quiet_mode;
+    bool streaming_enabled;
     bool engineering_mode;
     char model_path[512];
     char whisper_model_path[512];

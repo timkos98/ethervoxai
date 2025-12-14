@@ -63,6 +63,7 @@ static volatile bool g_running = true;
 static bool g_debug_enabled = false;   // Debug logging disabled by default (opt-in)
 static bool g_quiet_mode = true;       // Quiet mode by default
 static bool g_markdown_enabled = true; // Markdown formatting enabled by default
+static bool g_streaming_enabled = true; // Token streaming enabled by default
 
 // Voice system: Two separate pipelines
 // 1. Transcription pipeline (Whisper STT) - for meeting transcription, dictation
@@ -89,6 +90,17 @@ static bool g_wake_enabled = false;
 static pthread_t g_wake_thread;
 static bool g_wake_thread_running = false;
 static pthread_mutex_t g_wake_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+/**
+ * Token streaming callback - displays tokens as they're generated
+ */
+static void stream_token_callback(const char* token, void* user_data) {
+    (void)user_data;  // Unused
+    
+    // Apply cyan color for streaming output
+    printf("\033[36m%s\033[0m", token);
+    fflush(stdout);  // Ensure immediate display
+}
 
 /**
  * Wake word listening thread - continuously monitors microphone
@@ -928,6 +940,7 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
             ethervox_settings_t settings = {
                 .debug_enabled = g_debug_enabled,
                 .quiet_mode = g_quiet_mode,
+                .streaming_enabled = g_streaming_enabled,
                 .engineering_mode = false,  // Local variable, not accessible here
                 .log_level = 2,  // INFO level default
                 .wake_word_enabled = false,  // Not yet implemented
@@ -982,6 +995,7 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
                 // Apply changed settings
                 g_debug_enabled = settings.debug_enabled;
                 g_quiet_mode = settings.quiet_mode;
+                g_streaming_enabled = settings.streaming_enabled;
                 
                 // Apply wake word settings
                 if (settings.wake_word_enabled && !g_wake_enabled) {
@@ -2253,7 +2267,7 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         &error,
         &metrics,
         NULL,  // progress_callback
-        NULL,  // token_callback
+        g_streaming_enabled ? stream_token_callback : NULL,  // token_callback
         NULL   // user_data
     );
     
@@ -2264,22 +2278,28 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         close(stderr_backup);
     }
     
-    // Now apply cyan color to the response output
-    printf("\033[36m");  // Cyan color for assistant response
-    fflush(stdout);
-    
     if (status == ETHERVOX_GOVERNOR_SUCCESS && response) {
-        // Apply markdown formatting if enabled
-        if (g_markdown_enabled) {
-            char* formatted = markdown_to_ansi(response);
-            if (formatted) {
-                printf("\033[36m%s\033[0m\n\n", formatted);
-                free(formatted);
+        // If streaming was enabled, response was already printed token-by-token
+        // Just print newlines for spacing
+        if (g_streaming_enabled) {
+            printf("\n\n");
+        } else {
+            // Non-streaming mode: print full response at once
+            printf("\033[36m");  // Cyan color for assistant response
+            fflush(stdout);
+            
+            // Apply markdown formatting if enabled
+            if (g_markdown_enabled) {
+                char* formatted = markdown_to_ansi(response);
+                if (formatted) {
+                    printf("\033[36m%s\033[0m\n\n", formatted);
+                    free(formatted);
+                } else {
+                    printf("%s\033[0m\n\n", response);
+                }
             } else {
                 printf("%s\033[0m\n\n", response);
             }
-        } else {
-            printf("%s\033[0m\n\n", response);
         }
         
         // Store assistant response
