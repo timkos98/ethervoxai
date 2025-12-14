@@ -21,9 +21,9 @@
 
 // GitHub API configuration
 #define GITHUB_API_URL "https://api.github.com/repos/ethervox-ai/ethervoxai-android/issues"
-// Fine-grained token with ONLY public_repo (issues:write) scope
-// Can only create issues on this public repository
-#define GITHUB_TOKEN "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"
+// Token is read from environment variable ETHERVOX_GITHUB_TOKEN at runtime
+// Set it with: export ETHERVOX_GITHUB_TOKEN="your_token_here"
+// Fine-grained token should have ONLY public_repo (issues:write) scope
 
 // Response buffer for HTTP responses
 typedef struct {
@@ -146,6 +146,28 @@ int ethervox_report_submit(
     memset(result, 0, sizeof(ethervox_report_result_t));
     result->success = false;
     
+    // Get GitHub token from environment
+    // Try platform-specific token first, then fall back to generic token
+    const char* github_token = NULL;
+    
+#ifdef ETHERVOX_PLATFORM_ANDROID
+    github_token = getenv("ETHERVOX_GITHUB_TOKEN_ANDROID");
+#elif defined(ETHERVOX_PLATFORM_MACOS) || defined(ETHERVOX_PLATFORM_DESKTOP)
+    github_token = getenv("ETHERVOX_GITHUB_TOKEN_DESKTOP");
+#endif
+    
+    // Fall back to generic token if platform-specific not set
+    if (!github_token || github_token[0] == '\0') {
+        github_token = getenv("ETHERVOX_GITHUB_TOKEN");
+    }
+    
+    if (!github_token || github_token[0] == '\0') {
+        snprintf(result->error_message, sizeof(result->error_message),
+                 "Bug reporting not configured. Please set ETHERVOX_GITHUB_TOKEN environment variable.");
+        ETHERVOX_LOG_WARN("Bug reporting disabled: ETHERVOX_GITHUB_TOKEN not set");
+        return -1;
+    }
+    
     // Initialize curl
     CURL* curl = curl_easy_init();
     if (!curl) {
@@ -216,7 +238,7 @@ int ethervox_report_submit(
     headers = curl_slist_append(headers, "Accept: application/vnd.github+json");
     
     char auth_header[512];
-    snprintf(auth_header, sizeof(auth_header), "Authorization: Bearer %s", GITHUB_TOKEN);
+    snprintf(auth_header, sizeof(auth_header), "Authorization: Bearer %s", github_token);
     headers = curl_slist_append(headers, auth_header);
     headers = curl_slist_append(headers, "Content-Type: application/json");
     
