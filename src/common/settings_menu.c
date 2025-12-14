@@ -10,6 +10,7 @@
 
 #include "ethervox/settings_menu.h"
 #include "ethervox/config.h"
+#include "ethervox/settings.h"
 #include "ethervox/logging.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,7 +38,8 @@
 // Menu item types
 typedef enum {
     MENU_ITEM_TOGGLE,      // Boolean on/off
-    MENU_ITEM_NUMERIC,     // Numeric value
+    MENU_ITEM_NUMERIC,     // Integer numeric value
+    MENU_ITEM_FLOAT,       // Float numeric value
     MENU_ITEM_ACTION,      // Execute action
     MENU_ITEM_SUBMENU,     // Open submenu
     MENU_ITEM_BACK         // Go back
@@ -166,6 +168,9 @@ static void draw_menu(menu_item_t* items, int item_count, int selected) {
         } else if (items[i].type == MENU_ITEM_NUMERIC && items[i].value_ptr) {
             int* val = (int*)items[i].value_ptr;
             mvprintw(y, 40, "[%d]", *val);
+        } else if (items[i].type == MENU_ITEM_FLOAT && items[i].value_ptr) {
+            float* val = (float*)items[i].value_ptr;
+            mvprintw(y, 40, "[%.2f]", *val);
         } else if (items[i].type == MENU_ITEM_ACTION && items[i].action) {
             mvprintw(y, 40, "→");
         }
@@ -192,6 +197,99 @@ static void show_status(const char* message) {
     mvprintw(height - 4, 2, "Status: %-60s", message);
     attroff(COLOR_PAIR(COLOR_HEADER));
     refresh();
+}
+
+// Action: Export configuration
+static int action_export_config(void* data) {
+    cleanup_display();
+    
+    printf("\n╔═══════════════════════════════════════════════════════════════╗\n");
+    printf("║                    EXPORT CONFIGURATION                       ║\n");
+    printf("╚═══════════════════════════════════════════════════════════════╝\n\n");
+    
+    // Load current settings
+    ethervox_persistent_settings_t settings = ethervox_settings_get_defaults();
+    if (ethervox_settings_load(&settings, NULL) != 0) {
+        printf("Warning: Could not load current settings, using defaults\n\n");
+    }
+    
+    // Prompt for export path
+    char export_path[512];
+    printf("Enter export path (or press Enter for default 'ethervox_config.json'): ");
+    if (fgets(export_path, sizeof(export_path), stdin)) {
+        // Remove newline
+        export_path[strcspn(export_path, "\n")] = 0;
+        
+        if (export_path[0] == '\0') {
+            strncpy(export_path, "ethervox_config.json", sizeof(export_path) - 1);
+        }
+        
+        // Export to JSON string
+        char* json_string = ethervox_settings_export(&settings);
+        if (json_string) {
+            // Write to file
+            FILE* f = fopen(export_path, "w");
+            if (f) {
+                fprintf(f, "%s", json_string);
+                fclose(f);
+                printf("\n✓ Configuration exported to: %s\n", export_path);
+            } else {
+                printf("\n✗ Failed to write to file: %s\n", export_path);
+            }
+            free(json_string);
+        } else {
+            printf("\n✗ Failed to export configuration\n");
+        }
+    }
+    
+    printf("\nPress Enter to return...\n");
+    getchar();
+    
+    init_display();
+    return 0;
+}
+
+// Action: Import configuration
+static int action_import_config(void* data) {
+    cleanup_display();
+    
+    printf("\n╔═══════════════════════════════════════════════════════════════╗\n");
+    printf("║                    IMPORT CONFIGURATION                       ║\n");
+    printf("╚═══════════════════════════════════════════════════════════════╝\n\n");
+    printf("⚠️  WARNING: This will overwrite your current settings!\n\n");
+    
+    // Prompt for import path
+    char import_path[512];
+    printf("Enter import path (or press Enter to cancel): ");
+    if (fgets(import_path, sizeof(import_path), stdin)) {
+        // Remove newline
+        import_path[strcspn(import_path, "\n")] = 0;
+        
+        if (import_path[0] != '\0') {
+            // Load from specified path
+            ethervox_persistent_settings_t settings;
+            if (ethervox_settings_load(&settings, import_path) == 0) {
+                // Save to default location
+                if (ethervox_settings_save(&settings, NULL) == 0) {
+                    printf("\n✓ Configuration imported from: %s\n", import_path);
+                    printf("✓ Saved to: %s\n", ethervox_settings_get_default_path());
+                    printf("\nRestart the application for changes to take effect.\n");
+                } else {
+                    printf("\n✗ Failed to save imported configuration\n");
+                }
+            } else {
+                printf("\n✗ Failed to load configuration from: %s\n", import_path);
+            }
+        } else {
+            printf("\nImport cancelled.\n");
+        }
+    }
+    
+    printf("\nPress Enter to return...\n");
+    getchar();
+    
+    init_display();
+    return 0;
 }
 
 // Action: Run tool optimization
@@ -260,6 +358,10 @@ int ethervox_settings_menu_show(ethervox_settings_t* settings) {
         return -1;
     }
     
+    // Load persistent settings
+    ethervox_persistent_settings_t persistent = ethervox_settings_get_defaults();
+    ethervox_settings_load(&persistent, NULL);
+    
     // Define menu items
     menu_item_t items[] = {
         {
@@ -303,7 +405,63 @@ int ethervox_settings_menu_show(ethervox_settings_t* settings) {
             .action_data = NULL
         },
         {
-            .label = "─── Audio ───",
+            .label = "─── Whisper STT ───",
+            .description = "",
+            .type = MENU_ITEM_ACTION,
+            .value_ptr = NULL,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "Whisper Temperature",
+            .description = "Sampling temperature 0.0-1.0 (lower = more deterministic)",
+            .type = MENU_ITEM_FLOAT,
+            .value_ptr = &persistent.whisper.temperature,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "Whisper Beam Size",
+            .description = "Beam search width 1-10 (higher = more accurate, slower)",
+            .type = MENU_ITEM_NUMERIC,
+            .value_ptr = &persistent.whisper.beam_size,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "Translate to English",
+            .description = "Automatically translate input to English",
+            .type = MENU_ITEM_TOGGLE,
+            .value_ptr = &persistent.whisper.translate_to_english,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "Whisper GPU Acceleration",
+            .description = "Use GPU if available (experimental)",
+            .type = MENU_ITEM_TOGGLE,
+            .value_ptr = &persistent.whisper.use_gpu,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "─── Conversation ───",
+            .description = "",
+            .type = MENU_ITEM_ACTION,
+            .value_ptr = NULL,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "Filter Hallucinations",
+            .description = "Remove known Whisper hallucination patterns",
+            .type = MENU_ITEM_TOGGLE,
+            .value_ptr = &persistent.conversation.filter_hallucinations,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "─── Wake Word ───",
             .description = "",
             .type = MENU_ITEM_ACTION,
             .value_ptr = NULL,
@@ -319,12 +477,36 @@ int ethervox_settings_menu_show(ethervox_settings_t* settings) {
             .action_data = NULL
         },
         {
+            .label = "Wake Word Threshold",
+            .description = "Detection sensitivity 0.0-1.0 (higher = stricter)",
+            .type = MENU_ITEM_FLOAT,
+            .value_ptr = &persistent.wake_word.detection_threshold,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
             .label = "─── Actions ───",
             .description = "",
             .type = MENU_ITEM_ACTION,
             .value_ptr = NULL,
             .action = NULL,
             .action_data = NULL
+        },
+        {
+            .label = "Export Configuration",
+            .description = "Save current settings to a backup file",
+            .type = MENU_ITEM_ACTION,
+            .value_ptr = NULL,
+            .action = action_export_config,
+            .action_data = settings
+        },
+        {
+            .label = "Import Configuration",
+            .description = "Load settings from a backup file (overwrites current)",
+            .type = MENU_ITEM_ACTION,
+            .value_ptr = NULL,
+            .action = action_import_config,
+            .action_data = settings
         },
         {
             .label = "Optimize Tool Prompts",
@@ -387,6 +569,13 @@ int ethervox_settings_menu_show(ethervox_settings_t* settings) {
                     int* val = (int*)items[selected].value_ptr;
                     if (*val > 0) (*val)--;
                     show_status("Value decreased");
+                } else if (items[selected].type == MENU_ITEM_FLOAT && items[selected].value_ptr) {
+                    float* val = (float*)items[selected].value_ptr;
+                    if (*val > 0.0f) {
+                        *val -= 0.05f;
+                        if (*val < 0.0f) *val = 0.0f;
+                        show_status("Value decreased");
+                    }
                 }
                 break;
                 
@@ -399,6 +588,13 @@ int ethervox_settings_menu_show(ethervox_settings_t* settings) {
                     int* val = (int*)items[selected].value_ptr;
                     if (*val < 6) (*val)++;
                     show_status("Value increased");
+                } else if (items[selected].type == MENU_ITEM_FLOAT && items[selected].value_ptr) {
+                    float* val = (float*)items[selected].value_ptr;
+                    if (*val < 1.0f) {
+                        *val += 0.05f;
+                        if (*val > 1.0f) *val = 1.0f;
+                        show_status("Value increased");
+                    }
                 }
                 break;
                 
@@ -426,7 +622,12 @@ int ethervox_settings_menu_show(ethervox_settings_t* settings) {
     
     cleanup_display();
     
-    printf("\n✓ Settings saved\n\n");
+    // Save persistent settings to disk
+    if (ethervox_settings_save(&persistent, NULL) == 0) {
+        printf("\n✓ Settings saved to %s\n\n", ethervox_settings_get_default_path());
+    } else {
+        printf("\n⚠ Warning: Failed to save settings\n\n");
+    }
     
     return 0;
 }
