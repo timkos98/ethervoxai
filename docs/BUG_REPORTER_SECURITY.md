@@ -4,6 +4,14 @@
 
 The bug reporter uses a GitHub personal access token to anonymously submit issues. This token **must never be committed to the repository**.
 
+**Build-Time Token Validation**: As of December 2025, the CMake build system now **requires** a valid GitHub token and will fail the build if:
+- The token is not set
+- The token is invalid or expired
+- The token lacks required permissions
+- The token cannot reach the GitHub API
+
+This ensures that only properly configured builds with valid tokens can be deployed.
+
 ## Setup Instructions
 
 ### 1. Create GitHub Token
@@ -58,9 +66,37 @@ Set the environment variable in your deployment environment:
 
 ```bash
 # Check if token is set
-echo $ETHERVOX_GITHUB_TOKEN
+echo $ETHERVOX_GITHUB_TOKEN_DESKTOP
 
 # Should output your token (not empty)
+```
+
+**Build-time validation:**
+
+The token is automatically validated when you run CMake configuration:
+
+```bash
+cmake -B build
+```
+
+If the token is invalid, you'll see an error like:
+
+```
+====================================================================
+ERROR: GitHub token validation FAILED (HTTP 401 Unauthorized)
+====================================================================
+
+The provided token is invalid or has expired.
+...
+```
+
+If validation succeeds, you'll see:
+
+```
+-- GitHub token: Using ETHERVOX_GITHUB_TOKEN_DESKTOP
+-- Validating GitHub token...
+-- GitHub token validation: SUCCESS (HTTP 200)
+-- GitHub token has access to timkos98/ethervoxai repository
 ```
 
 ## Security Best Practices

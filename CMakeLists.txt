@@ -68,20 +68,37 @@ add_definitions(-DETHERVOX_GIT_BRANCH="${GIT_BRANCH}")
 add_definitions(-DETHERVOX_GIT_COMMIT="${GIT_COMMIT_HASH}")
 
 # =============================================================================
-# GitHub Token Configuration (OPTIONAL)
+# GitHub Token Configuration (REQUIRED)
 # =============================================================================
-# Read GitHub token from environment variable at build time
-# Priority: ETHERVOX_GITHUB_TOKEN_DESKTOP → ETHERVOX_GITHUB_TOKEN → empty string
+# Read GitHub token from environment variable at build time and validate it
+# Priority: ETHERVOX_GITHUB_TOKEN_DESKTOP → ETHERVOX_GITHUB_TOKEN
+# 
+# The token MUST be set for builds to succeed. The validation script will:
+# 1. Check if token exists
+# 2. Verify token is valid via GitHub API
+# 3. Check token has not expired
+# 4. Verify access to timkos98/ethervoxai repository
+#
+# To create a token: https://github.com/settings/tokens
+# Required permission: issues:write for timkos98/ethervoxai
+
 if(DEFINED ENV{ETHERVOX_GITHUB_TOKEN_DESKTOP} AND NOT "$ENV{ETHERVOX_GITHUB_TOKEN_DESKTOP}" STREQUAL "")
     set(ETHERVOX_GITHUB_TOKEN "$ENV{ETHERVOX_GITHUB_TOKEN_DESKTOP}")
-    message(STATUS "GitHub token: Configured (from ETHERVOX_GITHUB_TOKEN_DESKTOP)")
+    message(STATUS "GitHub token: Using ETHERVOX_GITHUB_TOKEN_DESKTOP")
 elseif(DEFINED ENV{ETHERVOX_GITHUB_TOKEN} AND NOT "$ENV{ETHERVOX_GITHUB_TOKEN}" STREQUAL "")
     set(ETHERVOX_GITHUB_TOKEN "$ENV{ETHERVOX_GITHUB_TOKEN}")
-    message(STATUS "GitHub token: Configured (from ETHERVOX_GITHUB_TOKEN)")
+    message(STATUS "GitHub token: Using ETHERVOX_GITHUB_TOKEN")
 else()
     set(ETHERVOX_GITHUB_TOKEN "")
-    message(STATUS "GitHub token: Not configured (bug reporter disabled)")
 endif()
+
+# Validate the GitHub token using our validation script
+# This will cause CMake configuration to FAIL if:
+# - Token is not set
+# - Token is invalid or expired
+# - Token doesn't have required permissions
+set(GITHUB_TOKEN "${ETHERVOX_GITHUB_TOKEN}")
+include(cmake/validate_github_token.cmake)
 
 add_definitions(-DETHERVOX_GITHUB_TOKEN="${ETHERVOX_GITHUB_TOKEN}")
 

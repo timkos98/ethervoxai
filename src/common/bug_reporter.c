@@ -23,9 +23,10 @@
 
 // GitHub API configuration
 #define GITHUB_API_URL "https://api.github.com/repos/timkos98/ethervoxai/issues"
-// Token is read from environment variable ETHERVOX_GITHUB_TOKEN at runtime
-// Set it with: export ETHERVOX_GITHUB_TOKEN="your_token_here"
-// Fine-grained token should have ONLY public_repo (issues:write) scope
+// Token is compiled into the binary at build time from environment variable
+// CMake reads ETHERVOX_GITHUB_TOKEN_DESKTOP or ETHERVOX_GITHUB_TOKEN and validates it
+// The build will FAIL if the token is not set, invalid, or expired
+// Fine-grained token must have issues:write permission for timkos98/ethervoxai
 
 // Response buffer for HTTP responses
 typedef struct {
