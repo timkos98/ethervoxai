@@ -11,6 +11,8 @@
 #include "ethervox/bug_reporter.h"
 #include "ethervox/logging.h"
 #include "ethervox/config.h"
+#include "ethervox/governor.h"
+#include "ethervox/settings.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -49,6 +51,116 @@ static size_t write_callback(void* contents, size_t size, size_t nmemb, void* us
     return realsize;
 }
 
+static int get_configuration_info(char* buffer, size_t buffer_size) {
+    if (!buffer || buffer_size == 0) {
+        return -1;
+    }
+    
+    int written = 0;
+    int ret;
+    
+    // Load persistent settings
+    ethervox_persistent_settings_t settings = ethervox_settings_get_defaults();
+    ethervox_settings_load(&settings, NULL);
+    
+    // Header
+    ret = snprintf(buffer + written, buffer_size - written, "### Configuration\n\n");
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    written += ret;
+    
+    // Whisper STT section
+    ret = snprintf(buffer + written, buffer_size - written, "**Whisper STT:**\n");
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    written += ret;
+    
+    ret = snprintf(buffer + written, buffer_size - written, "- Model: %s\n", settings.whisper.model_name);
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    written += ret;
+    
+    ret = snprintf(buffer + written, buffer_size - written, "- Language: %s\n", settings.whisper.language);
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    written += ret;
+    
+    ret = snprintf(buffer + written, buffer_size - written, "- Temperature: %.2f\n", settings.whisper.temperature);
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    written += ret;
+    
+    ret = snprintf(buffer + written, buffer_size - written, "- Beam Size: %d\n", settings.whisper.beam_size);
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    written += ret;
+    
+    ret = snprintf(buffer + written, buffer_size - written, "- Translate to English: %s\n", 
+                   settings.whisper.translate_to_english ? "Yes" : "No");
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    written += ret;
+    
+    ret = snprintf(buffer + written, buffer_size - written, "- GPU Enabled: %s\n", 
+                   settings.whisper.use_gpu ? "Yes" : "No");
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    written += ret;
+    
+    ret = snprintf(buffer + written, buffer_size - written, "- Threads: %d\n\n", settings.whisper.n_threads);
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    written += ret;
+    
+    // Conversation section
+    ret = snprintf(buffer + written, buffer_size - written, "**Conversation:**\n");
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    written += ret;
+    
+    ret = snprintf(buffer + written, buffer_size - written, "- Listen Timeout: %u ms\n", 
+                   settings.conversation.listen_timeout_ms);
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    written += ret;
+    
+    ret = snprintf(buffer + written, buffer_size - written, "- Silence Timeout: %u ms\n", 
+                   settings.conversation.silence_timeout_ms);
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    written += ret;
+    
+    ret = snprintf(buffer + written, buffer_size - written, "- Audio Energy Threshold: %.2f\n", 
+                   settings.conversation.audio_energy_threshold);
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    written += ret;
+    
+    ret = snprintf(buffer + written, buffer_size - written, "- Filter Hallucinations: %s\n\n", 
+                   settings.conversation.filter_hallucinations ? "Yes" : "No");
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    written += ret;
+    
+    // Wake Word section
+    ret = snprintf(buffer + written, buffer_size - written, "**Wake Word:**\n");
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    written += ret;
+    
+    ret = snprintf(buffer + written, buffer_size - written, "- Wake Phrase: %s\n", 
+                   settings.wake_word.wake_phrase);
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    written += ret;
+    
+    ret = snprintf(buffer + written, buffer_size - written, "- Detection Threshold: %.2f\n", 
+                   settings.wake_word.detection_threshold);
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    written += ret;
+    
+    ret = snprintf(buffer + written, buffer_size - written, "- Expected Syllables: %d\n", 
+                   settings.wake_word.expected_syllables);
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    written += ret;
+    
+    ret = snprintf(buffer + written, buffer_size - written, "- VAD Energy Threshold: %.2f\n", 
+                   settings.wake_word.vad_energy_threshold);
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    written += ret;
+    
+    ret = snprintf(buffer + written, buffer_size - written, "- Cooldown: %u ms\n\n", 
+                   settings.wake_word.cooldown_ms);
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    written += ret;
+    
+    return written;
+}
+
 int ethervox_report_get_system_info(char* buffer, size_t buffer_size) {
     if (!buffer || buffer_size == 0) {
         return -1;
@@ -70,7 +182,7 @@ int ethervox_report_get_system_info(char* buffer, size_t buffer_size) {
             "- **Hostname:** %s\n"
             "- **App Version:** %s\n"
             "- **Git Branch:** %s\n"
-            "- **Git Commit:** %s\n",
+            "- **Git Commit:** %s\n\n",
             sys_info.sysname,
             sys_info.release,
             sys_info.machine,
@@ -84,9 +196,15 @@ int ethervox_report_get_system_info(char* buffer, size_t buffer_size) {
         written = snprintf(buffer, buffer_size,
             "### System Information\n\n"
             "- **OS:** Unknown\n"
-            "- **App Version:** %s\n",
+            "- **App Version:** %s\n\n",
             ETHERVOX_BACKEND_VERSION
         );
+    }
+    
+    // Append configuration information directly to buffer
+    int config_written = get_configuration_info(buffer + written, buffer_size - written);
+    if (config_written > 0) {
+        written += config_written;
     }
     
     return written;
@@ -184,14 +302,11 @@ int ethervox_report_submit(
     
     // Add system info if requested
     if (include_system_info) {
-        char sys_info[1024];
+        char sys_info[2048];
         ethervox_report_get_system_info(sys_info, sizeof(sys_info));
         
-        // Escape newlines for JSON
-        for (char* p = sys_info; *p; p++) {
-            if (*p == '\n') *p = ' ';
-        }
-        
+        // sys_info will be json_escaped later along with the rest of the body,
+        // so we don't need to escape it here
         body_len += snprintf(body + body_len, sizeof(body) - body_len,
                             "%s", sys_info);
     }

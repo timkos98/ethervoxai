@@ -55,6 +55,13 @@ int ethervox_report_submit(
 /**
  * @brief Get system information string for reports
  * 
+ * Includes:
+ * - OS, architecture, machine type, hostname
+ * - App version, git branch, git commit
+ * - Whisper STT configuration (model, language, temperature, etc.)
+ * - Conversation settings (timeouts, thresholds, filters)
+ * - Wake word configuration (phrase, detection threshold, etc.)
+ * 
  * @param buffer Output buffer
  * @param buffer_size Buffer size
  * @return Number of bytes written
