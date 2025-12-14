@@ -22,7 +22,7 @@
 #include <unistd.h>
 
 // GitHub API configuration
-#define GITHUB_API_URL "https://api.github.com/repos/ethervox-ai/ethervoxai-android/issues"
+#define GITHUB_API_URL "https://api.github.com/repos/timkos98/ethervoxai/issues"
 // Token is read from environment variable ETHERVOX_GITHUB_TOKEN at runtime
 // Set it with: export ETHERVOX_GITHUB_TOKEN="your_token_here"
 // Fine-grained token should have ONLY public_repo (issues:write) scope
