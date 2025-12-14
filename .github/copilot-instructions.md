@@ -32,6 +32,12 @@ Be concise. Prefer minimal, testable changes and cite the files below when refer
   - Prefer to add unit tests for new behavior in `tests/` when feasible. Use `npm run test` and `npm run lint` locally.
   - When touching multi-language implementations, only change the language-specific folders if the change is language-specific; otherwise, update shared `specs/` first.
   - Do not add heavyweight dependencies (e.g., React) without documenting why and updating `README.md` installation steps.
+  - **License compliance**: EthervoxAI is a commercial product licensed under CC BY-NC-SA 4.0. When adding new dependencies:
+    - Check license compatibility (MIT, Apache 2.0, BSD are typically fine)
+    - Avoid GPL/AGPL licenses that require derivative works to be open-source
+    - Document third-party licenses in `THIRD_PARTY_LICENSES.md`
+    - Flag any licensing concerns before adding dependencies
+    - Never commit API keys, tokens, or secrets to the repository
 
 - Examples from the codebase (where to look)
   - Hardware detection: see `platformDetector` usage in `README.md` examples and mirror its API when writing new optimizations.
