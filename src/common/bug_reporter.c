@@ -146,25 +146,15 @@ int ethervox_report_submit(
     memset(result, 0, sizeof(ethervox_report_result_t));
     result->success = false;
     
-    // Get GitHub token from environment
-    // Try platform-specific token first, then fall back to generic token
-    const char* github_token = NULL;
-    
-#ifdef ETHERVOX_PLATFORM_ANDROID
-    github_token = getenv("ETHERVOX_GITHUB_TOKEN_ANDROID");
-#elif defined(ETHERVOX_PLATFORM_MACOS) || defined(ETHERVOX_PLATFORM_DESKTOP)
-    github_token = getenv("ETHERVOX_GITHUB_TOKEN_DESKTOP");
-#endif
-    
-    // Fall back to generic token if platform-specific not set
-    if (!github_token || github_token[0] == '\0') {
-        github_token = getenv("ETHERVOX_GITHUB_TOKEN");
-    }
+    // Get GitHub token from compile-time definition
+    // Token is compiled into the binary from environment variable at build time
+    // Priority: ETHERVOX_GITHUB_TOKEN_DESKTOP → ETHERVOX_GITHUB_TOKEN → empty string
+    const char* github_token = ETHERVOX_GITHUB_TOKEN;
     
     if (!github_token || github_token[0] == '\0') {
         snprintf(result->error_message, sizeof(result->error_message),
-                 "Bug reporting not configured. Please set ETHERVOX_GITHUB_TOKEN environment variable.");
-        ETHERVOX_LOG_WARN("Bug reporting disabled: ETHERVOX_GITHUB_TOKEN not set");
+                 "Bug reporting not configured. Set ETHERVOX_GITHUB_TOKEN at build time.");
+        ETHERVOX_LOG_WARN("Bug reporting disabled: ETHERVOX_GITHUB_TOKEN was not set during build");
         return -1;
     }
     

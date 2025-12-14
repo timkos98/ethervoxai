@@ -67,6 +67,24 @@ add_definitions(-DETHERVOX_BACKEND_VERSION="${ETHERVOX_BACKEND_VERSION}")
 add_definitions(-DETHERVOX_GIT_BRANCH="${GIT_BRANCH}")
 add_definitions(-DETHERVOX_GIT_COMMIT="${GIT_COMMIT_HASH}")
 
+# =============================================================================
+# GitHub Token Configuration (OPTIONAL)
+# =============================================================================
+# Read GitHub token from environment variable at build time
+# Priority: ETHERVOX_GITHUB_TOKEN_DESKTOP → ETHERVOX_GITHUB_TOKEN → empty string
+if(DEFINED ENV{ETHERVOX_GITHUB_TOKEN_DESKTOP} AND NOT "$ENV{ETHERVOX_GITHUB_TOKEN_DESKTOP}" STREQUAL "")
+    set(ETHERVOX_GITHUB_TOKEN "$ENV{ETHERVOX_GITHUB_TOKEN_DESKTOP}")
+    message(STATUS "GitHub token: Configured (from ETHERVOX_GITHUB_TOKEN_DESKTOP)")
+elseif(DEFINED ENV{ETHERVOX_GITHUB_TOKEN} AND NOT "$ENV{ETHERVOX_GITHUB_TOKEN}" STREQUAL "")
+    set(ETHERVOX_GITHUB_TOKEN "$ENV{ETHERVOX_GITHUB_TOKEN}")
+    message(STATUS "GitHub token: Configured (from ETHERVOX_GITHUB_TOKEN)")
+else()
+    set(ETHERVOX_GITHUB_TOKEN "")
+    message(STATUS "GitHub token: Not configured (bug reporter disabled)")
+endif()
+
+add_definitions(-DETHERVOX_GITHUB_TOKEN="${ETHERVOX_GITHUB_TOKEN}")
+
 # Parse version components (MAJOR.MINOR.PATCH) only if we have a proper tag
 if(GIT_TAG_RESULT EQUAL 0 AND GIT_VERSION_TAG AND ETHERVOX_BACKEND_VERSION MATCHES "^([0-9]+)\\.([0-9]+)\\.([0-9]+)")
     set(VERSION_MAJOR ${CMAKE_MATCH_1})

@@ -698,7 +698,7 @@ Java_com_droid_ethervox_1core_NativeLib_runIntegrationTests(
     (void)thiz;
     
     LOGI("Running integration tests...");
-    run_integration_tests();
+    run_integration_tests(g_governor);
     
     // Log completion with test reports path
     if (g_android_files_dir[0] != '\0') {
