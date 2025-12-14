@@ -288,13 +288,13 @@ int ethervox_report_submit(
     const char* issue_type = (type == ETHERVOX_REPORT_FEATURE) ? "Feature Request" : "Bug Report";
     const char* emoji = (type == ETHERVOX_REPORT_FEATURE) ? "💡" : "🐞";
     
-    char body[4096];
+    char body[8192];
     int body_len = snprintf(body, sizeof(body),
-        "## %s\\n\\n"
-        "> **Reported via in-app reporter**\\n"
-        "> *This is a user-submitted %s. Please add appropriate labels.*\\n\\n"
-        "### Description\\n\\n"
-        "%s\\n\\n",
+        "## %s\n\n"
+        "> **Reported via in-app reporter**\n"
+        "> *This is a user-submitted %s. Please add appropriate labels.*\n\n"
+        "### Description\n\n"
+        "%s\n\n",
         issue_type,
         issue_type,
         description
