@@ -12,6 +12,7 @@
 #include "ethervox/config.h"
 #include "ethervox/settings.h"
 #include "ethervox/logging.h"
+#include "ethervox/governor.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -129,11 +130,13 @@ static void draw_footer(void) {
 }
 
 // Draw menu items
-static void draw_menu(menu_item_t* items, int item_count, int selected) {
+static void draw_menu(menu_item_t* items, int item_count, int selected, int scroll_offset) {
     int start_y = 4;
+    int height = getmaxy(main_win);
+    int visible_items = (height - 8) / 2;  // Account for header/footer/status
     
-    for (int i = 0; i < item_count; i++) {
-        int y = start_y + (i * 2);
+    for (int i = scroll_offset; i < item_count && i < scroll_offset + visible_items; i++) {
+        int y = start_y + ((i - scroll_offset) * 2);
         
         // Check if this is a section header (starts with box drawing character)
         bool is_header = (strncmp(items[i].label, "─", 3) == 0);
@@ -166,8 +169,15 @@ static void draw_menu(menu_item_t* items, int item_count, int selected) {
             bool* val = (bool*)items[i].value_ptr;
             mvprintw(y, 40, "[%s]", *val ? "ON " : "OFF");
         } else if (items[i].type == MENU_ITEM_NUMERIC && items[i].value_ptr) {
-            int* val = (int*)items[i].value_ptr;
-            mvprintw(y, 40, "[%d]", *val);
+            uint32_t* val = (uint32_t*)items[i].value_ptr;
+            // Show signed values properly (for n_threads = -1)
+            if (*val == (uint32_t)-1) {
+                mvprintw(y, 40, "[auto]");
+            } else if (*val > 1000000) {
+                mvprintw(y, 40, "[%uk]", *val / 1024);
+            } else {
+                mvprintw(y, 40, "[%u]", *val);
+            }
         } else if (items[i].type == MENU_ITEM_FLOAT && items[i].value_ptr) {
             float* val = (float*)items[i].value_ptr;
             mvprintw(y, 40, "[%.2f]", *val);
@@ -350,7 +360,8 @@ static int action_view_info(void* data) {
 }
 
 // Main settings menu
-int ethervox_settings_menu_show(ethervox_settings_t* settings) {
+int ethervox_settings_menu_show(ethervox_settings_t* settings, const char* model_path,
+                                 ethervox_model_reload_callback_t reload_callback, void* user_data) {
     if (!settings) return -1;
     
     if (init_display() != 0) {
@@ -361,6 +372,14 @@ int ethervox_settings_menu_show(ethervox_settings_t* settings) {
     // Load persistent settings
     ethervox_persistent_settings_t persistent = ethervox_settings_get_defaults();
     ethervox_settings_load(&persistent, NULL);
+    
+    // Store initial values of parameters that require model reload
+    uint32_t initial_gov_gpu_layers = persistent.governor.gpu_layers;
+    uint32_t initial_gov_context_size = persistent.governor.context_size;
+    int initial_gov_n_threads = persistent.governor.n_threads;
+    uint32_t initial_llm_gpu_layers = persistent.llm.gpu_layers;
+    uint32_t initial_llm_context = persistent.llm.context_length;
+    int initial_llm_threads = persistent.llm.n_threads;
     
     // Define menu items
     menu_item_t items[] = {
@@ -469,6 +488,134 @@ int ethervox_settings_menu_show(ethervox_settings_t* settings) {
             .action_data = NULL
         },
         {
+            .label = "─── LLM (Language Model) ───",
+            .description = "",
+            .type = MENU_ITEM_ACTION,
+            .value_ptr = NULL,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "LLM Max Tokens",
+            .description = "Maximum response length 64-2048 tokens",
+            .type = MENU_ITEM_NUMERIC,
+            .value_ptr = &persistent.llm.max_tokens,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "LLM Context Length",
+            .description = "Context window size 512-8192 tokens (affects memory)",
+            .type = MENU_ITEM_NUMERIC,
+            .value_ptr = &persistent.llm.context_length,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "LLM Temperature",
+            .description = "Creativity 0.0-2.0 (0=deterministic, higher=creative)",
+            .type = MENU_ITEM_FLOAT,
+            .value_ptr = &persistent.llm.temperature,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "LLM Top-P",
+            .description = "Nucleus sampling 0.0-1.0 (lower=focused, higher=diverse)",
+            .type = MENU_ITEM_FLOAT,
+            .value_ptr = &persistent.llm.top_p,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "LLM GPU Layers",
+            .description = "Layers offloaded to GPU 0-999 (0=CPU only, 999=all)",
+            .type = MENU_ITEM_NUMERIC,
+            .value_ptr = &persistent.llm.gpu_layers,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "LLM Threads",
+            .description = "CPU threads 1-32 (-1=auto-detect)",
+            .type = MENU_ITEM_NUMERIC,
+            .value_ptr = &persistent.llm.n_threads,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "─── Governor (Tool Orchestration) ───",
+            .description = "",
+            .type = MENU_ITEM_ACTION,
+            .value_ptr = NULL,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "Governor Max Iterations",
+            .description = "Maximum reasoning loop iterations 1-50",
+            .type = MENU_ITEM_NUMERIC,
+            .value_ptr = &persistent.governor.max_iterations,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "Governor Timeout",
+            .description = "Maximum execution time in seconds 10-600",
+            .type = MENU_ITEM_NUMERIC,
+            .value_ptr = &persistent.governor.timeout_seconds,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "Governor Temperature",
+            .description = "Tool calling precision 0.0-1.0 (lower=deterministic)",
+            .type = MENU_ITEM_FLOAT,
+            .value_ptr = &persistent.governor.temperature,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "Governor Max Tokens/Iter",
+            .description = "Tokens per reasoning step 16-256",
+            .type = MENU_ITEM_NUMERIC,
+            .value_ptr = &persistent.governor.max_tokens_per_iteration,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "Governor Confidence",
+            .description = "Minimum confidence to execute tools 0.0-1.0",
+            .type = MENU_ITEM_FLOAT,
+            .value_ptr = &persistent.governor.confidence_threshold,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "Governor GPU Layers",
+            .description = "Layers offloaded to GPU 0-999 (999=all)",
+            .type = MENU_ITEM_NUMERIC,
+            .value_ptr = &persistent.governor.gpu_layers,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "Governor Context Size",
+            .description = "Context window 2048-16384 tokens",
+            .type = MENU_ITEM_NUMERIC,
+            .value_ptr = &persistent.governor.context_size,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "Governor Threads",
+            .description = "CPU threads 1-32 (-1=auto)",
+            .type = MENU_ITEM_NUMERIC,
+            .value_ptr = &persistent.governor.n_threads,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
             .label = "─── Wake Word ───",
             .description = "",
             .type = MENU_ITEM_ACTION,
@@ -544,12 +691,23 @@ int ethervox_settings_menu_show(ethervox_settings_t* settings) {
     
     int item_count = sizeof(items) / sizeof(items[0]);
     int selected = 0;
+    int scroll_offset = 0;
     bool done = false;
     
+    int height = getmaxy(main_win);
+    int visible_items = (height - 8) / 2;  // Account for header/footer/status
+    
     while (!done) {
+        // Auto-scroll to keep selected item visible
+        if (selected < scroll_offset) {
+            scroll_offset = selected;
+        } else if (selected >= scroll_offset + visible_items) {
+            scroll_offset = selected - visible_items + 1;
+        }
+        
         clear();
         draw_header("ETHERVOX SETTINGS");
-        draw_menu(items, item_count, selected);
+        draw_menu(items, item_count, selected, scroll_offset);
         draw_footer();
         refresh();
         
@@ -574,8 +732,14 @@ int ethervox_settings_menu_show(ethervox_settings_t* settings) {
                     *val = false;
                     show_status("Setting disabled");
                 } else if (items[selected].type == MENU_ITEM_NUMERIC && items[selected].value_ptr) {
-                    int* val = (int*)items[selected].value_ptr;
-                    if (*val > 0) (*val)--;
+                    uint32_t* val = (uint32_t*)items[selected].value_ptr;
+                    // Smart decrement based on value magnitude
+                    uint32_t decrement = (*val > 1000) ? 128 : (*val > 100) ? 16 : (*val > 10) ? 1 : 1;
+                    if (*val > decrement) {
+                        *val -= decrement;
+                    } else {
+                        *val = 0;
+                    }
                     show_status("Value decreased");
                 } else if (items[selected].type == MENU_ITEM_FLOAT && items[selected].value_ptr) {
                     float* val = (float*)items[selected].value_ptr;
@@ -593,16 +757,26 @@ int ethervox_settings_menu_show(ethervox_settings_t* settings) {
                     *val = true;
                     show_status("Setting enabled");
                 } else if (items[selected].type == MENU_ITEM_NUMERIC && items[selected].value_ptr) {
-                    int* val = (int*)items[selected].value_ptr;
-                    if (*val < 6) (*val)++;
+                    uint32_t* val = (uint32_t*)items[selected].value_ptr;
+                    // Smart increment based on value magnitude
+                    uint32_t increment = (*val >= 1000) ? 128 : (*val >= 100) ? 16 : (*val >= 10) ? 1 : 1;
+                    *val += increment;
+                    
+                    // Apply field-specific caps
+                    if (val == &persistent.llm.gpu_layers || val == &persistent.governor.gpu_layers) {
+                        if (*val > 999) *val = 999;  // GPU layers cap
+                    } else if (val == &persistent.governor.context_size) {
+                        if (*val > 16384) *val = 16384;  // Context size cap
+                    } else {
+                        if (*val > 16384) *val = 16384;  // Default cap
+                    }
                     show_status("Value increased");
                 } else if (items[selected].type == MENU_ITEM_FLOAT && items[selected].value_ptr) {
                     float* val = (float*)items[selected].value_ptr;
-                    if (*val < 1.0f) {
-                        *val += 0.05f;
-                        if (*val > 1.0f) *val = 1.0f;
-                        show_status("Value increased");
-                    }
+                    *val += 0.05f;
+                    // Cap at reasonable maximum
+                    if (*val > 2.0f) *val = 2.0f;
+                    show_status("Value increased");
                 }
                 break;
                 
@@ -630,11 +804,73 @@ int ethervox_settings_menu_show(ethervox_settings_t* settings) {
     
     cleanup_display();
     
+    // Check if any model reload parameters changed
+    bool reload_required = false;
+    reload_required |= (persistent.governor.gpu_layers != initial_gov_gpu_layers);
+    reload_required |= (persistent.governor.context_size != initial_gov_context_size);
+    reload_required |= (persistent.governor.n_threads != initial_gov_n_threads);
+    reload_required |= (persistent.llm.gpu_layers != initial_llm_gpu_layers);
+    reload_required |= (persistent.llm.context_length != initial_llm_context);
+    reload_required |= (persistent.llm.n_threads != initial_llm_threads);
+    
     // Save persistent settings to disk
     if (ethervox_settings_save(&persistent, NULL) == 0) {
         printf("\n✓ Settings saved to %s\n\n", ethervox_settings_get_default_path());
     } else {
         printf("\n⚠ Warning: Failed to save settings\n\n");
+    }
+    
+    // Prompt for model reload if needed (only if model is loaded)
+    if (reload_required && model_path && model_path[0] != '\0') {
+        printf("╔═══════════════════════════════════════════════════════════════╗\n");
+        printf("║                   MODEL RELOAD REQUIRED                       ║\n");
+        printf("╚═══════════════════════════════════════════════════════════════╝\n\n");
+        printf("The following settings require reloading the model:\n");
+        if (persistent.governor.gpu_layers != initial_gov_gpu_layers) {
+            printf("  • Governor GPU Layers: %u → %u\n", initial_gov_gpu_layers, persistent.governor.gpu_layers);
+        }
+        if (persistent.governor.context_size != initial_gov_context_size) {
+            printf("  • Governor Context Size: %u → %u\n", initial_gov_context_size, persistent.governor.context_size);
+        }
+        if (persistent.governor.n_threads != initial_gov_n_threads) {
+            printf("  • Governor Threads: %d → %d\n", initial_gov_n_threads, persistent.governor.n_threads);
+        }
+        if (persistent.llm.gpu_layers != initial_llm_gpu_layers) {
+            printf("  • LLM GPU Layers: %u → %u\n", initial_llm_gpu_layers, persistent.llm.gpu_layers);
+        }
+        if (persistent.llm.context_length != initial_llm_context) {
+            printf("  • LLM Context Length: %u → %u\n", initial_llm_context, persistent.llm.context_length);
+        }
+        if (persistent.llm.n_threads != initial_llm_threads) {
+            printf("  • LLM Threads: %d → %d\n", initial_llm_threads, persistent.llm.n_threads);
+        }
+        printf("\nCurrent model: %s\n\n", model_path);
+        printf("Would you like to reload the model now? (y/n): ");
+        fflush(stdout);
+        
+        char response[10];
+        if (fgets(response, sizeof(response), stdin)) {
+            if (response[0] == 'y' || response[0] == 'Y') {
+                printf("\n🔄 Reloading model...\n");
+                
+                // Trigger model reload via callback
+                if (reload_callback) {
+                    int ret = reload_callback(model_path, user_data);
+                    if (ret == 0) {
+                        printf("✓ Model reloaded successfully with new settings\n\n");
+                    } else {
+                        printf("✗ Failed to reload model (code: %d)\n", ret);
+                        printf("  You can manually reload with: /load %s\n\n", model_path);
+                    }
+                } else {
+                    printf("⚠ No reload callback available\n");
+                    printf("  Reload manually with: /load %s\n\n", model_path);
+                }
+            } else {
+                printf("\n⚠ Model not reloaded. New settings will apply on next model load.\n");
+                printf("  Reload manually with: /load %s\n\n", model_path);
+            }
+        }
     }
     
     return 0;
@@ -646,7 +882,11 @@ bool ethervox_settings_menu_available(void) {
 
 #else // No ncurses available
 
-int ethervox_settings_menu_show(ethervox_settings_t* settings) {
+int ethervox_settings_menu_show(ethervox_settings_t* settings, const char* model_path,
+                                 ethervox_model_reload_callback_t reload_callback, void* user_data) {
+    (void)model_path;
+    (void)reload_callback;
+    (void)user_data;
     fprintf(stderr, "Settings menu not available on this platform (ncurses not found)\n");
     return -1;
 }

@@ -18,6 +18,14 @@ extern "C" {
 #endif
 
 /**
+ * Model reload callback - called when settings requiring reload are changed
+ * @param model_path Path to model to reload
+ * @param user_data User data pointer
+ * @return 0 on success, non-zero on failure
+ */
+typedef int (*ethervox_model_reload_callback_t)(const char* model_path, void* user_data);
+
+/**
  * Settings menu context - holds all settings state
  */
 typedef struct {
@@ -40,9 +48,13 @@ typedef struct {
  * Launch the interactive settings menu
  * 
  * @param settings Current settings to display/edit
+ * @param model_path Currently loaded model path (NULL if no model loaded)
+ * @param reload_callback Callback to reload model if settings change (can be NULL)
+ * @param user_data User data passed to reload callback
  * @return 0 on success, -1 on error
  */
-int ethervox_settings_menu_show(ethervox_settings_t* settings);
+int ethervox_settings_menu_show(ethervox_settings_t* settings, const char* model_path,
+                                 ethervox_model_reload_callback_t reload_callback, void* user_data);
 
 /**
  * Check if ncurses is available on this platform

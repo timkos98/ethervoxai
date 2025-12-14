@@ -914,9 +914,9 @@ int ethervox_governor_load_model(ethervox_governor_t* governor, const char* mode
         GOV_LOG("[Governor] llama.cpp backend already initialized, skipping");
     }
     
-    // Model params - Use config.h defaults (platform-specific)
+    // Model params - Use runtime config (with config.h fallbacks)
     struct llama_model_params model_params = llama_model_default_params();
-    model_params.n_gpu_layers = ETHERVOX_GOVERNOR_GPU_LAYERS;
+    model_params.n_gpu_layers = governor->config.gpu_layers;
     model_params.use_mmap = ETHERVOX_GOVERNOR_USE_MMAP;
     model_params.use_mlock = false;  // Don't lock memory (let OS manage)
     model_params.progress_callback = governor_load_progress_callback;
@@ -1007,12 +1007,12 @@ int ethervox_governor_load_model(ethervox_governor_t* governor, const char* mode
     extern void ethervox_memory_set_privacy_mode(bool disable_logging);
     ethervox_memory_set_privacy_mode(governor->config.disable_memory_logging);
     
-    // Context params - Use config.h defaults
+    // Context params - Use runtime config (with config.h fallbacks)
     struct llama_context_params ctx_params = llama_context_default_params();
-    ctx_params.n_ctx = ETHERVOX_GOVERNOR_CONTEXT_SIZE;
+    ctx_params.n_ctx = governor->config.context_size;
     ctx_params.n_batch = ETHERVOX_GOVERNOR_BATCH_SIZE;
-    ctx_params.n_threads = ETHERVOX_GOVERNOR_THREADS;
-    ctx_params.n_threads_batch = ETHERVOX_GOVERNOR_THREADS;
+    ctx_params.n_threads = governor->config.n_threads;
+    ctx_params.n_threads_batch = governor->config.n_threads;
     ctx_params.flash_attn_type = ETHERVOX_GOVERNOR_FLASH_ATTN_TYPE;  // Enable flash attention for speed and quantized KV cache
     ctx_params.type_k = ETHERVOX_GOVERNOR_KV_CACHE_TYPE;
     ctx_params.type_v = ETHERVOX_GOVERNOR_KV_CACHE_TYPE;
@@ -1963,7 +1963,7 @@ ethervox_governor_status_t ethervox_governor_execute(
             ETHERVOX_GOVERNOR_PRESENCE_PENALTY
         ));
         
-        llama_sampler_chain_add(sampler, llama_sampler_init_temp(ETHERVOX_GOVERNOR_TEMPERATURE));
+        llama_sampler_chain_add(sampler, llama_sampler_init_temp(governor->config.temperature));
         llama_sampler_chain_add(sampler, llama_sampler_init_dist(0));
         
         int generated_count = 0;

@@ -73,6 +73,25 @@ ethervox_persistent_settings_t ethervox_settings_get_defaults(void) {
     settings.wake_word.vad_zcr_max = 0.35f;
     settings.wake_word.cooldown_ms = 3000;
     
+    // LLM defaults (from config.h)
+    settings.llm.max_tokens = 512;
+    settings.llm.context_length = 2048;
+    settings.llm.temperature = 0.7f;
+    settings.llm.top_p = 0.9f;
+    settings.llm.seed = 42;
+    settings.llm.gpu_layers = 99;
+    settings.llm.n_threads = -1; // Auto-detect
+    
+    // Governor defaults (from config.h)
+    settings.governor.max_iterations = 10;
+    settings.governor.timeout_seconds = 300;
+    settings.governor.temperature = 0.3f;
+    settings.governor.max_tokens_per_iteration = 64;
+    settings.governor.confidence_threshold = 0.85f;
+    settings.governor.gpu_layers = 999;
+    settings.governor.context_size = 8192;
+    settings.governor.n_threads = 8;
+    
     return settings;
 }
 
@@ -150,6 +169,29 @@ int ethervox_settings_save(const ethervox_persistent_settings_t* settings, const
     cJSON_AddNumberToObject(wake_word, "vad_zcr_max", settings->wake_word.vad_zcr_max);
     cJSON_AddNumberToObject(wake_word, "cooldown_ms", settings->wake_word.cooldown_ms);
     cJSON_AddItemToObject(root, "wake_word", wake_word);
+    
+    // LLM settings
+    cJSON* llm = cJSON_CreateObject();
+    cJSON_AddNumberToObject(llm, "max_tokens", settings->llm.max_tokens);
+    cJSON_AddNumberToObject(llm, "context_length", settings->llm.context_length);
+    cJSON_AddNumberToObject(llm, "temperature", settings->llm.temperature);
+    cJSON_AddNumberToObject(llm, "top_p", settings->llm.top_p);
+    cJSON_AddNumberToObject(llm, "seed", settings->llm.seed);
+    cJSON_AddNumberToObject(llm, "gpu_layers", settings->llm.gpu_layers);
+    cJSON_AddNumberToObject(llm, "n_threads", settings->llm.n_threads);
+    cJSON_AddItemToObject(root, "llm", llm);
+    
+    // Governor settings
+    cJSON* governor = cJSON_CreateObject();
+    cJSON_AddNumberToObject(governor, "max_iterations", settings->governor.max_iterations);
+    cJSON_AddNumberToObject(governor, "timeout_seconds", settings->governor.timeout_seconds);
+    cJSON_AddNumberToObject(governor, "temperature", settings->governor.temperature);
+    cJSON_AddNumberToObject(governor, "max_tokens_per_iteration", settings->governor.max_tokens_per_iteration);
+    cJSON_AddNumberToObject(governor, "confidence_threshold", settings->governor.confidence_threshold);
+    cJSON_AddNumberToObject(governor, "gpu_layers", settings->governor.gpu_layers);
+    cJSON_AddNumberToObject(governor, "context_size", settings->governor.context_size);
+    cJSON_AddNumberToObject(governor, "n_threads", settings->governor.n_threads);
+    cJSON_AddItemToObject(root, "governor", governor);
     
     // Write to file
     char* json_string = cJSON_Print(root);
@@ -340,6 +382,63 @@ int ethervox_settings_import(ethervox_persistent_settings_t* settings, const cha
         if (cJSON_IsNumber(item)) settings->wake_word.cooldown_ms = item->valueint;
     }
     
+    // Parse LLM settings (optional for backwards compatibility)
+    cJSON* llm = cJSON_GetObjectItem(root, "llm");
+    if (cJSON_IsObject(llm)) {
+        cJSON* item;
+        
+        item = cJSON_GetObjectItem(llm, "max_tokens");
+        if (cJSON_IsNumber(item)) settings->llm.max_tokens = item->valueint;
+        
+        item = cJSON_GetObjectItem(llm, "context_length");
+        if (cJSON_IsNumber(item)) settings->llm.context_length = item->valueint;
+        
+        item = cJSON_GetObjectItem(llm, "temperature");
+        if (cJSON_IsNumber(item)) settings->llm.temperature = (float)item->valuedouble;
+        
+        item = cJSON_GetObjectItem(llm, "top_p");
+        if (cJSON_IsNumber(item)) settings->llm.top_p = (float)item->valuedouble;
+        
+        item = cJSON_GetObjectItem(llm, "seed");
+        if (cJSON_IsNumber(item)) settings->llm.seed = item->valueint;
+        
+        item = cJSON_GetObjectItem(llm, "gpu_layers");
+        if (cJSON_IsNumber(item)) settings->llm.gpu_layers = item->valueint;
+        
+        item = cJSON_GetObjectItem(llm, "n_threads");
+        if (cJSON_IsNumber(item)) settings->llm.n_threads = item->valueint;
+    }
+    
+    // Parse Governor settings (optional for backwards compatibility)
+    cJSON* governor = cJSON_GetObjectItem(root, "governor");
+    if (cJSON_IsObject(governor)) {
+        cJSON* item;
+        
+        item = cJSON_GetObjectItem(governor, "max_iterations");
+        if (cJSON_IsNumber(item)) settings->governor.max_iterations = item->valueint;
+        
+        item = cJSON_GetObjectItem(governor, "timeout_seconds");
+        if (cJSON_IsNumber(item)) settings->governor.timeout_seconds = item->valueint;
+        
+        item = cJSON_GetObjectItem(governor, "temperature");
+        if (cJSON_IsNumber(item)) settings->governor.temperature = (float)item->valuedouble;
+        
+        item = cJSON_GetObjectItem(governor, "max_tokens_per_iteration");
+        if (cJSON_IsNumber(item)) settings->governor.max_tokens_per_iteration = item->valueint;
+        
+        item = cJSON_GetObjectItem(governor, "confidence_threshold");
+        if (cJSON_IsNumber(item)) settings->governor.confidence_threshold = (float)item->valuedouble;
+        
+        item = cJSON_GetObjectItem(governor, "gpu_layers");
+        if (cJSON_IsNumber(item)) settings->governor.gpu_layers = item->valueint;
+        
+        item = cJSON_GetObjectItem(governor, "context_size");
+        if (cJSON_IsNumber(item)) settings->governor.context_size = item->valueint;
+        
+        item = cJSON_GetObjectItem(governor, "n_threads");
+        if (cJSON_IsNumber(item)) settings->governor.n_threads = item->valueint;
+    }
+    
     cJSON_Delete(root);
     return 0;
 }
@@ -389,6 +488,29 @@ char* ethervox_settings_export(const ethervox_persistent_settings_t* settings) {
     cJSON_AddNumberToObject(wake_word, "vad_zcr_max", settings->wake_word.vad_zcr_max);
     cJSON_AddNumberToObject(wake_word, "cooldown_ms", settings->wake_word.cooldown_ms);
     cJSON_AddItemToObject(root, "wake_word", wake_word);
+    
+    // LLM settings
+    cJSON* llm = cJSON_CreateObject();
+    cJSON_AddNumberToObject(llm, "max_tokens", settings->llm.max_tokens);
+    cJSON_AddNumberToObject(llm, "context_length", settings->llm.context_length);
+    cJSON_AddNumberToObject(llm, "temperature", settings->llm.temperature);
+    cJSON_AddNumberToObject(llm, "top_p", settings->llm.top_p);
+    cJSON_AddNumberToObject(llm, "seed", settings->llm.seed);
+    cJSON_AddNumberToObject(llm, "gpu_layers", settings->llm.gpu_layers);
+    cJSON_AddNumberToObject(llm, "n_threads", settings->llm.n_threads);
+    cJSON_AddItemToObject(root, "llm", llm);
+    
+    // Governor settings
+    cJSON* governor = cJSON_CreateObject();
+    cJSON_AddNumberToObject(governor, "max_iterations", settings->governor.max_iterations);
+    cJSON_AddNumberToObject(governor, "timeout_seconds", settings->governor.timeout_seconds);
+    cJSON_AddNumberToObject(governor, "temperature", settings->governor.temperature);
+    cJSON_AddNumberToObject(governor, "max_tokens_per_iteration", settings->governor.max_tokens_per_iteration);
+    cJSON_AddNumberToObject(governor, "confidence_threshold", settings->governor.confidence_threshold);
+    cJSON_AddNumberToObject(governor, "gpu_layers", settings->governor.gpu_layers);
+    cJSON_AddNumberToObject(governor, "context_size", settings->governor.context_size);
+    cJSON_AddNumberToObject(governor, "n_threads", settings->governor.n_threads);
+    cJSON_AddItemToObject(root, "governor", governor);
     
     char* json_string = cJSON_Print(root);
     cJSON_Delete(root);

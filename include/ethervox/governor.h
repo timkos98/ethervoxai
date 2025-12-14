@@ -197,6 +197,12 @@ typedef struct {
     uint32_t timeout_seconds;           // Total execution timeout (default: 30)
     uint32_t max_tokens_per_response;   // Max tokens to generate per LLM response (default: 2048)
     
+    // Runtime-adjustable LLM parameters (from settings)
+    uint32_t gpu_layers;                // Number of layers to offload to GPU (0 = CPU only)
+    uint32_t context_size;              // Context window size (default from config.h)
+    int n_threads;                      // Number of CPU threads (-1 = auto-detect)
+    float temperature;                  // Sampling temperature (0.0-2.0)
+    
     // Mobile optimization and privacy features
     ethervox_governor_system_prompt_mode_t system_prompt_mode;  // Full or minimal prompt (default: FULL)
     bool disable_memory_logging;        // Secret mode - disable conversation logging (default: false)
@@ -386,6 +392,10 @@ static inline ethervox_governor_config_t ethervox_governor_default_config(void) 
         .max_tool_calls_per_iteration = 10,
         .timeout_seconds = 30,
         .max_tokens_per_response = 2048,
+        .gpu_layers = 999,        // Full GPU offload by default (overridden by settings)
+        .context_size = 8192,     // 8k context by default (overridden by settings)
+        .n_threads = 8,           // 8 threads by default (overridden by settings)
+        .temperature = 0.7f,      // Balanced creativity (overridden by settings)
         .system_prompt_mode = ETHERVOX_GOVERNOR_MODE_FULL,  // Default to full capabilities
         .disable_memory_logging = false  // Default to normal memory logging
     };

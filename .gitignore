@@ -148,3 +148,4 @@ run-artifacts/
 bin/act
 dashboard/package-lock.json
 semester_project_TUM.org
+_deps/

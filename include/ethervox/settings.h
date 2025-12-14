@@ -57,6 +57,33 @@ typedef struct {
 } ethervox_wake_word_settings_t;
 
 /**
+ * @brief LLM (Language Model) runtime configuration
+ */
+typedef struct {
+    uint32_t max_tokens;           /**< Maximum tokens to generate (response length) */
+    uint32_t context_length;       /**< Context window size (affects memory) */
+    float temperature;             /**< Sampling temperature (0.0-2.0, higher = more creative) */
+    float top_p;                   /**< Nucleus sampling threshold (0.0-1.0) */
+    uint32_t seed;                 /**< Random seed for reproducibility (-1 = random) */
+    uint32_t gpu_layers;           /**< Number of layers to offload to GPU (0 = CPU only) */
+    int n_threads;                 /**< Number of CPU threads (-1 = auto-detect) */
+} ethervox_llm_settings_t;
+
+/**
+ * @brief Governor (Tool Orchestration) configuration
+ */
+typedef struct {
+    uint32_t max_iterations;       /**< Maximum reasoning loop iterations */
+    uint32_t timeout_seconds;      /**< Maximum execution time before abort */
+    float temperature;             /**< Sampling temperature for tool calls */
+    uint32_t max_tokens_per_iteration; /**< Max tokens per reasoning step */
+    float confidence_threshold;    /**< Minimum confidence for tool execution (0.0-1.0) */
+    uint32_t gpu_layers;           /**< Number of layers to offload to GPU */
+    uint32_t context_size;         /**< Context window for tool orchestration */
+    int n_threads;                 /**< Number of CPU threads (-1 = auto-detect) */
+} ethervox_governor_settings_t;
+
+/**
  * @brief Complete application settings
  */
 typedef struct {
@@ -64,6 +91,8 @@ typedef struct {
     ethervox_whisper_settings_t whisper;           /**< Whisper STT settings */
     ethervox_conversation_settings_t conversation; /**< Conversation settings */
     ethervox_wake_word_settings_t wake_word;       /**< Wake word settings */
+    ethervox_llm_settings_t llm;                   /**< LLM runtime configuration */
+    ethervox_governor_settings_t governor;         /**< Governor/tool orchestration config */
 } ethervox_persistent_settings_t;
 
 /**

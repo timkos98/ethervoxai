@@ -267,6 +267,13 @@ static char** command_completion(const char* text, int start, int end) {
 static char g_loaded_model_path[512] = {0};  // Track loaded model path for /reset
 static tool_manifest_registry_t g_manifest_registry = {0};  // Tool Manifest System registry
 
+// Model reload callback for settings menu
+static int reload_model_callback(const char* model_path, void* user_data) {
+    ethervox_governor_t* gov = (ethervox_governor_t*)user_data;
+    if (!gov || !model_path) return -1;
+    return ethervox_governor_load_model(gov, model_path);
+}
+
 // Default startup prompt text (used if no custom prompt file exists)
 // Optimized for IBM Granite - show what to output, not just instructions
 // Non-static so it can be accessed from JNI
@@ -990,8 +997,9 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
             // TODO: Populate audio_device when audio device enumeration is implemented
             strcpy(settings.audio_device, "(default)");
             
-            // Show menu
-            if (ethervox_settings_menu_show(&settings) == 0) {
+            // Show menu with model path and reload callback
+            const char* current_model = (g_loaded_model_path[0] != '\0') ? g_loaded_model_path : NULL;
+            if (ethervox_settings_menu_show(&settings, current_model, reload_model_callback, g_governor) == 0) {
                 // Apply changed settings
                 g_debug_enabled = settings.debug_enabled;
                 g_quiet_mode = settings.quiet_mode;
@@ -2637,6 +2645,29 @@ int main(int argc, char** argv) {
     
     // Initialize Governor with config (apply minimal mode if requested)
     ethervox_governor_config_t gov_config = ethervox_governor_default_config();
+    
+    // Apply runtime settings from persistent config
+    gov_config.confidence_threshold = g_settings.governor.confidence_threshold;
+    gov_config.max_iterations = g_settings.governor.max_iterations;
+    gov_config.timeout_seconds = g_settings.governor.timeout_seconds;
+    gov_config.max_tokens_per_response = g_settings.governor.max_tokens_per_iteration;
+    gov_config.gpu_layers = g_settings.governor.gpu_layers;
+    gov_config.context_size = g_settings.governor.context_size;
+    gov_config.n_threads = g_settings.governor.n_threads;
+    gov_config.temperature = g_settings.governor.temperature;
+    
+    if (g_debug_enabled) {
+        printf("Governor settings applied from config:\n");
+        printf("  - Max iterations: %u\n", gov_config.max_iterations);
+        printf("  - Timeout: %u seconds\n", gov_config.timeout_seconds);
+        printf("  - Confidence threshold: %.2f\n", gov_config.confidence_threshold);
+        printf("  - Max tokens/iteration: %u\n", gov_config.max_tokens_per_response);
+        printf("  - GPU layers: %u\n", gov_config.gpu_layers);
+        printf("  - Context size: %u\n", gov_config.context_size);
+        printf("  - Threads: %d\n", gov_config.n_threads);
+        printf("  - Temperature: %.2f\n", gov_config.temperature);
+    }
+    
     if (minimal_mode) {
         gov_config.system_prompt_mode = ETHERVOX_GOVERNOR_MODE_MINIMAL;
         printf("⚡ Minimal mode: Using brief system prompt (~50 tokens vs ~1200)\n");
