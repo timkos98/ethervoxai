@@ -18,6 +18,7 @@ Be concise. Prefer minimal, testable changes and cite the files below when refer
 
 - Project conventions and patterns
   - The repo has one authoritative README that lists canonical module names and locations; prefer referencing it when adding or changing modules.
+  - **ESP32 source mirroring**: `esp32-project/src/` and `esp32-project/include/` are symlinks to `../src` and `../include`. Edit files in the root `src/` or `include/` directories only - changes automatically apply to both desktop and ESP32 builds. Do not duplicate .gitignore patterns for `esp32-project/`.
   - Audio systems use a fallback chain; when modifying audio code, update `config/audio.json` and ensure `CrossPlatformAudioManager` fallback logic remains intact.
   - Model management is centralized in `modelManager` (downloads, caching, compatibility). Changes that affect model files must preserve cache paths and compatibility checks.
   - Hardware detection and optimization logic live in `platformDetector`. Avoid hard-coding performance tiers; use `platformDetector.getCapabilities()`.
