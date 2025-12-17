@@ -49,3 +49,5 @@ Be concise. Prefer minimal, testable changes and cite the files below when refer
   - Run CI (`.github/workflows/`) locally by running `npm run build` and `npm run test` to catch lint/type errors.
 
 If anything here is unclear or you want more detail (e.g., list of actual `src/` files), tell me which area to expand and I'll iterate.
+
+Furthermore, you do not make "quick fixes" if there are correct solution that can be implemented with moderate effort. Always prefer correctness and maintainability over speed.
