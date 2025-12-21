@@ -13,9 +13,13 @@
 #include "ethervox/settings.h"
 #include "ethervox/logging.h"
 #include "ethervox/governor.h"
+#include "ethervox/tts.h"
+#include "ethervox/audio.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <math.h>
 
 // Check if ncurses is available
 #ifdef __ANDROID__
@@ -106,16 +110,16 @@ static void draw_header(const char* title) {
     int width = getmaxx(main_win);
     
     attron(COLOR_PAIR(COLOR_HEADER) | A_BOLD);
-    mvprintw(0, 0, "╔");
-    for (int i = 1; i < width - 1; i++) printw("═");
-    printw("╗");
+    mvprintw(0, 0, "+");
+    for (int i = 1; i < width - 1; i++) printw("=");
+    printw("+");
     
     int title_pos = (width - strlen(title)) / 2;
     mvprintw(1, title_pos, "%s", title);
     
-    mvprintw(2, 0, "╚");
-    for (int i = 1; i < width - 1; i++) printw("═");
-    printw("╝");
+    mvprintw(2, 0, "+");
+    for (int i = 1; i < width - 1; i++) printw("=");
+    printw("+");
     attroff(COLOR_PAIR(COLOR_HEADER) | A_BOLD);
 }
 
@@ -125,7 +129,7 @@ static void draw_footer(void) {
     int width = getmaxx(main_win);
     
     attron(COLOR_PAIR(COLOR_HEADER));
-    mvprintw(height - 2, 2, "↑↓: Navigate  ←→: Change  Enter: Select  Q: Quit");
+    mvprintw(height - 2, 2, "↑↓: Navigate  ←→: Change  Enter: Select  Ctrl+S: Save  Q: Quit");
     attroff(COLOR_PAIR(COLOR_HEADER));
 }
 
@@ -138,8 +142,8 @@ static void draw_menu(menu_item_t* items, int item_count, int selected, int scro
     for (int i = scroll_offset; i < item_count && i < scroll_offset + visible_items; i++) {
         int y = start_y + ((i - scroll_offset) * 2);
         
-        // Check if this is a section header (starts with box drawing character)
-        bool is_header = (strncmp(items[i].label, "─", 3) == 0);
+        // Check if this is a section header (starts with dashes)
+        bool is_header = (strncmp(items[i].label, "---", 3) == 0);
         
         if (is_header) {
             // Draw section header with special styling
@@ -213,9 +217,9 @@ static void show_status(const char* message) {
 static int action_export_config(void* data) {
     cleanup_display();
     
-    printf("\n╔═══════════════════════════════════════════════════════════════╗\n");
-    printf("║                    EXPORT CONFIGURATION                       ║\n");
-    printf("╚═══════════════════════════════════════════════════════════════╝\n\n");
+    printf("\n+===================================================================+\n");
+    printf("|                    EXPORT CONFIGURATION                       |\n");
+    printf("+===================================================================+\n\n");
     
     // Load current settings
     ethervox_persistent_settings_t settings = ethervox_settings_get_defaults();
@@ -263,9 +267,9 @@ static int action_export_config(void* data) {
 static int action_import_config(void* data) {
     cleanup_display();
     
-    printf("\n╔═══════════════════════════════════════════════════════════════╗\n");
-    printf("║                    IMPORT CONFIGURATION                       ║\n");
-    printf("╚═══════════════════════════════════════════════════════════════╝\n\n");
+    printf("\n+===================================================================+\n");
+    printf("|                    IMPORT CONFIGURATION                       |\n");
+    printf("+===================================================================+\n\n");
     printf("⚠️  WARNING: This will overwrite your current settings!\n\n");
     
     // Prompt for import path
@@ -308,9 +312,9 @@ static int action_optimize_tools(void* data) {
     
     cleanup_display();
     
-    printf("\n╔═══════════════════════════════════════════════════════════════╗\n");
-    printf("║          TOOL PROMPT OPTIMIZATION ROUTINE                     ║\n");
-    printf("╚═══════════════════════════════════════════════════════════════╝\n\n");
+    printf("\n+===================================================================+\n");
+    printf("|          TOOL PROMPT OPTIMIZATION ROUTINE                     |\n");
+    printf("+===================================================================+\n\n");
     printf("This will optimize tool prompts for your model.\n");
     printf("This may take several minutes...\n\n");
     printf("Press Ctrl+C to cancel, or Enter to continue...\n");
@@ -325,15 +329,461 @@ static int action_optimize_tools(void* data) {
     return 0;
 }
 
+// Action: Select TTS voice
+static int action_select_tts_voice(void* data) {
+    ethervox_persistent_settings_t* settings = (ethervox_persistent_settings_t*)data;
+    
+    cleanup_display();
+    
+    // Available voices per language
+    typedef struct {
+        const char* display_name;
+        const char* voice_id;
+        const char* model_filename;
+        const char* description;
+        const char* test_sentence;
+        const char* lang_code;
+    } voice_option_t;
+    
+    voice_option_t english_voices[] = {
+        // Expressive/Emotional models (recommended)
+        {"LibriTTS-R Medium ⭐", "en_US-libritts_r-medium", "en_US-libritts_r-medium.onnx", 
+         "High quality, natural prosody, multi-speaker (904 speakers)", 
+         "Welcome to EthervoxAI, your intelligent voice assistant.", "en"},
+        {"LibriTTS High ⭐", "en_US-libritts-high", "en_US-libritts-high.onnx", 
+         "Very high quality, expressive, multi-speaker", 
+         "Experience the power of natural speech synthesis.", "en"},
+        
+        // US English - Lessac (male, clear)
+        {"Lessac High", "en_US-lessac-high", "en_US-lessac-high.onnx", 
+         "US male, clear articulation, high quality", 
+         "The weather today will be sunny and warm.", "en"},
+        {"Lessac Medium", "en_US-lessac-medium", "en_US-lessac-medium.onnx", 
+         "US male, clear articulation, medium quality", 
+         "This is a test of the text-to-speech system.", "en"},
+        {"Lessac Low", "en_US-lessac-low", "en_US-lessac-low.onnx", 
+         "US male, clear articulation, fast/lightweight", 
+         "Quick and efficient voice synthesis.", "en"},
+        
+        // US English - Other voices
+        {"Amy Medium", "en_US-amy-medium", "en_US-amy-medium.onnx", 
+         "US female, friendly and warm", 
+         "Hello, I'm Amy. How can I help you today?", "en"},
+        {"Danny Low", "en_US-danny-low", "en_US-danny-low.onnx", 
+         "US male, casual and conversational", 
+         "Hey there! Let's get started.", "en"},
+        {"Joe Medium", "en_US-joe-medium", "en_US-joe-medium.onnx", 
+         "US male, professional tone", 
+         "Welcome to the voice assistant system.", "en"},
+        
+        // UK English
+        {"Alan Medium", "en_GB-alan-medium", "en_GB-alan-medium.onnx", 
+         "British male, clear and professional", 
+         "Good day. How may I assist you?", "en"},
+        {"Alba Medium", "en_GB-alba-medium", "en_GB-alba-medium.onnx", 
+         "British female, warm and natural", 
+         "Welcome to EthervoxAI voice assistant.", "en"},
+        {"Jenny Dioco Medium", "en_GB-jenny_dioco-medium", "en_GB-jenny_dioco-medium.onnx", 
+         "British female, expressive", 
+         "Hello! I'm here to help you today.", "en"}
+    };
+    
+    voice_option_t chinese_voices[] = {
+        {"Huayan Medium", "zh_CN-huayan-medium", "zh_CN-huayan-medium.onnx", 
+         "Mandarin Chinese, natural tone", 
+         "欢迎使用EthervoxAI语音助手", "zh"}
+    };
+    
+    voice_option_t german_voices[] = {
+        {"Thorsten Medium", "de_DE-thorsten-medium", "de_DE-thorsten-medium.onnx", 
+         "German male, clear and natural", 
+         "Willkommen beim EthervoxAI Sprachassistenten", "de"},
+        {"Thorsten Emotional Medium ⭐", "de_DE-thorsten_emotional-medium", "de_DE-thorsten_emotional-medium.onnx", 
+         "German male, emotional and expressive", 
+         "Ich freue mich, Ihnen heute zu helfen!", "de"},
+        {"Eva K Medium", "de_DE-eva_k-medium", "de_DE-eva_k-medium.onnx", 
+         "German female, warm and friendly", 
+         "Guten Tag! Wie kann ich Ihnen helfen?", "de"}
+    };
+    
+    // Language selection menu
+    while (1) {
+        printf("\n+==================================================================+\n");
+        printf("|              SELECT LANGUAGE FOR TTS VOICE                   |\n");
+        printf("+==================================================================+\n\n");
+        
+        printf("Current voice settings:\n");
+        printf("  English: %s\n", settings->tts.voice_en[0] ? settings->tts.voice_en : "(none)");
+        printf("  Chinese: %s\n", settings->tts.voice_zh[0] ? settings->tts.voice_zh : "(none)");
+        printf("  German:  %s\n\n", settings->tts.voice_de[0] ? settings->tts.voice_de : "(none)");
+        
+        printf("Select language to configure:\n\n");
+        printf("  [1] English\n");
+        printf("  [2] Chinese (Mandarin)\n");
+        printf("  [3] German\n");
+        printf("  [0] Back to main menu\n\n");
+        printf("Choice: ");
+        fflush(stdout);
+        
+        char input[16];
+        if (!fgets(input, sizeof(input), stdin)) {
+            break;
+        }
+        input[strcspn(input, "\n")] = '\0';
+        
+        int lang_choice = atoi(input);
+        if (lang_choice == 0) {
+            break;
+        }
+        
+        voice_option_t* voices = NULL;
+        int num_voices = 0;
+        char* voice_setting = NULL;
+        const char* lang_name = NULL;
+        
+        switch (lang_choice) {
+            case 1:
+                voices = english_voices;
+                num_voices = sizeof(english_voices) / sizeof(english_voices[0]);
+                voice_setting = settings->tts.voice_en;
+                lang_name = "English";
+                break;
+            case 2:
+                voices = chinese_voices;
+                num_voices = sizeof(chinese_voices) / sizeof(chinese_voices[0]);
+                voice_setting = settings->tts.voice_zh;
+                lang_name = "Chinese";
+                break;
+            case 3:
+                voices = german_voices;
+                num_voices = sizeof(german_voices) / sizeof(german_voices[0]);
+                voice_setting = settings->tts.voice_de;
+                lang_name = "German";
+                break;
+            default:
+                printf("\n⚠ Invalid choice\n");
+                printf("Press Enter to continue...");
+                fgets(input, sizeof(input), stdin);
+                continue;
+        }
+        
+        // Voice selection for chosen language with arrow key navigation
+        int selected_idx = 0;  // Currently highlighted voice
+        int quit_selection = 0;
+        
+        // Find current voice index
+        for (int i = 0; i < num_voices; i++) {
+            if (strcmp(voices[i].voice_id, voice_setting) == 0) {
+                selected_idx = i;
+                break;
+            }
+        }
+        
+        while (!quit_selection) {
+            printf("\n+==================================================================+\n");
+            printf("|              SELECT %s VOICE                           |\n", lang_name);
+            printf("+==================================================================+\n\n");
+            
+            printf("Current: %s\n\n", voice_setting[0] ? voice_setting : "(none)");
+            
+            printf("Available voices (use ↑↓ arrows to navigate):\n\n");
+            for (int i = 0; i < num_voices; i++) {
+                // Highlight selected voice
+                if (i == selected_idx) {
+                    printf("  → ");
+                } else {
+                    printf("    ");
+                }
+                printf("[%d] %s\n", i + 1, voices[i].display_name);
+                printf("      %s\n", voices[i].description);
+                if (i == selected_idx) {
+                    printf("      Test sentence: \"%s\"\n", voices[i].test_sentence);
+                }
+                printf("\n");
+            }
+            
+            printf("\nCommands:\n");
+            printf("  ↑/↓ or k/j:  Navigate voices\n");
+            printf("  ENTER/SPACE: Test current voice\n");
+            printf("  s:           Select current voice\n");
+            printf("  1-%d:        Quick select by number\n", num_voices);
+            printf("  q or 0:      Back to language selection\n\n");
+            printf("Choice: ");
+            fflush(stdout);
+            
+            if (!fgets(input, sizeof(input), stdin)) {
+                break;
+            }
+            input[strcspn(input, "\n")] = '\0';
+            
+            // Handle arrow keys and commands
+            if (strlen(input) == 0 || strcmp(input, "\n") == 0 || strcmp(input, " ") == 0) {
+                // ENTER or SPACE: test current voice
+                voice_option_t* test_voice = &voices[selected_idx];
+                
+                printf("\n🔊 Testing: %s\n", test_voice->display_name);
+                printf("   \"%s\"\n\n", test_voice->test_sentence);
+                
+                // Build model path for test
+                char test_model_path[512];
+                const char* home = getenv("HOME");
+                if (home) {
+                    snprintf(test_model_path, sizeof(test_model_path),
+                            "%s/.ethervox/models/piper/%s", home, test_voice->model_filename);
+                    
+                    // Create TTS context with test model
+                    ethervox_tts_config_t test_config = {
+                        .backend = ETHERVOX_TTS_BACKEND_PIPER,
+                        .model_path = test_model_path,
+                        .sample_rate = 16000,
+                        .channels = 1,
+                        .speaking_rate = settings->tts.speed,
+                        .phoneme_variance = settings->tts.phoneme_variance,
+                        .prosody_variance = settings->tts.prosody_variance
+                    };
+                    
+                    ethervox_tts_context_t* test_tts = ethervox_tts_create(&test_config);
+                    if (test_tts) {
+                        printf("Model: %s\n", test_voice->model_filename);
+                        printf("Expected language: %s\n", test_voice->lang_code);
+                        printf("Synthesizing audio...\n");
+                        
+                        ethervox_tts_audio_t audio = {0};
+                        int result = ethervox_tts_synthesize_text(test_tts, test_voice->test_sentence, &audio);
+                        
+                        if (result == 0 && audio.samples && audio.sample_count > 0) {
+                            printf("Playing %zu samples (%d Hz)...\n", audio.sample_count, audio.sample_rate);
+                            
+                            // Initialize audio runtime for playback
+                            ethervox_audio_runtime_t audio_runtime = {0};
+                            ethervox_audio_config_t audio_config = {
+                                .sample_rate = audio.sample_rate,
+                                .channels = audio.channels,
+                                .bits_per_sample = 16,
+                                .buffer_size = 1024,
+                                .enable_noise_suppression = false,
+                                .enable_echo_cancellation = false
+                            };
+                            
+                            // Register platform driver before initializing
+                            if (ethervox_audio_register_platform_driver(&audio_runtime) == 0 &&
+                                ethervox_audio_init(&audio_runtime, &audio_config) == 0) {
+                                // Convert float samples to int16_t for playback
+                                int16_t* int16_samples = (int16_t*)malloc(audio.sample_count * sizeof(int16_t));
+                                if (int16_samples) {
+                                    // Find peak amplitude for normalization (Piper's approach)
+                                    float max_abs_value = 0.01f;  // Minimum to avoid division by zero
+                                    for (size_t i = 0; i < audio.sample_count; i++) {
+                                        float abs_value = fabsf(audio.samples[i]);
+                                        if (abs_value > max_abs_value) {
+                                            max_abs_value = abs_value;
+                                        }
+                                    }
+                                    
+                                    // Calculate scaling factor to use full 16-bit range
+                                    float audio_scale = 32767.0f / max_abs_value;
+                                    printf("[Audio] Normalizing with scale factor: %.2f (peak: %.4f)\n", 
+                                           audio_scale, max_abs_value);
+                                    
+                                    // Convert with normalization
+                                    for (size_t i = 0; i < audio.sample_count; i++) {
+                                        float scaled = audio.samples[i] * audio_scale;
+                                        // Clamp to int16 range
+                                        if (scaled > 32767.0f) scaled = 32767.0f;
+                                        if (scaled < -32768.0f) scaled = -32768.0f;
+                                        int16_samples[i] = (int16_t)scaled;
+                                    }
+                                    
+                                    // Create audio buffer for playback
+                                    ethervox_audio_buffer_t play_buffer = {
+                                        .data = (float*)int16_samples,
+                                        .size = audio.sample_count * sizeof(int16_t),
+                                        .channels = audio.channels,
+                                        .timestamp_us = 0
+                                    };
+                                    
+                                    int play_result = audio_runtime.driver.write_audio(&audio_runtime, &play_buffer);
+                                    if (play_result == 0) {
+                                        printf("✓ Audio played successfully\n");
+                                        // Wait for audio to finish playing
+                                        usleep((audio.sample_count * 1000000) / audio.sample_rate + 500000);
+                                    } else {
+                                        printf("⚠ Failed to play audio (error %d)\n", play_result);
+                                    }
+                                    
+                                    free(int16_samples);
+                                } else {
+                                    printf("⚠ Failed to allocate audio conversion buffer\n");
+                                }
+                                
+                                ethervox_audio_cleanup(&audio_runtime);
+                            } else {
+                                printf("⚠ Failed to initialize audio for playback\n");
+                            }
+                            
+                            ethervox_tts_audio_free(&audio);
+                        } else {
+                            printf("⚠ Failed to synthesize test sentence (error %d)\n", result);
+                            printf("   Check that model exists: %s\n", test_model_path);
+                        }
+                        ethervox_tts_destroy(test_tts);
+                    } else {
+                        printf("⚠ Failed to initialize TTS for testing\n");
+                        printf("   Model: %s\n", test_model_path);
+                    }
+                } else {
+                    printf("⚠ Cannot determine model path (HOME not set)\n");
+                }
+                
+                printf("\nPress Enter to continue...");
+                fgets(input, sizeof(input), stdin);
+            } else if (strcmp(input, "k") == 0 || strcmp(input, "K") == 0) {
+                // k = up (vim style)
+                selected_idx = (selected_idx - 1 + num_voices) % num_voices;
+            } else if (strcmp(input, "j") == 0 || strcmp(input, "J") == 0) {
+                // j = down (vim style)
+                selected_idx = (selected_idx + 1) % num_voices;
+            } else if (strcmp(input, "s") == 0 || strcmp(input, "S") == 0) {
+                // Select current voice
+                voice_option_t* selected = &voices[selected_idx];
+                
+                // Update voice ID for the selected language
+                strncpy(voice_setting, selected->voice_id, 64 - 1);
+                voice_setting[64 - 1] = '\0';
+                
+                // Also update the deprecated global voice field (use first English as default)
+                if (lang_choice == 1) {
+                    strncpy(settings->tts.voice, selected->voice_id, sizeof(settings->tts.voice) - 1);
+                    settings->tts.voice[sizeof(settings->tts.voice) - 1] = '\0';
+                    
+                    // Update piper_model_path to match the selected voice
+                    const char* home = getenv("HOME");
+                    if (home) {
+                        snprintf(settings->tts.piper_model_path, sizeof(settings->tts.piper_model_path),
+                                "%s/.ethervox/models/piper/%s.onnx", home, selected->voice_id);
+                    }
+                }
+                
+                // Ensure piper engine is selected
+                strncpy(settings->tts.engine, "piper", sizeof(settings->tts.engine) - 1);
+                
+                printf("\n✓ %s voice changed to: %s\n", lang_name, selected->display_name);
+                printf("    Model path: %s\n", settings->tts.piper_model_path);
+                printf("\n⚠️  Note: Voice change will take effect after restarting EthervoxAI\n");
+                printf("    or use Ctrl+S to save and restart the application\n");
+                printf("\nPress Enter to continue...");
+                fgets(input, sizeof(input), stdin);
+                quit_selection = 1;
+            } else if (strcmp(input, "q") == 0 || strcmp(input, "Q") == 0 || strcmp(input, "0") == 0) {
+                // Quit back to language menu
+                quit_selection = 1;
+            } else if (input[0] == 't' || input[0] == 'T') {
+                // Test command: t<num>
+                int test_choice = atoi(&input[1]);
+                if (test_choice >= 1 && test_choice <= num_voices) {
+                    selected_idx = test_choice - 1;  // Update selection to tested voice
+                    voice_option_t* test_voice = &voices[selected_idx];
+                
+                    printf("\n🔊 Testing: %s\n", test_voice->display_name);
+                    printf("   \"%s\"\n\n", test_voice->test_sentence);
+                    
+                    // Build model path for test (reuse the code above)
+                    char test_model_path[512];
+                    const char* home = getenv("HOME");
+                    if (home) {
+                        snprintf(test_model_path, sizeof(test_model_path),
+                                "%s/.ethervox/models/piper/%s", home, test_voice->model_filename);
+                        
+                        ethervox_tts_config_t test_config = {
+                            .backend = ETHERVOX_TTS_BACKEND_PIPER,
+                            .model_path = test_model_path,
+                            .sample_rate = 16000,
+                            .channels = 1,
+                            .speaking_rate = settings->tts.speed,
+                            .phoneme_variance = settings->tts.phoneme_variance,
+                            .prosody_variance = settings->tts.prosody_variance
+                        };
+                        
+                        ethervox_tts_context_t* test_tts = ethervox_tts_create(&test_config);
+                        if (test_tts) {
+                            ethervox_tts_audio_t audio = {0};
+                            int result = ethervox_tts_synthesize_text(test_tts, test_voice->test_sentence, &audio);
+                            
+                            if (result == 0 && audio.samples && audio.sample_count > 0) {
+                                ethervox_audio_runtime_t audio_runtime = {0};
+                                ethervox_audio_config_t audio_config = {
+                                    .sample_rate = audio.sample_rate,
+                                    .channels = audio.channels,
+                                    .bits_per_sample = 16,
+                                    .buffer_size = 1024
+                                };
+                                
+                                if (ethervox_audio_register_platform_driver(&audio_runtime) == 0 &&
+                                    ethervox_audio_init(&audio_runtime, &audio_config) == 0) {
+                                    int16_t* int16_samples = (int16_t*)malloc(audio.sample_count * sizeof(int16_t));
+                                    if (int16_samples) {
+                                        float max_abs_value = 0.01f;
+                                        for (size_t i = 0; i < audio.sample_count; i++) {
+                                            float abs_value = fabsf(audio.samples[i]);
+                                            if (abs_value > max_abs_value) max_abs_value = abs_value;
+                                        }
+                                        float audio_scale = 32767.0f / max_abs_value;
+                                        for (size_t i = 0; i < audio.sample_count; i++) {
+                                            float scaled = audio.samples[i] * audio_scale;
+                                            if (scaled > 32767.0f) scaled = 32767.0f;
+                                            if (scaled < -32768.0f) scaled = -32768.0f;
+                                            int16_samples[i] = (int16_t)scaled;
+                                        }
+                                        ethervox_audio_buffer_t play_buffer = {
+                                            .data = (float*)int16_samples,
+                                            .size = audio.sample_count * sizeof(int16_t),
+                                            .channels = audio.channels
+                                        };
+                                        audio_runtime.driver.write_audio(&audio_runtime, &play_buffer);
+                                        usleep((audio.sample_count * 1000000) / audio.sample_rate + 500000);
+                                        free(int16_samples);
+                                    }
+                                    ethervox_audio_cleanup(&audio_runtime);
+                                }
+                                ethervox_tts_audio_free(&audio);
+                            }
+                            ethervox_tts_destroy(test_tts);
+                        }
+                    }
+                    printf("\nPress Enter to continue...");
+                    fgets(input, sizeof(input), stdin);
+                } else {
+                    printf("\n⚠ Invalid voice number for test\n");
+                    printf("Press Enter to continue...");
+                    fgets(input, sizeof(input), stdin);
+                }
+            } else {
+                // Try numeric selection
+                int choice = atoi(input);
+                if (choice >= 1 && choice <= num_voices) {
+                    selected_idx = choice - 1;  // Just update the selection
+                } else if (choice != 0) {
+                    printf("\n⚠ Invalid command. Use k/j (↑↓), ENTER (test), s (select), or q (quit)\n");
+                    printf("Press Enter to continue...");
+                    fgets(input, sizeof(input), stdin);
+                }
+            }
+        }
+    }
+    
+    init_display();
+    return 0;
+}
+
 // Action: View system info
 static int action_view_info(void* data) {
     ethervox_settings_t* settings = (ethervox_settings_t*)data;
     
     cleanup_display();
     
-    printf("\n╔═══════════════════════════════════════════════════════════════╗\n");
-    printf("║                     SYSTEM INFORMATION                        ║\n");
-    printf("╚═══════════════════════════════════════════════════════════════╝\n\n");
+    printf("\n+===================================================================+\n");
+    printf("|                     SYSTEM INFORMATION                        |\n");
+    printf("+===================================================================+\n\n");
     printf("Version:        0.0.6\n");
     printf("Branch:         %s\n", settings->git_branch[0] ? settings->git_branch : "unknown");
     printf("Commit:         %s\n\n", settings->git_commit[0] ? settings->git_commit : "unknown");
@@ -384,7 +834,7 @@ int ethervox_settings_menu_show(ethervox_settings_t* settings, const char* model
     // Define menu items
     menu_item_t items[] = {
         {
-            .label = "─── General ───",
+            .label = "--- General ---",
             .description = "",
             .type = MENU_ITEM_ACTION,
             .value_ptr = NULL,
@@ -432,7 +882,7 @@ int ethervox_settings_menu_show(ethervox_settings_t* settings, const char* model
             .action_data = NULL
         },
         {
-            .label = "─── Whisper STT ───",
+            .label = "--- Whisper STT ---",
             .description = "",
             .type = MENU_ITEM_ACTION,
             .value_ptr = NULL,
@@ -472,10 +922,50 @@ int ethervox_settings_menu_show(ethervox_settings_t* settings, const char* model
             .action_data = NULL
         },
         {
-            .label = "─── Conversation ───",
+            .label = "--- Conversation ---",
             .description = "",
             .type = MENU_ITEM_ACTION,
             .value_ptr = NULL,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "Listen Timeout",
+            .description = "Max wait time for user speech in ms (1000-30000)",
+            .type = MENU_ITEM_NUMERIC,
+            .value_ptr = &persistent.conversation.listen_timeout_ms,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "Conversation Timeout",
+            .description = "Total conversation duration limit in ms (5000-60000)",
+            .type = MENU_ITEM_NUMERIC,
+            .value_ptr = &persistent.conversation.conversation_timeout_ms,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "Silence Timeout",
+            .description = "Silence detection threshold in ms (500-5000)",
+            .type = MENU_ITEM_NUMERIC,
+            .value_ptr = &persistent.conversation.silence_timeout_ms,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "Audio Energy Threshold",
+            .description = "Voice activity detection threshold 0.0-1.0",
+            .type = MENU_ITEM_FLOAT,
+            .value_ptr = &persistent.conversation.audio_energy_threshold,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "Always Listening Mode",
+            .description = "Continuous STT without wake word (desktop only)",
+            .type = MENU_ITEM_TOGGLE,
+            .value_ptr = &persistent.conversation.always_listening,
             .action = NULL,
             .action_data = NULL
         },
@@ -488,7 +978,7 @@ int ethervox_settings_menu_show(ethervox_settings_t* settings, const char* model
             .action_data = NULL
         },
         {
-            .label = "─── LLM (Language Model) ───",
+            .label = "--- LLM (Language Model) ---",
             .description = "",
             .type = MENU_ITEM_ACTION,
             .value_ptr = NULL,
@@ -544,7 +1034,7 @@ int ethervox_settings_menu_show(ethervox_settings_t* settings, const char* model
             .action_data = NULL
         },
         {
-            .label = "─── Governor (Tool Orchestration) ───",
+            .label = "--- Governor (Tool Orchestration) ---",
             .description = "",
             .type = MENU_ITEM_ACTION,
             .value_ptr = NULL,
@@ -592,31 +1082,7 @@ int ethervox_settings_menu_show(ethervox_settings_t* settings, const char* model
             .action_data = NULL
         },
         {
-            .label = "Governor GPU Layers",
-            .description = "Layers offloaded to GPU 0-999 (999=all)",
-            .type = MENU_ITEM_NUMERIC,
-            .value_ptr = &persistent.governor.gpu_layers,
-            .action = NULL,
-            .action_data = NULL
-        },
-        {
-            .label = "Governor Context Size",
-            .description = "Context window 2048-16384 tokens",
-            .type = MENU_ITEM_NUMERIC,
-            .value_ptr = &persistent.governor.context_size,
-            .action = NULL,
-            .action_data = NULL
-        },
-        {
-            .label = "Governor Threads",
-            .description = "CPU threads 1-32 (-1=auto)",
-            .type = MENU_ITEM_NUMERIC,
-            .value_ptr = &persistent.governor.n_threads,
-            .action = NULL,
-            .action_data = NULL
-        },
-        {
-            .label = "─── Wake Word ───",
+            .label = "--- Wake Word ---",
             .description = "",
             .type = MENU_ITEM_ACTION,
             .value_ptr = NULL,
@@ -640,7 +1106,95 @@ int ethervox_settings_menu_show(ethervox_settings_t* settings, const char* model
             .action_data = NULL
         },
         {
-            .label = "─── Actions ───",
+            .label = "--- Echo Cancellation ---",
+            .description = "",
+            .type = MENU_ITEM_ACTION,
+            .value_ptr = NULL,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "AEC Enabled",
+            .description = "Enable acoustic echo cancellation",
+            .type = MENU_ITEM_TOGGLE,
+            .value_ptr = &persistent.aec.enabled,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "AEC Suppression",
+            .description = "Echo reduction strength 0.0-1.0 (higher = more aggressive)",
+            .type = MENU_ITEM_FLOAT,
+            .value_ptr = &persistent.aec.suppression_level,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "AEC Filter Length",
+            .description = "Filter duration in ms (32-128, higher = better long echoes)",
+            .type = MENU_ITEM_NUMERIC,
+            .value_ptr = &persistent.aec.filter_length_ms,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "--- Text-to-Speech ---",
+            .description = "",
+            .type = MENU_ITEM_ACTION,
+            .value_ptr = NULL,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "TTS Engine",
+            .description = "TTS backend: system (macOS say), piper (neural), none",
+            .type = MENU_ITEM_ACTION,
+            .value_ptr = persistent.tts.engine,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "TTS Voice",
+            .description = "Select language and voice quality (EN/ZH/DE high-quality)",
+            .type = MENU_ITEM_ACTION,
+            .value_ptr = NULL,
+            .action = action_select_tts_voice,
+            .action_data = &persistent
+        },
+        {
+            .label = "TTS Speed",
+            .description = "Speech rate 0.5-2.0 (1.0 = normal)",
+            .type = MENU_ITEM_FLOAT,
+            .value_ptr = &persistent.tts.speed,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "TTS Volume",
+            .description = "Output volume 0.0-1.0 (1.0 = max)",
+            .type = MENU_ITEM_FLOAT,
+            .value_ptr = &persistent.tts.volume,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "Phoneme Variance",
+            .description = "Duration timing 0.0-1.0 (0.667 = default, higher = more natural)",
+            .type = MENU_ITEM_FLOAT,
+            .value_ptr = &persistent.tts.phoneme_variance,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "Prosody Variance",
+            .description = "Pitch expression 0.0-1.5 (0.8 = default, 1.0-1.2 = more human)",
+            .type = MENU_ITEM_FLOAT,
+            .value_ptr = &persistent.tts.prosody_variance,
+            .action = NULL,
+            .action_data = NULL
+        },
+        {
+            .label = "--- Actions ---",
             .description = "",
             .type = MENU_ITEM_ACTION,
             .value_ptr = NULL,
@@ -717,13 +1271,13 @@ int ethervox_settings_menu_show(ethervox_settings_t* settings, const char* model
             case KEY_UP:
                 do {
                     selected = (selected - 1 + item_count) % item_count;
-                } while (strncmp(items[selected].label, "─", 3) == 0);
+                } while (strncmp(items[selected].label, "---", 3) == 0);
                 break;
                 
             case KEY_DOWN:
                 do {
                     selected = (selected + 1) % item_count;
-                } while (strncmp(items[selected].label, "─", 3) == 0);
+                } while (strncmp(items[selected].label, "---", 3) == 0);
                 break;
                 
             case KEY_LEFT:
@@ -794,6 +1348,15 @@ int ethervox_settings_menu_show(ethervox_settings_t* settings, const char* model
                 }
                 break;
                 
+            case 19: // Ctrl+S (save settings)
+                // Save settings immediately without exiting
+                if (ethervox_settings_save(&persistent, NULL) == 0) {
+                    show_status("✓ Settings saved successfully!");
+                } else {
+                    show_status("⚠ Failed to save settings");
+                }
+                break;
+                
             case 'q':
             case 'Q':
             case 27: // ESC
@@ -804,11 +1367,8 @@ int ethervox_settings_menu_show(ethervox_settings_t* settings, const char* model
     
     cleanup_display();
     
-    // Check if any model reload parameters changed
+    // Check if any model reload parameters changed (LLM settings affect Governor model)
     bool reload_required = false;
-    reload_required |= (persistent.governor.gpu_layers != initial_gov_gpu_layers);
-    reload_required |= (persistent.governor.context_size != initial_gov_context_size);
-    reload_required |= (persistent.governor.n_threads != initial_gov_n_threads);
     reload_required |= (persistent.llm.gpu_layers != initial_llm_gpu_layers);
     reload_required |= (persistent.llm.context_length != initial_llm_context);
     reload_required |= (persistent.llm.n_threads != initial_llm_threads);
@@ -822,19 +1382,10 @@ int ethervox_settings_menu_show(ethervox_settings_t* settings, const char* model
     
     // Prompt for model reload if needed (only if model is loaded)
     if (reload_required && model_path && model_path[0] != '\0') {
-        printf("╔═══════════════════════════════════════════════════════════════╗\n");
-        printf("║                   MODEL RELOAD REQUIRED                       ║\n");
-        printf("╚═══════════════════════════════════════════════════════════════╝\n\n");
+        printf("+===================================================================+\n");
+        printf("|                   MODEL RELOAD REQUIRED                           |\n");
+        printf("+===================================================================+\n\n");
         printf("The following settings require reloading the model:\n");
-        if (persistent.governor.gpu_layers != initial_gov_gpu_layers) {
-            printf("  • Governor GPU Layers: %u → %u\n", initial_gov_gpu_layers, persistent.governor.gpu_layers);
-        }
-        if (persistent.governor.context_size != initial_gov_context_size) {
-            printf("  • Governor Context Size: %u → %u\n", initial_gov_context_size, persistent.governor.context_size);
-        }
-        if (persistent.governor.n_threads != initial_gov_n_threads) {
-            printf("  • Governor Threads: %d → %d\n", initial_gov_n_threads, persistent.governor.n_threads);
-        }
         if (persistent.llm.gpu_layers != initial_llm_gpu_layers) {
             printf("  • LLM GPU Layers: %u → %u\n", initial_llm_gpu_layers, persistent.llm.gpu_layers);
         }

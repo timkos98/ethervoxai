@@ -108,13 +108,36 @@ void ethervox_voice_tools_cleanup(ethervox_voice_session_t* session);
 int ethervox_voice_tools_assign_speaker_names(ethervox_voice_session_t* session);
 
 /**
- * Register voice tools with Governor
+ * Register base voice tools with Governor
+ * 
+ * Base tools: listen_and_summarize (always available)
  * 
  * @param registry Governor tool registry
  * @param session Voice session state
  * @return 0 on success, -1 on error
  */
 int ethervox_voice_tools_register(void* registry, ethervox_voice_session_t* session);
+
+/**
+ * Register advanced voice training tools with Governor
+ * 
+ * Training tools: pronunciation training, voice training mode
+ * These are optional/advanced features separate from base voice tools
+ * 
+ * @param registry Governor tool registry
+ * @param session Voice session state  
+ * @param phonemizer_ctx Phonemizer context for training
+ * @param tts_ctx TTS context for synthesis
+ * @param stt_ctx STT context for transcription
+ * @return 0 on success, -1 on error
+ */
+int ethervox_voice_tools_register_training(
+    void* registry, 
+    ethervox_voice_session_t* session,
+    void* phonemizer_ctx,
+    void* tts_ctx,
+    void* stt_ctx
+);
 
 #ifdef __cplusplus
 }

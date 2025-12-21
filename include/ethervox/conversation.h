@@ -76,6 +76,7 @@ typedef struct {
     
     bool enable_beep_on_wake;          // Play feedback when wake word detected
     bool enable_beep_on_listen_end;    // Play feedback when listening ends
+    bool always_listening;             // Continuously transcribe without wake word (desktop mode)
 } ethervox_conversation_config_t;
 
 /**
@@ -166,6 +167,36 @@ bool ethervox_conversation_is_active(
  * @param session Session handle (may be NULL)
  */
 void ethervox_conversation_cleanup(ethervox_conversation_session_t* session);
+
+/**
+ * @brief Get phonemizer context from conversation session
+ * 
+ * For voice training and pronunciation improvement.
+ * 
+ * @param session Conversation session
+ * @return Phonemizer context (internal type, cast to void*) or NULL if not available
+ */
+void* ethervox_conversation_get_phonemizer(ethervox_conversation_session_t* session);
+
+/**
+ * @brief Get TTS context from conversation session
+ * 
+ * For voice training audio synthesis.
+ * 
+ * @param session Conversation session
+ * @return TTS context (internal type, cast to void*) or NULL if not available
+ */
+void* ethervox_conversation_get_tts(ethervox_conversation_session_t* session);
+
+/**
+ * @brief Get STT context from conversation session
+ * 
+ * For voice training transcription.
+ * 
+ * @param session Conversation session
+ * @return STT context (internal type, cast to void*) or NULL if not available
+ */
+void* ethervox_conversation_get_stt(ethervox_conversation_session_t* session);
 
 #ifdef __cplusplus
 }

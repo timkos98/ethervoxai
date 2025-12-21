@@ -7,11 +7,15 @@
  */
 
 #include "ethervox/conversation.h"
+#include "ethervox/conversation_tools.h"
 #include "ethervox/logging.h"
 #include "ethervox/error.h"
 #include "ethervox/governor.h"
 #include "ethervox/stt.h"
 #include "ethervox/audio.h"
+#include "ethervox/tts.h"
+#include "ethervox/aec.h"
+#include "ethervox/settings.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -19,6 +23,35 @@
 #include <time.h>
 #include <unistd.h>
 #include <math.h>
+#include <pthread.h>
+
+// External reference to global TTS context (initialized at app startup in main.c)
+extern ethervox_tts_context_t* g_global_tts;
+extern pthread_mutex_t g_tts_mutex;
+
+// Forward declaration for macOS audio state (platform-specific)
+#ifdef __APPLE__
+typedef struct {
+    void* capture_queue;
+    void* capture_buffers[3];
+    bool is_recording;
+    void* playback_queue;
+    void* playback_buffers[3];
+    bool is_playing;
+    int16_t* ring_buffer;
+    size_t ring_buffer_size;
+    size_t write_pos;
+    size_t read_pos;
+    pthread_mutex_t lock;
+    int16_t* playback_ring_buffer;
+    size_t playback_ring_buffer_size;
+    size_t playback_write_pos;
+    size_t playback_read_pos;
+    pthread_mutex_t playback_lock;
+    uint32_t sample_rate;
+    uint8_t channels;
+} macos_audio_state_t;
+#endif
 
 /**
  * @brief Internal conversation session structure
@@ -47,12 +80,21 @@ struct ethervox_conversation_session {
     ethervox_audio_runtime_t audio_runtime;
     bool audio_initialized;
     
-    // Piper TTS runtime (opaque pointer for now, will implement in piper_backend.c)
-    void* piper_voice;
+    // TTS runtime (Piper neural TTS)
+    ethervox_tts_context_t* tts_context;
+    bool tts_initialized;
+    
+    // AEC runtime (echo cancellation)
+    ethervox_aec_t* aec_context;
+    bool aec_initialized;
     
     // Audio capture
     ethervox_audio_buffer_t* audio_buffer;
     bool audio_capture_active;
+    
+    // Always-listening mode (desktop only)
+    bool always_listening;
+    char* pending_transcription;  // Buffer for continuous transcription
 };
 
 /**
@@ -64,291 +106,563 @@ static uint64_t get_time_ms(void) {
     return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
 }
 
+// ============================================================================
+// Conversation Tool Callbacks
+// ============================================================================
+
+/**
+ * @brief Callback for speak tool - handles TTS synthesis and playback
+ */
+static int conversation_on_speak(const char* text, bool wait_for_response, 
+                                  bool allow_interrupt, void* user_data) {
+    ethervox_conversation_session_t* session = (ethervox_conversation_session_t*)user_data;
+    if (!session || !text) {
+        return -1;
+    }
+    
+    ETHERVOX_LOG_INFO("[Speak Tool] Synthesizing: %s (wait=%d, interrupt=%d)",
+                      text, wait_for_response, allow_interrupt);
+    
+    pthread_mutex_lock(&session->mutex);
+    session->state = ETHERVOX_CONV_STATE_SPEAKING;
+    pthread_mutex_unlock(&session->mutex);
+    
+    // Print to console
+    printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    printf("🤖 Assistant: %s\n", text);
+    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
+    
+    // Synthesize and play audio with Piper TTS
+    if (session->tts_initialized && session->tts_context) {
+        ethervox_tts_audio_t tts_output = {0};
+        int result = ethervox_tts_synthesize_text(session->tts_context, text, &tts_output);
+        
+        if (result == 0 && tts_output.samples && tts_output.sample_count > 0) {
+            ETHERVOX_LOG_INFO("TTS synthesized %zu samples at %dHz", 
+                            tts_output.sample_count, tts_output.sample_rate);
+            
+            // Set AEC reference buffer (must be called before playback)
+            if (session->aec_initialized && session->aec_context) {
+                ethervox_aec_set_reference(session->aec_context, 
+                                          tts_output.samples, 
+                                          tts_output.sample_count);
+                ETHERVOX_LOG_DEBUG("AEC reference buffer updated with TTS output");
+            }
+            
+            // Play the synthesized audio through speakers
+            if (session->audio_initialized && session->audio_runtime.driver.write_audio) {
+                // Convert float samples to int16 for CoreAudio
+                size_t byte_count = tts_output.sample_count * sizeof(int16_t);
+                int16_t* pcm_buffer = (int16_t*)malloc(byte_count);
+                if (pcm_buffer) {
+                    for (size_t i = 0; i < tts_output.sample_count; i++) {
+                        float sample = tts_output.samples[i];
+                        // Clamp and convert to int16
+                        if (sample > 1.0f) sample = 1.0f;
+                        if (sample < -1.0f) sample = -1.0f;
+                        pcm_buffer[i] = (int16_t)(sample * 32767.0f);
+                    }
+                    
+                    ethervox_audio_buffer_t playback_buffer = {
+                        .data = (float*)pcm_buffer,  // Cast to float* to match struct type
+                        .size = byte_count,  // Size in BYTES for the audio driver
+                        .channels = tts_output.channels
+                    };
+                    
+                    int play_result = session->audio_runtime.driver.write_audio(
+                        &session->audio_runtime, &playback_buffer);
+                    
+                    if (play_result == 0) {
+                        ETHERVOX_LOG_INFO("Audio playback queued (%zu samples)", tts_output.sample_count);
+                        
+                        // ALWAYS wait for playback to finish before resuming listening
+                        // This prevents microphone from capturing TTS echo/feedback
+#ifdef ETHERVOX_PLATFORM_MACOS
+                        macos_audio_state_t* state = (macos_audio_state_t*)session->audio_runtime.platform_data;
+                        if (state) {
+                            ETHERVOX_LOG_DEBUG("Waiting for audio playback to complete (allow_interrupt=%d)...", allow_interrupt);
+                            
+                            // Give the playback thread time to start consuming samples
+                            usleep(20000); // 20ms initial delay
+                            
+                            int poll_count = 0;
+                            while (1) {
+                                pthread_mutex_lock(&state->playback_lock);
+                                bool is_empty = (state->playback_write_pos == state->playback_read_pos);
+                                size_t write_pos = state->playback_write_pos;
+                                size_t read_pos = state->playback_read_pos;
+                                pthread_mutex_unlock(&state->playback_lock);
+                                
+                                if (poll_count % 50 == 0 && !is_empty) { // Log every 500ms while playing
+                                    ETHERVOX_LOG_DEBUG("Playback buffer: write=%zu read=%zu", write_pos, read_pos);
+                                }
+                                
+                                if (is_empty) {
+                                    break;
+                                }
+                                
+                                // Check for interruption if allowed (user speaking detected)
+                                if (allow_interrupt && poll_count % 10 == 0) {
+                                    pthread_mutex_lock(&session->mutex);
+                                    bool should_stop = session->thread_should_exit;
+                                    pthread_mutex_unlock(&session->mutex);
+                                    
+                                    if (should_stop) {
+                                        ETHERVOX_LOG_INFO("Audio playback interrupted by user");
+                                        // Clear the playback buffer to stop audio immediately
+                                        pthread_mutex_lock(&state->playback_lock);
+                                        state->playback_write_pos = state->playback_read_pos;
+                                        pthread_mutex_unlock(&state->playback_lock);
+                                        break;
+                                    }
+                                }
+                                
+                                usleep(10000); // 10ms polling interval
+                                poll_count++;
+                            }
+                            ETHERVOX_LOG_DEBUG("Audio playback completed");
+                        }
+#else
+                        // For other platforms, use a simple delay based on audio duration
+                        // This is a fallback for platforms without direct playback buffer access
+                        if (tts_output.sample_count > 0 && tts_output.sample_rate > 0) {
+                            int duration_ms = (tts_output.sample_count * 1000) / tts_output.sample_rate;
+                            ETHERVOX_LOG_DEBUG("Waiting for audio playback (~%d ms)...", duration_ms);
+                            usleep(duration_ms * 1000);
+                            ETHERVOX_LOG_DEBUG("Audio playback estimated complete");
+                        }
+#endif
+                    } else {
+                        ETHERVOX_LOG_WARN("Audio playback failed: %d", play_result);
+                    }
+                    
+                    free(pcm_buffer);
+                } else {
+                    ETHERVOX_LOG_ERROR("Failed to allocate PCM buffer");
+                }
+            } else {
+                ETHERVOX_LOG_WARN("Audio playback not available");
+            }
+            
+            ethervox_tts_audio_free(&tts_output);
+        } else {
+            ETHERVOX_LOG_WARN("TTS synthesis failed (code=%d), using text-only mode", result);
+        }
+    } else {
+        ETHERVOX_LOG_DEBUG("TTS not initialized, text-only mode");
+    }
+    
+    return 0;
+}
+
+/**
+ * @brief Callback for listen tool - captures microphone input
+ */
+static int conversation_on_listen(char** user_input, int timeout_ms,
+                                   const char* prompt_hint, void* user_data) {
+    ethervox_conversation_session_t* session = (ethervox_conversation_session_t*)user_data;
+    if (!session || !user_input) {
+        return -1;
+    }
+    
+    ETHERVOX_LOG_INFO("[Listen Tool] Capturing audio (timeout=%dms, hint=%s)",
+                      timeout_ms, prompt_hint ? prompt_hint : "none");
+    
+    pthread_mutex_lock(&session->mutex);
+    session->state = ETHERVOX_CONV_STATE_LISTENING;
+    pthread_mutex_unlock(&session->mutex);
+    
+    if (prompt_hint) {
+        printf("💬 %s\n", prompt_hint);
+    }
+    
+    *user_input = NULL;
+    
+    // TODO: Implement actual STT capture with Vosk
+    // For now, return placeholder
+    if (!session->stt_initialized) {
+        ETHERVOX_LOG_WARN("STT not initialized, cannot capture audio");
+        return -1;  // Failure - no STT available
+    }
+    
+    // Start audio capture with timeout
+    uint64_t start_time = get_time_ms();
+    ethervox_audio_buffer_t audio_chunk = {0};
+    
+    // Use the existing STT system to capture and transcribe speech
+    // This is the same flow used in the main conversation loop
+    printf("🎤 Listening");
+    fflush(stdout);
+    
+    // Accumulate audio until speech detected or timeout
+    ethervox_audio_buffer_t accumulated_audio = {0};
+    bool speech_detected = false;
+    int silence_frames = 0;
+    const int silence_threshold = 10;  // frames of silence before considering speech ended
+    
+    while ((get_time_ms() - start_time) < (uint64_t)timeout_ms) {
+        int result = ethervox_audio_read(&session->audio_runtime, &audio_chunk);
+        if (result != 0) {
+            break;
+        }
+        
+        // Check for voice activity using RMS energy
+        float energy = ethervox_audio_calculate_rms_energy(
+            audio_chunk.data, audio_chunk.size / sizeof(int16_t)
+        );
+        
+        // Use a reasonable default threshold (TODO: get from settings)
+        const float energy_threshold = 0.02f;
+        if (energy > energy_threshold) {
+            speech_detected = true;
+            silence_frames = 0;
+            printf(".");
+            fflush(stdout);
+            
+            // Process audio chunk through STT
+            ethervox_stt_result_t stt_result;
+            int ret = ethervox_stt_process(&session->stt_runtime, &audio_chunk, &stt_result);
+            if (ret == 0 && stt_result.is_final && stt_result.text && strlen(stt_result.text) > 0) {
+                // Got final transcription
+                *user_input = strdup(stt_result.text);
+                ETHERVOX_LOG_INFO("Transcribed from listen tool: %s", *user_input);
+                printf(" ✓\n");
+                ethervox_audio_buffer_free(&audio_chunk);
+                return 0;
+            }
+        } else if (speech_detected) {
+            silence_frames++;
+            if (silence_frames >= silence_threshold) {
+                printf(" ✓\n");
+                // Speech ended - finalize transcription
+                ethervox_stt_result_t final_result;
+                if (ethervox_stt_finalize(&session->stt_runtime, &final_result) == 0) {
+                    if (final_result.text && strlen(final_result.text) > 0) {
+                        *user_input = strdup(final_result.text);
+                        ETHERVOX_LOG_INFO("Finalized transcription: %s", *user_input);
+                    }
+                }
+                ethervox_audio_buffer_free(&audio_chunk);
+                return 0;
+            }
+        }
+        
+        ethervox_audio_buffer_free(&audio_chunk);
+    }
+    
+    printf(" ⏱️\n");
+    
+    // Timeout reached - try to get partial transcription
+    if (speech_detected) {
+        ethervox_stt_result_t final_result;
+        if (ethervox_stt_finalize(&session->stt_runtime, &final_result) == 0) {
+            if (final_result.text && strlen(final_result.text) > 0) {
+                *user_input = strdup(final_result.text);
+                ETHERVOX_LOG_INFO("Partial transcription on timeout: %s", *user_input);
+            }
+        }
+    }
+    
+    ETHERVOX_LOG_INFO("Listen timeout reached after %dms", timeout_ms);
+    return 0;  // Return 0 for success even on timeout
+}
+
+/**
+ * @brief Callback for interrupt detection
+ */
+static int conversation_on_interrupt(void* user_data) {
+    ethervox_conversation_session_t* session = (ethervox_conversation_session_t*)user_data;
+    if (!session) {
+        return -1;
+    }
+    
+    // Check if thread should exit or conversation should stop
+    pthread_mutex_lock(&session->mutex);
+    bool should_interrupt = session->thread_should_exit;
+    pthread_mutex_unlock(&session->mutex);
+    
+    if (should_interrupt) {
+        ETHERVOX_LOG_INFO("[Interrupt] Conversation interrupted");
+        return 0;  // Interrupt detected
+    }
+    
+    return -1;  // No interrupt
+}
+
 /**
  * @brief Conversation processing thread
  */
 static void* conversation_thread(void* arg) {
     ethervox_conversation_session_t* session = (ethervox_conversation_session_t*)arg;
     
+    printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    printf("🎙️  CONVERSATION THREAD STARTED\n");
+    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    
     pthread_mutex_lock(&session->mutex);
     
+    // Check if always-listening mode is enabled
+    bool always_listening = session->always_listening;
+    
+    if (always_listening) {
+        printf("🔊 Always-listening mode: ENABLED (continuous STT, no wake word needed)\n");
+    } else {
+        printf("👂 Wake word mode: ENABLED (waiting for wake word trigger)\n");
+    }
+    
+    printf("Governor: %s\n", session->governor ? "✓ Connected" : "❌ Not connected");
+    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
+    
+    pthread_mutex_unlock(&session->mutex);
+    
+    // Initialize audio and STT once for the session
+    if (!session->audio_initialized) {
+        printf("🎤 Initializing microphone...\n");
+        ethervox_audio_config_t audio_config = {0};
+        audio_config.sample_rate = 16000;
+        audio_config.channels = 1;
+        audio_config.bits_per_sample = 16;
+        audio_config.buffer_size = 4096;
+        
+        if (ethervox_audio_register_platform_driver(&session->audio_runtime) == 0 &&
+            session->audio_runtime.driver.init(&session->audio_runtime, &audio_config) == 0) {
+            session->audio_initialized = true;
+            printf("✓ Microphone ready\n");
+        } else {
+            printf("❌ Failed to initialize microphone\n");
+            return NULL;
+        }
+    }
+    
+    if (!session->stt_initialized) {
+        printf("🗣️  Initializing speech recognition (Whisper)...\n");
+        ethervox_stt_config_t stt_config = ethervox_stt_get_default_config();
+        stt_config.sample_rate = 16000;
+        stt_config.enable_partial_results = true;
+        
+        // Use Whisper streaming (already compiled in)
+        stt_config.backend = ETHERVOX_STT_BACKEND_WHISPER;
+        
+        // Set Whisper model path
+        const char* home = getenv("HOME");
+        static char whisper_model_path[512];
+        if (home) {
+            snprintf(whisper_model_path, sizeof(whisper_model_path), 
+                     "%s/.ethervox/models/whisper/base.bin", home);
+            stt_config.model_path = whisper_model_path;
+        }
+        
+        if (ethervox_stt_init(&session->stt_runtime, &stt_config) == 0) {
+            session->stt_initialized = true;
+            printf("✓ Speech recognition ready\n");
+        } else {
+            printf("❌ Failed to initialize speech recognition\n");
+            return NULL;
+        }
+    }
+    
+    printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    if (always_listening) {
+        printf("🎙️  CONTINUOUS LISTENING MODE ACTIVE\n");
+        printf("   Speak anytime - no wake word needed\n");
+    } else {
+        printf("👂 WAKE WORD MODE ACTIVE\n");
+        printf("   Say 'hey ethervox' to start\n");
+    }
+    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
+    
     while (!session->thread_should_exit) {
-        // Wait for wake word trigger
-        session->state = ETHERVOX_CONV_STATE_IDLE;
+        pthread_mutex_lock(&session->mutex);
         
-        while (!session->thread_should_exit && session->state == ETHERVOX_CONV_STATE_IDLE) {
-            pthread_cond_wait(&session->trigger_cond, &session->mutex);
+        if (always_listening) {
+            // Always-listening mode: immediate listening state
+            session->state = ETHERVOX_CONV_STATE_LISTENING;
+        } else {
+            // Wake word mode: wait for trigger
+            session->state = ETHERVOX_CONV_STATE_IDLE;
+            
+            while (!session->thread_should_exit && session->state == ETHERVOX_CONV_STATE_IDLE) {
+                pthread_cond_wait(&session->trigger_cond, &session->mutex);
+            }
+            
+            if (session->thread_should_exit) {
+                pthread_mutex_unlock(&session->mutex);
+                break;
+            }
+            
+            session->state = ETHERVOX_CONV_STATE_LISTENING;
+            printf("\n🎤 Wake word detected, listening...\n");
         }
-        
-        if (session->thread_should_exit) {
-            break;
-        }
-        
-        // Conversation triggered
-        session->conversation_start_time_ms = get_time_ms();
-        session->state = ETHERVOX_CONV_STATE_LISTENING;
         
         pthread_mutex_unlock(&session->mutex);
         
-        printf("\n[Conversation] Thread activated, starting speech processing...\n");
+        // Simple audio capture loop - continuously listen and transcribe
+        printf("🎤 Listening");
+        fflush(stdout);
         
-        // TODO: Play wake confirmation beep if enabled
-        if (session->config.enable_beep_on_wake) {
-            // ethervox_audio_play_beep(440, 100); // Short beep
-        }
-        
-        // Listen for user speech with Vosk
         char recognized_text[1024] = {0};
         bool speech_detected = false;
         
-        printf("[Conversation] Initializing STT...\n");
-        
-        // Initialize STT if not already done
-        if (!session->stt_initialized) {
-            ethervox_stt_config_t stt_config = ethervox_stt_get_default_config();
-            
-            // Use Whisper streaming on desktop (already built-in)
-            // On Android, this will be overridden to use lightweight STT
-            stt_config.backend = ETHERVOX_STT_BACKEND_WHISPER;
-            
-            // Auto-detect Whisper model
-            const char* home = getenv("HOME");
-            static char whisper_model_path[512];
-            if (home) {
-                snprintf(whisper_model_path, sizeof(whisper_model_path), 
-                         "%s/.ethervox/models/whisper/base.bin", home);
-                stt_config.model_path = whisper_model_path;
-            } else {
-                stt_config.model_path = NULL;
-            }
-            
-            stt_config.sample_rate = 16000;
-            stt_config.enable_partial_results = true; // Whisper streaming supports this
-            
-            printf("[Conversation] Calling ethervox_stt_init with model: %s\n", stt_config.model_path ? stt_config.model_path : "NULL");
-            
-            if (ethervox_stt_init(&session->stt_runtime, &stt_config) == 0) {
-                session->stt_initialized = true;
-                printf("[Conversation] ✓ Whisper streaming STT initialized\n");
-                ETHERVOX_LOG_INFO("Whisper streaming STT initialized for conversation");
-            } else {
-                printf("[Conversation] ❌ Failed to initialize Whisper STT\n");
-                ETHERVOX_LOG_ERROR("Failed to initialize Whisper STT");
-                pthread_mutex_lock(&session->mutex);
-                session->state = ETHERVOX_CONV_STATE_ERROR;
-                pthread_mutex_unlock(&session->mutex);
-                continue;
-            }
-        }
-        
-        // Start STT session
+        // Start STT and audio capture
         if (ethervox_stt_start(&session->stt_runtime) != 0) {
-            ETHERVOX_LOG_ERROR("Failed to start STT session");
+            ETHERVOX_LOG_ERROR("Failed to start STT");
             pthread_mutex_lock(&session->mutex);
             session->state = ETHERVOX_CONV_STATE_IDLE;
             pthread_mutex_unlock(&session->mutex);
+            usleep(100000);
             continue;
         }
         
-        // Start audio capture
-        // Initialize audio runtime if not already done
-        if (!session->audio_initialized) {
-            ethervox_audio_config_t audio_config = {0};
-            audio_config.sample_rate = session->config.vosk.sample_rate;
-            audio_config.channels = 1;
-            audio_config.bits_per_sample = 16;
-            audio_config.buffer_size = 4096;
-            
-            if (ethervox_audio_register_platform_driver(&session->audio_runtime) == 0 &&
-                session->audio_runtime.driver.init(&session->audio_runtime, &audio_config) == 0) {
-                session->audio_initialized = true;
-                ETHERVOX_LOG_INFO("Audio runtime initialized for conversation");
-            } else {
-                ETHERVOX_LOG_ERROR("Failed to initialize audio runtime");
-                pthread_mutex_lock(&session->mutex);
-                session->state = ETHERVOX_CONV_STATE_ERROR;
-                pthread_mutex_unlock(&session->mutex);
-                continue;
-            }
-        }
-        
-        // Start microphone capture
         if (session->audio_runtime.driver.start_capture(&session->audio_runtime) != 0) {
             ETHERVOX_LOG_ERROR("Failed to start audio capture");
+            ethervox_stt_stop(&session->stt_runtime);
             pthread_mutex_lock(&session->mutex);
             session->state = ETHERVOX_CONV_STATE_IDLE;
             pthread_mutex_unlock(&session->mutex);
+            usleep(100000);
             continue;
         }
         
-        // Allocate audio buffer for processing
-        ethervox_audio_buffer_t audio_buf;
-        audio_buf.size = 16000 * 5; // 5 seconds
-        audio_buf.channels = 1;
-        audio_buf.data = (float*)calloc(audio_buf.size, sizeof(float));
-        audio_buf.timestamp_us = 0;
-        
-        if (!audio_buf.data) {
-            ETHERVOX_LOG_ERROR("Failed to allocate audio buffer");
-            session->audio_runtime.driver.stop_capture(&session->audio_runtime);
-            pthread_mutex_lock(&session->mutex);
-            session->state = ETHERVOX_CONV_STATE_IDLE;
-            pthread_mutex_unlock(&session->mutex);
-            continue;
-        }
-        
-        session->audio_buffer = &audio_buf;
-        session->audio_capture_active = true;
-        
-        // Listening loop with Vosk
+        // Streaming audio capture: continuously feed to Whisper
         uint64_t listen_start = get_time_ms();
-        uint64_t last_audio_time = listen_start;
-        bool timeout_reached = false;
-        size_t total_samples_captured = 0;
         
-        ETHERVOX_LOG_INFO("Listening for speech (timeout: %d ms)...", session->config.listen_timeout_ms);
-        
-        while (session->audio_capture_active && !timeout_reached) {
-            // Read audio from microphone
-            ethervox_audio_buffer_t read_buffer;
-            read_buffer.size = 3200; // 200ms at 16kHz
-            read_buffer.channels = 1;
-            read_buffer.data = (float*)calloc(read_buffer.size, sizeof(float));
+        while (!speech_detected && !session->thread_should_exit) {
+            ethervox_audio_buffer_t audio_chunk;
+            audio_chunk.size = 1600;  // 100ms at 16kHz
+            audio_chunk.channels = 1;
+            audio_chunk.data = (float*)calloc(audio_chunk.size, sizeof(float));
             
-            if (!read_buffer.data) {
-                ETHERVOX_LOG_ERROR("Failed to allocate read buffer");
+            if (!audio_chunk.data) {
                 break;
             }
             
-            int samples_read = session->audio_runtime.driver.read_audio(&session->audio_runtime, &read_buffer);
+            int samples_read = session->audio_runtime.driver.read_audio(&session->audio_runtime, &audio_chunk);
+            if (samples_read <= 0) {
+                free(audio_chunk.data);
+                usleep(10000);  // Wait and try again
+                continue;
+            }
             
-            if (samples_read > 0) {
-                // Calculate audio energy to detect actual speech
-                float energy = 0.0f;
-                for (int i = 0; i < samples_read; i++) {
-                    energy += read_buffer.data[i] * read_buffer.data[i];
-                }
-                energy = sqrtf(energy / samples_read);
+            // Apply AEC to remove speaker output from microphone input
+            // AEC requires 10ms frames (160 samples at 16kHz), so process in chunks
+            if (session->aec_initialized && session->aec_context) {
+                const size_t aec_frame_size = 160;  // 10ms at 16kHz
+                size_t offset = 0;
                 
-                // Only process if there's significant audio energy
-                if (energy > 0.01f) {  // Threshold to ignore silence
-                    // Process audio with STT
-                    ethervox_stt_result_t result;
-                    memset(&result, 0, sizeof(result));
+                while (offset < samples_read) {
+                    size_t frame_samples = (offset + aec_frame_size <= samples_read) ? 
+                                          aec_frame_size : (samples_read - offset);
                     
-                    int ret = ethervox_stt_process(&session->stt_runtime, &read_buffer, &result);
-                    
-                    if (ret == 0) {
-                        if (result.is_final && result.text && strlen(result.text) > 0) {
-                            // Filter out Whisper hallucinations
-                            if (strstr(result.text, "Transcribed by") != NULL ||
-                                strstr(result.text, "R.A.R.E.") != NULL ||
-                                strstr(result.text, "Thank you") == result.text) {
-                                // Skip hallucination
-                                ETHERVOX_LOG_DEBUG("Filtered Whisper hallucination: %s", result.text);
-                                free(result.text);
-                            } else {
-                                // Got final result - conversation complete
-                                strncpy(recognized_text, result.text, sizeof(recognized_text) - 1);
-                                speech_detected = true;
-                                ETHERVOX_LOG_INFO("Final recognition: %s", result.text);
-                                free(result.text);
-                                free(read_buffer.data);
-                                break;
-                            }
-                        } else if (result.is_partial && result.text && strlen(result.text) > 0) {
-                            // Partial result - keep listening
-                            ETHERVOX_LOG_DEBUG("Partial: %s", result.text);
-                            last_audio_time = get_time_ms();
-                            free(result.text);
+                    // Only process full frames (AEC needs exact frame size)
+                    if (frame_samples == aec_frame_size) {
+                        int aec_result = ethervox_aec_process(session->aec_context, 
+                                                              audio_chunk.data + offset, 
+                                                              frame_samples);
+                        if (aec_result != 0) {
+                            ETHERVOX_LOG_WARN("AEC processing failed at offset %zu: %d", offset, aec_result);
+                            break;  // Stop processing on error
                         }
                     }
-                } else {
-                    ETHERVOX_LOG_DEBUG("Audio energy too low (%.6f), skipping STT", energy);
+                    // else: partial frame at end, skip AEC (will be processed with next chunk)
+                    
+                    offset += frame_samples;
+                }
+            }
+            
+            // Feed all audio to Whisper - let it decide on VAD and boundaries
+            ethervox_stt_result_t stt_result = {0};
+            int ret = ethervox_stt_process(&session->stt_runtime, &audio_chunk, &stt_result);
+            
+            // Check for results (Whisper returns is_final when it detects sentence boundary)
+            if (ret == 0 && stt_result.text && strlen(stt_result.text) > 3) {
+                // Show partial results
+                if (stt_result.is_partial) {
+                    printf("\r🎤 %s", stt_result.text);
+                    fflush(stdout);
                 }
                 
-                total_samples_captured += samples_read;
+                // Trust Whisper's is_final flag - it knows speech boundaries
+                if (stt_result.is_final) {
+                    // Filter Whisper hallucinations
+                    if (strstr(stt_result.text, "Transcribed by") == NULL &&
+                        strstr(stt_result.text, "R.A.R.E.") == NULL &&
+                        strstr(stt_result.text, "Thank you") != stt_result.text) {
+                        
+                        strncpy(recognized_text, stt_result.text, sizeof(recognized_text) - 1);
+                        speech_detected = true;
+                        printf("\r✓ Final: %s\n", stt_result.text);
+                    }
+                }
+                
+                // Free STT result memory
+                ethervox_stt_result_free(&stt_result);
             }
             
-            free(read_buffer.data);
+            free(audio_chunk.data);
             
-            uint64_t now = get_time_ms();
-            
-            // Check for silence timeout (no speech activity)
-            if (total_samples_captured > 0 && (now - last_audio_time > session->config.listen_timeout_ms)) {
-                ETHERVOX_LOG_DEBUG("Silence timeout reached");
-                timeout_reached = true;
+            // Timeout check (30 seconds max)
+            if (get_time_ms() - listen_start > 30000) {
+                printf("\r⏱️  Timeout\n");
                 break;
             }
             
-            // Check for max listen time
-            if (now - listen_start > session->config.listen_timeout_ms && total_samples_captured == 0) {
-                ETHERVOX_LOG_DEBUG("Listen timeout reached without speech");
-                timeout_reached = true;
-                break;
-            }
-            
-            // Check for conversation timeout
-            if (now - session->conversation_start_time_ms > session->config.conversation_timeout_ms) {
-                ETHERVOX_LOG_DEBUG("Conversation timeout reached");
-                timeout_reached = true;
-                break;
-            }
-            
-            // Small sleep to avoid busy-wait
-            usleep(10000); // 10ms
-        }
-        
-        // Stop audio capture
-        session->audio_capture_active = false;
-        
-        // Finalize STT to get any remaining text
-        ethervox_stt_result_t final_result;
-        if (ethervox_stt_finalize(&session->stt_runtime, &final_result) == 0) {
-            if (final_result.text && strlen(final_result.text) > 0) {
-                strncpy(recognized_text, final_result.text, sizeof(recognized_text) - 1);
-                speech_detected = true;
-                ETHERVOX_LOG_INFO("Recognized: %s", final_result.text);
-                free(final_result.text);
-            }
+            usleep(10000);  // 10ms sleep
         }
         
         ethervox_stt_stop(&session->stt_runtime);
-        
-        // Free audio buffer
-        if (session->audio_buffer && session->audio_buffer->data) {
-            free(session->audio_buffer->data);
-        }
-        session->audio_buffer = NULL;
+        session->audio_runtime.driver.stop_capture(&session->audio_runtime);
         
         pthread_mutex_lock(&session->mutex);
         
         if (!speech_detected || strlen(recognized_text) == 0) {
-            // No speech detected, return to idle
+            // No speech detected in always-listening mode - keep looping
+            if (always_listening) {
+                session->state = ETHERVOX_CONV_STATE_LISTENING;
+                pthread_mutex_unlock(&session->mutex);
+                usleep(100000);  // 100ms sleep to avoid tight loop
+                continue;
+            }
+            // In wake word mode, return to idle
             session->state = ETHERVOX_CONV_STATE_IDLE;
             pthread_mutex_unlock(&session->mutex);
             continue;
         }
         
-        // TODO: Play listening end beep if enabled
-        if (session->config.enable_beep_on_listen_end) {
-            // ethervox_audio_play_beep(880, 100);
-        }
-        
-        // Process with Governor
+        // Speech detected - process with Governor
         session->state = ETHERVOX_CONV_STATE_PROCESSING;
         pthread_mutex_unlock(&session->mutex);
         
+        printf("\n👤 User: %s\n", recognized_text);
         ETHERVOX_LOG_INFO("Processing user input with Governor: %s", recognized_text);
         
-        // Send to Governor and get response
+        // Send to Governor with execution context for tool-based conversational AI
         if (session->governor) {
             char* llm_response = NULL;
             char* error_msg = NULL;
             
-            ethervox_governor_status_t status = ethervox_governor_execute(
+            // Set up conversation callbacks for speak/listen tools
+            ethervox_conversation_callbacks_t callbacks = {
+                .on_speak = conversation_on_speak,
+                .on_listen = conversation_on_listen,
+                .on_interrupt = conversation_on_interrupt,
+                .user_data = session
+            };
+            
+            // Create execution context with VOICE source
+            ethervox_execution_context_t exec_context = {
+                .source = ETHERVOX_INPUT_SOURCE_VOICE,
+                .source_description = "voice conversation",
+                .tts_available = session->audio_initialized,
+                .microphone_available = session->stt_initialized,
+                .current_turn = ETHERVOX_TURN_USER,
+                .callbacks = &callbacks
+            };
+            
+            // Execute Governor - this will call speak/listen tools via callbacks
+            ethervox_governor_status_t status = ethervox_governor_execute_with_context(
                 session->governor,
                 recognized_text,
+                &exec_context,
                 &llm_response,
                 &error_msg,
                 NULL,  // metrics (optional)
@@ -357,41 +671,54 @@ static void* conversation_thread(void* arg) {
                 NULL   // user_data (optional)
             );
             
-            if (status == ETHERVOX_GOVERNOR_SUCCESS && llm_response && strlen(llm_response) > 0) {
-                ETHERVOX_LOG_INFO("Governor response: %s", llm_response);
-                
-                pthread_mutex_lock(&session->mutex);
-                session->state = ETHERVOX_CONV_STATE_SPEAKING;
-                pthread_mutex_unlock(&session->mutex);
-                
-                // TODO: Synthesize with Piper TTS
-                // For now, just print the response
-                printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-                printf("🤖 Assistant: %s\n", llm_response);
-                printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
-                
-                // TODO: When Piper TTS is implemented:
-                // ethervox_audio_buffer_t tts_output;
-                // if (ethervox_piper_synthesize(session->piper_voice, llm_response, &tts_output) == 0) {
-                //     ethervox_audio_play(&session->audio_runtime, &tts_output);
-                //     free(tts_output.data);
-                // }
-                
-                free(llm_response);
-            } else {
-                ETHERVOX_LOG_WARN("Governor failed to generate response: %s", 
-                                error_msg ? error_msg : "unknown error");
-                if (error_msg) {
-                    free(error_msg);
+            // NOTE: In the new tool-based architecture, the LLM should use the 'speak' tool
+            // to generate responses. If we get a direct text response here, it means:
+            // 1. The LLM didn't use the speak tool (needs stronger prompting), OR
+            // 2. The response is informational/acknowledgment
+            
+            if (status == ETHERVOX_GOVERNOR_SUCCESS) {
+                if (llm_response && strlen(llm_response) > 0) {
+                    // LLM returned text without using speak tool - print as fallback
+                    ETHERVOX_LOG_INFO("Governor returned text response (speak tool not used): %s", llm_response);
+                    printf("🤖 Assistant (text): %s\n", llm_response);
+                    free(llm_response);
+                } else {
+                    // Success with no text response means LLM used tools correctly
+                    ETHERVOX_LOG_INFO("Governor executed successfully (tools used)");
                 }
+            } else if (status == ETHERVOX_GOVERNOR_INTERRUPTED) {
+                ETHERVOX_LOG_INFO("Conversation interrupted by user");
+                if (llm_response) free(llm_response);
+                if (error_msg) free(error_msg);
+                break;  // Exit conversation thread
+            } else {
+                ETHERVOX_LOG_WARN("Governor execution failed: %s", 
+                                error_msg ? error_msg : "unknown error");
+                printf("❌ Error processing request: %s\n", 
+                       error_msg ? error_msg : "unknown error");
+                if (error_msg) free(error_msg);
             }
         } else {
             ETHERVOX_LOG_WARN("No Governor instance available");
+            printf("❌ Governor not initialized\n");
         }
         
         pthread_mutex_lock(&session->mutex);
+        
+        // Return to appropriate state based on mode
+        if (always_listening) {
+            // In always-listening mode, immediately go back to listening
+            session->state = ETHERVOX_CONV_STATE_LISTENING;
+            pthread_mutex_unlock(&session->mutex);
+            ETHERVOX_LOG_DEBUG("Continuing in always-listening mode...");
+        } else {
+            // In wake word mode, return to idle and wait for next trigger
+            session->state = ETHERVOX_CONV_STATE_IDLE;
+            pthread_mutex_unlock(&session->mutex);
+        }
     }
     
+    pthread_mutex_lock(&session->mutex);
     session->state = ETHERVOX_CONV_STATE_UNINITIALIZED;
     session->thread_running = false;
     pthread_mutex_unlock(&session->mutex);
@@ -422,6 +749,13 @@ ethervox_conversation_config_t ethervox_conversation_get_default_config(void) {
     // Audio feedback
     config.enable_beep_on_wake = true;
     config.enable_beep_on_listen_end = true;
+    
+    // Always-listening mode (enabled on desktop platforms with sufficient resources)
+#if defined(ETHERVOX_PLATFORM_MACOS) || defined(ETHERVOX_PLATFORM_LINUX) || defined(ETHERVOX_PLATFORM_WINDOWS)
+    config.always_listening = true;  // Desktop: continuous STT, no wake word needed
+#else
+    config.always_listening = false; // Embedded: use wake word to conserve resources
+#endif
     
     return config;
 }
@@ -461,10 +795,91 @@ ethervox_conversation_session_t* ethervox_conversation_init(
     session->audio_buffer = NULL;
     session->audio_capture_active = false;
     
-    // TODO: Initialize Piper voice
-    // session->piper_voice = piper_voice_load(model_path, config_path);
+    // Always-listening mode
+    session->always_listening = config->always_listening;
+    session->pending_transcription = NULL;
     
-    ETHERVOX_LOG_INFO("Conversation session initialized (STT lazy-loaded, Piper TODO)");
+    // Initialize TTS (Piper backend)
+    session->tts_initialized = false;
+    session->tts_context = NULL;
+    
+    // Load settings for TTS and AEC configuration
+    ethervox_persistent_settings_t settings;
+    bool settings_loaded = (ethervox_settings_load(&settings, NULL) == 0);
+    
+    // Check if global TTS is already initialized (from app startup)
+    // If so, reuse it instead of creating a new instance
+    pthread_mutex_lock(&g_tts_mutex);
+    if (g_global_tts) {
+        session->tts_context = g_global_tts;
+        session->tts_initialized = true;
+        pthread_mutex_unlock(&g_tts_mutex);
+        ETHERVOX_LOG_INFO("Reusing global TTS instance for voice conversation");
+    } else {
+        pthread_mutex_unlock(&g_tts_mutex);
+        
+        // No global TTS, initialize one for this session
+        if (settings_loaded) {
+            // Check if Piper is enabled and model exists
+            if (strcmp(settings.tts.engine, "piper") == 0 && 
+                strlen(settings.tts.piper_model_path) > 0) {
+                
+                ethervox_tts_config_t tts_config = ethervox_tts_default_config();
+                tts_config.backend = ETHERVOX_TTS_BACKEND_PIPER;
+                tts_config.model_path = settings.tts.piper_model_path;
+                tts_config.speaking_rate = settings.tts.speed;
+                tts_config.phoneme_variance = settings.tts.phoneme_variance;
+                tts_config.prosody_variance = settings.tts.prosody_variance;
+                tts_config.sample_rate = 16000;  // Target sample rate
+                tts_config.channels = 1;         // Mono
+                
+                session->tts_context = ethervox_tts_create(&tts_config);
+                if (session->tts_context && ethervox_tts_is_ready(session->tts_context)) {
+                    session->tts_initialized = true;
+                    ETHERVOX_LOG_INFO("Piper TTS initialized: %s", settings.tts.piper_model_path);
+                } else {
+                    ETHERVOX_LOG_WARN("Failed to initialize Piper TTS");
+                    if (session->tts_context) {
+                        ethervox_tts_destroy(session->tts_context);
+                        session->tts_context = NULL;
+                    }
+                }
+            } else {
+                ETHERVOX_LOG_INFO("TTS disabled or not Piper (engine=%s)", settings.tts.engine);
+            }
+        } else {
+            ETHERVOX_LOG_WARN("Failed to load settings, TTS disabled");
+        }
+    }
+    
+    // Initialize AEC if enabled
+    session->aec_initialized = false;
+    session->aec_context = NULL;
+    
+    if (settings_loaded && settings.aec.enabled && strcmp(settings.aec.backend, "speex") == 0) {
+        ethervox_aec_config_t aec_config = {
+            .sample_rate = 16000,
+            .frame_size = 160,  // 10ms frames at 16kHz
+            .filter_length = settings.aec.filter_length_ms,
+            .suppression_level = settings.aec.suppression_level
+        };
+        
+        session->aec_context = ethervox_aec_create(&aec_config);
+        if (session->aec_context) {
+            session->aec_initialized = true;
+            ETHERVOX_LOG_INFO("AEC initialized (backend=%s, filter=%dms, suppression=%.2f)",
+                            settings.aec.backend, settings.aec.filter_length_ms, 
+                            settings.aec.suppression_level);
+        } else {
+            ETHERVOX_LOG_WARN("Failed to initialize AEC");
+        }
+    } else if (settings_loaded) {
+        ETHERVOX_LOG_INFO("AEC disabled (enabled=%d, backend=%s)", 
+                        settings.aec.enabled, settings.aec.backend);
+    }
+    
+    ETHERVOX_LOG_INFO("Conversation session initialized (always_listening=%d, TTS=%d, AEC=%d)",
+                      session->always_listening, session->tts_initialized, session->aec_initialized);
     
     return session;
 }
@@ -596,8 +1011,32 @@ void ethervox_conversation_cleanup(ethervox_conversation_session_t* session) {
         session->stt_initialized = false;
     }
     
-    // TODO: Cleanup Piper
-    // if (session->piper_voice) piper_voice_free(session->piper_voice);
+    // Cleanup TTS context (but NOT if it's the global instance)
+    if (session->tts_initialized && session->tts_context) {
+        pthread_mutex_lock(&g_tts_mutex);
+        bool is_global = (session->tts_context == g_global_tts);
+        pthread_mutex_unlock(&g_tts_mutex);
+        
+        if (!is_global) {
+            // Session-specific TTS, safe to destroy
+            ethervox_tts_destroy(session->tts_context);
+            ETHERVOX_LOG_DEBUG("Session TTS context destroyed");
+        } else {
+            // Global TTS, just detach from session
+            ETHERVOX_LOG_DEBUG("Detached from global TTS (not destroyed)");
+        }
+        
+        session->tts_context = NULL;
+        session->tts_initialized = false;
+    }
+    
+    // Cleanup AEC context
+    if (session->aec_initialized && session->aec_context) {
+        ethervox_aec_destroy(session->aec_context);
+        session->aec_context = NULL;
+        session->aec_initialized = false;
+        ETHERVOX_LOG_DEBUG("AEC context destroyed");
+    }
     
     // Free audio buffer if still allocated
     if (session->audio_buffer && session->audio_buffer->data) {
@@ -612,4 +1051,48 @@ void ethervox_conversation_cleanup(ethervox_conversation_session_t* session) {
     free(session);
     
     ETHERVOX_LOG_INFO("Conversation session cleaned up");
+}
+
+/**
+ * Get phonemizer context from conversation session
+ */
+void* ethervox_conversation_get_phonemizer(ethervox_conversation_session_t* session) {
+    if (!session) {
+        ETHERVOX_LOG_WARN("get_phonemizer: session is NULL");
+        return NULL;
+    }
+    if (!session->tts_context) {
+        ETHERVOX_LOG_WARN("get_phonemizer: tts_context is NULL");
+        return NULL;
+    }
+    
+    ETHERVOX_LOG_INFO("get_phonemizer: calling ethervox_tts_get_phonemizer");
+    // Get phonemizer from TTS context
+    void* result = ethervox_tts_get_phonemizer(session->tts_context);
+    if (result) {
+        ETHERVOX_LOG_INFO("get_phonemizer: success, got phonemizer %p", result);
+    } else {
+        ETHERVOX_LOG_WARN("get_phonemizer: ethervox_tts_get_phonemizer returned NULL");
+    }
+    return result;
+}
+
+/**
+ * Get TTS context from conversation session
+ */
+void* ethervox_conversation_get_tts(ethervox_conversation_session_t* session) {
+    if (!session) {
+        return NULL;
+    }
+    return session->tts_context;
+}
+
+/**
+ * Get STT context from conversation session
+ */
+void* ethervox_conversation_get_stt(ethervox_conversation_session_t* session) {
+    if (!session || !session->stt_initialized) {
+        return NULL;
+    }
+    return &session->stt_runtime;
 }

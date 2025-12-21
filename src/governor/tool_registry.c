@@ -210,7 +210,9 @@ static bool is_fast_path_tool(const char* tool_name) {
     return (strcmp(tool_name, "calculator_compute") == 0 ||
             strcmp(tool_name, "get_time") == 0 ||
             strcmp(tool_name, "get_date") == 0 ||
-            strcmp(tool_name, "get_tool_info") == 0);
+            strcmp(tool_name, "get_tool_info") == 0 ||
+            strcmp(tool_name, "speak") == 0 ||
+            strcmp(tool_name, "listen") == 0);
 }
 
 /**
@@ -304,6 +306,8 @@ int ethervox_tool_registry_build_system_prompt(
             const ethervox_tool_t* tool = &registry->tools[i];
             if (!is_fast_path_tool(tool->name)) continue;
             
+            ETHERVOX_LOG_INFO("Adding fast-path tool to system prompt: %s", tool->name);
+            
             char json_tool[1024];
             int json_len = build_json_tool_definition(tool, json_tool, sizeof(json_tool));
             if (json_len < 0 || json_len >= (int)sizeof(json_tool)) continue;
@@ -348,6 +352,17 @@ int ethervox_tool_registry_build_system_prompt(
             "Assistant: <tool_call>\n{\"name\": \"calculator_compute\", \"arguments\": {\"expression\": \"17*23\"}}\n</tool_call>\n\n"
             "User: What's the current date?\n"
             "Assistant: <tool_call>\n{\"name\": \"get_date\", \"arguments\": {}}\n</tool_call>\n\n"
+            "[Context: Input from voice conversation]\n"
+            "User: Hello, can you hear me?\n"
+            "Assistant: <tool_call>\n{\"name\": \"speak\", \"arguments\": {\"text\": \"Yes, I can hear you! How can I help you today?\"}}\n</tool_call>\n\n"
+            "[Context: Input from voice conversation]\n"
+            "User: What's 5 plus 7?\n"
+            "Assistant: <tool_call>\n{\"name\": \"calculator_compute\", \"arguments\": {\"expression\": \"5+7\"}}\n</tool_call>\n"
+            "[Tool result: 12]\n"
+            "Assistant: <tool_call>\n{\"name\": \"speak\", \"arguments\": {\"text\": \"Five plus seven equals twelve.\"}}\n</tool_call>\n\n"
+            "[Context: Input from voice conversation]\n"
+            "User: Can you tell me a joke?\n"
+            "Assistant: <tool_call>\n{\"name\": \"speak\", \"arguments\": {\"text\": \"Sure! Why did the programmer quit his job? Because he didn't get arrays!\"}}\n</tool_call>\n\n"
             "User: Read the startup prompt\n"
             "Assistant: <tool_call>\n{\"name\": \"get_tool_info\", \"arguments\": {\"tool_name\": \"startup_prompt_get_current\"}}\n</tool_call>\n"
             "[After learning parameters...]\n"

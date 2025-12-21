@@ -4,6 +4,7 @@
  */
 
 #include "ethervox/settings.h"
+#include "ethervox/config.h"
 #include "ethervox/logging.h"
 #include "cJSON.h"
 
@@ -54,6 +55,32 @@ ethervox_persistent_settings_t ethervox_settings_get_defaults(void) {
     settings.whisper.n_threads = -1; // Auto-detect
     settings.whisper.use_gpu = false;
     
+    // TTS defaults
+#ifdef __APPLE__
+    strncpy(settings.tts.engine, "piper", sizeof(settings.tts.engine) - 1);
+    strncpy(settings.tts.voice, "en_GB-alba-medium", sizeof(settings.tts.voice) - 1); // Deprecated, use per-language
+    strncpy(settings.tts.voice_en, "en_GB-alba-medium", sizeof(settings.tts.voice_en) - 1);
+    strncpy(settings.tts.voice_zh, "zh_CN-huayan-medium", sizeof(settings.tts.voice_zh) - 1);
+    strncpy(settings.tts.voice_de, "de_DE-thorsten-high", sizeof(settings.tts.voice_de) - 1);
+#elif defined(__linux__)
+    strncpy(settings.tts.engine, "piper", sizeof(settings.tts.engine) - 1);
+    strncpy(settings.tts.voice, "en_GB-alba-medium", sizeof(settings.tts.voice) - 1); // Deprecated, use per-language
+    strncpy(settings.tts.voice_en, "en_GB-alba-medium", sizeof(settings.tts.voice_en) - 1);
+    strncpy(settings.tts.voice_zh, "zh_CN-huayan-medium", sizeof(settings.tts.voice_zh) - 1);
+    strncpy(settings.tts.voice_de, "de_DE-thorsten-high", sizeof(settings.tts.voice_de) - 1);
+#else
+    strncpy(settings.tts.engine, "none", sizeof(settings.tts.engine) - 1);
+    settings.tts.voice[0] = '\0';
+    settings.tts.voice_en[0] = '\0';
+    settings.tts.voice_zh[0] = '\0';
+    settings.tts.voice_de[0] = '\0';
+#endif
+    settings.tts.speed = 1.0f;
+    settings.tts.volume = 0.8f;
+    settings.tts.phoneme_variance = 0.667f;  // Default Piper noise_scale
+    settings.tts.prosody_variance = 0.8f;    // Default Piper noise_w (increase to 1.0-1.2 for more expressiveness)
+    settings.tts.piper_model_path[0] = '\0'; // Will auto-detect
+    
     // Conversation defaults
     settings.conversation.listen_timeout_ms = 5000;
     settings.conversation.conversation_timeout_ms = 30000;
@@ -61,6 +88,17 @@ ethervox_persistent_settings_t ethervox_settings_get_defaults(void) {
     settings.conversation.audio_energy_threshold = 0.01f;
     settings.conversation.filter_hallucinations = true;
     settings.conversation.max_audio_chunk_size = 16000 * 3; // 3 seconds at 16kHz
+#if defined(ETHERVOX_PLATFORM_MACOS) || defined(ETHERVOX_PLATFORM_LINUX) || defined(ETHERVOX_PLATFORM_WINDOWS)
+    settings.conversation.always_listening = true;  // Desktop: sufficient resources for continuous STT
+#else
+    settings.conversation.always_listening = false; // Embedded: use wake word to conserve resources
+#endif
+    
+    // AEC defaults
+    settings.aec.enabled = true;  // Enable AEC by default
+    strncpy(settings.aec.backend, "speex", sizeof(settings.aec.backend) - 1);
+    settings.aec.suppression_level = 0.5f;  // Moderate echo suppression
+    settings.aec.filter_length_ms = 64;     // 64ms echo tail (1024 samples @ 16kHz)
     
     // Wake word defaults
     strncpy(settings.wake_word.wake_phrase, "hey ethervox", sizeof(settings.wake_word.wake_phrase) - 1);
@@ -73,24 +111,24 @@ ethervox_persistent_settings_t ethervox_settings_get_defaults(void) {
     settings.wake_word.vad_zcr_max = 0.35f;
     settings.wake_word.cooldown_ms = 3000;
     
-    // LLM defaults (from config.h)
-    settings.llm.max_tokens = 512;
-    settings.llm.context_length = 2048;
-    settings.llm.temperature = 0.7f;
-    settings.llm.top_p = 0.9f;
-    settings.llm.seed = 42;
-    settings.llm.gpu_layers = 99;
+    // LLM defaults (from config.h defines)
+    settings.llm.max_tokens = ETHERVOX_LLM_MAX_TOKENS_DEFAULT;
+    settings.llm.context_length = ETHERVOX_GOVERNOR_CONTEXT_SIZE;  // Use Governor context size (LLM is Governor)
+    settings.llm.temperature = ETHERVOX_LLM_TEMPERATURE_DEFAULT;
+    settings.llm.top_p = ETHERVOX_LLM_TOP_P_DEFAULT;
+    settings.llm.seed = ETHERVOX_LLM_SEED_DEFAULT;
+    settings.llm.gpu_layers = ETHERVOX_LLM_GPU_LAYERS_DEFAULT;
     settings.llm.n_threads = -1; // Auto-detect
     
-    // Governor defaults (from config.h)
-    settings.governor.max_iterations = 10;
-    settings.governor.timeout_seconds = 300;
-    settings.governor.temperature = 0.3f;
-    settings.governor.max_tokens_per_iteration = 64;
-    settings.governor.confidence_threshold = 0.85f;
-    settings.governor.gpu_layers = 999;
-    settings.governor.context_size = 8192;
-    settings.governor.n_threads = 8;
+    // Governor defaults (from config.h defines)
+    settings.governor.max_iterations = ETHERVOX_GOVERNOR_MAX_ITERATIONS;
+    settings.governor.timeout_seconds = ETHERVOX_GOVERNOR_TIMEOUT_SECONDS;
+    settings.governor.temperature = ETHERVOX_GOVERNOR_TEMPERATURE;
+    settings.governor.max_tokens_per_iteration = ETHERVOX_GOVERNOR_MAX_TOKENS_PER_ITERATION;
+    settings.governor.confidence_threshold = ETHERVOX_GOVERNOR_CONFIDENCE_THRESHOLD;
+    settings.governor.gpu_layers = ETHERVOX_GOVERNOR_GPU_LAYERS;
+    settings.governor.context_size = ETHERVOX_GOVERNOR_CONTEXT_SIZE;
+    settings.governor.n_threads = ETHERVOX_GOVERNOR_THREADS;
     
     return settings;
 }
@@ -147,15 +185,38 @@ int ethervox_settings_save(const ethervox_persistent_settings_t* settings, const
     cJSON_AddBoolToObject(whisper, "use_gpu", settings->whisper.use_gpu);
     cJSON_AddItemToObject(root, "whisper", whisper);
     
+    // TTS settings
+    cJSON* tts = cJSON_CreateObject();
+    cJSON_AddStringToObject(tts, "engine", settings->tts.engine);
+    cJSON_AddStringToObject(tts, "voice", settings->tts.voice);
+    cJSON_AddStringToObject(tts, "voice_en", settings->tts.voice_en);
+    cJSON_AddStringToObject(tts, "voice_zh", settings->tts.voice_zh);
+    cJSON_AddStringToObject(tts, "voice_de", settings->tts.voice_de);
+    cJSON_AddNumberToObject(tts, "speed", settings->tts.speed);
+    cJSON_AddNumberToObject(tts, "volume", settings->tts.volume);
+    cJSON_AddNumberToObject(tts, "phoneme_variance", settings->tts.phoneme_variance);
+    cJSON_AddNumberToObject(tts, "prosody_variance", settings->tts.prosody_variance);
+    cJSON_AddStringToObject(tts, "piper_model_path", settings->tts.piper_model_path);
+    cJSON_AddItemToObject(root, "tts", tts);
+    
     // Conversation settings
     cJSON* conversation = cJSON_CreateObject();
     cJSON_AddNumberToObject(conversation, "listen_timeout_ms", settings->conversation.listen_timeout_ms);
     cJSON_AddNumberToObject(conversation, "conversation_timeout_ms", settings->conversation.conversation_timeout_ms);
     cJSON_AddNumberToObject(conversation, "silence_timeout_ms", settings->conversation.silence_timeout_ms);
     cJSON_AddNumberToObject(conversation, "audio_energy_threshold", settings->conversation.audio_energy_threshold);
+    cJSON_AddBoolToObject(conversation, "always_listening", settings->conversation.always_listening);
     cJSON_AddBoolToObject(conversation, "filter_hallucinations", settings->conversation.filter_hallucinations);
     cJSON_AddNumberToObject(conversation, "max_audio_chunk_size", settings->conversation.max_audio_chunk_size);
     cJSON_AddItemToObject(root, "conversation", conversation);
+    
+    // AEC settings
+    cJSON* aec = cJSON_CreateObject();
+    cJSON_AddBoolToObject(aec, "enabled", settings->aec.enabled);
+    cJSON_AddStringToObject(aec, "backend", settings->aec.backend);
+    cJSON_AddNumberToObject(aec, "suppression_level", settings->aec.suppression_level);
+    cJSON_AddNumberToObject(aec, "filter_length_ms", settings->aec.filter_length_ms);
+    cJSON_AddItemToObject(root, "aec", aec);
     
     // Wake word settings
     cJSON* wake_word = cJSON_CreateObject();
@@ -339,11 +400,99 @@ int ethervox_settings_import(ethervox_persistent_settings_t* settings, const cha
         item = cJSON_GetObjectItem(conversation, "audio_energy_threshold");
         if (cJSON_IsNumber(item)) settings->conversation.audio_energy_threshold = (float)item->valuedouble;
         
+        item = cJSON_GetObjectItem(conversation, "always_listening");
+        if (cJSON_IsBool(item)) settings->conversation.always_listening = cJSON_IsTrue(item);
+        
         item = cJSON_GetObjectItem(conversation, "filter_hallucinations");
         if (cJSON_IsBool(item)) settings->conversation.filter_hallucinations = cJSON_IsTrue(item);
         
         item = cJSON_GetObjectItem(conversation, "max_audio_chunk_size");
         if (cJSON_IsNumber(item)) settings->conversation.max_audio_chunk_size = item->valueint;
+    }
+    
+    // Parse TTS settings
+    cJSON* tts = cJSON_GetObjectItem(root, "tts");
+    if (cJSON_IsObject(tts)) {
+        cJSON* item;
+        
+        item = cJSON_GetObjectItem(tts, "engine");
+        if (cJSON_IsString(item)) {
+            strncpy(settings->tts.engine, item->valuestring,
+                    sizeof(settings->tts.engine) - 1);
+        }
+        
+        item = cJSON_GetObjectItem(tts, "voice");
+        if (cJSON_IsString(item)) {
+            strncpy(settings->tts.voice, item->valuestring,
+                    sizeof(settings->tts.voice) - 1);
+        }
+        
+        item = cJSON_GetObjectItem(tts, "voice_en");
+        if (cJSON_IsString(item)) {
+            strncpy(settings->tts.voice_en, item->valuestring,
+                    sizeof(settings->tts.voice_en) - 1);
+        }
+        
+        item = cJSON_GetObjectItem(tts, "voice_zh");
+        if (cJSON_IsString(item)) {
+            strncpy(settings->tts.voice_zh, item->valuestring,
+                    sizeof(settings->tts.voice_zh) - 1);
+        }
+        
+        item = cJSON_GetObjectItem(tts, "voice_de");
+        if (cJSON_IsString(item)) {
+            strncpy(settings->tts.voice_de, item->valuestring,
+                    sizeof(settings->tts.voice_de) - 1);
+        }
+        
+        item = cJSON_GetObjectItem(tts, "speed");
+        if (cJSON_IsNumber(item)) settings->tts.speed = (float)item->valuedouble;
+        
+        item = cJSON_GetObjectItem(tts, "volume");
+        if (cJSON_IsNumber(item)) settings->tts.volume = (float)item->valuedouble;
+        
+        item = cJSON_GetObjectItem(tts, "phoneme_variance");
+        if (cJSON_IsNumber(item)) settings->tts.phoneme_variance = (float)item->valuedouble;
+        
+        item = cJSON_GetObjectItem(tts, "prosody_variance");
+        if (cJSON_IsNumber(item)) settings->tts.prosody_variance = (float)item->valuedouble;
+        
+        item = cJSON_GetObjectItem(tts, "piper_model_path");
+        if (cJSON_IsString(item)) {
+            strncpy(settings->tts.piper_model_path, item->valuestring,
+                    sizeof(settings->tts.piper_model_path) - 1);
+        }
+        
+        // Auto-build piper_model_path from voice_en if not explicitly set
+        // This ensures the selected voice is actually used
+        if (strlen(settings->tts.piper_model_path) == 0 && strlen(settings->tts.voice_en) > 0) {
+            const char* home = getenv("HOME");
+            if (home) {
+                snprintf(settings->tts.piper_model_path, sizeof(settings->tts.piper_model_path),
+                        "%s/.ethervox/models/piper/%s.onnx", home, settings->tts.voice_en);
+            }
+        }
+    }
+    
+    // Parse AEC settings
+    cJSON* aec = cJSON_GetObjectItem(root, "aec");
+    if (cJSON_IsObject(aec)) {
+        cJSON* item;
+        
+        item = cJSON_GetObjectItem(aec, "enabled");
+        if (cJSON_IsBool(item)) settings->aec.enabled = cJSON_IsTrue(item);
+        
+        item = cJSON_GetObjectItem(aec, "backend");
+        if (cJSON_IsString(item)) {
+            strncpy(settings->aec.backend, item->valuestring,
+                    sizeof(settings->aec.backend) - 1);
+        }
+        
+        item = cJSON_GetObjectItem(aec, "suppression_level");
+        if (cJSON_IsNumber(item)) settings->aec.suppression_level = (float)item->valuedouble;
+        
+        item = cJSON_GetObjectItem(aec, "filter_length_ms");
+        if (cJSON_IsNumber(item)) settings->aec.filter_length_ms = item->valueint;
     }
     
     // Parse wake word settings
@@ -472,9 +621,18 @@ char* ethervox_settings_export(const ethervox_persistent_settings_t* settings) {
     cJSON_AddNumberToObject(conversation, "conversation_timeout_ms", settings->conversation.conversation_timeout_ms);
     cJSON_AddNumberToObject(conversation, "silence_timeout_ms", settings->conversation.silence_timeout_ms);
     cJSON_AddNumberToObject(conversation, "audio_energy_threshold", settings->conversation.audio_energy_threshold);
+    cJSON_AddBoolToObject(conversation, "always_listening", settings->conversation.always_listening);
     cJSON_AddBoolToObject(conversation, "filter_hallucinations", settings->conversation.filter_hallucinations);
     cJSON_AddNumberToObject(conversation, "max_audio_chunk_size", settings->conversation.max_audio_chunk_size);
     cJSON_AddItemToObject(root, "conversation", conversation);
+    
+    // AEC settings
+    cJSON* aec = cJSON_CreateObject();
+    cJSON_AddBoolToObject(aec, "enabled", settings->aec.enabled);
+    cJSON_AddStringToObject(aec, "backend", settings->aec.backend);
+    cJSON_AddNumberToObject(aec, "suppression_level", settings->aec.suppression_level);
+    cJSON_AddNumberToObject(aec, "filter_length_ms", settings->aec.filter_length_ms);
+    cJSON_AddItemToObject(root, "aec", aec);
     
     // Wake word settings
     cJSON* wake_word = cJSON_CreateObject();

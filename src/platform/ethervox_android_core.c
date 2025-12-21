@@ -736,7 +736,7 @@ Java_com_droid_ethervox_1core_NativeLib_runLlmToolTests(
     }
     
     LOGI("Running LLM tool tests (verbose=%d)...", verbose);
-    run_llm_tool_tests(g_governor, g_memory_store, model_path_str, (bool)verbose);
+    run_llm_tool_tests(g_governor, g_memory_store, model_path_str, (bool)verbose, NULL);
     
     // Log completion with test reports path
     if (g_android_files_dir[0] != '\0') {

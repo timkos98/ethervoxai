@@ -117,6 +117,16 @@ int ethervox_language_detect(const ethervox_audio_buffer_t* buffer,
 ethervox_audio_config_t ethervox_audio_get_default_config(void);
 void ethervox_audio_buffer_free(ethervox_audio_buffer_t* buffer);
 
+/**
+ * Calculate RMS (root mean square) energy of audio samples
+ * Used for voice activity detection (VAD) and speech energy measurement
+ * 
+ * @param samples Float audio samples normalized to [-1, 1]
+ * @param count Number of samples
+ * @return RMS energy value (typically 0.0-1.0 range)
+ */
+float ethervox_audio_calculate_rms_energy(const float* samples, uint32_t count);
+
 // Platform-specific driver registration
 int ethervox_audio_register_platform_driver(ethervox_audio_runtime_t* runtime);
 

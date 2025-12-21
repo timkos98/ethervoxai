@@ -73,16 +73,16 @@ EtherVoxAI is an open-source voice AI platform designed for privacy-conscious us
 ### Clone and Setup
 
 ```bash
-
 # Clone the repository
-
 git clone https://github.com/ethervox-ai/ethervoxai.git
 cd ethervoxai
 
-# Install dependencies (optional - auto-installs on first build)
+# Download phonemizer dictionaries (required for TTS)
+./scripts/download_phonemizer_data.sh
 
+# Install dependencies (optional - auto-installs on first build)
 make install-deps
-```text
+```
 
 ## Platform-Specific Builds
 
@@ -255,7 +255,12 @@ npm run build
 
 # Or build just the core
 npm run build:core
+
+# Skip GitHub token validation during development
+SKIP_GITHUB_TOKEN_VALIDATION=1 make
 ```
+
+**Note:** GitHub token validation can be skipped by setting `SKIP_GITHUB_TOKEN_VALIDATION=1` environment variable. This disables the bug reporter but allows development without configuring GitHub access.
 
 ### Running the Governor CLI
 
@@ -342,6 +347,9 @@ Total disk usage: 1847.23 MB
   - vosk-model-en-us-0.22 (1.8GB, best accuracy)
 - **Piper TTS**: Text-to-speech for natural voice output
   - en_US-lessac-medium.onnx (17MB, natural voice)
+
+**Phonemizer Note:**
+EthervoxAI uses a custom GPL-free phonemizer for Piper TTS. The phonemizer dictionaries (CMU Dict for English, CC-CEDICT for Chinese) are downloaded via `scripts/download_phonemizer_data.sh` and are not included in the repository.
 
 **Storage Location:**
 All models are stored in `~/.ethervox/models/` with subdirectories by type.
@@ -1009,6 +1017,18 @@ This project is licensed under the **Creative Commons Attribution-NonCommercial-
 For commercial licensing options, please contact us at licensing@ethervox-ai.org
 
 See the [LICENSE](LICENSE) file for full terms.
+
+### Third-Party Licenses
+
+EthervoxAI uses several open-source libraries and data sources:
+- **ONNX Runtime** (MIT) - Neural network inference
+- **Speex DSP** (BSD-3-Clause) - Audio resampling
+- **CMU Pronouncing Dictionary** (Public Domain) - English phonemization
+- **CC-CEDICT** (CC BY-SA 4.0) - Chinese phonemization
+- **llama.cpp** (MIT) - LLM inference
+- **whisper.cpp** (MIT) - Speech recognition
+
+For complete licensing information and attribution requirements, see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
 
 ## Support
 

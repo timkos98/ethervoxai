@@ -68,7 +68,7 @@ add_definitions(-DETHERVOX_GIT_BRANCH="${GIT_BRANCH}")
 add_definitions(-DETHERVOX_GIT_COMMIT="${GIT_COMMIT_HASH}")
 
 # =============================================================================
-# GitHub Token Configuration (REQUIRED)
+# GitHub Token Configuration (REQUIRED for bug reporter)
 # =============================================================================
 # Read GitHub token from environment variable at build time and validate it
 # Priority: ETHERVOX_GITHUB_TOKEN_DESKTOP → ETHERVOX_GITHUB_TOKEN
@@ -81,6 +81,23 @@ add_definitions(-DETHERVOX_GIT_COMMIT="${GIT_COMMIT_HASH}")
 #
 # To create a token: https://github.com/settings/tokens
 # Required permission: issues:write for timkos98/ethervoxai
+#
+# To disable validation (e.g., for development):
+#   cmake -DSKIP_GITHUB_TOKEN_VALIDATION=ON
+#   OR set environment variable: export SKIP_GITHUB_TOKEN_VALIDATION=1
+
+# Auto-detect Android builds and skip GitHub token validation
+if(ANDROID)
+    set(SKIP_GITHUB_TOKEN_VALIDATION ON)
+    message(STATUS "Android build detected - GitHub token validation will be skipped")
+endif()
+
+# Check environment variable first, then CMake option
+if(DEFINED ENV{SKIP_GITHUB_TOKEN_VALIDATION} AND NOT "$ENV{SKIP_GITHUB_TOKEN_VALIDATION}" STREQUAL "")
+    set(SKIP_GITHUB_TOKEN_VALIDATION ON)
+endif()
+
+option(SKIP_GITHUB_TOKEN_VALIDATION "Skip GitHub token validation (disables bug reporter)" OFF)
 
 if(DEFINED ENV{ETHERVOX_GITHUB_TOKEN_DESKTOP} AND NOT "$ENV{ETHERVOX_GITHUB_TOKEN_DESKTOP}" STREQUAL "")
     set(ETHERVOX_GITHUB_TOKEN "$ENV{ETHERVOX_GITHUB_TOKEN_DESKTOP}")
@@ -97,8 +114,13 @@ endif()
 # - Token is not set
 # - Token is invalid or expired
 # - Token doesn't have required permissions
-set(GITHUB_TOKEN "${ETHERVOX_GITHUB_TOKEN}")
-include(cmake/validate_github_token.cmake)
+if(NOT SKIP_GITHUB_TOKEN_VALIDATION)
+    set(GITHUB_TOKEN "${ETHERVOX_GITHUB_TOKEN}")
+    include(cmake/validate_github_token.cmake)
+else()
+    message(WARNING "GitHub token validation SKIPPED - bug reporter will be disabled")
+    set(ETHERVOX_GITHUB_TOKEN "")
+endif()
 
 add_definitions(-DETHERVOX_GITHUB_TOKEN="${ETHERVOX_GITHUB_TOKEN}")
 
@@ -412,7 +434,26 @@ set(COMMON_SOURCES
     src/common/settings_menu.c
     src/common/model_downloader.c
     src/config/settings.c
+    src/audio/reference_buffer.c
+    src/audio/aec_speex.c
+    src/tts/tts.c
+    src/tts/text_normalizer.c
+    src/tts/phonemizer/phonemizer.c
+    src/tts/phonemizer/dictionary.c
+    src/tts/phonemizer/rules_en.c
+    src/tts/phonemizer/rules_de.c
+    src/tts/phonemizer/dict_chinese.c
+    src/tts/phonemizer/chinese_segmenter.c
+    src/tts/phonemizer/pronunciation_overrides.c
+    src/tts/phonemizer/pronunciation_trainer.c
 )
+
+# Desktop-only sources (not compiled for Android)
+if(NOT ANDROID)
+    list(APPEND COMMON_SOURCES
+        src/tts/piper_backend.c
+    )
+endif()
 
 # Add bug_reporter.c only for non-Android platforms (Android uses Kotlin BugReporter)
 if(NOT TARGET_PLATFORM STREQUAL "ANDROID")
@@ -477,6 +518,11 @@ file(GLOB CONTEXT_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/context
 list(APPEND ETHERVOXAI_CORE_SOURCES ${CONTEXT_TOOLS_SOURCES})
 message(STATUS "Context tools plugin sources included")
 
+# Add conversation tools plugin sources (speak, listen for LLM-controlled interaction)
+file(GLOB CONVERSATION_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/conversation_tools/*.c")
+list(APPEND ETHERVOXAI_CORE_SOURCES ${CONVERSATION_TOOLS_SOURCES})
+message(STATUS "Conversation tools plugin sources included")
+
 # Add voice tools plugin sources
 file(GLOB VOICE_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/voice_tools/*.c")
 list(APPEND ETHERVOXAI_CORE_SOURCES ${VOICE_TOOLS_SOURCES})
@@ -495,6 +541,7 @@ message(STATUS "Dialogue sources included: ${DIALOGUE_SOURCES}")
 
 # Shared audio core implementation (excluding platform-specific files)
 list(APPEND ETHERVOXAI_CORE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/audio/audio_core.c")
+list(APPEND ETHERVOXAI_CORE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/audio/audio_recording.c")
 
 # Platform-specific source files
 # Check multiple conditions for RPI detection
@@ -588,6 +635,7 @@ if(WITH_LLAMA)
         target_include_directories(ethervoxai PRIVATE 
             ${CMAKE_CURRENT_SOURCE_DIR}/external/llama.cpp/include
             ${CMAKE_CURRENT_SOURCE_DIR}/external/llama.cpp/src
+            ${CMAKE_CURRENT_SOURCE_DIR}/external/llama.cpp/vendor
         )
         target_link_libraries(ethervoxai PUBLIC llama)
         message(STATUS "Linked llama.cpp library to ethervoxai")
@@ -627,6 +675,73 @@ if(TARGET cjson)
     message(STATUS "Linked cJSON library to ethervoxai")
 else()
     message(WARNING "cJSON target not found - settings persistence will fail")
+endif()
+
+# Link Speex DSP for AEC (echo cancellation) and resampling
+# Note: Speex DSP is desktop-only (not available on Android)
+if(NOT ANDROID)
+    find_package(PkgConfig)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(SPEEX speexdsp)
+        if(SPEEX_FOUND)
+            target_link_libraries(ethervoxai PUBLIC ${SPEEX_LINK_LIBRARIES})
+            target_include_directories(ethervoxai PRIVATE ${SPEEX_INCLUDE_DIRS})
+            target_link_directories(ethervoxai PRIVATE ${SPEEX_LIBRARY_DIRS})
+            target_compile_definitions(ethervoxai PRIVATE HAVE_SPEEXDSP=1)
+            message(STATUS "Linked Speex DSP library: ${SPEEX_VERSION}")
+            message(STATUS "Speex lib dirs: ${SPEEX_LIBRARY_DIRS}")
+            message(STATUS "Speex link libs: ${SPEEX_LINK_LIBRARIES}")
+        else()
+            message(WARNING "Speex DSP not found - AEC will use passthrough mode. Install with: brew install speexdsp")
+        endif()
+        
+        # Link ONNX Runtime for Piper TTS
+        pkg_check_modules(ONNXRUNTIME onnxruntime)
+        if(ONNXRUNTIME_FOUND)
+            target_link_libraries(ethervoxai PUBLIC ${ONNXRUNTIME_LINK_LIBRARIES})
+            target_include_directories(ethervoxai PRIVATE ${ONNXRUNTIME_INCLUDE_DIRS})
+            target_link_directories(ethervoxai PRIVATE ${ONNXRUNTIME_LIBRARY_DIRS})
+            target_compile_definitions(ethervoxai PRIVATE HAVE_ONNXRUNTIME=1)
+            message(STATUS "Linked ONNX Runtime library: ${ONNXRUNTIME_VERSION}")
+        else()
+            # Try manual detection (Homebrew on macOS)
+            find_path(ONNXRUNTIME_INCLUDE_DIR 
+                NAMES onnxruntime_c_api.h
+                PATHS /opt/homebrew/Cellar/onnxruntime/*/include/onnxruntime
+                      /usr/local/Cellar/onnxruntime/*/include/onnxruntime
+                      /opt/homebrew/include/onnxruntime
+                      /usr/local/include/onnxruntime
+            )
+            find_library(ONNXRUNTIME_LIBRARY
+                NAMES onnxruntime
+                PATHS /opt/homebrew/Cellar/onnxruntime/*/lib
+                      /usr/local/Cellar/onnxruntime/*/lib
+                      /opt/homebrew/lib
+                      /usr/local/lib
+            )
+            
+            if(ONNXRUNTIME_INCLUDE_DIR AND ONNXRUNTIME_LIBRARY)
+                # Include parent directory so we can use #include <onnxruntime/...>
+                get_filename_component(ONNXRUNTIME_INCLUDE_PARENT "${ONNXRUNTIME_INCLUDE_DIR}" DIRECTORY)
+                target_include_directories(ethervoxai PRIVATE ${ONNXRUNTIME_INCLUDE_PARENT})
+                target_link_libraries(ethervoxai PUBLIC ${ONNXRUNTIME_LIBRARY})
+                target_compile_definitions(ethervoxai PRIVATE HAVE_ONNXRUNTIME=1)
+                message(STATUS "Found ONNX Runtime manually:")
+                message(STATUS "  Include: ${ONNXRUNTIME_INCLUDE_PARENT}")
+                message(STATUS "  Library: ${ONNXRUNTIME_LIBRARY}")
+            else()
+                message(WARNING "ONNX Runtime not found - Piper TTS will be unavailable. Install with: brew install onnxruntime")
+            endif()
+        endif()
+        
+        # espeak-ng REMOVED - replaced with custom phonemizer (MIT-licensed)
+        # See src/tts/phonemizer.c for dictionary-based G2P implementation
+        message(STATUS "Using custom phonemizer (espeak-ng dependency removed for licensing)")
+    else()
+        message(WARNING "PkgConfig not found - skipping Speex and ONNX Runtime detection")
+    endif()
+else()
+    message(STATUS "Android build - Speex DSP and ONNX Runtime skipped (desktop-only libraries)")
 endif()
 
 # Platform-specific linking for library consumers
@@ -728,6 +843,26 @@ if(NOT ANDROID AND TARGET_PLATFORM STREQUAL "MACOS")
     add_executable(test_mic_direct test_mic_direct.c)
     target_link_libraries(test_mic_direct PRIVATE ethervoxai)
     target_include_directories(test_mic_direct PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+endif()
+
+# Voice quality tuner tool
+if(NOT ANDROID)
+    add_executable(voice_tuner tools/voice_tuner.c)
+    target_link_libraries(voice_tuner PRIVATE ethervoxai cjson)
+    target_include_directories(voice_tuner PRIVATE 
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${cjson_SOURCE_DIR})
+    set_target_properties(voice_tuner PROPERTIES OUTPUT_NAME ethervox-tune-voice)
+    install(TARGETS voice_tuner RUNTIME DESTINATION bin)
+    
+    # Emotion tester tool for multi-speaker models
+    add_executable(emotion_tester tools/emotion_tester.c)
+    target_link_libraries(emotion_tester PRIVATE ethervoxai cjson)
+    target_include_directories(emotion_tester PRIVATE 
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${cjson_SOURCE_DIR})
+    set_target_properties(emotion_tester PROPERTIES OUTPUT_NAME ethervox-test-emotions)
+    install(TARGETS emotion_tester RUNTIME DESTINATION bin)
 endif()
 
 # Optional: Examples and tests (if directories exist and not Android)

@@ -1423,7 +1423,9 @@ static ethervox_tool_t listen_tool = {
     .estimated_latency_ms = 100.0f};
 
 /**
- * Register voice tools with Governor
+ * Register base voice tools with Governor
+ * 
+ * Base tools: listen_and_summarize (always available)
  */
 int ethervox_voice_tools_register(void* registry, ethervox_voice_session_t* session) {
   if (!registry || !session) {
@@ -1442,5 +1444,38 @@ int ethervox_voice_tools_register(void* registry, ethervox_voice_session_t* sess
 
   LOG_INFO("Registered listen_and_summarize tool with Governor (Whisper STT)");
 
+  return 0;
+}
+
+/**
+ * Register advanced voice training tools with Governor
+ * 
+ * Training tools: pronunciation training, voice training mode
+ * These are optional/advanced features separate from base voice tools
+ * 
+ * @param registry Governor tool registry
+ * @param session Voice session state  
+ * @param phonemizer_ctx Phonemizer context for training
+ * @param tts_ctx TTS context for synthesis
+ * @param stt_ctx STT context for transcription
+ * @return 0 on success, -1 on error
+ */
+int ethervox_voice_tools_register_training(
+    void* registry, 
+    ethervox_voice_session_t* session,
+    void* phonemizer_ctx,
+    void* tts_ctx,
+    void* stt_ctx
+) {
+  if (!registry || !session) {
+    LOG_ERROR("Invalid parameters for training tools registration");
+    return -1;
+  }
+
+  // Training tools are registered in conversation_tools plugin
+  // This function exists for future training-specific tools
+  
+  LOG_INFO("Training tools registration placeholder (tools in conversation_tools)");
+  
   return 0;
 }

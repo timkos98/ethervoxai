@@ -482,9 +482,23 @@ int ethervox_optimize_tool_prompts_v2(
     }
     printf("\n");
     
+    // DEBUG: Check manifest state
+    ETHERVOX_LOGI("Manifest state before optimization:");
+    ETHERVOX_LOGI("  manifest_file=%p", (void*)manifest_registry->manifest_file);
+    ETHERVOX_LOGI("  header.tool_count=%u", manifest_registry->header.tool_count);
+    ETHERVOX_LOGI("  tools_available=%d", manifest_registry->tools_available);
+    ETHERVOX_LOGI("  fallback_level=%u", manifest_registry->fallback_level);
+    
+    // CRITICAL FIX: During optimization, we need access to the manifest even if
+    // tools_available is false (which happens when optimized file doesn't exist yet).
+    // Temporarily set tools_available = true so ethervox_tool_get_index() doesn't fail.
+    bool original_tools_available = manifest_registry->tools_available;
+    manifest_registry->tools_available = true;
+    
     // If no new tools to optimize, we're done
     if (tools_to_optimize == 0) {
         printf(COLOR_GREEN "✓" COLOR_RESET " All tools already optimized!\n");
+        manifest_registry->tools_available = original_tools_available;  // Restore state
         if (existing_entries) free(existing_entries);
         if (g_report_file) {
             fprintf(g_report_file, "\nAll tools already optimized - nothing to do\n");
@@ -590,18 +604,30 @@ int ethervox_optimize_tool_prompts_v2(
             
             // Get full tool detail
             tool_detail_header_t detail;
-            tool_param_t params[MAX_PARAMETERS];
+            // Allocate params on heap to avoid stack overflow (7.7KB array)
+            tool_param_t* params = malloc(MAX_PARAMETERS * sizeof(tool_param_t));
+            if (!params) {
+                printf("  ✗ %s: memory allocation failed for params\n", tool_idx->name);
+                continue;
+            }
             uint8_t param_count;
             
             if (ethervox_tool_get_detail(manifest_registry, tool_idx->name, 
                                         &detail, params, &param_count) != 0) {
                 printf("  ✗ %s: failed to load detail\n", tool_idx->name);
+                free(params);
                 continue;
             }
             
             // Build optimization query - model-agnostic
-            char query[4096];
-            int qoff = snprintf(query, sizeof(query),
+            // Allocate on heap to avoid stack overflow
+            char* query = malloc(4096);
+            if (!query) {
+                printf("  ✗ %s: memory allocation failed\n", tool_idx->name);
+                free(params);
+                continue;
+            }
+            int qoff = snprintf(query, 4096,
                     "Tool: %s\n"
                     "Category: %s\n"
                     "Description: %s\n"
@@ -609,8 +635,8 @@ int ethervox_optimize_tool_prompts_v2(
                     tool_idx->name, tool_idx->category, detail.description, detail.param_count);
             
             // Add parameter list
-            for (uint8_t p = 0; p < param_count && qoff < (int)sizeof(query) - 500; p++) {
-                qoff += snprintf(query + qoff, sizeof(query) - qoff,
+            for (uint8_t p = 0; p < param_count && qoff < 4096 - 500; p++) {
+                qoff += snprintf(query + qoff, 4096 - qoff,
                                "  - %s (%s, %s)\n",
                                params[p].name, params[p].type,
                                params[p].required ? "required" : "optional");
@@ -622,38 +648,97 @@ int ethervox_optimize_tool_prompts_v2(
             tool_format_type_t tool_fmt = chat_template ? 
                 chat_template_get_tool_format(chat_template) : TOOL_FORMAT_XML_ATTR;
             
-            char tool_format[512];
-            if (tool_fmt == TOOL_FORMAT_JSON_IN_XML) {
-                // Granite 4.0 format: <tool_call>{"name":"...","arguments":{...}}</tool_call>
-                int foff = snprintf(tool_format, sizeof(tool_format),
-                                  "<tool_call>\n{\"name\": \"%s\", \"arguments\": {",
-                                  tool_idx->name);
-                for (uint8_t p = 0; p < param_count && foff < (int)sizeof(tool_format) - 100; p++) {
-                    if (p > 0) {
-                        foff += snprintf(tool_format + foff, sizeof(tool_format) - foff, ", ");
-                    }
-                    foff += snprintf(tool_format + foff, sizeof(tool_format) - foff,
-                                   "\"%s\": \"value\"", params[p].name);
-                }
-                snprintf(tool_format + foff, sizeof(tool_format) - foff, "}}\n</tool_call>");
-            } else {
-                // XML attribute format (Qwen, Llama, Phi)
-                int foff = snprintf(tool_format, sizeof(tool_format),
-                                  "<tool_call name=\"%s\"", tool_idx->name);
-                for (uint8_t p = 0; p < param_count && foff < (int)sizeof(tool_format) - 50; p++) {
-                    foff += snprintf(tool_format + foff, sizeof(tool_format) - foff,
-                                   " %s=\"value\"", params[p].name);
-                }
-                snprintf(tool_format + foff, sizeof(tool_format) - foff, " />");
+            // Allocate on heap to avoid stack overflow
+            char* tool_format = malloc(512);
+            if (!tool_format) {
+                printf("  ✗ %s: memory allocation failed for tool_format\n", tool_idx->name);
+                free(query);
+                free(params);
+                continue;
             }
             
-            qoff += snprintf(query + qoff, sizeof(query) - qoff,
-                    "\nGenerate a concise optimized prompt (under 30 words) that includes:\n"
-                    "1. WHEN to call this tool (user intent/trigger scenarios)\n"
-                    "2. HOW to call it: %s\n\n"
-                    "Format: Start with 'Call %s when...' then show the exact tool call format.\n"
-                    "Be specific about triggering scenarios.",
-                    tool_format, tool_idx->name);
+            if (tool_fmt == TOOL_FORMAT_JSON_IN_XML) {
+                // Granite 4.0 format: <tool_call>{"name":"...","arguments":{...}}</tool_call>
+                int foff = snprintf(tool_format, 512,
+                                  "<tool_call>\n{\"name\": \"%s\", \"arguments\": {",
+                                  tool_idx->name);
+                for (uint8_t p = 0; p < param_count && foff < 512 - 100; p++) {
+                    if (p > 0) {
+                        foff += snprintf(tool_format + foff, 512 - foff, ", ");
+                    }
+                    foff += snprintf(tool_format + foff, 512 - foff,
+                                   "\"%s\": \"value\"", params[p].name);
+                }
+                snprintf(tool_format + foff, 512 - foff, "}}\n</tool_call>");
+            } else {
+                // XML attribute format (Qwen, Llama, Phi)
+                int foff = snprintf(tool_format, 512,
+                                  "<tool_call name=\"%s\"", tool_idx->name);
+                for (uint8_t p = 0; p < param_count && foff < 512 - 50; p++) {
+                    foff += snprintf(tool_format + foff, 512 - foff,
+                                   " %s=\"value\"", params[p].name);
+                }
+                snprintf(tool_format + foff, 512 - foff, " />");
+            }
+            
+            // Add special guidance for memory tools
+            const char* memory_guidance = "";
+            if (strcmp(tool_idx->name, "memory_store") == 0) {
+                memory_guidance = "\n\nCRITICAL: This tool stores information to PERSISTENT LONG-TERM MEMORY. "
+                                 "Call it when user says 'remember', shares preferences, facts about themselves, "
+                                 "or provides corrections. Memory survives conversation resets and app restarts.";
+            } else if (strcmp(tool_idx->name, "memory_search") == 0) {
+                memory_guidance = "\n\nCRITICAL: This tool searches PERSISTENT LONG-TERM MEMORY. "
+                                 "Call it when asked to recall previously stored information (e.g., 'what is my...', "
+                                 "'do you remember...', 'what did I say about...'). "
+                                 "Do NOT answer from conversation context alone - always check persistent storage.";
+            }
+            
+            qoff += snprintf(query + qoff, 4096 - qoff,
+                    "\nYou must generate a brief natural language description (under 30 words) explaining:\n"
+                    "- WHEN to use this tool (what user requests trigger it)\n"
+                    "- WHAT it does\n%s\n\n"
+                    "Do NOT output XML tags or tool calls. Output plain English text only.\n"
+                    "Example format: \"Use %s when the user asks to [scenario]. It [what it does].\"\n"
+                    "Your description:",
+                    memory_guidance, tool_idx->name);
+            
+            // Hardcode critical memory tool prompts (LLM-generated ones are too weak)
+            const char* hardcoded_prompt = NULL;
+            int hardcoded_tokens = 0;
+            
+            if (strcmp(tool_idx->name, "memory_store") == 0) {
+                hardcoded_prompt = "ALWAYS call when user says 'remember' or shares personal facts/preferences. Stores to persistent long-term memory.";
+                hardcoded_tokens = 15;
+            } else if (strcmp(tool_idx->name, "memory_search") == 0) {
+                hardcoded_prompt = "ALWAYS call when asked 'what is my...', 'do you remember...'. Searches persistent memory, not conversation context.";
+                hardcoded_tokens = 17;
+            }
+            
+            if (hardcoded_prompt) {
+                // Use hardcoded prompt for critical memory tools
+                fprintf(fp, "    {\n");
+                fprintf(fp, "      \"name\": \"%s\",\n", tool_idx->name);
+                fprintf(fp, "      \"optimized_prompt\": \"%s\",\n", hardcoded_prompt);
+                fprintf(fp, "      \"token_count\": %d\n", hardcoded_tokens);
+                fprintf(fp, "    }%s\n", (i < total_tools - 1) ? "," : "");
+                
+                printf("  " COLOR_CYAN "⚙" COLOR_RESET " %s: %s (%d tokens) " COLOR_YELLOW "[hardcoded]" COLOR_RESET "\n", 
+                       tool_idx->name, hardcoded_prompt, hardcoded_tokens);
+                
+                if (g_report_file) {
+                    fprintf(g_report_file, "  ⚙ %s [hardcoded]\n", tool_idx->name);
+                    fprintf(g_report_file, "    Optimized: %s\n", hardcoded_prompt);
+                    fprintf(g_report_file, "    Tokens: %d\n", hardcoded_tokens);
+                    fflush(g_report_file);
+                }
+                
+                tools_processed++;
+                free(query);
+                free(tool_format);
+                free(params);
+                continue;  // Skip LLM generation for this tool
+            }
             
             // Disable tool execution so the LLM's example tool call isn't executed
             ethervox_governor_set_tool_execution(governor, false);
@@ -662,14 +747,21 @@ int ethervox_optimize_tool_prompts_v2(
             char* response = NULL;
             char* error = NULL;
             
+            ETHERVOX_LOGI("Sending query to LLM for tool '%s' (query length: %d)", tool_idx->name, qoff);
+            
             if (ethervox_governor_execute(governor, query, &response, &error,
                                          NULL, NULL, NULL, NULL) == 0 && response) {
                 // Re-enable tool execution
                 ethervox_governor_set_tool_execution(governor, true);
                 
+                ETHERVOX_LOGI("LLM response for '%s': '%.200s%s'", 
+                             tool_idx->name, response, strlen(response) > 200 ? "..." : "");
+                
                 // Extract optimized sentence
                 char optimized[256];
                 extract_optimized_sentence(response, optimized, sizeof(optimized));
+                
+                ETHERVOX_LOGI("Extracted optimized prompt: '%s'", optimized);
                 
                 // Estimate tokens (~0.75 tokens per word)
                 int word_count = count_words(optimized);
@@ -718,6 +810,9 @@ int ethervox_optimize_tool_prompts_v2(
             
             free(response);
             free(error);
+            free(tool_format);  // Free heap-allocated tool_format buffer
+            free(query);  // Free heap-allocated query buffer
+            free(params);  // Free heap-allocated params array
         }
     }
     
@@ -750,6 +845,9 @@ int ethervox_optimize_tool_prompts_v2(
     }
     
     printf("\nRestart EthervoxAI to use optimized prompts.\n");
+    
+    // Restore original tools_available state
+    manifest_registry->tools_available = original_tools_available;
     
     // Cleanup
     if (existing_entries) {

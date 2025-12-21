@@ -30,6 +30,32 @@ typedef struct {
 } ethervox_whisper_settings_t;
 
 /**
+ * @brief Text-to-Speech (TTS) configuration settings
+ */
+typedef struct {
+    char engine[32];               /**< TTS engine: "system", "piper", "none" */
+    char voice[64];                /**< Default voice name/ID (deprecated, use per-language voices) */
+    char voice_en[64];             /**< English voice ID */
+    char voice_zh[64];             /**< Chinese voice ID */
+    char voice_de[64];             /**< German voice ID */
+    float speed;                   /**< Speech rate (0.5-2.0, 1.0 = normal) */
+    float volume;                  /**< Volume (0.0-1.0) */
+    float phoneme_variance;        /**< Phoneme duration variance (0.0-1.0, 0.667 = default, higher = more natural rhythm) */
+    float prosody_variance;        /**< Pitch/intonation variance (0.0-1.5, 0.8 = default, higher = more expressive) */
+    char piper_model_path[256];    /**< Path to Piper model (if using Piper) */
+} ethervox_tts_settings_t;
+
+/**
+ * @brief Acoustic Echo Cancellation (AEC) settings
+ */
+typedef struct {
+    bool enabled;                  /**< Enable/disable AEC */
+    char backend[16];              /**< AEC backend: "none", "speex", "webrtc" */
+    float suppression_level;       /**< Echo suppression strength (0.0-1.0, 0.5 = moderate) */
+    int filter_length_ms;          /**< Echo tail length in milliseconds (32-128ms) */
+} ethervox_aec_settings_t;
+
+/**
  * @brief Voice conversation configuration settings
  */
 typedef struct {
@@ -37,6 +63,7 @@ typedef struct {
     uint32_t conversation_timeout_ms;  /**< Max conversation duration (ms) */
     uint32_t silence_timeout_ms;       /**< Silence threshold to stop listening (ms) */
     float audio_energy_threshold;      /**< Minimum audio energy to process (0.0-1.0) */
+    bool always_listening;             /**< Continuous STT without wake word (desktop only) */
     bool filter_hallucinations;        /**< Filter known Whisper hallucinations */
     int max_audio_chunk_size;          /**< Audio chunk size for STT (samples) */
 } ethervox_conversation_settings_t;
@@ -89,6 +116,8 @@ typedef struct {
 typedef struct {
     uint32_t version;                              /**< Settings format version */
     ethervox_whisper_settings_t whisper;           /**< Whisper STT settings */
+    ethervox_tts_settings_t tts;                   /**< TTS engine settings */
+    ethervox_aec_settings_t aec;                   /**< Acoustic echo cancellation settings */
     ethervox_conversation_settings_t conversation; /**< Conversation settings */
     ethervox_wake_word_settings_t wake_word;       /**< Wake word settings */
     ethervox_llm_settings_t llm;                   /**< LLM runtime configuration */

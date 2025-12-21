@@ -23,6 +23,92 @@
 extern "C" {
 #endif
 
+// ============================================================================
+// Execution Context for Conversational AI
+// ============================================================================
+
+/**
+ * Input source tracking - where did the user's query come from?
+ */
+typedef enum {
+    ETHERVOX_INPUT_SOURCE_CLI,           // Typed command in terminal
+    ETHERVOX_INPUT_SOURCE_VOICE,         // Voice conversation (wake word → STT)
+    ETHERVOX_INPUT_SOURCE_API,           // External API call
+    ETHERVOX_INPUT_SOURCE_UNKNOWN        // Default/unspecified
+} ethervox_input_source_t;
+
+/**
+ * Conversation turn state for bidirectional interaction
+ */
+typedef enum {
+    ETHERVOX_TURN_USER,              // User is speaking/typing
+    ETHERVOX_TURN_ASSISTANT,         // Assistant is speaking
+    ETHERVOX_TURN_WAITING,           // Waiting for user response
+    ETHERVOX_TURN_INTERRUPTED        // User interrupted assistant
+} ethervox_conversation_turn_t;
+
+/**
+ * Tool callbacks for real-time conversational control
+ * 
+ * These callbacks allow LLM tools (speak, listen) to interact with
+ * the conversation system in real-time, enabling bidirectional
+ * interruption and natural turn-taking.
+ */
+typedef struct {
+    /**
+     * Called when LLM invokes "speak" tool
+     * @param text Text to speak via TTS
+     * @param wait_for_response If true, open microphone after speaking
+     * @param allow_interrupt If true, user can interrupt by speaking
+     * @param user_data Typically the conversation session
+     * @return 0 on success, negative on error
+     */
+    int (*on_speak)(const char* text, bool wait_for_response, bool allow_interrupt, void* user_data);
+    
+    /**
+     * Called when LLM invokes "listen" tool
+     * @param user_input Output: captured user speech (caller must free)
+     * @param timeout_ms Maximum wait time in milliseconds
+     * @param prompt_hint Optional hint about what to listen for
+     * @param user_data Typically the conversation session
+     * @return 0 on success, negative on error
+     */
+    int (*on_listen)(char** user_input, int timeout_ms, const char* prompt_hint, void* user_data);
+    
+    /**
+     * Called when user interrupts during TTS playback
+     * @param user_data Typically the conversation session
+     * @return 0 on success, negative on error
+     */
+    int (*on_interrupt)(void* user_data);
+    
+    void* user_data;  // Opaque pointer (typically conversation_session)
+} ethervox_conversation_callbacks_t;
+
+/**
+ * Execution context passed to Governor for conversational awareness
+ * 
+ * This gives the LLM knowledge about:
+ * - Where input came from (voice vs CLI)
+ * - What output capabilities are available (TTS, screen)
+ * - Conversation state (turn-taking)
+ * - Callbacks for real-time interaction
+ */
+typedef struct {
+    ethervox_input_source_t source;               // Where did input come from?
+    const char* source_description;                // Human-readable (e.g., "voice conversation")
+    
+    // Capability flags
+    bool tts_available;                            // Can we speak responses?
+    bool microphone_available;                     // Can we listen for input?
+    
+    // Conversation state
+    ethervox_conversation_turn_t current_turn;     // Who's turn is it?
+    
+    // Callbacks for conversational tools (NULL if not applicable)
+    ethervox_conversation_callbacks_t* callbacks;
+} ethervox_execution_context_t;
+
 // Android platform helper (defined in ethervox_android_core.c)
 #ifdef ETHERVOX_PLATFORM_ANDROID
 const char* ethervox_android_get_files_dir(void);
@@ -133,7 +219,8 @@ typedef enum {
     ETHERVOX_GOVERNOR_NEED_CLARIFICATION, // Need more info from user
     ETHERVOX_GOVERNOR_TIMEOUT,            // Exceeded iteration/time limits
     ETHERVOX_GOVERNOR_ERROR,              // Execution error
-    ETHERVOX_GOVERNOR_USER_DENIED         // User denied tool execution
+    ETHERVOX_GOVERNOR_USER_DENIED,        // User denied tool execution
+    ETHERVOX_GOVERNOR_INTERRUPTED         // Generation interrupted by user
 } ethervox_governor_status_t;
 
 /**
@@ -323,7 +410,8 @@ bool ethervox_governor_is_loaded(ethervox_governor_t* governor);
  * @param error Output: Error message if failed (caller must free)
  * @param metrics Output: Confidence metrics (optional, can be NULL)
  * @param progress_callback Progress callback for UI updates (optional, can be NULL)
- * @param user_data User data passed to progress callback (optional, can be NULL)
+ * @param token_callback Token-by-token streaming callback (optional, can be NULL)
+ * @param user_data User data passed to callbacks (optional, can be NULL)
  * @return Governor status
  */
 ethervox_governor_status_t ethervox_governor_execute(
@@ -337,6 +425,34 @@ ethervox_governor_status_t ethervox_governor_execute(
     void* user_data
 );
 
+/**
+ * Execute user query with execution context for conversational awareness
+ * 
+ * Extended version of ethervox_governor_execute() that includes execution context
+ * for conversational AI features like voice interaction, turn-taking, and interrupts.
+ * 
+ * @param governor Governor instance
+ * @param user_query User's natural language query
+ * @param exec_context Execution context (input source, capabilities, callbacks) - can be NULL for legacy behavior
+ * @param response Output: Final response (caller must free)
+ * @param error Output: Error message if failed (caller must free)
+ * @param metrics Output: Confidence metrics (optional, can be NULL)
+ * @param progress_callback Progress callback for UI updates (optional, can be NULL)
+ * @param token_callback Token-by-token streaming callback (optional, can be NULL)
+ * @param user_data User data passed to callbacks (optional, can be NULL)
+ * @return Governor status
+ */
+ethervox_governor_status_t ethervox_governor_execute_with_context(
+    ethervox_governor_t* governor,
+    const char* user_query,
+    const ethervox_execution_context_t* exec_context,
+    char** response,
+    char** error,
+    ethervox_confidence_metrics_t* metrics,
+    ethervox_governor_progress_callback progress_callback,
+    void (*token_callback)(const char* token, void* user_data),
+    void* user_data
+);
 /**
  * Get iteration count from last execution (for debugging)
  */
@@ -409,6 +525,25 @@ static inline ethervox_governor_config_t ethervox_governor_default_config(void) 
  * @return Tool registry pointer, or NULL if invalid
  */
 ethervox_tool_registry_t* ethervox_governor_get_registry(ethervox_governor_t* governor);
+
+/**
+ * Request interruption of ongoing generation
+ * 
+ * Sets an interrupt flag that will be checked at the start of each iteration.
+ * Safe to call from signal handlers or conversation interrupt callbacks.
+ * 
+ * @param governor Governor instance
+ */
+void ethervox_governor_request_interrupt(ethervox_governor_t* governor);
+
+/**
+ * Update Governor runtime configuration (for settings changes)
+ * 
+ * @param governor Governor instance
+ * @param config New configuration to apply
+ * @return 0 on success, -1 on error
+ */
+int ethervox_governor_update_config(ethervox_governor_t* governor, const ethervox_governor_config_t* config);
 
 /**
  * Get chat template from Governor instance

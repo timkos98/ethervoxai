@@ -29,6 +29,7 @@
 #include "ethervox/timer_tools.h"    // Timer tools
 #include "ethervox/memory_tools.h"   // Memory tools
 #include "ethervox/unit_conversion.h" // Unit conversion tools
+#include "ethervox/conversation_tools.h" // Conversation tools (speak, listen)
 #include "ethervox/config.h"         // For version information
 #include "ethervox/dialogue.h"
 #include "ethervox/governor.h"  // Governor orchestration
@@ -684,6 +685,23 @@ int ethervox_dialogue_init(ethervox_dialogue_engine_t* engine,
       ETHERVOX_LOGI("Registered unit conversion tool with Governor");
 #else
       printf("Registered unit conversion tool with Governor\n");
+#endif
+    }
+    
+    // Register conversation tools (speak, listen for LLM-controlled voice interaction)
+    int conv_tools_result = ethervox_conversation_tools_register(registry);
+    if (conv_tools_result == 0) {
+      tool_count += 2;  // speak and listen
+#ifdef ETHERVOX_PLATFORM_ANDROID
+      ETHERVOX_LOGI("Registered conversation tools (speak, listen) with Governor");
+#else
+      printf("Registered conversation tools (speak, listen) with Governor\n");
+#endif
+    } else {
+#ifdef ETHERVOX_PLATFORM_ANDROID
+      ETHERVOX_LOGE("Failed to register conversation tools - error code: %d", conv_tools_result);
+#else
+      printf("Failed to register conversation tools - error code: %d\n", conv_tools_result);
 #endif
     }
     

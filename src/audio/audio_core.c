@@ -217,7 +217,43 @@ int ethervox_tts_synthesize(ethervox_audio_runtime_t* runtime,
     return -1;
   }
 
-  // Placeholder: Generate simple tone as audio output
+#ifdef __APPLE__
+  // Use macOS `say` command for TTS
+  // Build command with proper escaping
+  char command[2048];
+  
+  // Escape single quotes in text for shell
+  char escaped_text[1024];
+  const char* src = request->text;
+  char* dst = escaped_text;
+  while (*src && (dst - escaped_text) < (int)sizeof(escaped_text) - 10) {
+    if (*src == '\'') {
+      *dst++ = '\'';
+      *dst++ = '\\';
+      *dst++ = '\'';
+      *dst++ = '\'';
+    } else {
+      *dst++ = *src;
+    }
+    src++;
+  }
+  *dst = '\0';
+  
+  snprintf(command, sizeof(command), "say '%s' &", escaped_text);
+  
+  // Execute TTS in background
+  int result = system(command);
+  
+  // Return empty buffer (audio plays directly via system)
+  output->data = NULL;
+  output->size = 0;
+  output->channels = 1;
+  output->timestamp_us = 0;
+  
+  return (result == 0) ? 0 : -1;
+  
+#else
+  // Fallback: Generate simple tone as audio output
   uint32_t samples = runtime->config.sample_rate * kEthervoxAudioTtsDurationSeconds;
   output->data = (float*)malloc(samples * sizeof(float));
   output->size = samples;
@@ -234,6 +270,7 @@ int ethervox_tts_synthesize(ethervox_audio_runtime_t* runtime,
   }
 
   return 0;
+#endif
 }
 
 // Free audio buffer

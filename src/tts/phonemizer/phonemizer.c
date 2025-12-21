@@ -1,0 +1,472 @@
+/**
+ * @file phonemizer.c
+ * @brief Core phonemizer implementation
+ * 
+ * Text preprocessing + dictionary lookup + G2P fallback + ARPAbet→IPA
+ */
+
+#include "phonemizer.h"
+#include "dictionary.h"
+#include "arpabet_to_ipa.h"
+#include "rules_en.h"
+#include "rules_de.h"
+#include "dict_chinese.h"
+#include "pinyin_to_ipa.h"
+#include "chinese_segmenter.h"
+#include "pronunciation_overrides.h"
+#include "ethervox/logging.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+
+#define MAX_TOKENS 256
+#define MAX_TOKEN_LENGTH 64
+#define MAX_ARPABET_LENGTH 512
+
+struct phonemizer_context {
+    phonemizer_language_t language;
+    dict_t* dictionary;  // CMU Dict for English
+    dict_chinese_t* chinese_dict;  // CC-CEDICT for Chinese
+    pronunciation_override_store_t* overrides;  // User-trainable overrides
+};
+
+/**
+ * Parse language code to enum
+ * Uses prefix matching to support variants like "en-gb-x-rp" → "en-gb"
+ */
+static phonemizer_language_t parse_language_code(const char* code) {
+    if (!code) return PHONEMIZER_LANG_UNKNOWN;
+    
+    // Use strncmp for prefix matching to support language variants
+    // e.g., "en-gb-x-rp" matches "en-gb", "en-us-1" matches "en-us"
+    
+    if (strncmp(code, "en-us", 5) == 0 || strncmp(code, "en_us", 5) == 0) {
+        return PHONEMIZER_LANG_EN_US;
+    }
+    if (strncmp(code, "en-gb", 5) == 0 || strncmp(code, "en_gb", 5) == 0) {
+        return PHONEMIZER_LANG_EN_GB;
+    }
+    if (strncmp(code, "zh", 2) == 0 || strncmp(code, "zh-cn", 5) == 0 || strncmp(code, "zh_cn", 5) == 0) {
+        return PHONEMIZER_LANG_ZH_CN;
+    }
+    if (strncmp(code, "de", 2) == 0 || strncmp(code, "de-de", 5) == 0 || strncmp(code, "de_de", 5) == 0) {
+        return PHONEMIZER_LANG_DE_DE;
+    }
+    if (strncmp(code, "es-mx", 5) == 0 || strncmp(code, "es_mx", 5) == 0) {
+        return PHONEMIZER_LANG_ES_MX;
+    }
+    
+    return PHONEMIZER_LANG_UNKNOWN;
+}
+
+phonemizer_t* phonemizer_create(const char* lang_code) {
+    phonemizer_language_t lang = parse_language_code(lang_code);
+    if (lang == PHONEMIZER_LANG_UNKNOWN) {
+        ETHERVOX_LOG_ERROR("Unsupported language: %s\n", lang_code);
+        return NULL;
+    }
+    
+    phonemizer_t* ctx = calloc(1, sizeof(phonemizer_t));
+    if (!ctx) return NULL;
+    
+    ctx->language = lang;
+    
+    // Load pronunciation overrides (highest priority)
+    ctx->overrides = pronunciation_overrides_load();
+    if (ctx->overrides) {
+        int total, community;
+        float avg_conf;
+        pronunciation_overrides_get_stats(ctx->overrides, &total, &community, &avg_conf);
+        printf("[Phonemizer] ✅ Loaded %d pronunciation overrides (%d community, avg confidence: %.2f)\n",
+               total, community, avg_conf);
+    } else {
+        printf("[Phonemizer] ⚠️  No pronunciation overrides loaded\n");
+    }
+    
+    // Load dictionary for English
+    if (lang == PHONEMIZER_LANG_EN_US || lang == PHONEMIZER_LANG_EN_GB) {
+        // Try to find cmudict relative to binary or in data directory
+        const char* dict_paths[] = {
+            "src/tts/phonemizer/data/cmudict-0.7b.txt",
+            "data/cmudict-0.7b.txt",
+            "/usr/share/ethervox/cmudict-0.7b.txt",
+            NULL
+        };
+        
+        for (int i = 0; dict_paths[i]; i++) {
+            ctx->dictionary = dict_load(dict_paths[i]);
+            if (ctx->dictionary) {
+                printf("Loaded dictionary from: %s\n", dict_paths[i]);
+                break;
+            }
+        }
+        
+        if (!ctx->dictionary) {
+            ETHERVOX_LOG_WARN("Could not load CMU dictionary, G2P rules only");
+        }
+    }
+    
+    // Load dictionary for Chinese
+    if (lang == PHONEMIZER_LANG_ZH_CN) {
+        const char* unihan_paths[] = {
+            "src/tts/phonemizer/data/Unihan_Readings.txt",
+            "data/Unihan_Readings.txt",
+            "/usr/share/ethervox/Unihan_Readings.txt",
+            NULL
+        };
+        
+        for (int i = 0; unihan_paths[i]; i++) {
+            ctx->chinese_dict = dict_chinese_load(unihan_paths[i]);
+            if (ctx->chinese_dict) {
+                printf("Loaded Chinese dictionary from: %s\n", unihan_paths[i]);
+                break;
+            }
+        }
+        
+        if (!ctx->chinese_dict) {
+            ETHERVOX_LOG_ERROR("Could not load Unihan dictionary");
+            free(ctx);
+            return NULL;
+        }
+    }
+    
+    return ctx;
+}
+
+/**
+ * Tokenize text into words AND punctuation
+ * Punctuation is kept as separate tokens so Piper can add pauses
+ */
+static int tokenize_text(const char* text, char tokens[][MAX_TOKEN_LENGTH], int max_tokens) {
+    int count = 0;
+    const char* p = text;
+    char current[MAX_TOKEN_LENGTH];
+    int idx = 0;
+    
+    while (*p && count < max_tokens) {
+        if (isalpha(*p) || *p == '\'') {
+            // Build word
+            if (idx < MAX_TOKEN_LENGTH - 1) {
+                current[idx++] = *p;
+            }
+        } else if (ispunct(*p) && *p != '\'') {
+            // End current word if any
+            if (idx > 0) {
+                current[idx] = '\0';
+                strncpy(tokens[count++], current, MAX_TOKEN_LENGTH);
+                idx = 0;
+            }
+            
+            // Add punctuation as separate token (important for pauses!)
+            if (count < max_tokens) {
+                tokens[count][0] = *p;
+                tokens[count][1] = '\0';
+                count++;
+            }
+        } else {
+            // Whitespace or other - end current word
+            if (idx > 0) {
+                current[idx] = '\0';
+                strncpy(tokens[count++], current, MAX_TOKEN_LENGTH);
+                idx = 0;
+            }
+        }
+        p++;
+    }
+    
+    // Final word
+    if (idx > 0 && count < max_tokens) {
+        current[idx] = '\0';
+        strncpy(tokens[count++], current, MAX_TOKEN_LENGTH);
+    }
+    
+    return count;
+}
+
+/**
+ * Convert ARPAbet phoneme string to IPA
+ */
+static int arpabet_string_to_ipa(const char* arpabet, char* ipa_out, size_t max_len) {
+    ipa_out[0] = '\0';
+    
+    char arpabet_copy[MAX_ARPABET_LENGTH];
+    strncpy(arpabet_copy, arpabet, MAX_ARPABET_LENGTH - 1);
+    arpabet_copy[MAX_ARPABET_LENGTH - 1] = '\0';
+    
+    char* token = strtok(arpabet_copy, " ");
+    while (token) {
+        const char* ipa = arpabet_to_ipa(token);
+        if (ipa) {
+            size_t current_len = strlen(ipa_out);
+            size_t ipa_len = strlen(ipa);
+            
+            if (current_len + ipa_len + 2 > max_len) {
+                return -1; // Overflow
+            }
+            
+            if (current_len > 0) {
+                strcat(ipa_out, " ");
+            }
+            strcat(ipa_out, ipa);
+        } else {
+            ETHERVOX_LOG_ERROR("Unknown ARPAbet phoneme: %s\n", token);
+        }
+        
+        token = strtok(NULL, " ");
+    }
+    
+    return 0;
+}
+
+/**
+ * Phonemize Chinese text
+ */
+static int phonemize_chinese(phonemizer_t* ctx, const char* text, char* ipa_output, size_t max_len) {
+    if (!ctx->chinese_dict) return -1;
+    
+    // Segment text into words
+    char* words[MAX_TOKENS];
+    int word_count = segment_chinese_text(ctx->chinese_dict, text, words, MAX_TOKENS);
+    
+    if (word_count < 0) {
+        fprintf(stderr, "Failed to segment Chinese text\n");
+        return -1;
+    }
+    
+    ipa_output[0] = '\0';
+    
+    // Process each word
+    for (int i = 0; i < word_count; i++) {
+        char pinyin[256];
+        
+        // Lookup word in dictionary
+        if (dict_chinese_lookup(ctx->chinese_dict, words[i], pinyin, sizeof(pinyin)) != 0) {
+            fprintf(stderr, "Chinese word not in dictionary: %s\n", words[i]);
+            free(words[i]);
+            continue;
+        }
+        
+        // Convert pinyin syllables to IPA
+        char* syllable = strtok(pinyin, " ");
+        while (syllable) {
+            char syllable_ipa[64];
+            if (pinyin_syllable_to_ipa(syllable, syllable_ipa, sizeof(syllable_ipa)) == 0) {
+                size_t current_len = strlen(ipa_output);
+                if (current_len + strlen(syllable_ipa) + 2 < max_len) {
+                    if (current_len > 0) strcat(ipa_output, " ");
+                    strcat(ipa_output, syllable_ipa);
+                }
+            }
+            syllable = strtok(NULL, " ");
+        }
+        
+        free(words[i]);
+    }
+    
+    return 0;
+}
+
+/**
+ * Phonemize German text using rules
+ */
+static int phonemize_german(const char* text, char* ipa_output, size_t max_len) {
+    ipa_output[0] = '\0';
+    
+    // Tokenize text into words (same as English)
+    char tokens[MAX_TOKENS][MAX_TOKEN_LENGTH];
+    int token_count = tokenize_text(text, tokens, MAX_TOKENS);
+    
+    if (token_count == 0) {
+        return -1;
+    }
+    
+    // Process each word with German G2P rules
+    for (int i = 0; i < token_count; i++) {
+        char word_ipa[MAX_ARPABET_LENGTH];
+        
+        // Check if this token is punctuation
+        if (strlen(tokens[i]) == 1 && ispunct(tokens[i][0])) {
+            // Pass punctuation through directly - Piper uses it for pauses
+            size_t current_len = strlen(ipa_output);
+            if (current_len + 3 < max_len) {
+                if (current_len > 0) strcat(ipa_output, " ");
+                strcat(ipa_output, tokens[i]);
+            }
+            continue;
+        }
+        
+        if (apply_german_g2p_rules(tokens[i], word_ipa, MAX_ARPABET_LENGTH) != 0) {
+            ETHERVOX_LOG_ERROR("Failed to phonemize German: %s\n", tokens[i]);
+            continue;
+        }
+        
+        // Append to output with word boundary space
+        size_t current_len = strlen(ipa_output);
+        size_t word_len = strlen(word_ipa);
+        
+        if (current_len + word_len + 4 > max_len) {
+            fprintf(stderr, "German IPA output buffer overflow\n");
+            return -1;
+        }
+        
+        if (current_len > 0) {
+            strcat(ipa_output, " ");  // Word boundary
+        }
+        strcat(ipa_output, word_ipa);
+    }
+    
+    return 0;
+}
+
+int phonemizer_text_to_ipa(phonemizer_t* ctx, const char* text, char* ipa_output, size_t max_len) {
+    if (!ctx || !text || !ipa_output || max_len == 0) return -1;
+    
+    ipa_output[0] = '\0';
+    
+    // Route to language-specific implementation
+    if (ctx->language == PHONEMIZER_LANG_ZH_CN) {
+        return phonemize_chinese(ctx, text, ipa_output, max_len);
+    }
+    
+    if (ctx->language == PHONEMIZER_LANG_DE_DE) {
+        return phonemize_german(text, ipa_output, max_len);
+    }
+    
+    if (ctx->language != PHONEMIZER_LANG_EN_US && ctx->language != PHONEMIZER_LANG_EN_GB) {
+        fprintf(stderr, "Language not yet implemented\n");
+        return -1;
+    }
+    
+    // Tokenize text into words
+    char tokens[MAX_TOKENS][MAX_TOKEN_LENGTH];
+    int token_count = tokenize_text(text, tokens, MAX_TOKENS);
+    
+    if (token_count == 0) {
+        ETHERVOX_LOG_DEBUG("[Phonemizer] No tokens found in text: '%s'\n", text);
+        return -1; // No words found
+    }
+    
+    ETHERVOX_LOG_DEBUG("[Phonemizer DEBUG] Processing %d tokens from text: '%s'\n", token_count, text);
+    
+    // Process each word
+    for (int i = 0; i < token_count; i++) {
+        char arpabet[MAX_ARPABET_LENGTH];
+        char word_ipa[MAX_ARPABET_LENGTH];
+        
+        // Check if this token is punctuation
+        if (strlen(tokens[i]) == 1 && ispunct(tokens[i][0])) {
+            // Pass punctuation through directly - Piper uses it for pauses
+            size_t current_len = strlen(ipa_output);
+            if (current_len + 3 < max_len) {
+                if (current_len > 0) strcat(ipa_output, " ");
+                strcat(ipa_output, tokens[i]);
+            }
+            continue;
+        }
+        
+        // Try pronunciation overrides first (highest priority)
+        int found = 0;
+        int override_is_ipa = 0;  // Track if override is already in IPA format
+        pronunciation_override_t override;
+        if (ctx->overrides && 
+            pronunciation_overrides_lookup(ctx->overrides, tokens[i], &override) == 0) {
+            
+            ETHERVOX_LOG_DEBUG("[Phonemizer] 🎯 Override found for '%s': ipa='%s' phonemes='%s' (confidence=%.3f)\n", 
+                    tokens[i], override.ipa, override.phonemes, override.confidence);
+            
+            // Check if override.ipa is populated - if so, use it directly
+            if (strlen(override.ipa) > 0) {
+                strncpy(word_ipa, override.ipa, MAX_ARPABET_LENGTH - 1);
+                word_ipa[MAX_ARPABET_LENGTH - 1] = '\0';
+                override_is_ipa = 1;
+                found = 1;
+                ETHERVOX_LOG_DEBUG("[Phonemizer] Using IPA from override: '%s'\n", word_ipa);
+            } else if (strlen(override.phonemes) > 0) {
+                // Fallback to phonemes field (should be ARPABET)
+                strncpy(arpabet, override.phonemes, MAX_ARPABET_LENGTH - 1);
+                arpabet[MAX_ARPABET_LENGTH - 1] = '\0';
+                found = 1;
+                ETHERVOX_LOG_DEBUG("[Phonemizer] Using phonemes from override (will convert): '%s'\n", arpabet);
+            } else {
+                ETHERVOX_LOG_DEBUG("[Phonemizer] WARNING: Override has empty ipa AND phonemes fields!");
+            }
+            
+            // Record usage for promotion tracking
+            pronunciation_overrides_record_usage(ctx->overrides, tokens[i]);
+        }
+        
+        // Try dictionary
+        if (!found && ctx->dictionary) {
+            if (dict_lookup(ctx->dictionary, tokens[i], arpabet, MAX_ARPABET_LENGTH) == 0) {
+                found = 1;
+                ETHERVOX_LOG_DEBUG("[Phonemizer] Dictionary found '%s' → '%s'\n", tokens[i], arpabet);
+            } else {
+                ETHERVOX_LOG_DEBUG("[Phonemizer] Dictionary lookup failed for '%s'\n", tokens[i]);
+            }
+        }
+        
+        // Fallback to G2P rules
+        if (!found) {
+            if (apply_english_g2p_rules(tokens[i], arpabet, MAX_ARPABET_LENGTH) != 0) {
+                ETHERVOX_LOG_ERROR("Failed to phonemize: %s\n", tokens[i]);
+                continue;
+            } else {
+                ETHERVOX_LOG_DEBUG("[Phonemizer] G2P rules produced '%s' → '%s'\n", tokens[i], arpabet);
+            }
+        }
+        
+        // Convert ARPAbet to IPA (skip if override was already IPA)
+        if (!override_is_ipa) {
+            if (arpabet_string_to_ipa(arpabet, word_ipa, MAX_ARPABET_LENGTH) != 0) {
+                fprintf(stderr, "Failed ARPAbet→IPA conversion\n");
+                continue;
+            }
+        }
+        
+        // Append to output with word boundary space
+        size_t current_len = strlen(ipa_output);
+        size_t word_len = strlen(word_ipa);
+        
+        if (current_len + word_len + 2 > max_len) {
+            fprintf(stderr, "IPA output buffer overflow\n");
+            return -1;
+        }
+        
+        if (current_len > 0) {
+            strcat(ipa_output, " ");  // Space between words only
+        }
+        strcat(ipa_output, word_ipa);
+    }
+    
+    return 0;
+}
+
+phonemizer_language_t phonemizer_get_language(phonemizer_t* ctx) {
+    return ctx ? ctx->language : PHONEMIZER_LANG_UNKNOWN;
+}
+
+void* phonemizer_get_override_store(phonemizer_t* ctx) {
+    return ctx ? ctx->overrides : NULL;
+}
+
+void phonemizer_destroy(phonemizer_t* ctx) {
+    if (!ctx) return;
+    
+    if (ctx->dictionary) {
+        dict_free(ctx->dictionary);
+    }
+    
+    if (ctx->chinese_dict) {
+        dict_chinese_free(ctx->chinese_dict);
+    }
+    
+    if (ctx->overrides) {
+        // Save overrides and promote qualifying ones before cleanup
+        pronunciation_overrides_promote(ctx->overrides);
+        pronunciation_overrides_save(ctx->overrides);
+        pronunciation_overrides_free(ctx->overrides);
+    }
+    
+    free(ctx);
+}

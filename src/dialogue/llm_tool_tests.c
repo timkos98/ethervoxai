@@ -28,6 +28,7 @@
 #include <signal.h>
 #include <setjmp.h>
 #include <sys/time.h>
+#include <ctype.h>
 #include <sys/stat.h>
 #include <errno.h>
 
@@ -118,6 +119,26 @@ extern int g_ethervox_debug_enabled;
 // Crash detection
 static jmp_buf g_crash_recovery_point;
 static volatile sig_atomic_t g_crash_occurred = 0;
+
+// Helper function for case-insensitive substring search
+static int contains_case_insensitive(const char* haystack, const char* needle) {
+    if (!haystack || !needle) return 0;
+    
+    size_t hlen = strlen(haystack);
+    size_t nlen = strlen(needle);
+    if (nlen > hlen) return 0;
+    
+    for (size_t i = 0; i <= hlen - nlen; i++) {
+        size_t j;
+        for (j = 0; j < nlen; j++) {
+            if (tolower((unsigned char)haystack[i + j]) != tolower((unsigned char)needle[j])) {
+                break;
+            }
+        }
+        if (j == nlen) return 1;
+    }
+    return 0;
+}
 static char g_crash_signal_name[64] = {0};
 static char g_current_test_name[128] = {0};
 
@@ -512,6 +533,29 @@ static void test_llm_memory_add(ethervox_governor_t* governor) {
 static void test_llm_memory_search(ethervox_governor_t* governor) {
     LLM_TEST_SUBHEADER("Memory Search Tool Usage");
     
+    // First, ensure memory is populated (test may run independently)
+    reset_tool_tracking();
+    const char* setup_query = "Remember that my favorite color is blue.";
+    char* setup_response = NULL;
+    char* setup_error = NULL;
+    
+    LLM_TEST_INFO("Setup: \"%s\"", setup_query);
+    ethervox_governor_execute(governor, setup_query, &setup_response, &setup_error, NULL, 
+                             track_tool_progress, NULL, NULL);
+    if (setup_response) free(setup_response);
+    if (setup_error) free(setup_error);
+    
+    // CRITICAL: Reset conversation to clear KV cache
+    // This forces LLM to use memory_search tool instead of answering from context
+    LLM_TEST_INFO("Resetting conversation to force memory_search tool usage");
+    if (ethervox_governor_reset_conversation(governor) != 0) {
+        LLM_TEST_WARN("Failed to reset conversation");
+    }
+    
+    // Add a small delay to ensure memory persistence completes
+    usleep(100000);  // 100ms
+    
+    // Now test memory search
     reset_tool_tracking();
     
     const char* query = "What is my favorite color?";
@@ -519,7 +563,9 @@ static void test_llm_memory_search(ethervox_governor_t* governor) {
     char* error = NULL;
     
     LLM_TEST_INFO("Prompting: \"%s\"", query);
+    LLM_TEST_INFO("Expected: LLM should call memory_search tool to retrieve 'blue' from persistent storage");
     report_debug("Executing query: %s", query);
+    report_debug("Memory should contain 'blue' from setup query (stored in persistent DB, not context)");
     
     ethervox_governor_status_t status = ethervox_governor_execute(
         governor, query, &response, &error, NULL,
@@ -601,7 +647,8 @@ static void test_llm_calculator(ethervox_governor_t* governor) {
         }
         
         // Check if response contains correct answer (1234 * 5678 = 7006652)
-        if (response && strstr(response, "7006652")) {
+        // Accept both formatted (7,006,652) and unformatted (7006652) versions
+        if (response && (strstr(response, "7006652") || strstr(response, "7,006,652"))) {
             LLM_TEST_PASS("Response contains correct result: 7006652");
             g_llm_tests_passed++;
         } else {
@@ -1348,7 +1395,8 @@ static void test_llm_startup_prompt_tools(ethervox_governor_t* governor) {
 void run_llm_tool_tests(ethervox_governor_t* governor, 
                        ethervox_memory_store_t* memory_store,
                        const char* model_path,
-                       bool verbose) {
+                       bool verbose,
+                       const char* test_filter) {
     // Set verbose mode and enable debug logging if requested
     g_verbose_mode = verbose;
     
@@ -1579,75 +1627,127 @@ void run_llm_tool_tests(ethervox_governor_t* governor,
     // Run all LLM tool tests
     int passed_before, failed_before;
     
+    // Helper macro to check if test should run
+    #define SHOULD_RUN_TEST(name) (!test_filter || contains_case_insensitive(name, test_filter))
+    
+    if (test_filter) {
+        printf("\n" COLOR_CYAN "ℹ Running tests matching: '%s'" COLOR_RESET "\n\n", test_filter);
+        printf("DEBUG: test_filter = '%s'\n", test_filter);
+    } else {
+        printf("\nDEBUG: Running ALL tests (no filter)\n\n");
+    }
+    
     LLM_TEST_HEADER("Test 1: Memory Add Tool");
-    report_test_header("Test 1: Memory Add Tool");
-    passed_before = g_llm_tests_passed; failed_before = g_llm_tests_failed;
-    test_llm_memory_add(governor);
-    if (g_llm_tests_failed > failed_before) record_llm_test_result("Memory Add Tool", false);
-    else if (g_llm_tests_passed > passed_before) record_llm_test_result("Memory Add Tool", true);
+    if (SHOULD_RUN_TEST("Memory Add Tool")) {
+        report_test_header("Test 1: Memory Add Tool");
+        passed_before = g_llm_tests_passed; failed_before = g_llm_tests_failed;
+        test_llm_memory_add(governor);
+        if (g_llm_tests_failed > failed_before) record_llm_test_result("Memory Add Tool", false);
+        else if (g_llm_tests_passed > passed_before) record_llm_test_result("Memory Add Tool", true);
+    } else {
+        printf("  ⊘ Skipped\n");
+    }
     
     LLM_TEST_HEADER("Test 2: Memory Search Tool");
-    report_test_header("Test 2: Memory Search Tool");
-    passed_before = g_llm_tests_passed; failed_before = g_llm_tests_failed;
-    test_llm_memory_search(governor);
-    if (g_llm_tests_failed > failed_before) record_llm_test_result("Memory Search Tool", false);
-    else if (g_llm_tests_passed > passed_before) record_llm_test_result("Memory Search Tool", true);
+    if (SHOULD_RUN_TEST("Memory Search Tool")) {
+        report_test_header("Test 2: Memory Search Tool");
+        passed_before = g_llm_tests_passed; failed_before = g_llm_tests_failed;
+        test_llm_memory_search(governor);
+        if (g_llm_tests_failed > failed_before) record_llm_test_result("Memory Search Tool", false);
+        else if (g_llm_tests_passed > passed_before) record_llm_test_result("Memory Search Tool", true);
+    } else {
+        printf("  ⊘ Skipped\n");
+    }
     
     LLM_TEST_HEADER("Test 3: Calculator Tool");
-    report_test_header("Test 3: Calculator Tool");
-    passed_before = g_llm_tests_passed; failed_before = g_llm_tests_failed;
-    test_llm_calculator(governor);
-    if (g_llm_tests_failed > failed_before) record_llm_test_result("Calculator Tool", false);
-    else if (g_llm_tests_passed > passed_before) record_llm_test_result("Calculator Tool", true);
+    if (SHOULD_RUN_TEST("Calculator Tool")) {
+        report_test_header("Test 3: Calculator Tool");
+        passed_before = g_llm_tests_passed; failed_before = g_llm_tests_failed;
+        test_llm_calculator(governor);
+        if (g_llm_tests_failed > failed_before) record_llm_test_result("Calculator Tool", false);
+        else if (g_llm_tests_passed > passed_before) record_llm_test_result("Calculator Tool", true);
+    } else {
+        printf("  ⊘ Skipped\n");
+    }
     
     LLM_TEST_HEADER("Test 4: Memory Correction (Adaptive)");
-    report_test_header("Test 4: Memory Correction (Adaptive)");
-    passed_before = g_llm_tests_passed; failed_before = g_llm_tests_failed;
-    test_llm_memory_correction(governor);
-    if (g_llm_tests_failed > failed_before) record_llm_test_result("Memory Correction (Adaptive)", false);
-    else if (g_llm_tests_passed > passed_before) record_llm_test_result("Memory Correction (Adaptive)", true);
+    if (SHOULD_RUN_TEST("Memory Correction")) {
+        report_test_header("Test 4: Memory Correction (Adaptive)");
+        passed_before = g_llm_tests_passed; failed_before = g_llm_tests_failed;
+        test_llm_memory_correction(governor);
+        if (g_llm_tests_failed > failed_before) record_llm_test_result("Memory Correction (Adaptive)", false);
+        else if (g_llm_tests_passed > passed_before) record_llm_test_result("Memory Correction (Adaptive)", true);
+    } else {
+        printf("  ⊘ Skipped\n");
+    }
     
     LLM_TEST_HEADER("Test 5: Tag-Based Memory Search");
-    report_test_header("Test 5: Tag-Based Memory Search");
-    passed_before = g_llm_tests_passed; failed_before = g_llm_tests_failed;
-    test_llm_memory_tags(governor);
-    if (g_llm_tests_failed > failed_before) record_llm_test_result("Tag-Based Memory Search", false);
-    else if (g_llm_tests_passed > passed_before) record_llm_test_result("Tag-Based Memory Search", true);
+    if (SHOULD_RUN_TEST("Tag-Based")) {
+        report_test_header("Test 5: Tag-Based Memory Search");
+        passed_before = g_llm_tests_passed; failed_before = g_llm_tests_failed;
+        test_llm_memory_tags(governor);
+        if (g_llm_tests_failed > failed_before) record_llm_test_result("Tag-Based Memory Search", false);
+        else if (g_llm_tests_passed > passed_before) record_llm_test_result("Tag-Based Memory Search", true);
+    } else {
+        printf("  ⊘ Skipped\n");
+    }
     
     LLM_TEST_HEADER("Test 6: Multi-Tool Orchestration");
-    report_test_header("Test 6: Multi-Tool Orchestration");
-    passed_before = g_llm_tests_passed; failed_before = g_llm_tests_failed;
-    test_llm_multi_tool(governor);
-    if (g_llm_tests_failed > failed_before) record_llm_test_result("Multi-Tool Orchestration", false);
-    else if (g_llm_tests_passed > passed_before) record_llm_test_result("Multi-Tool Orchestration", true);
+    if (SHOULD_RUN_TEST("Multi-Tool Orchestration")) {
+        report_test_header("Test 6: Multi-Tool Orchestration");
+        passed_before = g_llm_tests_passed; failed_before = g_llm_tests_failed;
+        test_llm_multi_tool(governor);
+        if (g_llm_tests_failed > failed_before) record_llm_test_result("Multi-Tool Orchestration", false);
+        else if (g_llm_tests_passed > passed_before) record_llm_test_result("Multi-Tool Orchestration", true);
+    } else {
+        printf("  ⊘ Skipped\n");
+    }
     
     LLM_TEST_HEADER("Test 7: Model Load/Unload Lifecycle");
-    report_test_header("Test 7: Model Load/Unload Lifecycle");
-    passed_before = g_llm_tests_passed; failed_before = g_llm_tests_failed;
-    test_llm_model_lifecycle(model_path);
-    if (g_llm_tests_failed > failed_before) record_llm_test_result("Model Load/Unload Lifecycle", false);
-    else if (g_llm_tests_passed > passed_before) record_llm_test_result("Model Load/Unload Lifecycle", true);
+    if (SHOULD_RUN_TEST("Model") || SHOULD_RUN_TEST("Lifecycle")) {
+        report_test_header("Test 7: Model Load/Unload Lifecycle");
+        passed_before = g_llm_tests_passed; failed_before = g_llm_tests_failed;
+        test_llm_model_lifecycle(model_path);
+        if (g_llm_tests_failed > failed_before) record_llm_test_result("Model Load/Unload Lifecycle", false);
+        else if (g_llm_tests_passed > passed_before) record_llm_test_result("Model Load/Unload Lifecycle", true);
+    } else {
+        printf("  ⊘ Skipped\n");
+    }
     
     LLM_TEST_HEADER("Test 8: Long Runtime Stress Test");
-    report_test_header("Test 8: Long Runtime Stress Test");
-    passed_before = g_llm_tests_passed; failed_before = g_llm_tests_failed;
-    test_llm_long_runtime(governor);
-    if (g_llm_tests_failed > failed_before) record_llm_test_result("Long Runtime Stress Test", false);
-    else if (g_llm_tests_passed > passed_before) record_llm_test_result("Long Runtime Stress Test", true);
+    if (SHOULD_RUN_TEST("Runtime") || SHOULD_RUN_TEST("Stress")) {
+        report_test_header("Test 8: Long Runtime Stress Test");
+        passed_before = g_llm_tests_passed; failed_before = g_llm_tests_failed;
+        test_llm_long_runtime(governor);
+        if (g_llm_tests_failed > failed_before) record_llm_test_result("Long Runtime Stress Test", false);
+        else if (g_llm_tests_passed > passed_before) record_llm_test_result("Long Runtime Stress Test", true);
+    } else {
+        printf("  ⊘ Skipped\n");
+    }
     
     LLM_TEST_HEADER("Test 9: Context Window Management");
-    report_test_header("Test 9: Context Window Management");
-    passed_before = g_llm_tests_passed; failed_before = g_llm_tests_failed;
-    test_context_window_management(governor);
-    if (g_llm_tests_failed > failed_before) record_llm_test_result("Context Window Management", false);
-    else if (g_llm_tests_passed > passed_before) record_llm_test_result("Context Window Management", true);
+    if (SHOULD_RUN_TEST("Context") || SHOULD_RUN_TEST("Window")) {
+        report_test_header("Test 9: Context Window Management");
+        passed_before = g_llm_tests_passed; failed_before = g_llm_tests_failed;
+        test_context_window_management(governor);
+        if (g_llm_tests_failed > failed_before) record_llm_test_result("Context Window Management", false);
+        else if (g_llm_tests_passed > passed_before) record_llm_test_result("Context Window Management", true);
+    } else {
+        printf("  ⊘ Skipped\n");
+    }
     
     LLM_TEST_HEADER("Test 10: Startup Prompt Tools");
-    report_test_header("Test 10: Startup Prompt Tools (Read/Write)");
-    passed_before = g_llm_tests_passed; failed_before = g_llm_tests_failed;
-    test_llm_startup_prompt_tools(governor);
-    if (g_llm_tests_failed > failed_before) record_llm_test_result("Startup Prompt Tools", false);
-    else if (g_llm_tests_passed > passed_before) record_llm_test_result("Startup Prompt Tools", true);
+    if (SHOULD_RUN_TEST("Startup Prompt Tools")) {
+        report_test_header("Test 10: Startup Prompt Tools (Read/Write)");
+        passed_before = g_llm_tests_passed; failed_before = g_llm_tests_failed;
+        test_llm_startup_prompt_tools(governor);
+        if (g_llm_tests_failed > failed_before) record_llm_test_result("Startup Prompt Tools", false);
+        else if (g_llm_tests_passed > passed_before) record_llm_test_result("Startup Prompt Tools", true);
+    } else {
+        printf("  ⊘ Skipped\n");
+    }
+    
+    #undef SHOULD_RUN_TEST
     
     time_t end_time = time(NULL);
     double duration = difftime(end_time, start_time);

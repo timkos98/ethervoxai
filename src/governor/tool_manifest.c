@@ -247,6 +247,8 @@ int ethervox_tool_get_detail(
     uint8_t* param_count
 ) {
     if (!registry || !name || !detail || !params || !param_count) {
+        ETHERVOX_LOGE("ethervox_tool_get_detail: Invalid parameters (registry=%p, name=%p, detail=%p, params=%p, param_count=%p)",
+                     (void*)registry, (void*)name, (void*)detail, (void*)params, (void*)param_count);
         return -1;
     }
     
@@ -254,12 +256,16 @@ int ethervox_tool_get_detail(
     // The tools_available flag may be false during optimization when
     // the optimization file doesn't exist yet
     if (!registry->manifest_file) {
+        ETHERVOX_LOGE("ethervox_tool_get_detail: Manifest file is NULL for tool '%s'", name);
+        ETHERVOX_LOGE("  registry=%p, header.tool_count=%u, tools_available=%d",
+                     (void*)registry, registry->header.tool_count, registry->tools_available);
         return -1;
     }
     
     // Find in index
     const tool_index_entry_t* index_entry = ethervox_tool_get_index(registry, name);
     if (!index_entry) {
+        ETHERVOX_LOGE("ethervox_tool_get_detail: Tool '%s' not found in index", name);
         return -1;
     }
     

@@ -144,3 +144,38 @@ target_link_libraries(test_cache_summarization ethervoxai)
 target_include_directories(test_cache_summarization PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME CacheSummarization COMMAND test_cache_summarization)
 set_tests_properties(CacheSummarization PROPERTIES TIMEOUT 30 LABELS "unit;governor;cache")
+
+# AEC infrastructure tests (reference buffer + Speex AEC)
+add_executable(test_aec_infrastructure test_aec_infrastructure.c)
+target_link_libraries(test_aec_infrastructure ethervoxai)
+target_include_directories(test_aec_infrastructure PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME AECInfrastructure COMMAND test_aec_infrastructure)
+set_tests_properties(AECInfrastructure PROPERTIES TIMEOUT 30 LABELS "unit;audio;aec")
+
+# TTS text-to-phoneme integration tests (English, Chinese, German)
+add_executable(test_tts_text_to_phoneme unit/test_tts_text_to_phoneme.c)
+target_link_libraries(test_tts_text_to_phoneme ethervoxai m)
+target_include_directories(test_tts_text_to_phoneme PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME TTSTextToPhoneme COMMAND test_tts_text_to_phoneme)
+set_tests_properties(TTSTextToPhoneme PROPERTIES TIMEOUT 30 LABELS "unit;tts;phonemizer")
+
+# TTS end-to-end synthesis tests (requires model file, not added to ctest)
+add_executable(test_tts_synthesis unit/test_tts_synthesis.c)
+target_link_libraries(test_tts_synthesis ethervoxai m)
+target_include_directories(test_tts_synthesis PRIVATE ${CMAKE_SOURCE_DIR}/include)
+# Run manually: ./tests/test_tts_synthesis [model_path.onnx]
+# Example: ./tests/test_tts_synthesis ~/.ethervox/models/piper/en_US-lessac-medium.onnx
+
+# Voice training system tests (pronunciation training, audio recording)
+add_executable(test_voice_training unit/test_voice_training.c)
+target_link_libraries(test_voice_training ethervoxai m)
+target_include_directories(test_voice_training PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME VoiceTraining COMMAND test_voice_training)
+set_tests_properties(VoiceTraining PROPERTIES TIMEOUT 60 LABELS "unit;voice;training")
+
+# Voice training integration tests (requires microphone, manual test only)
+add_executable(test_voice_training_integration integration/test_voice_training_integration.c)
+target_link_libraries(test_voice_training_integration ethervoxai m)
+target_include_directories(test_voice_training_integration PRIVATE ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
+# Not added to CTest - requires microphone and user interaction
+# Run manually: ./tests/test_voice_training_integration
