@@ -151,5 +151,5 @@ Potential additions:
 ## See Also
 
 - [MOBILE_OPTIMIZATION.md](MOBILE_OPTIMIZATION.md) - Details on `--minimal` and secret mode
-- [QUICK_REFERENCE_MOBILE.md](../QUICK_REFERENCE_MOBILE.md) - Quick reference for mobile features
+- [QUICK_REFERENCE_MOBILE.md](QUICK_REFERENCE_MOBILE.md) - Quick reference for mobile features
 - [README.md](../README.md) - Full command-line documentation

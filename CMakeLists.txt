@@ -818,13 +818,6 @@ if(NOT ANDROID)
     set_target_properties(ethervoxai_app PROPERTIES OUTPUT_NAME ethervoxai)
 endif()
 
-# Direct microphone test (standalone)
-if(NOT ANDROID AND TARGET_PLATFORM STREQUAL "MACOS")
-    add_executable(test_mic_direct test_mic_direct.c)
-    target_link_libraries(test_mic_direct PRIVATE ethervoxai)
-    target_include_directories(test_mic_direct PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-endif()
-
 # Voice quality tuner tool
 if(NOT ANDROID)
     add_executable(voice_tuner tools/voice_tuner.c)

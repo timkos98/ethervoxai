@@ -418,7 +418,7 @@ ethervox_memory_set_privacy_mode(true);  // NEW (set global flag)
 ## See Also
 
 - [GOVERNOR_ARCHITECTURE.md](../GOVERNOR_ARCHITECTURE.md) - Governor system design
-- [RELIGHT_SYSTEM.md](./RELIGHT_SYSTEM.md) - System prompt recovery
+- [RELIGHT_SYSTEM.md](RELIGHT_SYSTEM.md) - System prompt recovery
 - [CONTEXT_MANAGEMENT_UI_INTEGRATION.md](./CONTEXT_MANAGEMENT_UI_INTEGRATION.md) - Android UI integration
 - [errorhandling.md](./errorhandling.md) - Error handling patterns
 

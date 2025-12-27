@@ -179,3 +179,45 @@ target_link_libraries(test_voice_training_integration ethervoxai m)
 target_include_directories(test_voice_training_integration PRIVATE ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
 # Not added to CTest - requires microphone and user interaction
 # Run manually: ./tests/test_voice_training_integration
+
+# Microphone direct tests (manual testing, requires microphone)
+add_executable(test_mic_direct unit/test_mic_direct.c)
+target_link_libraries(test_mic_direct ethervoxai)
+target_include_directories(test_mic_direct PRIVATE ${CMAKE_SOURCE_DIR}/include)
+# Not added to CTest - requires microphone and user interaction
+# Run manually: ./tests/test_mic_direct
+
+# Phonemizer tests (English)
+add_executable(test_phonemizer unit/test_phonemizer.c)
+target_link_libraries(test_phonemizer ethervoxai)
+target_include_directories(test_phonemizer PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME Phonemizer COMMAND test_phonemizer)
+set_tests_properties(Phonemizer PROPERTIES TIMEOUT 30 LABELS "unit;phonemizer")
+
+# Phonemizer tests (Chinese)
+add_executable(test_phonemizer_chinese unit/test_phonemizer_chinese.c)
+target_link_libraries(test_phonemizer_chinese ethervoxai)
+target_include_directories(test_phonemizer_chinese PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME PhonemizerChinese COMMAND test_phonemizer_chinese)
+set_tests_properties(PhonemizerChinese PROPERTIES TIMEOUT 30 LABELS "unit;phonemizer;chinese")
+
+# Phonemizer tests (German)
+add_executable(test_phonemizer_german unit/test_phonemizer_german.c)
+target_link_libraries(test_phonemizer_german ethervoxai)
+target_include_directories(test_phonemizer_german PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME PhonemizerGerman COMMAND test_phonemizer_german)
+set_tests_properties(PhonemizerGerman PROPERTIES TIMEOUT 30 LABELS "unit;phonemizer;german")
+
+# Piper phonemizers comprehensive tests
+add_executable(test_piper_phonemizers unit/test_piper_phonemizers.c)
+target_link_libraries(test_piper_phonemizers ethervoxai)
+target_include_directories(test_piper_phonemizers PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME PiperPhonemizers COMMAND test_piper_phonemizers)
+set_tests_properties(PiperPhonemizers PROPERTIES TIMEOUT 60 LABELS "unit;phonemizer;comprehensive")
+
+# Tool descriptions tests
+add_executable(test_tool_descriptions unit/test_tool_descriptions.c)
+target_link_libraries(test_tool_descriptions ethervoxai)
+target_include_directories(test_tool_descriptions PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME ToolDescriptions COMMAND test_tool_descriptions)
+set_tests_properties(ToolDescriptions PROPERTIES TIMEOUT 30 LABELS "unit;tools")

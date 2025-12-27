@@ -212,4 +212,4 @@ echo $ETHERVOX_GITHUB_TOKEN  # Should output token
 
 - [Bug Reporter Security](BUG_REPORTER_SECURITY.md) - Local token setup
 - [GitHub Actions Secrets](GITHUB_ACTIONS_SECRETS.md) - CI/CD configuration
-- [Security Incident](../SECURITY_INCIDENT.md) - Recent security fixes
+- [Security Incident](SECURITY_INCIDENT.md) - Recent security fixes
