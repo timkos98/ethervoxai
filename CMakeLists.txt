@@ -86,12 +86,6 @@ add_definitions(-DETHERVOX_GIT_COMMIT="${GIT_COMMIT_HASH}")
 #   cmake -DSKIP_GITHUB_TOKEN_VALIDATION=ON
 #   OR set environment variable: export SKIP_GITHUB_TOKEN_VALIDATION=1
 
-# Auto-detect Android builds and skip GitHub token validation
-if(ANDROID)
-    set(SKIP_GITHUB_TOKEN_VALIDATION ON)
-    message(STATUS "Android build detected - GitHub token validation will be skipped")
-endif()
-
 # Check environment variable first, then CMake option
 if(DEFINED ENV{SKIP_GITHUB_TOKEN_VALIDATION} AND NOT "$ENV{SKIP_GITHUB_TOKEN_VALIDATION}" STREQUAL "")
     set(SKIP_GITHUB_TOKEN_VALIDATION ON)
@@ -438,6 +432,7 @@ set(COMMON_SOURCES
     src/audio/aec_speex.c
     src/tts/tts.c
     src/tts/text_normalizer.c
+    src/tts/piper_backend.c
     src/tts/phonemizer/phonemizer.c
     src/tts/phonemizer/dictionary.c
     src/tts/phonemizer/rules_en.c
@@ -447,13 +442,6 @@ set(COMMON_SOURCES
     src/tts/phonemizer/pronunciation_overrides.c
     src/tts/phonemizer/pronunciation_trainer.c
 )
-
-# Desktop-only sources (not compiled for Android)
-if(NOT ANDROID)
-    list(APPEND COMMON_SOURCES
-        src/tts/piper_backend.c
-    )
-endif()
 
 # Add bug_reporter.c only for non-Android platforms (Android uses Kotlin BugReporter)
 if(NOT TARGET_PLATFORM STREQUAL "ANDROID")
@@ -678,70 +666,62 @@ else()
 endif()
 
 # Link Speex DSP for AEC (echo cancellation) and resampling
-# Note: Speex DSP is desktop-only (not available on Android)
-if(NOT ANDROID)
-    find_package(PkgConfig)
-    if(PkgConfig_FOUND)
-        pkg_check_modules(SPEEX speexdsp)
-        if(SPEEX_FOUND)
-            target_link_libraries(ethervoxai PUBLIC ${SPEEX_LINK_LIBRARIES})
-            target_include_directories(ethervoxai PRIVATE ${SPEEX_INCLUDE_DIRS})
-            target_link_directories(ethervoxai PRIVATE ${SPEEX_LIBRARY_DIRS})
-            target_compile_definitions(ethervoxai PRIVATE HAVE_SPEEXDSP=1)
-            message(STATUS "Linked Speex DSP library: ${SPEEX_VERSION}")
-            message(STATUS "Speex lib dirs: ${SPEEX_LIBRARY_DIRS}")
-            message(STATUS "Speex link libs: ${SPEEX_LINK_LIBRARIES}")
-        else()
-            message(WARNING "Speex DSP not found - AEC will use passthrough mode. Install with: brew install speexdsp")
-        endif()
-        
-        # Link ONNX Runtime for Piper TTS
-        pkg_check_modules(ONNXRUNTIME onnxruntime)
-        if(ONNXRUNTIME_FOUND)
-            target_link_libraries(ethervoxai PUBLIC ${ONNXRUNTIME_LINK_LIBRARIES})
-            target_include_directories(ethervoxai PRIVATE ${ONNXRUNTIME_INCLUDE_DIRS})
-            target_link_directories(ethervoxai PRIVATE ${ONNXRUNTIME_LIBRARY_DIRS})
-            target_compile_definitions(ethervoxai PRIVATE HAVE_ONNXRUNTIME=1)
-            message(STATUS "Linked ONNX Runtime library: ${ONNXRUNTIME_VERSION}")
-        else()
-            # Try manual detection (Homebrew on macOS)
-            find_path(ONNXRUNTIME_INCLUDE_DIR 
-                NAMES onnxruntime_c_api.h
-                PATHS /opt/homebrew/Cellar/onnxruntime/*/include/onnxruntime
-                      /usr/local/Cellar/onnxruntime/*/include/onnxruntime
-                      /opt/homebrew/include/onnxruntime
-                      /usr/local/include/onnxruntime
-            )
-            find_library(ONNXRUNTIME_LIBRARY
-                NAMES onnxruntime
-                PATHS /opt/homebrew/Cellar/onnxruntime/*/lib
-                      /usr/local/Cellar/onnxruntime/*/lib
-                      /opt/homebrew/lib
-                      /usr/local/lib
-            )
-            
-            if(ONNXRUNTIME_INCLUDE_DIR AND ONNXRUNTIME_LIBRARY)
-                # Include parent directory so we can use #include <onnxruntime/...>
-                get_filename_component(ONNXRUNTIME_INCLUDE_PARENT "${ONNXRUNTIME_INCLUDE_DIR}" DIRECTORY)
-                target_include_directories(ethervoxai PRIVATE ${ONNXRUNTIME_INCLUDE_PARENT})
-                target_link_libraries(ethervoxai PUBLIC ${ONNXRUNTIME_LIBRARY})
-                target_compile_definitions(ethervoxai PRIVATE HAVE_ONNXRUNTIME=1)
-                message(STATUS "Found ONNX Runtime manually:")
-                message(STATUS "  Include: ${ONNXRUNTIME_INCLUDE_PARENT}")
-                message(STATUS "  Library: ${ONNXRUNTIME_LIBRARY}")
-            else()
-                message(WARNING "ONNX Runtime not found - Piper TTS will be unavailable. Install with: brew install onnxruntime")
-            endif()
-        endif()
-        
-        # espeak-ng REMOVED - replaced with custom phonemizer (MIT-licensed)
-        # See src/tts/phonemizer.c for dictionary-based G2P implementation
-        message(STATUS "Using custom phonemizer (espeak-ng dependency removed for licensing)")
+find_package(PkgConfig)
+if(PkgConfig_FOUND)
+    pkg_check_modules(SPEEX speexdsp)
+    if(SPEEX_FOUND)
+        target_link_libraries(ethervoxai PUBLIC ${SPEEX_LINK_LIBRARIES})
+        target_include_directories(ethervoxai PRIVATE ${SPEEX_INCLUDE_DIRS})
+        target_link_directories(ethervoxai PRIVATE ${SPEEX_LIBRARY_DIRS})
+        message(STATUS "Linked Speex DSP library: ${SPEEX_VERSION}")
+        message(STATUS "Speex lib dirs: ${SPEEX_LIBRARY_DIRS}")
+        message(STATUS "Speex link libs: ${SPEEX_LINK_LIBRARIES}")
     else()
-        message(WARNING "PkgConfig not found - skipping Speex and ONNX Runtime detection")
+        message(WARNING "Speex DSP not found - AEC will use passthrough mode. Install with: brew install speexdsp")
     endif()
+    
+    # Link ONNX Runtime for Piper TTS
+    pkg_check_modules(ONNXRUNTIME onnxruntime)
+    if(ONNXRUNTIME_FOUND)
+        target_link_libraries(ethervoxai PUBLIC ${ONNXRUNTIME_LINK_LIBRARIES})
+        target_include_directories(ethervoxai PRIVATE ${ONNXRUNTIME_INCLUDE_DIRS})
+        target_link_directories(ethervoxai PRIVATE ${ONNXRUNTIME_LIBRARY_DIRS})
+        message(STATUS "Linked ONNX Runtime library: ${ONNXRUNTIME_VERSION}")
+    else()
+        # Try manual detection (Homebrew on macOS)
+        find_path(ONNXRUNTIME_INCLUDE_DIR 
+            NAMES onnxruntime_c_api.h
+            PATHS /opt/homebrew/Cellar/onnxruntime/*/include/onnxruntime
+                  /usr/local/Cellar/onnxruntime/*/include/onnxruntime
+                  /opt/homebrew/include/onnxruntime
+                  /usr/local/include/onnxruntime
+        )
+        find_library(ONNXRUNTIME_LIBRARY
+            NAMES onnxruntime
+            PATHS /opt/homebrew/Cellar/onnxruntime/*/lib
+                  /usr/local/Cellar/onnxruntime/*/lib
+                  /opt/homebrew/lib
+                  /usr/local/lib
+        )
+        
+        if(ONNXRUNTIME_INCLUDE_DIR AND ONNXRUNTIME_LIBRARY)
+            # Include parent directory so we can use #include <onnxruntime/...>
+            get_filename_component(ONNXRUNTIME_INCLUDE_PARENT "${ONNXRUNTIME_INCLUDE_DIR}" DIRECTORY)
+            target_include_directories(ethervoxai PRIVATE ${ONNXRUNTIME_INCLUDE_PARENT})
+            target_link_libraries(ethervoxai PUBLIC ${ONNXRUNTIME_LIBRARY})
+            message(STATUS "Found ONNX Runtime manually:")
+            message(STATUS "  Include: ${ONNXRUNTIME_INCLUDE_PARENT}")
+            message(STATUS "  Library: ${ONNXRUNTIME_LIBRARY}")
+        else()
+            message(WARNING "ONNX Runtime not found - Piper TTS will be unavailable. Install with: brew install onnxruntime")
+        endif()
+    endif()
+    
+    # espeak-ng REMOVED - replaced with custom phonemizer (MIT-licensed)
+    # See src/tts/phonemizer.c for dictionary-based G2P implementation
+    message(STATUS "Using custom phonemizer (espeak-ng dependency removed for licensing)")
 else()
-    message(STATUS "Android build - Speex DSP and ONNX Runtime skipped (desktop-only libraries)")
+    message(WARNING "PkgConfig not found - skipping Speex and ONNX Runtime detection")
 endif()
 
 # Platform-specific linking for library consumers

@@ -177,7 +177,6 @@ static int conversation_on_speak(const char* text, bool wait_for_response,
                         
                         // ALWAYS wait for playback to finish before resuming listening
                         // This prevents microphone from capturing TTS echo/feedback
-#ifdef ETHERVOX_PLATFORM_MACOS
                         macos_audio_state_t* state = (macos_audio_state_t*)session->audio_runtime.platform_data;
                         if (state) {
                             ETHERVOX_LOG_DEBUG("Waiting for audio playback to complete (allow_interrupt=%d)...", allow_interrupt);
@@ -222,16 +221,6 @@ static int conversation_on_speak(const char* text, bool wait_for_response,
                             }
                             ETHERVOX_LOG_DEBUG("Audio playback completed");
                         }
-#else
-                        // For other platforms, use a simple delay based on audio duration
-                        // This is a fallback for platforms without direct playback buffer access
-                        if (tts_output.sample_count > 0 && tts_output.sample_rate > 0) {
-                            int duration_ms = (tts_output.sample_count * 1000) / tts_output.sample_rate;
-                            ETHERVOX_LOG_DEBUG("Waiting for audio playback (~%d ms)...", duration_ms);
-                            usleep(duration_ms * 1000);
-                            ETHERVOX_LOG_DEBUG("Audio playback estimated complete");
-                        }
-#endif
                     } else {
                         ETHERVOX_LOG_WARN("Audio playback failed: %d", play_result);
                     }

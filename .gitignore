@@ -195,3 +195,5 @@ dashboard/package-lock.json
 semester_project_TUM.org
 _deps/
 examples/memory_example_memonly
+ethervox-test-emotions
+*.lldb

@@ -52,12 +52,18 @@ ethervox_tts_context_t* ethervox_tts_create(const ethervox_tts_config_t* config)
     
     switch (config->backend) {
         case ETHERVOX_TTS_BACKEND_PIPER:
+#ifdef HAVE_PIPER_TTS
             ctx->impl = ethervox_tts_piper_create(config);
             if (!ctx->impl) {
                 fprintf(stderr, "[TTS] Failed to create Piper backend\n");
                 free(ctx);
                 return NULL;
             }
+#else
+            fprintf(stderr, "[TTS] Piper backend not available on this platform\n");
+            free(ctx);
+            return NULL;
+#endif
             break;
             
         case ETHERVOX_TTS_BACKEND_SYSTEM:
@@ -84,7 +90,11 @@ int ethervox_tts_synthesize_text(ethervox_tts_context_t* ctx,
     
     switch (ctx->backend) {
         case ETHERVOX_TTS_BACKEND_PIPER:
+#ifdef HAVE_PIPER_TTS
             return ethervox_tts_piper_synthesize(ctx->impl, text, output);
+#else
+            return -1;
+#endif
             
         case ETHERVOX_TTS_BACKEND_SYSTEM:
             // TODO
@@ -104,7 +114,11 @@ int ethervox_tts_synthesize_ipa(ethervox_tts_context_t* ctx,
     
     // Only Piper backend supports direct IPA synthesis
     if (ctx->backend == ETHERVOX_TTS_BACKEND_PIPER) {
+#ifdef HAVE_PIPER_TTS
         return ethervox_tts_piper_synthesize_ipa(ctx->impl, ipa_phonemes, output);
+#else
+        return -1;
+#endif
     }
     
     // System TTS doesn't support IPA - fall back to text synthesis
@@ -124,7 +138,9 @@ void ethervox_tts_destroy(ethervox_tts_context_t* ctx) {
     
     switch (ctx->backend) {
         case ETHERVOX_TTS_BACKEND_PIPER:
+#ifdef HAVE_PIPER_TTS
             ethervox_tts_piper_destroy(ctx->impl);
+#endif
             break;
             
         case ETHERVOX_TTS_BACKEND_SYSTEM:
@@ -152,7 +168,11 @@ void* ethervox_tts_get_phonemizer(ethervox_tts_context_t* ctx) {
     
     switch (ctx->backend) {
         case ETHERVOX_TTS_BACKEND_PIPER:
+#ifdef HAVE_PIPER_TTS
             return ethervox_tts_piper_get_phonemizer(ctx->impl);
+#else
+            return NULL;
+#endif
         default:
             fprintf(stderr, "[TTS] get_phonemizer: unsupported backend %d\n", ctx->backend);
             return NULL;

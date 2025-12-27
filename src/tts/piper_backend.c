@@ -6,7 +6,6 @@
  * Converts text → phonemes → ONNX inference → raw PCM audio.
  */
 
-#include "ethervox/audio.h"
 #include "ethervox/tts.h"
 #include "ethervox/text_normalizer.h"
 #include "ethervox/logging.h"
@@ -16,7 +15,6 @@
 #include <string.h>
 #include <ctype.h>
 #include <math.h>
-
 #include <onnxruntime/onnxruntime_c_api.h>
 #include <speex/speex_resampler.h>
 
@@ -681,7 +679,6 @@ static int piper_infer(piper_context_t* ctx,
 /**
  * Resample from 22050Hz to 16000Hz
  */
-#ifdef HAVE_SPEEXDSP
 static int resample_audio(SpeexResamplerState* resampler,
                          const float* input,
                          size_t input_count,
@@ -854,7 +851,6 @@ ethervox_tts_context_t* ethervox_tts_piper_create(const ethervox_tts_config_t* c
         ETHERVOX_LOG_DEBUG("[Piper] Model is single-speaker (no sid input)");
     }
     
-#ifdef HAVE_SPEEXDSP
     // Create resampler (22050Hz → 16000Hz)
     int err = 0;
     ctx->resampler = speex_resampler_init(1, PIPER_SAMPLE_RATE, TARGET_SAMPLE_RATE, 5, &err);
@@ -866,9 +862,6 @@ ethervox_tts_context_t* ethervox_tts_piper_create(const ethervox_tts_config_t* c
         free(ctx);
         return NULL;
     }
-#else
-    ETHERVOX_LOG_WARN("[Piper] SpeexDSP not available - audio resampling disabled");
-#endif
     
     // Load phoneme_id_map from model config
     if (load_phoneme_map(config->model_path, ctx) < 0) {
@@ -879,9 +872,7 @@ ethervox_tts_context_t* ethervox_tts_piper_create(const ethervox_tts_config_t* c
     ctx->phonemizer = phonemizer_create(ctx->piper_voice);
     if (!ctx->phonemizer) {
         ETHERVOX_LOG_ERROR("[Piper] Failed to initialize phonemizer for language: %s\n", ctx->piper_voice);
-#ifdef HAVE_SPEEXDSP
         speex_resampler_destroy(ctx->resampler);
-#endif
         g_ort_api->ReleaseMemoryInfo(ctx->memory_info);
         g_ort_api->ReleaseSession(ctx->session);
         g_ort_api->ReleaseEnv(ctx->env);
@@ -925,7 +916,6 @@ int ethervox_tts_piper_synthesize(ethervox_tts_context_t* ctx,
         return -1;
     }
     
-#ifdef HAVE_SPEEXDSP
     // Resample to 16kHz
     float* resampled_audio = NULL;
     size_t resampled_count = 0;
@@ -945,18 +935,6 @@ int ethervox_tts_piper_synthesize(ethervox_tts_context_t* ctx,
     output->channels = 1;
     
     return 0;
-#else
-    // Without resampler, use the Piper audio directly (22050Hz instead of 16000Hz)
-    // This is not ideal but allows the system to work without speexdsp
-    ETHERVOX_LOG_WARN("[Piper] No resampler available - using 22050Hz audio instead of 16000Hz");
-    
-    output->samples = piper_audio;
-    output->sample_count = piper_sample_count;
-    output->sample_rate = PIPER_SAMPLE_RATE;  // 22050
-    output->channels = 1;
-    
-    return 0;
-#endif
 }
 
 void* ethervox_tts_piper_get_phonemizer(void* piper_impl) {
