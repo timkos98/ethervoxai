@@ -176,19 +176,47 @@ Implements standard German phonological rules:
 
 ---
 
+## Generated Data (GPL-Safe)
+
+### Espeak-Trained Pronunciation Dictionaries
+- **Files**: `src/tts/phonemizer/data/espeak_dict_*.h`, `src/tts/phonemizer/data/espeak_*.dict`
+- **License**: MIT (generated factual data, not derivative work)
+- **Purpose**: IPA pronunciation mappings for English and German
+- **URL**: N/A (generated in-house)
+- **Copyright**: Copyright (c) 2025 EthervoxAI
+
+**Legal Status**:
+- Generated using espeak-ng (GPL-3.0) as a **development/build tool only**
+- Espeak-ng is **never linked or distributed** with EthervoxAI
+- Dictionary data contains **factual IPA pronunciations** (not copyrightable code)
+- Analogous to using GCC (GPL compiler) to build MIT-licensed software
+- All lookup/integration code is original MIT-licensed implementation
+
+**Key Points**:
+1. **No Dynamic Linking**: Espeak-ng never loaded at runtime
+2. **No Static Linking**: No espeak-ng code in binaries
+3. **Data Only**: Only word→IPA mappings embedded
+4. **Original Code**: All C implementation is original work
+5. **Build Tool Pattern**: Same as GCC compiling non-GPL code
+
+For detailed legal analysis, see `docs/ESPEAK_DICT_LICENSING.md`
+
+---
+
 ## Removed Dependencies (GPL-free Migration)
 
-### ~~espeak-ng~~ (REMOVED)
+### ~~espeak-ng~~ (REMOVED from Runtime)
 - **Previous License**: GPL-3.0
-- **Status**: **REMOVED** in commit for licensing compliance
-- **Reason**: Incompatible with CC BY-NC-SA 4.0 project license
-- **Replacement**: Custom phonemizer with public domain and CC BY-SA 4.0 dictionaries
+- **Status**: **REMOVED from distributed software** (still used as dev tool only)
+- **Reason**: Incompatible with commercial distribution
+- **Current Use**: Development/training tool only - generates pronunciation data offline
 
 **Migration Notes**:
 - Phase 1 (Dec 2024): Replaced with CMU Dictionary (public domain)
 - Phase 2 (Dec 2024): Initially used CC-CEDICT, then migrated to Unicode Unihan (license compatibility)
 - Phase 3 (Dec 2024): Implemented rule-based German phonemizer (no external dependencies)
-- See `docs/PHONEMIZER_IMPLEMENTATION_PLAN.md` for details
+- Phase 4 (Dec 2024): Added espeak-trained dictionaries (GPL-safe, data only)
+- See `docs/PHONEMIZER_IMPLEMENTATION_PLAN.md` and `docs/ESPEAK_DICT_LICENSING.md` for details
 
 ---
 
@@ -218,9 +246,12 @@ Implements standard German phonological rules:
 | cJSON | MIT | Yes | No | ✅ Yes |
 | CMU Dict | Public Domain | Yes | No | ✅ Yes |
 | Unicode Unihan | Unicode License v3 | Yes | No | ✅ Yes |
-| ~~espeak-ng~~ | ~~GPL-3.0~~ | Yes | Yes | ❌ **REMOVED** |
+| Espeak Dict (data) | MIT (generated) | Yes | No | ✅ Yes |
+| ~~espeak-ng (runtime)~~ | ~~GPL-3.0~~ | Yes | Yes | ❌ **REMOVED** |
 
 \* Commercial licensing available via licensing@ethervox.ai
+
+**Note**: espeak-ng is used as a development/build tool only (like GCC), not distributed.
 
 ---
 

@@ -8,6 +8,7 @@
 #include "phonemizer.h"
 #include "dictionary.h"
 #include "arpabet_to_ipa.h"
+#include "espeak_dict.h"
 #include "rules_en.h"
 #include "rules_de.h"
 #include "dict_chinese.h"
@@ -396,7 +397,72 @@ int phonemizer_text_to_ipa(phonemizer_t* ctx, const char* text, char* ipa_output
             pronunciation_overrides_record_usage(ctx->overrides, tokens[i]);
         }
         
-        // Try dictionary
+        // Try embedded espeak dictionary (2nd priority)
+        if (!found) {
+            char espeak_ipa[MAX_ARPABET_LENGTH];
+            int espeak_found = 0;
+            
+            ETHERVOX_LOG_DEBUG("[Phonemizer] 🔍 Trying espeak dictionary lookup for '%s' (language=%d)", tokens[i], ctx->language);
+            
+            #ifdef ESPEAK_DICT_EN_US_ENABLED
+            if (ctx->language == PHONEMIZER_LANG_EN_US) {
+                ETHERVOX_LOG_DEBUG("[Phonemizer] 📚 Searching en-us espeak dict (%zu entries)...", espeak_dict_en_us_size);
+                if (espeak_dict_lookup(espeak_dict_en_us, espeak_dict_en_us_size,
+                                      tokens[i], espeak_ipa, sizeof(espeak_ipa)) == 0) {
+                    strncpy(word_ipa, espeak_ipa, MAX_ARPABET_LENGTH - 1);
+                    word_ipa[MAX_ARPABET_LENGTH - 1] = '\0';
+                    found = 1;
+                    override_is_ipa = 1;
+                    espeak_found = 1;
+                    ETHERVOX_LOG_DEBUG("[Phonemizer] ✅ Espeak dict (en-us): '%s' → '%s'", tokens[i], word_ipa);
+                } else {
+                    ETHERVOX_LOG_DEBUG("[Phonemizer] ❌ Not found in en-us espeak dict: '%s'", tokens[i]);
+                }
+            }
+            #else
+            ETHERVOX_LOG_DEBUG("[Phonemizer] ⚠️  ESPEAK_DICT_EN_US_ENABLED not defined");
+            #endif
+            
+            #ifdef ESPEAK_DICT_EN_GB_ENABLED
+            if (!espeak_found && ctx->language == PHONEMIZER_LANG_EN_GB) {
+                ETHERVOX_LOG_DEBUG("[Phonemizer] 📚 Searching en-gb espeak dict (%zu entries)...", espeak_dict_en_gb_size);
+                if (espeak_dict_lookup(espeak_dict_en_gb, espeak_dict_en_gb_size,
+                                      tokens[i], espeak_ipa, sizeof(espeak_ipa)) == 0) {
+                    strncpy(word_ipa, espeak_ipa, MAX_ARPABET_LENGTH - 1);
+                    word_ipa[MAX_ARPABET_LENGTH - 1] = '\0';
+                    found = 1;
+                    override_is_ipa = 1;
+                    espeak_found = 1;
+                    ETHERVOX_LOG_DEBUG("[Phonemizer] ✅ Espeak dict (en-gb): '%s' → '%s'", tokens[i], word_ipa);
+                } else {
+                    ETHERVOX_LOG_DEBUG("[Phonemizer] ❌ Not found in en-gb espeak dict: '%s'", tokens[i]);
+                }
+            }
+            #endif
+            
+            #ifdef ESPEAK_DICT_DE_ENABLED
+            if (!espeak_found && ctx->language == PHONEMIZER_LANG_DE_DE) {
+                ETHERVOX_LOG_DEBUG("[Phonemizer] 📚 Searching de espeak dict (%zu entries)...", espeak_dict_de_size);
+                if (espeak_dict_lookup(espeak_dict_de, espeak_dict_de_size,
+                                      tokens[i], espeak_ipa, sizeof(espeak_ipa)) == 0) {
+                    strncpy(word_ipa, espeak_ipa, MAX_ARPABET_LENGTH - 1);
+                    word_ipa[MAX_ARPABET_LENGTH - 1] = '\0';
+                    found = 1;
+                    override_is_ipa = 1;
+                    espeak_found = 1;
+                    ETHERVOX_LOG_DEBUG("[Phonemizer] ✅ Espeak dict (de): '%s' → '%s'", tokens[i], word_ipa);
+                } else {
+                    ETHERVOX_LOG_DEBUG("[Phonemizer] ❌ Not found in de espeak dict: '%s'", tokens[i]);
+                }
+            }
+            #endif
+            
+            if (!espeak_found) {
+                ETHERVOX_LOG_DEBUG("[Phonemizer] ⚠️  Espeak lookup failed for '%s', falling back to next priority", tokens[i]);
+            }
+        }
+        
+        // Try CMU/traditional dictionary (3rd priority)
         if (!found && ctx->dictionary) {
             if (dict_lookup(ctx->dictionary, tokens[i], arpabet, MAX_ARPABET_LENGTH) == 0) {
                 found = 1;

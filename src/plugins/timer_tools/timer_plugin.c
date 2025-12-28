@@ -449,7 +449,7 @@ int ethervox_timer_get_info(int timer_id, char* label_out, size_t label_size, in
         if (timers[i].is_active && timers[i].id == timer_id) {
             if (label_out && label_size > 0) {
                 strncpy(label_out, timers[i].label, label_size - 1);
-                label_out[label_size - 1] = '\\0';
+                label_out[label_size - 1] = '\0';
             }
             if (remaining_seconds) {
                 time_t now = time(NULL);

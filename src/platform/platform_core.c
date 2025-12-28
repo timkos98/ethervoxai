@@ -33,15 +33,12 @@
 extern int rpi_hal_register(ethervox_platform_t* platform);
 #endif
 #ifdef ETHERVOX_PLATFORM_ESP32
-#pragma message("----Compiling with ETHERVOX_PLATFORM_ESP32")
 extern int esp32_hal_register(ethervox_platform_t* platform);
 #endif
 #if defined(ETHERVOX_PLATFORM_DESKTOP)
-#pragma message("----Compiling with ETHERVOX_PLATFORM_DESKTOP")
 extern int desktop_hal_register(ethervox_platform_t* platform);
 #endif
 #if defined(ETHERVOX_PLATFORM_ANDROID) || defined(__ANDROID__)
-#pragma message("----Compiling with ETHERVOX_PLATFORM_ANDROID")
 extern int ethervox_platform_hal_register_android(ethervox_platform_t* platform);
 #endif
 
@@ -52,19 +49,14 @@ int ethervox_platform_register_hal(ethervox_platform_t* platform) {
   }
 
 #ifdef ETHERVOX_PLATFORM_ESP32
-#pragma message("Returning ESP32_HAL")
   return esp32_hal_register(platform);
 #elif defined(ETHERVOX_PLATFORM_RPI)
-#pragma message("Returning RPI_HAL")
   return rpi_hal_register(platform);
 #elif defined(ETHERVOX_PLATFORM_ANDROID) || defined(__ANDROID__)
-#pragma message("Returning ANDROID_HAL")
   return ethervox_platform_hal_register_android(platform);
 #elif defined(ETHERVOX_PLATFORM_DESKTOP)
-#pragma message("Returning DESKTOP_HAL")
   return desktop_hal_register(platform);
 #else
-#pragma message("No HAL available for this platform")
   fprintf(stderr, "No HAL available for this platform\n");
   return -1;
 #endif

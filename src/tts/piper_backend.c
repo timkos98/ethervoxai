@@ -299,8 +299,8 @@ static int tokenize_ipa(const char* ipa, char tokens[][8], size_t max_tokens) {
         
         // Check for stress marker followed by diphthong (keep together as one token)
         // Common English diphthongs: ɔɪ (choice), aɪ (price), aʊ (mouth), eɪ (face), oʊ (goat)
-        if ((p[0] == 0xCB && p[1] == 0x88) ||  // ˈ (primary stress, 3-byte UTF-8)
-            (p[0] == 0xCB && p[1] == 0x8C)) {  // ˌ (secondary stress, 3-byte UTF-8)
+        if (((unsigned char)p[0] == 0xCB && (unsigned char)p[1] == 0x88) ||  // ˈ (primary stress, 3-byte UTF-8)
+            ((unsigned char)p[0] == 0xCB && (unsigned char)p[1] == 0x8C)) {  // ˌ (secondary stress, 3-byte UTF-8)
             // Stress marker detected, check if followed by diphthong
             const char* after_stress = p + 3;  // Skip stress marker (3 bytes)
             
@@ -309,28 +309,28 @@ static int tokenize_ipa(const char* ipa, char tokens[][8], size_t max_tokens) {
             int diphthong_len = 0;
             
             // ɔɪ (0xC994 + 0xC9AA)
-            if (after_stress[0] == 0xC9 && after_stress[1] == 0x94 &&
-                after_stress[2] == 0xC9 && after_stress[3] == 0xAA) {
+            if ((unsigned char)after_stress[0] == 0xC9 && (unsigned char)after_stress[1] == 0x94 &&
+                (unsigned char)after_stress[2] == 0xC9 && (unsigned char)after_stress[3] == 0xAA) {
                 is_diphthong = true; diphthong_len = 4;
             }
             // aɪ (0x61 + 0xC9AA)
             else if (after_stress[0] == 'a' && 
-                     after_stress[1] == 0xC9 && after_stress[2] == 0xAA) {
+                     (unsigned char)after_stress[1] == 0xC9 && (unsigned char)after_stress[2] == 0xAA) {
                 is_diphthong = true; diphthong_len = 3;
             }
             // aʊ (0x61 + 0xCA8A)
             else if (after_stress[0] == 'a' &&
-                     after_stress[1] == 0xCA && after_stress[2] == 0x8A) {
+                     (unsigned char)after_stress[1] == 0xCA && (unsigned char)after_stress[2] == 0x8A) {
                 is_diphthong = true; diphthong_len = 3;
             }
             // eɪ (0x65 + 0xC9AA)
             else if (after_stress[0] == 'e' &&
-                     after_stress[1] == 0xC9 && after_stress[2] == 0xAA) {
+                     (unsigned char)after_stress[1] == 0xC9 && (unsigned char)after_stress[2] == 0xAA) {
                 is_diphthong = true; diphthong_len = 3;
             }
             // oʊ (0x6F + 0xCA8A)
             else if (after_stress[0] == 'o' &&
-                     after_stress[1] == 0xCA && after_stress[2] == 0x8A) {
+                     (unsigned char)after_stress[1] == 0xCA && (unsigned char)after_stress[2] == 0x8A) {
                 is_diphthong = true; diphthong_len = 3;
             }
             
@@ -827,15 +827,32 @@ ethervox_tts_context_t* ethervox_tts_piper_create(const ethervox_tts_config_t* c
     // Check if model has speaker_id input (multi-speaker models only)
     ctx->has_speaker_id_input = false;
     size_t num_inputs = 0;
-    g_ort_api->SessionGetInputCount(ctx->session, &num_inputs);
-    ETHERVOX_LOG_DEBUG("[Piper] Model has %zu input(s)\n", num_inputs);
+    status = g_ort_api->SessionGetInputCount(ctx->session, &num_inputs);
+    if (status != NULL) {
+        const char* msg = g_ort_api->GetErrorMessage(status);
+        ETHERVOX_LOG_ERROR("[Piper] Failed to get input count: %s", msg);
+        g_ort_api->ReleaseStatus(status);
+        g_ort_api->ReleaseSession(ctx->session);
+        g_ort_api->ReleaseEnv(ctx->env);
+        free(ctx);
+        return NULL;
+    }
+    ETHERVOX_LOG_DEBUG("[Piper] Model has %zu input(s)\\n", num_inputs);
     
     // Check if any input is named "sid"
     for (size_t i = 0; i < num_inputs; i++) {
         char* input_name = NULL;
         OrtAllocator* allocator = NULL;
-        g_ort_api->GetAllocatorWithDefaultOptions(&allocator);
-        g_ort_api->SessionGetInputName(ctx->session, i, allocator, &input_name);
+        status = g_ort_api->GetAllocatorWithDefaultOptions(&allocator);
+        if (status != NULL) {
+            g_ort_api->ReleaseStatus(status);
+            continue;
+        }
+        status = g_ort_api->SessionGetInputName(ctx->session, i, allocator, &input_name);
+        if (status != NULL) {
+            g_ort_api->ReleaseStatus(status);
+            continue;
+        }
         
         if (input_name) {
             ETHERVOX_LOG_DEBUG("[Piper]   Input %zu: %s\n", i, input_name);

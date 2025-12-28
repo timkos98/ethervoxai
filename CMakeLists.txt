@@ -435,6 +435,7 @@ set(COMMON_SOURCES
     src/tts/piper_backend.c
     src/tts/phonemizer/phonemizer.c
     src/tts/phonemizer/dictionary.c
+    src/tts/phonemizer/espeak_dict.c
     src/tts/phonemizer/rules_en.c
     src/tts/phonemizer/rules_de.c
     src/tts/phonemizer/dict_chinese.c
@@ -442,6 +443,42 @@ set(COMMON_SOURCES
     src/tts/phonemizer/pronunciation_overrides.c
     src/tts/phonemizer/pronunciation_trainer.c
 )
+
+# Espeak-trained dictionary embeddings (optional, improves accuracy)
+# To enable: run tools/train_phonemizer.sh before building
+option(ENABLE_ESPEAK_DICT "Enable embedded espeak-trained dictionaries" ON)
+
+set(ESPEAK_DICT_ENABLED FALSE)
+if(ENABLE_ESPEAK_DICT)
+    # Check for generated dictionary headers
+    set(ESPEAK_DICT_DIR "${CMAKE_SOURCE_DIR}/src/tts/phonemizer/data")
+    
+    if(EXISTS "${ESPEAK_DICT_DIR}/espeak_dict_en_us.h")
+        message(STATUS "✅ Espeak dictionary (en-us) found - enabling")
+        add_definitions(-DESPEAK_DICT_EN_US_ENABLED)
+        set(ESPEAK_DICT_ENABLED TRUE)
+    else()
+        message(STATUS "⚠️  Espeak dictionary (en-us) not found. Run: tools/train_phonemizer.sh")
+    endif()
+    
+    if(EXISTS "${ESPEAK_DICT_DIR}/espeak_dict_en_gb.h")
+        message(STATUS "✅ Espeak dictionary (en-gb) found - enabling")
+        add_definitions(-DESPEAK_DICT_EN_GB_ENABLED)
+        set(ESPEAK_DICT_ENABLED TRUE)
+    endif()
+    
+    if(EXISTS "${ESPEAK_DICT_DIR}/espeak_dict_de.h")
+        message(STATUS "✅ Espeak dictionary (de) found - enabling")
+        add_definitions(-DESPEAK_DICT_DE_ENABLED)
+        set(ESPEAK_DICT_ENABLED TRUE)
+    endif()
+    
+    # Add the data file if any dictionaries are enabled
+    if(ESPEAK_DICT_ENABLED)
+        list(APPEND COMMON_SOURCES src/tts/phonemizer/espeak_dict_data.c)
+        message(STATUS "✅ Espeak dictionary data file included in build")
+    endif()
+endif()
 
 # Add bug_reporter.c only for non-Android platforms (Android uses Kotlin BugReporter)
 if(NOT TARGET_PLATFORM STREQUAL "ANDROID")
@@ -686,7 +723,9 @@ if(PkgConfig_FOUND)
         target_link_libraries(ethervoxai PUBLIC ${ONNXRUNTIME_LINK_LIBRARIES})
         target_include_directories(ethervoxai PRIVATE ${ONNXRUNTIME_INCLUDE_DIRS})
         target_link_directories(ethervoxai PRIVATE ${ONNXRUNTIME_LIBRARY_DIRS})
+        target_compile_definitions(ethervoxai PUBLIC HAVE_PIPER_TTS=1)
         message(STATUS "Linked ONNX Runtime library: ${ONNXRUNTIME_VERSION}")
+        message(STATUS "✅ Piper TTS backend ENABLED")
     else()
         # Try manual detection (Homebrew on macOS)
         find_path(ONNXRUNTIME_INCLUDE_DIR 
@@ -709,9 +748,11 @@ if(PkgConfig_FOUND)
             get_filename_component(ONNXRUNTIME_INCLUDE_PARENT "${ONNXRUNTIME_INCLUDE_DIR}" DIRECTORY)
             target_include_directories(ethervoxai PRIVATE ${ONNXRUNTIME_INCLUDE_PARENT})
             target_link_libraries(ethervoxai PUBLIC ${ONNXRUNTIME_LIBRARY})
+            target_compile_definitions(ethervoxai PUBLIC HAVE_PIPER_TTS=1)
             message(STATUS "Found ONNX Runtime manually:")
             message(STATUS "  Include: ${ONNXRUNTIME_INCLUDE_PARENT}")
             message(STATUS "  Library: ${ONNXRUNTIME_LIBRARY}")
+            message(STATUS "✅ Piper TTS backend ENABLED")
         else()
             message(WARNING "ONNX Runtime not found - Piper TTS will be unavailable. Install with: brew install onnxruntime")
         endif()

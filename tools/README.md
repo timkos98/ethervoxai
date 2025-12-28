@@ -1,5 +1,24 @@
 # EthervoxAI Tools
 
+## Python Development Environment
+
+Python tools use a **virtual environment** to avoid conflicts with system packages.
+
+### Quick Start
+
+```bash
+# Automatic setup (recommended)
+./train_phonemizer.sh  # Auto-creates venv on first run
+
+# Manual setup
+./setup_python_env.sh
+source venv/bin/activate
+```
+
+**Location:** `tools/venv/` (git-ignored)
+
+See [Python Environment](#python-environment) section below for details.
+
 ## Voice Tuner (`ethervox-tune-voice`)
 
 Interactive tool for finding optimal TTS settings for each Piper voice model.
@@ -119,6 +138,99 @@ Was that a YES (y)? y
 <audio plays>
 Did you like this combination? (y/n/q to quit): n
 ...
+```
+
+## Phonemizer Training Tools
+
+Generate espeak-compatible pronunciation dictionaries for offline use.
+
+### Quick Start
+
+```bash
+# One command does everything (auto-creates venv)
+./train_phonemizer.sh
+```
+
+### Requirements
+
+- **espeak-ng** (system package): `brew install espeak-ng`
+- **Python 3.7+** with venv support (standard on modern systems)
+
+### What It Does
+
+1. Creates Python virtual environment (first run only)
+2. Installs `phonemizer` library
+3. Generates pronunciation dictionaries for en-us, en-gb, de
+4. Creates C headers for embedding in binary
+
+**Output files:**
+- `src/tts/phonemizer/data/espeak_*.dict` - Text format
+- `src/tts/phonemizer/data/espeak_dict_*.h` - Embedded headers
+
+### Individual Tools
+
+```bash
+# Setup Python environment (manual)
+./setup_python_env.sh
+
+# Generate specific language
+source venv/bin/activate
+python3 generate_espeak_dict.py --lang en-us --output ../src/tts/phonemizer/data/espeak_en_us.dict
+
+# Validate accuracy
+python3 validate_espeak_dict.py --dict ../src/tts/phonemizer/data/espeak_en_us.dict --lang en-us
+```
+
+See [docs/PHONEMIZER_TRAINING.md](../docs/PHONEMIZER_TRAINING.md) for details.
+
+## Python Environment
+
+### Automatic Setup (Recommended)
+
+Training scripts automatically manage the virtual environment:
+
+```bash
+./train_phonemizer.sh  # Creates venv if needed
+```
+
+### Manual Setup
+
+```bash
+# Create and install dependencies
+./setup_python_env.sh
+
+# Activate when needed
+source venv/bin/activate
+
+# Your prompt changes to show (venv)
+(venv) $ python3 --version
+(venv) $ pip list
+
+# Deactivate when done
+(venv) $ deactivate
+```
+
+### Troubleshooting
+
+**"externally-managed-environment" error:**
+- Solution: Use the virtual environment (automatic in our scripts)
+
+**Virtual environment corrupted:**
+```bash
+rm -rf venv/
+./setup_python_env.sh
+```
+
+### Git and CI/CD
+
+- **Location:** `tools/venv/`
+- **Git status:** Excluded via `.gitignore`
+- **CI builds:** Don't need venv (use committed training data)
+
+## License Notes
+
+Tools may use GPL software (espeak-ng) for **development only** - not distributed. Generated training data is not GPL-infected.
+
 
 # 5. Save results
 Best Settings Found

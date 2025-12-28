@@ -58,7 +58,7 @@ typedef struct {
   char name[64];
   char version[16];
   char author[64];
-  char description[256];
+  char description[512];  // Increased from 256 to fit longer descriptions
   ethervox_plugin_type_t type;
 } ethervox_plugin_metadata_t;
 
@@ -89,7 +89,7 @@ typedef struct {
 typedef struct ethervox_plugin {
   char name[64];
   char version[16];
-  char description[256];
+  char description[512];  // Increased from 256 to fit longer descriptions
   ethervox_plugin_type_t type;
   ethervox_plugin_status_t status;
   void* handle;  // Dynamic library handle

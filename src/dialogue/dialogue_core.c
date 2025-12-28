@@ -707,7 +707,7 @@ int ethervox_dialogue_init(ethervox_dialogue_engine_t* engine,
     
     // Register memory tools if memory store is available
     if (g_dialogue_memory_store) {
-      int memory_tools = ethervox_memory_tools_register(registry, g_dialogue_memory_store);
+      int memory_tools = ethervox_memory_tools_register(registry, (ethervox_memory_store_t*)g_dialogue_memory_store);
       if (memory_tools == 0) {
         tool_count += 6;  // 6 memory tools registered
 #ifdef ETHERVOX_PLATFORM_ANDROID
