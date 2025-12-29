@@ -389,9 +389,11 @@ static int ipa_to_phoneme_ids(piper_context_t* ctx, const char* ipa_text, int64_
     // Add BOS token (^)
     phoneme_ids[id_count++] = phoneme_to_id(ctx, "^");
     
-    for (size_t i = 0; i < total_tokens && id_count < PIPER_MAX_PHONEMES - 2; i++) {
+    for (size_t i = 0; i < total_tokens && id_count < PIPER_MAX_PHONEMES - 4; i++) {
         int id = phoneme_to_id(ctx, phoneme_tokens[i]);
         phoneme_ids[id_count++] = id;
+        // Add PAD token after each phoneme (Piper requirement for proper duration)
+        phoneme_ids[id_count++] = 0;  // PAD = "_"
     }
     
     // Add EOS token ($)
@@ -451,9 +453,15 @@ static int text_to_phonemes(piper_context_t* ctx, const char* text, int64_t* pho
     // Add BOS token (^)
     phoneme_ids[id_count++] = phoneme_to_id(ctx, "^");
     
-    for (size_t i = 0; i < total_tokens && id_count < PIPER_MAX_PHONEMES - 2; i++) {
+    for (size_t i = 0; i < total_tokens && id_count < PIPER_MAX_PHONEMES - 4; i++) {
         int id = phoneme_to_id(ctx, phoneme_tokens[i]);
+        if (id < 0) {
+            ETHERVOX_LOG_DEBUG("[Piper] WARNING: Unknown phoneme '%s', skipping\n", phoneme_tokens[i]);
+            continue;
+        }
         phoneme_ids[id_count++] = id;
+        // Add PAD token after each phoneme (Piper requirement for proper duration)
+        phoneme_ids[id_count++] = 0;  // PAD = "_"
     }
     
     // Add EOS token ($)
