@@ -1,6 +1,6 @@
-# espeak-generated pronunciation dictionary
-# Generated with espeak-ng for offline training
-# Format: WORD<tab>IPA_PRONUNCIATION
+# espeak-generated pronunciaIPA format (--ipa) for Piper TTS
+# Format: WORD<tab>IPA_PRONUNCIATION-SAMPA format for Piper TTS
+# Format: WORD<tab>X-SAMPA_PHONEMES
 
 'bout	bˈaʊt
 'cause	kˈɔːz
@@ -18,14 +18,14 @@
 'tis	tˈɪz
 'twas	twˈɑːz
 I	ˈaɪ
-I'm	aɪm
+I'm	ˈaɪm
 a	ˈeɪ
 a's	ˈeɪz
 a.	ˈeɪ
-a.'s	ɐ ˈɛs
-a.d.	ɐ dˈiː
-a.m.	ɐ ˈɛm
-a.s	ɐ ˈɛs
+a.'s	ˈeɪ dˈɑːtz
+a.d.	ˌeɪdˈiː
+a.m.	ˌeɪˈɛm
+a.s	ˌeɪˈɛs
 aaa	ˌeɪˌeɪˈeɪ
 aaberg	ˈɑːbɜːɡ
 aachen	ˈɑːtʃən
@@ -327,7 +327,7 @@ abridged	ɐbɹˈɪdʒd
 abridgement	ɐbɹˈɪdʒmənt
 abridges	ɐbɹˈɪdʒᵻz
 abridging	ɐbɹˈɪdʒɪŋ
-abril	ɐbɹəl
+abril	ɐbɹˈəl
 abroad	ɐbɹˈɔːd
 abrogate	ˈæbɹəɡˌeɪt
 abrogated	ˈæbɹəɡˌeɪɾᵻd
@@ -510,7 +510,7 @@ accidental	ˌæksɪdˈɛntəl
 accidentally	ˌæksɪdˈɛntəli
 accidently	ˈæksɪdəntli
 accidents	ˈæksɪdənts
-accion	ɐkɪən
+accion	ɐkɪˈən
 accival	ɐkˈɪvəl
 acclaim	ɐklˈeɪm
 acclaim's	ɐklˈeɪmz
@@ -651,7 +651,7 @@ acetylene	ɐsˈɛɾəlˌiːn
 acevedo	ɐsɪvˈiːdoʊ
 aceves	ɐsˈɛvz
 acey	ɐsˈaɪ
-ach	ɐtʃ
+ach	ˈɐtʃ
 achaean	ɐtʃˈiən
 achatz	ɐtʃˈæts
 ache	ˈeɪk
@@ -684,7 +684,7 @@ achilles	ɐkˈɪliːz
 achilles'	ɐkˈɪliːz
 aching	ˈeɪkɪŋ
 achingly	ˈeɪkɪŋli
-achmed	ɐtʃəmd
+achmed	ɐtʃˈəmd
 achoa	ɐtʃˈoʊə
 achoa's	ɐtʃˈoʊəz
 achoo	ɐtʃˈuː
@@ -1474,7 +1474,7 @@ affix	ɐfˈɪks
 affixed	ɐfˈɪkst
 affixes	ɐfˈɪksᵻz
 affixing	ɐfˈɪksɪŋ
-affleck	ɐfəlk
+affleck	ɐfˈəlk
 afflerbach	ɐfələbˈɑːx
 afflict	ɐflˈɪkt
 afflicted	ɐflˈɪktᵻd
@@ -2106,7 +2106,7 @@ akers's	ˈeɪkɚzᵻz
 akerson	ˈækɚsən
 akey	ˈeɪki
 akhtar	ˈækhtɚ
-aki	ɐki
+aki	ɐkˈi
 akiba	ɐkˈiːbə
 akihito	ɐkɪhˈiːɾoʊ
 akiko	ɐkˈɪkoʊ
@@ -2736,7 +2736,7 @@ alliterative	ɐlˈɪɾɚɹətˌɪv
 allman	ɔːlmˈæn
 allmendinger	ɔːlmˈɛndɪŋɡɚ
 allmon	ɔːlmˈɑːn
-allmond	ɔːlmənd
+allmond	ɔːlmˈənd
 allnet	ɔːlnˈɛt
 allnutt	ɔːlnˈʌt
 allocate	ˈæləkˌeɪt
@@ -2930,7 +2930,7 @@ alps	ˈælps
 alquist	ɐlkwˈɪst
 alread	ɔːlɹˈiːd
 already	ɔːlɹˈɛdi
-alred	ɔːlrd
+alred	ˈɔːlrd
 alright	ɔːlɹˈaɪt
 alrighty	ɔːlɹˈaɪɾi
 alrosa	ɔːlɹˈoʊsə
@@ -3120,8 +3120,8 @@ alzene	ɐlzˈiːn
 alzheimer	ˈɑːltshaɪmɚ
 alzheimer's	ˈɑːltshaɪmɚz
 alzona	ɐlzˈoʊnə
-am	æm
-am's	æmz
+am	ˈæm
+am's	ˈæmz
 ama	ˈɑːmə
 amabel	ˈæmeɪbəl
 amabelle	ˌæmeɪbˈɛl
@@ -3559,7 +3559,7 @@ amrhein	ˈæmɹiːn
 amrine	ˈæmɹiːn
 amritsar	ɐmɹˈɪtsɚ
 amro	ˈæmɹoʊ
-ams	æmz
+ams	ˈæmz
 amsbaugh	ˈæmsbɔː
 amsco	ˈæmskoʊ
 amsden	ˈæmsdən
@@ -3600,7 +3600,7 @@ amylin	ˈæmɪlˌɪn
 amyloid	ˈæmɪlˌɔɪd
 amyotrophic	ˌæmɪətɹˈoʊfɪk
 amyx	ˈæmɪks
-an	æn
+an	ˈæn
 ana	ˈɑːnə
 anabaptist	ˈænɐbˌæptɪst
 anable	ˈeɪnəbəl
@@ -3730,7 +3730,7 @@ ancira	ænsˈiəɹə
 ancona	æŋkˈoʊnə
 ancrum	ˈæŋkɹəm
 anctil	ˈæŋktɪl
-and	ænd
+and	ˈænd
 andal	ˈændəl
 andalusia	ˌændɐlˈuːʒə
 andalusian	ˌændɐlˈuːʒən
@@ -4432,7 +4432,7 @@ anxieties	æŋzˈaɪəɾiz
 anxiety	æŋzˈaɪəɾi
 anxious	ˈæŋʃəs
 anxiously	ˈæŋʃəsli
-any	ˌɛni
+any	ˈɛni
 anybody	ˈɛnɪbˌɑːdi
 anybody's	ˈɛnɪbˌɑːdiz
 anyhow	ˈɛnɪhˌaʊ
@@ -4672,7 +4672,7 @@ applicators	ˈæplᵻkˌeɪɾɚz
 applied	ɐplˈaɪd
 applies	ɐplˈaɪz
 applin	ɐplˈɪn
-appling	ɐpəlɪŋ
+appling	ɐpəlˈɪŋ
 apply	ɐplˈaɪ
 applying	ɐplˈaɪɪŋ
 appoint	ɐpˈɔɪnt
@@ -5027,7 +5027,7 @@ ardsley	ˈɑːɹdsli
 arduini	ˌɑːɹduːˈiːni
 arduino	ˌɑːɹduːˈiːnoʊ
 arduous	ˈɑːɹdjuːəs
-are	ɑːɹ
+are	ˈɑːɹ
 area	ˈɛɹiə
 area's	ˈɛɹiəz
 areas	ˈɛɹiəz
@@ -5565,7 +5565,7 @@ arzamas	ɑːɹzˈɑːməz
 arzate	ˈɑːɹzeɪt
 arzola	ɑːɹzˈoʊlə
 arzt	ˈɑːɹzt
-as	æz
+as	ˈæz
 asa	ɐsˈæ
 asaf	ɐsˈæf
 asahan	ɐsˈæhæn
@@ -5989,7 +5989,7 @@ asymptote	ˈæsɪmptˌoʊt
 asymptotes	ˈæsɪmptˌoʊts
 asymptotic	ˌæsɪmptˈɑːɾɪk
 asynchronous	ɐsˈɪŋkɹənəs
-at	æt
+at	ˈæt
 at-bat	ætbˈæt
 at-bats	ætbˈæts
 ata	ˈɑːɾə
@@ -6142,7 +6142,7 @@ attali	ɐtˈɑːli
 attalla	ɐtˈælə
 attanasio	ɐtɐnˈæsɪˌoʊ
 attar	ɐtˈɑːɹ
-attard	ɐɾɚd
+attard	ɐɾˈɚd
 attardo	ɐtˈɑːɹdoʊ
 attaway	ɐɾəwˈeɪ
 atteberry	ɐtˈɛbɛɹi
@@ -6230,7 +6230,7 @@ atypia	eɪtˈɪpiə
 atypic	eɪtˈɪpɪk
 atypical	eɪtˈɪpɪkəl
 atz	ˈæts
-au	ˌoʊ
+au	ˈoʊ
 aube	ˈɔːb
 aubel	ˈɔːbəl
 auber	ˈɔːbɚ
@@ -6244,7 +6244,7 @@ aubrey	ˈɔːbɹi
 aubry	ˈɔːbɹi
 aubuchon	ˈɔːbʌtʃən
 auburn	ˈɔːbɜːn
-auch	ɔːx
+auch	ˈɔːx
 auchter	ɔːxtˈɜː
 auckland	ˈɔːklənd
 auclair	ˈɔːklɛɹ
@@ -6368,7 +6368,7 @@ ault	ˈɔlt
 aultman	ˈɔltmən
 auman	ˈɔːmən
 aumann	ˈɔːmən
-aument	ˌoʊmənt
+aument	ˈoʊmənt
 aumiller	ˈɔːmɪlɚ
 aune	ˈɔːn
 aung	ˈɔːŋ
@@ -6393,7 +6393,7 @@ auriemma	ˈɔːɹɪmə
 aurora	ɔːɹˈɔːɹə
 auroral	ˈɔːɹɚɹəl
 aurum	ˈɔːɹəm
-aus	ˌoʊz
+aus	ˈoʊz
 ausbrooks	ˈɔːsbɹʊks
 ausburn	ˈɔːsbɜːn
 auschwitz	ˈaʊʃwɪts
@@ -6884,9 +6884,9 @@ b's	bˈiːz
 b-j	bˈiːdʒˈeɪ
 b-j's	bˈiːdʒˈeɪz
 b.	bˈiː
-b.'s	bˈiː ˈɛs
-b.c.	bˈiː sˈiː
-b.s	bˈiː ˈɛs
+b.'s	bˈiː dˈɑːtz
+b.c.	bˌiːsˈiː
+b.s	bˌiːˈɛs
 ba	bˈɑː
 ba'ath	bˈææθ
 ba'athism	bˈæeɪðˌɪzəm
@@ -7631,7 +7631,7 @@ bamako	bæmˈɑːkoʊ
 bamba	bæmbˈæ
 bambach	bæmbˈɑːx
 bambenek	bæmbˈɛnɛk
-bamber	bæmbɚ
+bamber	bæmbˈɚ
 bamberg	bæmbˈɜːɡ
 bamberger	bæmbˈɜːdʒɚ
 bambi	bˈæmbiː
@@ -9169,7 +9169,7 @@ beeler	bˈiːlɚ
 beem	bˈiːm
 beeman	bˈiːmən
 beemer	bˈiːmɚ
-been	bˌɪn
+been	bˈɪn
 beene	bˈiːn
 beeney	bˈiːni
 beenken	bˈiːŋkən
@@ -9263,14 +9263,14 @@ begot	bᵻɡˈɑːt
 begotten	bᵻɡˈɑːʔn̩
 begrudge	bᵻɡɹˈʌdʒ
 begs	bˈɛɡz
-begue	bᵻɡ
+begue	bˈᵻɡ
 beguelin	bᵻɡˈɛlɪn
 beguile	bᵻɡˈaɪl
 beguiled	bᵻɡˈaɪld
 beguiling	bᵻɡˈaɪlɪŋ
 begun	bɪɡˈʌn
 behalf	bᵻhˈæf
-behan	bᵻhən
+behan	bᵻhˈən
 behar	bᵻhˈɑːɹ
 behave	bᵻhˈeɪv
 behaved	bᵻhˈeɪvd
@@ -9378,7 +9378,7 @@ beitz	bˈeɪts
 beitzel	bˈeɪtsəl
 bejar	bᵻdʒˈɑːɹ
 bejarano	bᵻdʒɐɹˈɑːnoʊ
-beji	bᵻdʒi
+beji	bᵻdʒˈi
 bekaa	bᵻkˈɑː
 bekaert	bᵻkˈɛɹt
 beker	bᵻkˈɜː
@@ -9449,7 +9449,7 @@ belgo	bˈɛlɡoʊ
 belgrade	bɛlɡɹˈeɪd
 belgrade's	bɛlɡɹˈeɪdz
 belgrave	bˈɛlɡɹeɪv
-beli	bᵻli
+beli	bᵻlˈi
 belich	bᵻlˈɪx
 belie	bᵻlˈaɪ
 belied	bᵻlˈaɪd
@@ -9635,7 +9635,7 @@ bembenek	bˈɛmbənˌɛk
 bembry	bˈɛmbɹi
 bement	bᵻmˈɛnt
 bemidji	bᵻmˈɪdʒi
-bemis	bᵻmiz
+bemis	bᵻmˈiz
 bemiss	bᵻmˈɪs
 bemoan	bᵻmˈoʊn
 bemoaned	bᵻmˈoʊnd
@@ -9765,7 +9765,7 @@ bengtson	bˈɛŋtsən
 benguet	bˈɛŋt
 benham	bˈɛnæm
 benhamou	bˈɛnhɐmˌuː
-beni	bᵻni
+beni	bᵻnˈi
 benight	bᵻnˈaɪt
 benighted	bᵻnˈaɪɾᵻd
 benighting	bᵻnˈaɪɾɪŋ
@@ -10155,11 +10155,11 @@ berry's	bˈɛɹiz
 berryhill	bˈɛɹɪhˌɪl
 berrylike	bˈɛɹilˌaɪk
 berryman	bˈɛɹɪmən
-bersch	bɚʃ
+bersch	bˈɚʃ
 berserk	bɚsˈɜːk
 bershad	bɚʃˈæd
 berson	bɚsˈɑːn
-berst	bɚst
+berst	bˈɚst
 berstein	bɚstˈaɪn
 bert	bˈɜːt
 berta	bˈɜːɾə
@@ -10224,7 +10224,7 @@ bes	bˈɛs
 besancon	bᵻsˈæŋkən
 besant	bᵻsˈænt
 besaw	bᵻsˈɔː
-besch	bᵻʃ
+besch	bˈᵻʃ
 beschloss	bᵻʃlˈɔs
 beschloss'	bᵻʃlˈɔs
 beschloss's	bᵻʃlˈɔsᵻz
@@ -10300,10 +10300,10 @@ betakeren	bˌeɪɾəkˈɜːɹən
 betamax	bˌeɪɾəmˈæks
 betancourt	bˌeɪtəŋkˈɔːɹt
 betancur	bˌeɪtəŋkˈɜː
-betar	bˌeɪɾəɚ
+betar	bˈeɪɾəɚ
 betas	bˈeɪɾəz
 betaseron	bˌeɪɾəsˈɜːɹən
-betavon	bˌeɪɾəvən
+betavon	bˈeɪɾəvən
 betcha	bˈɛtʃə
 betcher	bˈɛtʃɚ
 betel	bᵻtˈɛl
@@ -11011,8 +11011,8 @@ biovest	bˌaɪoʊvˈɛst
 bip	bˈɪp
 bipartisan	baɪpˈɑːɹɾɪsən
 bipartisanship	baɪpˈɑːɹɾɪsənʃˌɪp
-biphenyl	baɪfˌiːnaɪl
-biphenyls	baɪfˌiːnaɪlz
+biphenyl	baɪfˈiːnaɪl
+biphenyls	baɪfˈiːnaɪlz
 biplane	bˈaɪpleɪn
 bipolar	baɪpˈoʊlɚ
 bippus	bˈɪpəs
@@ -14671,7 +14671,7 @@ brott	bɹˈɑːt
 brotzman	bɹˈɑːtsmən
 broucek	bɹˈaʊsɛk
 broudy	bɹˈaʊdi
-brough	bɹə
+brough	bɹˈə
 brougham	bɹˈʌfæm
 brougher	bɹˈʌfɚ
 broughman	bɹˈʌfmən
@@ -15941,8 +15941,8 @@ busty	bˈʌsti
 busulaki	bjˌuːsuːlˈæki
 buswell	bˈʌswɛl
 busy	bˈɪzi
-but	bˌʌt
-but's	bˌʌts
+but	bˈʌt
+but's	bˈʌts
 butala	bjuːtˈɑːlə
 butan	bjˈuːtən
 butane	bjˈuːteɪn
@@ -16156,7 +16156,7 @@ byword	bˈaɪwɜːd
 byzantine	bˈɪzɐntˌiːn
 byzantium	bɪzˈæntiəm
 c	sˈiː
-c'est	seɪ
+c'est	sˈeɪ
 c'mon	kəmˈɑːn
 c's	sˈiːz
 c-code	sˈiːkˈoʊd
@@ -16164,10 +16164,10 @@ c-codes	sˈiːkˈoʊdz
 c-span	sˈiːspˈæn
 c-span's	sˈiːspˈænz
 c.	sˈiː
-c.'s	sˈiː ˈɛs
-c.d.s	sˈiː dˈiː ˈɛs
-c.o.d.	sˈiː ˈoʊ dˈiː
-c.s	sˈiː ˈɛs
+c.'s	sˈiː dˈɑːtz
+c.d.s	sˌiːdˌiːˈɛs
+c.o.d.	sˌiːˌoʊdˈiː
+c.s	sˌiːˈɛs
 ca	kˈɑː
 caan	kˈɑːn
 cab	kˈæb
@@ -19474,7 +19474,7 @@ chennault	tʃˈɛnɔlt
 chenoweth	tʃˈɛnoʊəθ
 chenowitz	tʃˈɛnoʊvˌɪts
 chenxiang	tʃˈɛŋksjæŋ
-cheong	tʃəŋɡ
+cheong	tʃˈəŋɡ
 cheque	tʃˈɛk
 cheques	tʃˈɛks
 cher	ʃˈɛɹ
@@ -21213,7 +21213,7 @@ cnbc's	sˌiːˌɛnbˌiːsˈiːz
 cnet	sˈiːnˈɛt
 cnn	sˌiːˌɛnˈɛn
 cnn's	sˌiːˌɛnˈɛnz
-cnn.com	sˌiːˌɛnˈɛn kˈɑːm
+cnn.com	sˌiːˌɛnˈɛn dˈɑːt kˈɑːm
 cnnfn	sˌiːˌɛnˈɛnˌɛfˈɛn
 co	kˈoʊ
 co-founder	kˈoʊfˈaʊndɚ
@@ -21999,7 +21999,7 @@ combatting	kˈɑːmbæɾɪŋ
 combe	kəmˈɛ
 combed	kˈoʊmd
 combee	kəmˈiː
-comber	kɑːmɚ
+comber	kɑːmˈɚ
 combes	kəmˈɛz
 combest	kəmˈɛst
 combinability	kəmbˌaɪnəbˈɪlᵻɾi
@@ -22153,7 +22153,7 @@ commercialized	kəmˈɜːʃəlˌaɪzd
 commercializing	kəmˈɜːʃəlˌaɪzɪŋ
 commercially	kəmˈɜːʃəli
 commercials	kəmˈɜːʃəlz
-commerford	kɑːmɚfɚd
+commerford	kɑːmɚfˈɚd
 commerical	kəmˈɛɹɪkəl
 commerzbank	kəmˈɜːzbæŋk
 commerzbank's	kəmˈɜːzbæŋks
@@ -22688,7 +22688,7 @@ condom	kˈɑːndəm
 condominium	kˌɑːndəmˈɪniəm
 condominiums	kˌɑːndəmˈɪniəmz
 condoms	kˈɑːndəmz
-condon	kəndən
+condon	kəndˈən
 condone	kəndˈoʊn
 condoned	kəndˈoʊnd
 condones	kəndˈoʊnz
@@ -22702,7 +22702,7 @@ condracky's	kəndɹˈækiz
 condray	kəndɹˈeɪ
 condren	kəndɹˈɛn
 condrey	kəndɹˈaɪ
-condron	kɑːndɹən
+condron	kɑːndɹˈən
 condry	kəndɹˈaɪ
 conducive	kəndˈuːsɪv
 conduct	kˈɑːndʌkt
@@ -22846,7 +22846,7 @@ confusion	kənfjˈuːʒən
 confusions	kənfjˈuːʒənz
 cong	kˈɑːŋ
 conga	kˈɑːŋɡə
-congdon	kɑːŋɡdən
+congdon	kɑːŋɡdˈən
 congeal	kəndʒˈiːl
 congealed	kəndʒˈiːld
 congenial	kəndʒˈiːnɪəl
@@ -22858,7 +22858,7 @@ congest	kəndʒˈɛst
 congested	kəndʒˈɛstᵻd
 congestion	kəndʒˈɛstʃən
 congestive	kəndʒˈɛstɪv
-congleton	kɑːŋɡəltən
+congleton	kɑːŋɡəltˈən
 conglomerate	kəŋɡlˈɑːmɚɹˌeɪt
 conglomerate's	kəŋɡlˈɑːmɚɹˌeɪtz
 conglomerates	kəŋɡlˈɑːmɚɹˌeɪts
@@ -22942,7 +22942,7 @@ conlan	kənlˈæn
 conlee	kənlˈiː
 conley	kənlˈaɪ
 conlin	kənlˈɪn
-conlon	kɑːnlən
+conlon	kɑːnlˈən
 conlow	kənlˈoʊ
 conly	kənlˈaɪ
 conn	kˈɑːn
@@ -22976,7 +22976,7 @@ connelly's	kˈɑːnəliz
 connely	kˈɑːnli
 conner	kˈɑːnɚ
 conner's	kˈɑːnɚz
-connerly	kɑːnɚli
+connerly	kɑːnɚlˈi
 conners	kˈɑːnɚz
 connery	kənˈɜːɹi
 connery's	kənˈɜːɹiz
@@ -23991,7 +23991,7 @@ coronets	kˈɔːɹənˌɛts
 corp	kˈɔːɹp
 corp's	kˈɔːɹps
 corp.	kˈɔːɹp
-corp.'s	kˈɔːɹp ˈɛs
+corp.'s	kˈɔːɹp dˈɑːt
 corpening	kˈɔːɹpənɪŋ
 corpora	kˈɔːɹpɔːɹə
 corporacion	kˈɔːɹpɔːɹˌeɪʃən
@@ -26327,9 +26327,9 @@ d'orsay	dˈɔːɹseɪ
 d's	dˈiːz
 d'souza	dəsˈuːzə
 d.	dˈiː
-d.'s	dˈiː ˈɛs
-d.c.	dˈiː sˈiː
-d.s	dˈiː ˈɛs
+d.'s	dˈiː dˈɑːtz
+d.c.	dˌiːsˈiː
+d.s	dˌiːˈɛs
 da	dˈɑː
 da's	dˈɑːz
 daane	dˈɑːn
@@ -27182,7 +27182,7 @@ dazzo	dˈætsoʊ
 dbase	dˈiːbˈeɪs
 dc	dˌiːsˈiː
 ddt	dˌiːdˌiːtˈiː
-de	də
+de	dˈə
 de-excite	diːɛksˈaɪt
 de-excites	diːɛksˈaɪts
 dea	dˈiː
@@ -27593,7 +27593,7 @@ decoders	dᵻkˈoʊdɚz
 decodes	dᵻkˈoʊdz
 decoding	dᵻkˈoʊdɪŋ
 decola	dᵻkˈoʊlə
-decom	dˌiːkɑːm
+decom	dˈiːkɑːm
 decommission	dˌiːkəmˈɪʃən
 decommissioned	dˌiːkəmˈɪʃənd
 decommissioning	dˌiːkəmˈɪʃənɪŋ
@@ -28073,7 +28073,7 @@ delacy	dᵻlˈæsi
 delafield	dᵻlˈæfiːld
 delafuente	dᵻlɐfwˈɛnteɪ
 delagarza	dᵻlˈæɡɑːɹzə
-delage	dᵻlɪdʒ
+delage	dᵻlˈɪdʒ
 delagrange	dᵻlˈæɡɹeɪndʒ
 delahanty	dᵻlˈæhənti
 delahoussaye	dᵻlˈæhaʊsˌeɪ
@@ -28161,7 +28161,7 @@ delegations	dˌɛlɪɡˈeɪʃənz
 delehanty	dᵻlˈɛhənti
 delellis	dᵻlˈɛlɪz
 deleo	dᵻlɪˈoʊ
-deleon	dᵻlɪən
+deleon	dᵻlɪˈən
 deleonardis	dᵻlɪənˈɑːɹdiz
 delete	dᵻlˈiːt
 deleted	dᵻlˈiːɾᵻd
@@ -29399,7 +29399,7 @@ detonation	dˌɛtənˈeɪʃən
 detonations	dˌɛtənˈeɪʃənz
 detonator	dˈɛtənˌeɪɾɚ
 detonators	dˈɛtənˌeɪɾɚz
-detore	dɪɾɚ
+detore	dɪɾˈɚ
 detour	dˈiːtʊɹ
 detoured	dˈiːtʊɹd
 detours	dˈiːtʊɹz
@@ -29680,8 +29680,8 @@ dhlakama	dlækˈɑːmə
 dhole	dˈoʊl
 dhondt	dˈiːhˈɑːnt
 dhows	dˈiːhˌaʊz
-di	di
-di's	dˌɪz
+di	dˈi
+di's	dˈɪz
 dia	dˈaɪə
 diab	dˈaɪəb
 diabase	dˈaɪəbˌeɪs
@@ -30929,7 +30929,7 @@ disqualified	dɪskwˈɑːlᵻfˌaɪd
 disqualifies	dɪskwˈɑːlᵻfˌaɪz
 disqualify	dɪskwˈɑːlᵻfˌaɪ
 disqualifying	dɪskwˈɑːlᵻfˌaɪɪŋ
-disque	dɪsk
+disque	dˈɪsk
 disquiet	dɪskwˈaɪət
 disquieting	dɪskwˈaɪəɾɪŋ
 disraeli	dɪsɹˈeɪli
@@ -33421,9 +33421,9 @@ e-mailed	ˈiːmˈeɪld
 e-mailing	ˈiːmˈeɪlɪŋ
 e-mails	ˈiːmˈeɪlz
 e.	ˈiː
-e.'s	ˈiː ˈɛs
-e.g.	ˈiː dʒˈiː
-e.s	ˈiː ˈɛs
+e.'s	ˈiː dˈɑːtz
+e.g.	ˌiːdʒˈiː
+e.s	ˌiːˈɛs
 each	ˈiːtʃ
 eachan	ˈiːtʃən
 eachus	ˈiːtʃəs
@@ -34354,7 +34354,7 @@ ekofisk	ˈɛkəfˌɪsk
 eksportfinans	ˈɛkspɔːɹtfˌaɪnənz
 ekstrand	ˈɛkstɹænd
 ekstrom	ˈɛkstɹɑːm
-el	ˌɛl
+el	ˈɛl
 el-al	ˌɛlˈæl
 el-greco	ˌɛlɡɹˈiːkoʊ
 el-nino	ˌɛlnˈiːnoʊ
@@ -34481,7 +34481,7 @@ electrifies	ᵻlˈɛktɹᵻfˌaɪz
 electrify	ᵻlˈɛktɹᵻfˌaɪ
 electrifying	ᵻlˈɛktɹᵻfˌaɪɪŋ
 electrique	ᵻlɪktɹˈiːk
-electro	ɪlˌɛktɹoʊ
+electro	ɪlˈɛktɹoʊ
 electrobiology	ɪlˌɛktɹoʊbaɪˈɑːlədʒi
 electrobiology's	ɪlˌɛktɹoʊbaɪˈɑːlədʒiz
 electrocardiogram	ɪlˌɛktɹoʊkˈɑːɹdɪˌoʊɡɹæm
@@ -34591,7 +34591,7 @@ elger	ˈɛldʒɚ
 elgersma	ˈɛldʒɚsmə
 elgie	ˈɛldʒi
 elgin	ˈɛldʒɪn
-eli	ᵻli
+eli	ᵻlˈi
 elia	ᵻlˈɪə
 eliades	ᵻlˈɪeɪdz
 elias	ᵻlˈaɪəs
@@ -34947,7 +34947,7 @@ emblem	ˈɛmbləm
 emblematic	ˌɛmbəlmˈæɾɪk
 emblems	ˈɛmbləmz
 embler	ɛmblˈɜː
-embleton	ɛmbəltən
+embleton	ɛmbəltˈən
 embodied	ɛmbˈɑːdid
 embodies	ɛmbˈɑːdiz
 embodiment	ɛmbˈɑːdɪmənt
@@ -35105,7 +35105,7 @@ emmy's	ˈɛmiz
 emmys	ˈɛmɪz
 emo	ɪmˈoʊ
 emogene	ɪmˈoʊdʒiːn
-emond	ɪmənd
+emond	ɪmˈənd
 emory	ˈɛmɚɹi
 emory's	ˈɛmɚɹiz
 emoticon	ɪmˈɑːɾɪkən
@@ -35556,7 +35556,7 @@ enid	ˈiːnɪd
 enigma	ɛnˈɪɡmə
 enigmatic	ˌɛnɪɡmˈæɾɪk
 enimont	ɛnˈɪmɔnt
-enis	ɛniz
+enis	ɛnˈiz
 enitt	ɛnˈɪt
 enix	ɛnˈɪks
 enjoin	ɛndʒˈɔɪn
@@ -35608,13 +35608,13 @@ ennea	ɛnˈiə
 enneking	ɛnˈɛkɪŋ
 ennen	ɛnˈɛn
 ennes	ˈɛnz
-ennis	ɛniz
+ennis	ɛnˈiz
 ennoble	ɛnˈoʊbəl
 ennobled	ɛnˈoʊbəld
 ennobles	ɛnˈoʊbəlz
 ennobling	ɛnˈoʊblɪŋ
 ennosuke	ɛnˈɑːsuːk
-enns	ɛnz
+enns	ˈɛnz
 ennui	ɛnˈuːi
 eno	ˈiːnoʊ
 enoch	ˈiːnɑːk
@@ -36034,7 +36034,7 @@ equilink	ˌiːkwɪlˈɪŋk
 equimark	ˌiːkwɪmˈɑːɹk
 equine	ˈɛkwaɪn
 equinox	ˈɛkwɪnˌɑːks
-equion	ˌiːkwɪən
+equion	ˈiːkwɪən
 equip	ɪkwˈɪp
 equipment	ɪkwˈɪpmənt
 equipment's	ɪkwˈɪpmənts
@@ -36864,7 +36864,7 @@ everlast	ˌɛvɚlˈæst
 everlasting	ˌɛvɚlˈæstɪŋ
 everlastings	ˌɛvɚlˈæstɪŋz
 everley	ˌɛvɚlˈaɪ
-everling	ˌɛvɚlɪŋ
+everling	ˈɛvɚlɪŋ
 everly	ˌɛvɚlˈaɪ
 everman	ˌɛvɚmˈæn
 evermore	ˌɛvɚmˈɔːɹ
@@ -37642,7 +37642,7 @@ f	ˈɛf
 f'd	ˈɛfd
 f's	ˈɛfs
 f.	ˈɛf
-f.'s	ˈɛf ˈɛs
+f.'s	ˈɛf dˈɑːtz
 faal	fˈɑːl
 faal's	fˈɑːlz
 faas	fˈɑːz
@@ -39129,7 +39129,7 @@ fey	fˈeɪ
 feyen	fˈeɪən
 feynman	fˈeɪnmən
 fez	fˈɛz
-fi	fˌaɪ
+fi	fˈaɪ
 fiacco	fˈaɪəkˌoʊ
 fiala	fˈaɪələ
 fialkowski	fˌaɪəlkˈaʊski
@@ -40776,7 +40776,7 @@ footwear	fˈʊtwɛɹ
 footwork	fˈʊtwɜːk
 fop	fˈɑːp
 foppiano	fˌɑːpiˈænoʊ
-for	fɔːɹ
+for	fˈɔːɹ
 for-profit	fɔːɹpɹˈɑːfɪt
 fora	fˈɔːɹə
 forage	fˈɔːɹɪdʒ
@@ -41037,7 +41037,7 @@ formylin	fˈɔːɹmɪlˌɪn
 fornal	fˈɔːɹnəl
 forner	fˈɔːɹnɚ
 fornes	fˈɔːɹnz
-forness	fˌɔːɹnəs
+forness	fˈɔːɹnəs
 forney	fˈɔːɹni
 forni	fˈɔːɹni
 fornoff	fˈɔːɹnɔf
@@ -41050,7 +41050,7 @@ forrestal	fˈɔːɹɛstəl
 forrester	fˈɔːɹᵻstɚ
 forrey	fˈɔːɹi
 forry	fˈɔːɹi
-fors	fɔːɹz
+fors	fˈɔːɹz
 forsake	fɔːɹsˈeɪk
 forsaken	fɔːɹsˈeɪkən
 forsaking	fɔːɹsˈeɪkɪŋ
@@ -41144,7 +41144,7 @@ forwarder	fˈɔːɹwɚdɚ
 forwarders	fˈɔːɹwɚdɚz
 forwarding	fˈɔːɹwɚdɪŋ
 forwards	fˈɔːɹwɚdz
-forwood	fˌɔːɹwʊd
+forwood	fˈɔːɹwʊd
 forys	fˈɔːɹiz
 forza	fˈɔːɹzə
 fosamax	fˈɑːsɐmˌæks
@@ -41872,7 +41872,7 @@ friedlander	fɹˈiːdləndɚ
 friedley	fɹˈiːdli
 friedli	fɹˈiːdli
 friedline	fɹˈiːdlaɪn
-friedly	fɹᵻdli
+friedly	fɹᵻdlˈi
 friedman	fɹˈiːdmən
 friedman's	fɹˈiːdmənz
 friedmann	fɹˈiːdmən
@@ -42017,7 +42017,7 @@ froio	fɹˈɔɪoʊ
 frolic	fɹˈɑːlɪk
 frolicking	fɹˈɑːlɪkɪŋ
 frolo	fɹˈoʊloʊ
-from	fɹʌm
+from	fɹˈʌm
 froman	fɹˈoʊmən
 frombuger	fɹˈɑːmbuːɡɚ
 frombuger's	fɹˈɑːmbuːɡɚz
@@ -42531,8 +42531,8 @@ g	dʒˈiː
 g's	dʒˈiːz
 g'vanni's	dʒˈiːvˈæniz
 g.	dʒˈiː
-g.'s	dʒˈiː ˈɛs
-g.s	dʒˈiː ˈɛs
+g.'s	dʒˈiː dˈɑːtz
+g.s	dʒˌiːˈɛs
 ga	ɡˈɑː
 gaal	ɡˈɑːl
 gaar	ɡˈɑːɹ
@@ -43152,7 +43152,7 @@ garibaldi	ɡˌɑːɹɹɪbˈɔːldi
 garibay	ɡˈɑːɹɹɪbˌeɪ
 gariepy	ɡˈɑːɹɹɪpi
 garin	ɡˈɑːɹɹɪn
-garing	ɡɚɹɪŋ
+garing	ɡɚɹˈɪŋ
 garinger	ɡɚɹɪŋˈɜː
 garis	ɡˈɑːɹɹɪs
 garish	ɡˈɛɹɪʃ
@@ -43983,7 +43983,7 @@ geometrics	dʒˌiːoʊmˈɛtɹɪks
 geometries	dʒiˈɑːmətɹiz
 geometry	dʒiˈɑːmətɹi
 geomorphology	dʒˌiːoʊmɔːɹfˈɑːlədʒi
-geon	dʒən
+geon	dʒˈən
 geophysical	dʒˌiːoʊfˈɪzɪkəl
 geopolitic	dʒˌiːoʊpəlˈɪɾɪk
 geopolitical	dʒˌiːoʊpəlˈɪɾɪkəl
@@ -44368,7 +44368,7 @@ giants	dʒˈaɪənts
 giants'	dʒˈaɪənts
 giap	dʒˈaɪəp
 giaquinto	dʒɐkwˈɪntoʊ
-giard	dʒɪɚd
+giard	dʒɪˈɚd
 giardi	dʒˈaɪɚdi
 giardina	dʒɐədˈɪnə
 giardini	dʒɐədˈiːni
@@ -45450,8 +45450,8 @@ gohlke	ɡˈoʊlk
 gohman	ɡˈoʊmən
 gohn	ɡˈoʊn
 gohr	ɡˈoʊɚ
-goin	ɡˌoʊɪn
-goin'	ɡˌoʊɪn
+goin	ɡˈoʊɪn
+goin'	ɡˈoʊɪn
 goines	ɡˈɔɪnz
 going	ɡˈoʊɪŋ
 goings	ɡˈoʊɪŋz
@@ -45644,7 +45644,7 @@ gongs	ɡˈɔŋz
 gonia	ɡˈoʊniə
 goniometer	ɡˌoʊnɪˈɑːmɪɾɚ
 gonium	ɡˈoʊniəm
-gonna	ɡˌənə
+gonna	ɡˈənə
 gonnella	ɡənˈɛlə
 gonnerman	ɡˈɑːnɚmən
 gonococcal	ɡˈɑːnəkˌɑːkəl
@@ -47914,7 +47914,7 @@ gypsies	dʒˈɪpsiz
 gypsum	dʒˈɪpsəm
 gypsum's	dʒˈɪpsəmz
 gypsy	dʒˈɪpsi
-gyr	dʒɚ
+gyr	dʒˈɚ
 gyrate	dʒˈaɪɹeɪt
 gyrated	dʒˈaɪɹeɪɾᵻd
 gyrates	dʒˈaɪɹeɪts
@@ -47935,7 +47935,7 @@ gyuhama	dʒjuːhˈɑːmə
 h	ˈeɪtʃ
 h's	ˈeɪtʃᵻz
 h.	ˈeɪtʃ
-h.'s	ˈeɪtʃ ˈɛs
+h.'s	ˈeɪtʃ dˈɑːtz
 ha	hˈɑː
 ha'aretz	hˈæɐɹˌɛts
 ha'etzni	hˈæɛtsni
@@ -48040,7 +48040,7 @@ hacks	hˈæks
 hacksaw	hˈæksɔː
 hackstaff	hˈækstæf
 hackworth	hˈækwɜːθ
-had	hˌæd
+had	hˈæd
 hada	hˈɑːdə
 hadad	hˈædæd
 hadar	hˈædɑːɹ
@@ -49516,7 +49516,7 @@ haters	hˈeɪɾɚz
 hates	hˈeɪts
 hatfield	hˈætfiːld
 hatfield's	hˈætfiːldz
-hath	hæθ
+hath	hˈæθ
 hathaway	hˈæθəwˌeɪ
 hathaway's	hˈæθəwˌeɪz
 hathcoat	hˈæθkoʊt
@@ -49802,10 +49802,10 @@ hazzard	hˈæzɚd
 hbo	ˌeɪtʃbˌiːˈoʊ
 hbox	ˈeɪtʃbˈɑːks
 hces	ˈeɪtʃsˈɛᵻz
-he	hiː
-he'd	hiːd
-he'll	hiːl
-he's	hiːz
+he	hˈiː
+he'd	hˈiːd
+he'll	hˈiːl
+he's	hˈiːz
 heaberlin	hˈiːbɚlˌɪn
 heacock	hˈiːkɑːk
 heacox	hˈiːkɑːks
@@ -50768,8 +50768,8 @@ heppler	hˈɛplɚ
 heppner	hˈɛpnɚ
 heptathlon	hˈɛptæθlən
 hepworth	hˈɛpwɜːθ
-her	hɜː
-her's	hɜːz
+her	hˈɜː
+her's	hˈɜːz
 hera	hˈiəɹə
 heradia	həɹˈeɪdiə
 herald	hˈɛɹəld
@@ -51485,7 +51485,7 @@ hilty	hˈɪlti
 hiltz	hˈɪlts
 hilyard	hˈɪljɑːɹd
 hilyer	hˈɪlaɪɚ
-him	hˌɪm
+him	hˈɪm
 himalaya	hˌɪməlˈeɪə
 himalayan	hˌɪməlˈeɪən
 himalayas	hˌɪməlˈeɪəz
@@ -51785,7 +51785,7 @@ hlavac	ˈeɪtʃlˈævæk
 hlavacek	ˈeɪtʃlˈæveɪsək
 hlavaty	ˈeɪtʃlˈævəɾi
 hm	ˌeɪtʃˈɛm
-hmm	həm
+hmm	hˈəm
 hmmm	hˈəm
 hmong	ˈeɪtʃmˈɔŋɡ
 hnat	ˈeɪtʃnˈæt
@@ -52457,7 +52457,7 @@ homosapiens	hˌoʊmoʊsˈæpiənz
 homosexual	hˌoʊmoʊsˈɛkʃuːəl
 homosexuality	hˌoʊmoʊsˈɛkʃuːˈælᵻɾi
 homosexuals	hˌoʊmoʊsˈɛkʃuːəlz
-homosporous	hˌoʊmoʊspɚɹəs
+homosporous	hˈoʊmoʊspɚɹəs
 homozygote	hˈɑːməzˌɪɡoʊt
 homozygous	hˌɑːməzˈɪɡəs
 homrich	hˈɑːmɹɪtʃ
@@ -54036,15 +54036,15 @@ hyundais	hˈʌndeɪz
 hywell	hˈaɪwɛl
 hz	ˌeɪtʃzˈiː
 i	ˈaɪ
-i'd	aɪd
+i'd	ˈaɪd
 i'ers	aɪˈɜːz
-i'll	aɪl
-i'm	aɪm
-i's	aɪz
-i've	aɪv
+i'll	ˈaɪl
+i'm	ˈaɪm
+i's	ˈaɪz
+i've	ˈaɪv
 i.	ˈaɪ
-i.'s	ˈaɪ ˈɛs
-i.s	ˈaɪ ˈɛs
+i.'s	ˈaɪ dˈɑːtz
+i.s	ˌaɪˈɛs
 ia	ˈaɪə
 iacobelli	ˌaɪɐkəbˈɛli
 iacobellis	ˌaɪɐkəbˈɛlɪz
@@ -54245,8 +54245,8 @@ ieee	ˌaɪˌiːˌiːˈiː
 ierardi	ɪˌɛɹˈɑːɹdi
 ierne	ˈɪɹn
 iezzi	ˈiːzi
-if	ɪf
-if's	ɪfs
+if	ˈɪf
+if's	ˈɪfs
 ifas	ˈɪfəz
 iffy	ˈɪfi
 ifil	ˈɪfɪl
@@ -54436,7 +54436,7 @@ imai	ɪmˈaɪ
 imam	ɪmˈæm
 imamura	ɪmɐmjˈʊɹɹə
 iman	ɪmˈæn
-imari	ɪmɚɹi
+imari	ɪmɚɹˈi
 imasco	ɪmˈæskoʊ
 imax	ɪmˈæks
 imax'	ɪmˈæks
@@ -54448,7 +54448,7 @@ imbeciles	ˈɪmbəsəlz
 imbed	ˈɪmd
 imbedded	ɪmbˈɛdᵻd
 imbeds	ˈɪmdz
-imber	ɪmbɚ
+imber	ɪmbˈɚ
 imbera	ɪmbˈɜːɹə
 imbibe	ɪmbˈaɪb
 imbibed	ɪmbˈaɪbd
@@ -54854,7 +54854,7 @@ inadvertent	ɪnɐdvˈɜːtənt
 inadvertently	ɪnɐdvˈɜːtəntli
 inadvisable	ɪnɐdvˈaɪzəbəl
 inaez	ɪnˈiːz
-inaki	ɪnɐki
+inaki	ɪnɐkˈi
 inalienable	ɪnˈeɪliənəbəl
 inamura	ɪnæmjˈʊɹɹə
 inane	ɪnˈeɪn
@@ -54888,7 +54888,7 @@ inbreed	ˈɪnbɹiːd
 inbreeding	ˈɪnbɹiːdɪŋ
 inc	ˈɪŋk
 inc.	ˈɪŋk
-inc.'s	ˈɪŋk ˈɛs
+inc.'s	ˈɪŋk dˈɑːt
 inca	ˈɪŋkə
 incalculable	ɪŋkˈælkjuːləbəl
 incandescent	ˌɪŋkɐndˈɛsənt
@@ -55472,7 +55472,7 @@ infotechnology	ˌɪnfoʊtɛknˈɑːlədʒi
 infotron	ˌɪnfoʊtɹˈɑːn
 infotron's	ˌɪnfoʊtɹˈɑːnz
 infoworld	ɪnfˈaʊɜːld
-infra	ˌɪnfɹə
+infra	ˈɪnfɹə
 infraction	ɪnfɹˈækʃən
 infractions	ɪnfɹˈækʃənz
 infrared	ˌɪnfɹɚɹˈɛd
@@ -55605,7 +55605,7 @@ inimical	ɪnˈɪmɪkəl
 inimitable	ɪnˈɪmɪɾəbəl
 iniquity	ɪnˈɪkwᵻɾi
 iniss	ɪnˈɪs
-initable	ɪnˌɪɾəbəl
+initable	ɪnˈɪɾəbəl
 initial	ɪnˈɪʃəl
 initialed	ɪnˈɪʃəld
 initialing	ɪnˈɪʃəlɪŋ
@@ -56058,7 +56058,7 @@ intentions	ɪntˈɛnʃənz
 intently	ɪntˈɛntli
 intents	ɪntˈɛnts
 inter	ɪntˈɜː
-interacciones	ˌɪntɚɹɐkɪənz
+interacciones	ˈɪntɚɹɐkɪənz
 interact	ˌɪntɚɹˈækt
 interacted	ˌɪntɚɹˈæktᵻd
 interacting	ˌɪntɚɹˈæktɪŋ
@@ -56363,7 +56363,7 @@ intimidates	ɪntˈɪmᵻdˌeɪts
 intimidating	ɪntˈɪmᵻdˌeɪɾɪŋ
 intimidation	ɪntˌɪmɪdˈeɪʃən
 intis	ɪntˈɪs
-into	ˌɪntʊ
+into	ˈɪntʊ
 intolerable	ɪntˈɑːlɚɹəbəl
 intolerably	ɪntˈɑːlɚɹəbli
 intolerance	ɪntˈɑːlɚɹəns
@@ -56784,7 +56784,7 @@ irving	ˈɜːvɪŋ
 irving's	ˈɜːvɪŋz
 irwin	ˈɜːwɪn
 irwindale	ˈɜːwɪndˌeɪl
-is	ɪz
+is	ˈɪz
 isa	ˈɪsə
 isaac	ˈaɪsək
 isaacks	ˈɪsɑːks
@@ -56963,10 +56963,10 @@ istre	ˈɪstɚ
 isty	ˈɪsti
 isu	ˈɪsuː
 isuzu	ɪsˈuːzuː
-it	ɪt
-it'd	ɪɾəd
-it'll	ˌɪɾəl
-it's	ɪts
+it	ˈɪt
+it'd	ɪɾˈəd
+it'll	ˈɪɾəl
+it's	ˈɪts
 it-wit	ɪtwˈɪt
 ita	ˈiːɾə
 italia	ɪtˈæliə
@@ -57013,13 +57013,13 @@ ito	ˈiːɾoʊ
 ito's	ˈiːɾoʊz
 itochu	aɪtˈɑːtʃuː
 itoh	ˈaɪɾoʊ
-its	ɪts
+its	ˈɪts
 itself	ɪtsˈɛlf
 itstee	ˈɪtstiː
 itsy	ˈɪtsi
 itsy-bitsy	ˈɪtsibˈɪtsi
 ittner	ˈɪtnɚ
-itty	ˌɪɾi
+itty	ˈɪɾi
 itty-bitty	ˌɪɾibˈɪɾi
 itunes	ˈɪtuːnz
 itzhak	ˈɪtshæk
@@ -57095,7 +57095,7 @@ izzy's	ˈɪziz
 j	dʒˈeɪ
 j's	dʒˈeɪz
 j.	dʒˈeɪ
-j.'s	dʒˈeɪ ˈɛs
+j.'s	dʒˈeɪ dˈɑːtz
 ja	jˈɑː
 jaan	dʒˈɑːn
 jab	dʒˈæb
@@ -57201,7 +57201,7 @@ jacques'	ʒˈæk
 jacquet	dʒˈækeɪ
 jacquetta	dʒækˈɛɾə
 jacquez	dʒˈækɛz
-jacquie	dʒˌækaɪ
+jacquie	dʒˈækaɪ
 jacquin	dʒˈækɪn
 jacquot	dʒˈækɑːt
 jacuzzi	dʒəkˈuːzi
@@ -58663,7 +58663,7 @@ k's	kˈeɪz
 k-mart	kˈeɪmˈɑːɹt
 k-mart's	kˈeɪmˈɑːɹts
 k.	kˈeɪ
-k.'s	kˈeɪ ˈɛs
+k.'s	kˈeɪ dˈɑːtz
 ka	kˈɑː
 kaas	kˈɑːz
 kaatz	kˈɑːts
@@ -62667,9 +62667,9 @@ l'heureux	ˈɛlhjˈuːɹuː
 l'oreal	ˈɛlˈɔːɹiəl
 l's	ˈɛlz
 l.	ˈɛl
-l.'s	ˈɛl ˈɛs
-l.s	ˈɛl ˈɛs
-la	lˌæ
+l.'s	ˈɛl dˈɑːtz
+l.s	ˌɛlˈɛs
+la	lˈæ
 la-carre	lˌækˈɑːɹ
 la-crosse	lˌækɹˈɔs
 la-guardia	lˌæɡˈɑːɹdiə
@@ -63704,7 +63704,7 @@ laryngoscopicaly	lˌæɹɪŋɡəskˈɑːpɪkəli
 laryngoscopy	lˌæɹɪŋɡˈɑːskəpi
 larynx	lˈæɹɪŋks
 larzelere	lˈɑːɹzɛlɚ
-las	lˌɑːs
+las	lˈɑːs
 las-vegas	lˌɑːsvˈeɪɡəs
 lasagna	ləzˈɑːnjə
 lasala	leɪzˈɑːlə
@@ -64221,7 +64221,7 @@ lb	ˌɛlbˈiː
 lbs	pˈaʊndz
 lcb	ˌɛlsˌiːbˈiː
 lcs	ˌɛlsˌiːˈɛs
-le	lə
+le	lˈə
 lea	lˈiː
 leabo	lˈiːboʊ
 leach	lˈiːtʃ
@@ -67035,7 +67035,7 @@ lorton	lˈɔːɹtən
 lortz	lˈɔːɹts
 lorusso	lɔːɹˈʌsoʊ
 lory	lˈɔːɹi
-los	lˌɑːs
+los	lˈɑːs
 los-angeles	lˌɑːsˈændʒəlɪs
 los-palmas	lˌɑːspˈɑːməz
 losada	ləsˈɑːdə
@@ -67959,9 +67959,9 @@ m's	ˈɛmz
 m-code	ˈɛmkˈoʊd
 m-codes	ˈɛmkˈoʊdz
 m.	ˈɛm
-m.'s	ˈɛm ˈɛs
-m.d.	ˈɛm dˈiː
-m.s	ˈɛm ˈɛs
+m.'s	ˈɛm dˈɑːtz
+m.d.	ˌɛmdˈiː
+m.s	ˌɛmˈɛs
 ma	mˈɑː
 ma'am	mˈæm
 maack	mˈɑːk
@@ -70972,7 +70972,7 @@ mcbay	məkbˈeɪ
 mcbean	məkbˈiːn
 mcbeath	məkbˈiːθ
 mcbee	məkbˈiː
-mcbeth	mkbəθ
+mcbeth	mkbˈəθ
 mcbirney	məkbˈɜːni
 mcbrayer	məkbɹˈeɪɚ
 mcbrearty	məkbɹˈɪɹɾi
@@ -71021,18 +71021,18 @@ mccamish	məkˈæmɪʃ
 mccammon	məkˈæmən
 mccampbell	məkˈæmpbɛl
 mccamy	məkˈeɪmi
-mccan	məkən
+mccan	məkˈən
 mccance	məkˈæns
 mccandless	məkˈændləs
 mccandlish	məkˈændlɪʃ
 mccane	məkˈeɪn
-mccanless	məkənləs
+mccanless	məkənlˈəs
 mccann	məkˈæn
 mccann's	məkˈænz
 mccanna	məkˈænə
 mccannon	məkˈænən
 mccants	məkˈænts
-mccard	məkɚd
+mccard	məkˈɚd
 mccardell	məkˈɑːɹdɛl
 mccardle	məkˈɑːɹdəl
 mccarey	məkˈɛɹi
@@ -71119,8 +71119,8 @@ mcclements	məkəlmˈɛnts
 mcclenaghan	məkəlnˈæɡən
 mcclenahan	məkəlnˈæhæn
 mcclenathan	məkəlnˈæθən
-mcclendon	məkəlndən
-mcclenny	məkəlni
+mcclendon	məkəlndˈən
+mcclenny	məkəlnˈi
 mccleskey	məkəlskˈaɪ
 mcclimans	məklˈaɪmənz
 mcclintic	məklˈɪntɪk
@@ -71522,7 +71522,7 @@ mcgrory	məɡɹˈɔːɹi
 mcgruder	məɡɹˈuːdɚ
 mcguane	məɡjˈuːeɪn
 mcguckin	məɡˈʌkɪn
-mcgue	məɡ
+mcgue	mˈəɡ
 mcguffee	məɡˈʌfiː
 mcguffey	məɡˈʌfi
 mcguffie	məɡˈʌfi
@@ -71616,7 +71616,7 @@ mckennon	məkˈɛnən
 mckenny	məkˈɛni
 mckenrick	məkˈɛnɹɪk
 mckenzie	məkˈɛnzi
-mckeon	məkɪən
+mckeon	məkɪˈən
 mckeone	məkɪˈoʊn
 mckeough	məkɪˈoʊ
 mckeown	məkɪˈoʊn
@@ -73591,7 +73591,7 @@ migent	mˈaɪdʒənt
 miggins	mˈɪɡɪnz
 might	mˈaɪt
 might've	mˈaɪɾəv
-might-have-been	mˌaɪthɐvbˌɪn
+might-have-been	mˈaɪthɐvbˌɪn
 might-have-beens	mˌaɪthɐvbˈiːnz
 mightier	mˈaɪɾiɚ
 mightiest	mˈaɪɾiɪst
@@ -75206,7 +75206,7 @@ mondor	mˈɔndɔːɹ
 mondragon	mˈɔndɹæɡən
 mondrian	mˈɔndɹiən
 mondry	mˈɔndɹi
-monds	məndz
+monds	mˈəndz
 mondschein	mˈɔndʃiːn
 mondy	mˈɔndi
 mone	mˈoʊn
@@ -76511,8 +76511,8 @@ multinationals	mˌʌltɪnˈæʃənəlz
 multipart	mˈʌltipˌɑːɹt
 multiparty	mˌʌltɪpˈɑːɹɾi
 multiplayer	mˌʌltɪplˈeɪɚ
-multiple	mˌʌltɪpəl
-multiples	mˌʌltɪpəlz
+multiple	mˈʌltɪpəl
+multiples	mˈʌltɪpəlz
 multiplex	mˌʌltɪplˈɛks
 multiplexer	mˈʌltɪplˌɛksɚ
 multiplexers	mˈʌltɪplˌɛksɚz
@@ -77036,8 +77036,8 @@ n-tuple	ˈɛntˈuːpəl
 n-word	ˈɛnwˈɜːd
 n-words	ˈɛnwˈɜːdz
 n.	ˈɛn
-n.'s	ˈɛn ˈɛs
-n.s	ˈɛn ˈɛs
+n.'s	ˈɛn dˈɑːtz
+n.s	ˌɛnˈɛs
 na	nˈɑː
 naab	nˈɑːb
 naacp	ˌɛndʌbəlˌeɪsiːpˈiː
@@ -77253,7 +77253,7 @@ nannies	nˈænɪz
 nanninga	nˈænɪŋɡə
 nannini	nænˈiːni
 nanny	nˈæni
-nano	nˌænoʊ
+nano	nˈænoʊ
 nanobaby	nˌænoʊbˈeɪbi
 nanogram	nˌænoʊɡɹˈæm
 nanograms	nˌænoʊɡɹˈæmz
@@ -79814,7 +79814,7 @@ nozzle	nˈɑːzəl
 nozzles	nˈɑːzəlz
 npr	ˌɛnpˌiːˈɑːɹ
 npr's	ˌɛnpˌiːˈɑːɹz
-npr.org	ˌɛnpˌiːˈɑːɹ ˈɔːɹɡ
+npr.org	ˌɛnpˌiːˈɑːɹ dˈɑːt ˈɔːɹɡ
 nth	ˌɛntˌiːˈeɪtʃ
 nu	nˈuː
 nuala	nuːˈɑːlə
@@ -80196,9 +80196,9 @@ o'steen	oʊstˈiːn
 o'sullivan	oʊsˈʌlɪvən
 o'toole	oʊtˈuːl
 o.	ˈoʊ
-o.'s	ˈoʊ ˈɛs
-o.s	ˈoʊ ˈɛs
-o.s'	ˈoʊ ˈɛs
+o.'s	ˈoʊ dˈɑːtz
+o.s	ˌoʊˈɛs
+o.s'	ˌoʊˈɛs
 oad	ˈoʊd
 oahu	oʊˈɑːhuː
 oak	ˈoʊk
@@ -80405,7 +80405,7 @@ obsolescence	ˌɑːbsəlˈɛsəns
 obsolescent	ˌɑːbsəlˈɛsənt
 obsolete	ˈɑːbsəlˌiːt
 obsoletes	ˈɑːbsəlˌiːts
-obst	ɑːbst
+obst	ˈɑːbst
 obstacle	ˈɑːbstəkəl
 obstacles	ˈɑːbstəkəlz
 obstetric	əbstˈɛtɹɪk
@@ -80666,7 +80666,7 @@ oetken	ˈoʊtkən
 oetting	ˈoʊɾɪŋ
 oettinger	ˈoʊɾɪŋɡɚ
 oeuvre	ˈɜːvɹə
-of	ʌv
+of	ˈʌv
 ofallon	ˈoʊfɔːlən
 ofarrell	ˈɑːfæɹəl
 ofc	ˈɑːfk
@@ -81203,8 +81203,8 @@ onder	ˈɑːndɚ
 onderdonk	ˈɑːndɚdˌɔŋk
 ondo	ˈɑːndoʊ
 ondracek	ˈɑːndɹeɪsək
-one	wˌʌn
-one's	wˌʌnz
+one	wˈʌn
+one's	wˈʌnz
 one-eyed	wˈʌnˈaɪd
 one-legged	wˈʌnlˈɛɡɪd
 one-man	wˈʌnmˈæn
@@ -81227,8 +81227,8 @@ oneill	wˈʌnɪl
 oneness	wˈʌnnəs
 oneok	wˈʌnɑːk
 onerous	ˈoʊnɚɹəs
-ones	wˌʌnz
-ones'	wˌʌnz
+ones	wˈʌnz
+ones'	wˈʌnz
 oneself	wʌnsˈɛlf
 onetime	wˈʌntaɪm
 onex	wˈʌŋks
@@ -81487,7 +81487,7 @@ opus	ˈoʊpəs
 oquendo	ɑːkwˈɛndoʊ
 oquin	ˈɑːkwɪn
 oquinn	ˈɑːkwɪn
-or	ɔːɹ
+or	ˈɔːɹ
 ora	ˈɔːɹə
 orabel	ˈɔːɹeɪbəl
 orabelle	ˌɔːɹeɪbˈɛl
@@ -82125,9 +82125,9 @@ ouimette	ˌuːaɪmˈɛt
 ounce	ˈaʊns
 ounces	ˈaʊnsᵻz
 ounsted	ˈaʊnstᵻd
-our	ˌaʊɚ
+our	ˈaʊɚ
 ourada	aʊɚɹˈɑːdə
-ours	aʊɚz
+ours	aʊˈɚz
 ourself	aʊɚsˈɛlf
 ourselves	aʊɚsˈɛlvz
 ourso	aʊɚsˈoʊ
@@ -82904,9 +82904,9 @@ ozzy	ˈɑːzi
 p	pˈiː
 p's	pˈiːz
 p.	pˈiː
-p.'s	pˈiː ˈɛs
-p.m.	pˈiː ˈɛm
-p.s	pˈiː ˈɛs
+p.'s	pˈiː dˈɑːtz
+p.m.	pˌiːˈɛm
+p.s	pˌiːˈɛs
 pa	pˈɑː
 paap	pˈɑːp
 paape	pˈɑːp
@@ -84966,7 +84966,7 @@ pennzoil's	pˈɛnzɔɪlz
 penobscot	pənˈɑːbskɑːt
 penology	pɛnˈɑːlədʒi
 penoyer	pˈɛnɔɪɚ
-penril	pɛnɹəl
+penril	pɛnɹˈəl
 penrod	pɛnɹˈɑːd
 penrod's	pɛnɹˈɑːdz
 penrose	pɛnɹˈoʊz
@@ -85068,7 +85068,7 @@ peptide	pˈɛptaɪd
 peptides	pˈɛptaɪdz
 pequeno	pɛkwˈiːnoʊ
 pequignot	pˈɛkwɪɡnˌɑːt
-per	pɜː
+per	pˈɜː
 per-se	pˌɜː sˈeɪ
 pera	pˈiəɹə
 peragine	pˈɛɹɐdʒˌɪn
@@ -85391,7 +85391,7 @@ perry	pˈɛɹi
 perry's	pˈɛɹiz
 perryman	pˈɛɹɪmən
 perryn	pˈɛɹɪn
-pers	pɜːz
+pers	pˈɜːz
 persall	pˈɜːsɔːl
 persaud	pɜːsˈɔːd
 perschbacher	pˈɜːʃbɑːkɚ
@@ -85838,7 +85838,7 @@ pga	pˌiːdʒˌiːˈeɪ
 pga's	pˈiːɡˈɑːz
 pgm	pˌiːdʒˌiːˈɛm
 ph	pˌiːˈeɪtʃ
-ph.d.	pˌiːˈeɪtʃ dˈiː
+ph.d.	pˌiːˈeɪtʃ dˈɑːt dˈiː
 phagan	fˈæɡən
 phage	fˈeɪdʒ
 phagocyte	fˈæɡəsˌaɪt
@@ -89782,7 +89782,7 @@ pros	pɹˈoʊz
 pros'	pɹˈoʊz
 prosaic	pɹəsˈeɪɪk
 proscar	pɹəskˈɑːɹ
-prosch	pɹəʃ
+prosch	pɹˈəʃ
 proscia	pɹəsˈɪə
 prosciutto	pɹəsɪˈʌɾoʊ
 proscribe	pɹəskɹˈaɪb
@@ -90656,8 +90656,8 @@ pyxis	pˈaɪksɪs
 q	kjˈuː
 q's	kjˈuːz
 q.	kjˈuː
-q.'s	kjˈuː ˈɛs
-q.s	kjˈuː ˈɛs
+q.'s	kjˈuː dˈɑːtz
+q.s	kjˌuːˈɛs
 qaeda	kˈaɪdə
 qana	kˈɑːnə
 qantas	kˈæntəz
@@ -90919,7 +90919,7 @@ queues	kjˈuːz
 queuing	kjˈuːɪŋ
 quevedo	kwɛvˈiːdoʊ
 quezada	kwɛzˈɑːdə
-qui	kwi
+qui	kwˈi
 quibble	kwˈɪbəl
 quibbles	kwˈɪbəlz
 quibbling	kwˈɪblɪŋ
@@ -91093,8 +91093,8 @@ qureshi	kwɚɹˈɛʃi
 r	ˈɑːɹ
 r's	ˈɑːɹz
 r.	ˈɑːɹ
-r.'s	ˈɑːɹ ˈɛs
-r.s	ˈɑːɹ ˈɛs
+r.'s	ˈɑːɹ dˈɑːtz
+r.s	ˌɑːɹɹˈɛs
 ra	ɹˈɑː
 raab	ɹˈɑːb
 raab's	ɹˈɑːbz
@@ -92173,8 +92173,8 @@ razzano	ɹæzˈɑːnoʊ
 razzle	ɹˈæzəl
 razzmatazz	ɹˌæzmɐtˈæz
 rca	ˌɑːɹsˌiːˈeɪ
-re	ɹˌiː
-re's	ɹˌiːz
+re	ɹˈiː
+re's	ɹˈiːz
 re-entered	ɹˌiːˈɛntɚd
 rea	ɹˈiə
 rea's	ɹˈiəz
@@ -92883,7 +92883,7 @@ redhanded	ɹˈɛdhændᵻd
 redhead	ɹˈɛdhɛd
 redheaded	ɹˈɛdhɛdᵻd
 redheads	ɹˈɛdhɛdz
-redi	ɹᵻdi
+redi	ɹᵻdˈi
 redial	ɹˈiːdaɪəl
 redic	ɹᵻdˈɪk
 redick	ɹᵻdˈɪk
@@ -93709,7 +93709,7 @@ relevancy	ɹˈɛlᵻvənsi
 relevant	ɹˈɛlᵻvənt
 relf	ɹˈɛlf
 relford	ɹᵻlfˈɔːɹd
-reli	ɹᵻli
+reli	ɹᵻlˈi
 reliability	ɹᵻlˌaɪəbˈɪlᵻɾi
 reliable	ɹᵻlˈaɪəbəl
 reliably	ɹᵻlˈaɪəbli
@@ -93728,7 +93728,7 @@ reliever	ɹᵻlˈiːvɚ
 relievers	ɹᵻlˈiːvɚz
 relieves	ɹᵻlˈiːvz
 relieving	ɹᵻlˈiːvɪŋ
-reliford	ɹᵻlifɚd
+reliford	ɹᵻlifˈɚd
 relig	ɹᵻlˈɪɡ
 religion	ɹᵻlˈɪdʒən
 religion's	ɹᵻlˈɪdʒənz
@@ -94703,7 +94703,7 @@ retest	ɹᵻtˈɛst
 retested	ɹᵻtˈɛstᵻd
 retesting	ɹᵻtˈɛstɪŋ
 retests	ɹᵻtˈɛsts
-retherford	ɹᵻðɚfɚd
+retherford	ɹᵻðɚfˈɚd
 rethink	ɹᵻθˈɪŋk
 rethinking	ɹᵻθˈɪŋkɪŋ
 rethought	ɹᵻθˈɔːt
@@ -94776,7 +94776,7 @@ retriever	ɹᵻtɹˈiːvɚ
 retrievers	ɹᵻtɹˈiːvɚz
 retrieves	ɹᵻtɹˈiːvz
 retrieving	ɹᵻtɹˈiːvɪŋ
-retro	ɹˌɛtɹoʊ
+retro	ɹˈɛtɹoʊ
 retroactive	ɹˌɛtɹoʊˈæktɪv
 retroactively	ɹˌɛtɹoʊˈæktɪvli
 retroactivity	ɹˌɛtɹoʊæktˈɪvᵻɾi
@@ -95019,7 +95019,7 @@ rewind	ɹᵻwˈaɪnd
 rewire	ɹᵻwˈaɪɚ
 rewired	ɹᵻwˈaɪɚd
 rewiring	ɹᵻwˈaɪɚɹɪŋ
-rewis	ɹᵻwiz
+rewis	ɹᵻwˈiz
 reword	ɹᵻwˈɜːd
 rework	ɹᵻwˈɜːk
 reworked	ɹᵻwˈɜːkt
@@ -97756,7 +97756,7 @@ rzepka	ˈɑːɹzˈɛpkə
 s	ˈɛs
 s's	ˈɛsᵻz
 s.	ˈɛs
-s.'s	ˈɛs ˈɛs
+s.'s	ˈɛs dˈɑːtz
 sa	sˈɑː
 saab	sˈɑːb
 saab's	sˈɑːbz
@@ -98436,7 +98436,7 @@ samuelson	sˈæmjuːlsən
 samurai	sˈæmjʊɹɹˌaɪ
 samurai's	sˈæmjʊɹɹˌaɪz
 samurais	sˈæmjʊɹɹˌaɪz
-san	sˌæn
+san	sˈæn
 san-andreas	sˌænɑːndɹˈeɪəs
 san-diego	sˌændɪˈeɪɡoʊ
 san-fran	sˌænfɹˈæn
@@ -102106,7 +102106,7 @@ shallower	ʃˈæloʊɚ
 shallowness	ʃˈæloʊnəs
 shalnev	ʃˈælnɛv
 shalom	ʃˈæləm
-shalt	ʃˌælt
+shalt	ʃˈælt
 sham	ʃˈæm
 shamalia	ʃæmˈeɪliə
 shaman	ʃˈæmən
@@ -102357,10 +102357,10 @@ shays	ʃˈeɪz
 shcharansky	ˌɛsˈeɪtʃtʃæɹˈænski
 shchedrin	ˌɛsˈeɪtʃtʃˈɛdɹɪn
 shcherbitsky	ˌɛsˈeɪtʃtʃɜːbˈɪtski
-she	ʃiː
-she'd	ʃiːd
-she'll	ʃiːl
-she's	ʃiːz
+she	ʃˈiː
+she'd	ʃˈiːd
+she'll	ʃˈiːl
+she's	ʃˈiːz
 shea	ʃˈeɪ
 shea's	ʃˈeɪz
 shead	ʃˈɛd
@@ -102645,7 +102645,7 @@ shewell	ʃjˈuːɛl
 shewmake	ʃjˈuːmeɪk
 shewmaker	ʃjˈuːmeɪkɚ
 shh	ˌɛsˌeɪtʃˈeɪtʃ
-shi	ʃi
+shi	ʃˈi
 shia	ʃˈiə
 shiah	ʃˈaɪə
 shias	ʃˈiəz
@@ -102769,7 +102769,7 @@ shinwa	ʃˈɪnwə
 shinxiaku	ʃˌɪŋksɪˈɑːkuː
 shiny	ʃˈaɪni
 shinyuka	ʃˈɪnjuːkə
-shiong	ʃəŋ
+shiong	ʃˈəŋ
 shionogi	ʃənˈoʊɡi
 ship	ʃˈɪp
 ship's	ʃˈɪps
@@ -103347,7 +103347,7 @@ siamese	sˈaɪəmˌiːz
 sian	sˈaɪən
 siang	sjˈæŋ
 siano	siˈɑːnoʊ
-sias	ʒəz
+sias	ʒˈəz
 sib	sˈɪb
 sibbie	sˈɪbi
 sibby	sˈɪbi
@@ -104000,7 +104000,7 @@ sippican	sˈɪpɪkən
 sipping	sˈɪpɪŋ
 sipple	sˈɪpəl
 sips	sˈɪps
-sir	sˌɜː
+sir	sˈɜː
 siracusa	sˌɪɹəkjˈuːsə
 siracuse	sˈɜːɹɐkjˌuːs
 siragusa	sˈɜːɹɐɡjˌuːsə
@@ -104701,7 +104701,7 @@ slobogin's	slˈɑːbədʒˌɪnz
 slobs	slˈɑːbz
 slocan	slˈɑːkən
 slocan's	slˈɑːkənz
-slocomb	slˌoʊkoʊm
+slocomb	slˈoʊkoʊm
 slocum	slˈɑːkəm
 slocumb	slˈɑːkʌm
 sloe	slˈoʊ
@@ -105702,7 +105702,7 @@ somatotropin	sˈɑːmɐtˌɑːtɹəpˌɪn
 somber	sˈɑːmɚ
 somberly	sˈɑːmɚli
 sombrero	səmbɹˈɛɹoʊ
-some	sˌʌm
+some	sˈʌm
 somebody	sˈʌmbɑːdi
 somebody's	sˈʌmbɑːdiz
 someday	sˈʌmdeɪ
@@ -107114,7 +107114,7 @@ srdan	ˌɛsˈɑːɹdˈæn
 srebrenica	ˈɛsɹᵻbɹˈɛnɪkə
 srebrenica's	ˈɛsɹᵻbɹˈɛnɪkəz
 sremac	ˈɛsɹᵻmˈæk
-sri	sɹˌiː
+sri	sɹˈiː
 sri-lanka	sɹˌiːlˈæŋkə
 srinagar	sɹˈiːnəɡɚ
 srinagarb	sɹˈiːnɐɡˌɑːɹb
@@ -107130,7 +107130,7 @@ srpska	sɹˈʌpskɑː
 ss	ˌɛsˈɛs
 ssangyong	ˈɛssˈæŋɪˌɑːŋ
 ssn	ˌɛsˌɛsˈɛn
-st	sənt
+st	sˈənt
 st-charles	sənttʃˈɑːɹlz
 st-clair	səntklˈɛɹ
 st-claire	səntklˈɛɹ
@@ -111192,8 +111192,8 @@ t-mobile	tˈiːmˈoʊbəl
 t-shirt	tˈiːʃˈɜːt
 t-shirts	tˈiːʃˈɜːts
 t.	tˈiː
-t.'s	tˈiː ˈɛs
-t.s	tˈiː ˈɛs
+t.'s	tˈiː dˈɑːtz
+t.s	tˌiːˈɛs
 ta	tˈɑː
 taaffe	tˈɑːf
 tab	tˈæb
@@ -112899,7 +112899,7 @@ thalman	θˈælmən
 thalmann	θˈælmən
 tham	θˈæm
 thames	tˈɛmz
-than	ðɐn
+than	ðˈɐn
 thanatology	θˌænɐtˈɑːlədʒi
 thane	θˈeɪn
 thang	θˈæŋ
@@ -112926,7 +112926,7 @@ tharrington	θˈæɹɪŋtən
 thaser	θˈeɪsɚ
 thassos	θˈæsoʊz
 that	ðˈæt
-that'd	ðæɾəd
+that'd	ðæɾˈəd
 that'll	ðˈæɾəl
 that's	ðˈæts
 that've	ðˈæɾəv
@@ -112951,7 +112951,7 @@ thayer	θˈeɪɚ
 thayer's	θˈeɪɚz
 thayers	θˈeɪɚz
 thayne	θˈeɪn
-the	ðə
+the	ðˈə
 thea	θˈiə
 theall	θˈiːl
 theano	θˈiːnoʊ
@@ -112986,7 +112986,7 @@ theile	θˈeɪl
 theilen	θˈeɪlən
 theiler	θˈeɪlɚ
 thein	θˈeɪn
-their	ðɛɹ
+their	ðˈɛɹ
 theirs	ðˈɛɹz
 theirself	θɛɹsˈɛlf
 theirselves	θɛɹsˈɛlvz
@@ -113002,7 +113002,7 @@ thelin	θˈɛlɪn
 thelma	θˈɛlmə
 thelma's	θˈɛlməz
 thelonius	ðəlˈoʊnɪəs
-them	ðˌɛm
+them	ðˈɛm
 thematic	θiːmˈæɾɪk
 thematically	θiːmˈæɾɪkli
 theme	θˈiːm
@@ -113066,11 +113066,11 @@ therapists's	θˈɛɹəpˌɪstsᵻz
 therapy	θˈɛɹəpi
 therat	θˈɜːɹæt
 there	ðˈɛɹ
-there'd	ðɛɹd
-there'll	ðɛɹl
+there'd	ðˈɛɹd
+there'll	ðˈɛɹl
 there're	ðˈɛɹɚ
 there's	ðˈɛɹz
-there've	ðɛɹv
+there've	ðˈɛɹv
 thereabouts	ðɛɹɐbˈaʊts
 thereafter	ðɛɹˈæftɚ
 thereby	ðɛɹbˈaɪ
@@ -113125,11 +113125,11 @@ theurer	θjˈuːɹə
 theus	θjˈuːz
 thew	θjˈuː
 thewlis	θjˈuːliz
-they	ðeɪ
-they'd	ðeɪd
-they'll	ðeɪl
-they're	ðeɪɚ
-they've	ðeɪv
+they	ðˈeɪ
+they'd	ðˈeɪd
+they'll	ðˈeɪl
+they're	ðeɪˈɚ
+they've	ðˈeɪv
 thi	θˈaɪ
 thiamin	θˈaɪəmˌɪn
 thibadeau	θˈɪbeɪdˌaʊ
@@ -113173,7 +113173,7 @@ thien	θˈiːn
 thier	θˈɪɹ
 thierry	tɪˈɛɹi
 thiery	θˈɪɹi
-thies	ðˌaɪz
+thies	ðˈaɪz
 thiesen	θˈiːsən
 thiessen	θˈiːsən
 thieve	θˈiːv
@@ -113365,7 +113365,7 @@ thorup	θˈɔːɹʌp
 thorvald	θˈɔːɹvəld
 those	ðˈoʊz
 thou	ðˈaʊ
-though	ðˌoʊ
+though	ðˈoʊ
 thought	θˈɔːt
 thoughtful	θˈɔːtfəl
 thoughtfully	θˈɔːtfəli
@@ -113559,7 +113559,7 @@ thwarting	θwˈɔːɹɾɪŋ
 thwarts	θwˈɔːɹts
 thweatt	θwˈiːt
 thwing	θwˈɪŋ
-thy	ðˌaɪ
+thy	ðˈaɪ
 thygerson	θˈaɪdʒɚsən
 thyme	tˈaɪm
 thymidine	θˈaɪmɪdˌiːn
@@ -114022,7 +114022,7 @@ tkacz	tˈiːkˈækz
 tlateloco	tˈiːleɪtlˈoʊkoʊ
 tlc	tˌiːˌɛlsˈiː
 tlingit	tˈiːlˈɪŋɡɪt
-to	tuː
+to	tˈuː
 to-do	tədˈuː
 to-dos	tədˈɑːs
 toa	tˈoʊə
@@ -115957,7 +115957,7 @@ tschirhart	tˈiːskˈɜːhɑːɹt
 tschopp	tˈiːskˈɑːp
 tschudy	tˈiːʃˈʌdi
 tschumi	tˈiːʃˈuːmi
-tse	tsi
+tse	tsˈi
 tsemel	tsˈɛməl
 tseng	tsˈɛŋ
 tsetse	tsˈɛtsi
@@ -116206,7 +116206,7 @@ turf	tˈɜːf
 turgeon	tˈɜːdʒən
 turgid	tˈɜːdʒɪd
 turgut	tˈɜːɡʌt
-turi	tjɚɹi
+turi	tjɚɹˈi
 turin	tjɚɹˈɪn
 turing	tjˈʊɹɹɪŋ
 turismo	tjɚɹˈɪsmoʊ
@@ -116566,13 +116566,13 @@ u's	jˈuːz
 u-turn	jˈuːtˈɜːn
 u-turns	jˈuːtˈɜːnz
 u.	jˈuː
-u.'s	jˈuː ˈɛs
-u.k.	jˈuː kˈeɪ
-u.n.	jˈuː ˈɛn
-u.s	jˈuː ˈɛs
-u.s.	jˈuː ˈɛs
-u.s.a.	jˈuː ˈɛs ˈeɪ
-u.s.c.	jˈuː ˈɛs sˈiː
+u.'s	jˈuː dˈɑːtz
+u.k.	jˌuːkˈeɪ
+u.n.	jˌuːˈɛn
+u.s	jˌuːˈɛs
+u.s.	jˌuːˈɛs
+u.s.a.	jˌuːˌɛsˈeɪ
+u.s.c.	jˌuːˌɛssˈiː
 uarco	juːˈɑːɹkoʊ
 uart	jˈuːɑːɹt
 ubben	ˈʌbən
@@ -116728,7 +116728,7 @@ ultra	ˈʌltɹə
 ultra's	ˈʌltɹəz
 ultraconservative	ˌʊltɹɐkˈɑːnsɚvətˌɪv
 ultrair	ˌʊltɹɐˈɜː
-ultramar	ˌʊltɹæmɚ
+ultramar	ˈʊltɹæmɚ
 ultramodern	ˌʊltɹɐmˈɑːdɚn
 ultranationalist	ˌʊltɹɐnˈeɪʃənəlˌɪst
 ultranationalist's	ˌʊltɹɐnˈeɪʃənəlˌɪsts
@@ -117406,8 +117406,8 @@ unicorp	jˈuːnɪkˌɔːɹp
 unicorp's	jˈuːnɪkˌɔːɹps
 unicycle	jˈuːnɪsˌaɪkəl
 unicycles	jˈuːnɪsˌaɪkəlz
-uniden	ˌʌnaɪdən
-uniden's	ˌʌnaɪdənz
+uniden	ˈʌnaɪdən
+uniden's	ˈʌnaɪdənz
 unidentified	ˌʌnaɪdˈɛntᵻfˌaɪd
 unification	jˌuːnɪfɪkˈeɪʃən
 unified	jˈuːnɪfˌaɪd
@@ -117852,7 +117852,7 @@ untied	ʌntˈaɪd
 untiedt	ʌntˈaɪt
 until	ʌntˈɪl
 untimely	ʌntˈaɪmli
-unto	ˌʌntʊ
+unto	ˈʌntʊ
 untold	ʌntˈoʊld
 untouchable	ʌntˈʌtʃəbəl
 untouchables	ʌntˈʌtʃəbəlz
@@ -117928,7 +117928,7 @@ up-front	ˌʌpfɹˈʌnt
 upbeat	ʌpbˈiːt
 upbraid	ʌpbɹˈeɪd
 upbraided	ʌpbɹˈeɪdᵻd
-upbringing	ʌpbɹɪŋɪŋ
+upbringing	ʌpbɹɪŋˈɪŋ
 upchurch	ʌptʃˈɜːtʃ
 upcoming	ʌpkˈʌmɪŋ
 update	ˈʌpdeɪt
@@ -117978,7 +117978,7 @@ uploading	ˈʌploʊdɪŋ
 uploads	ˈʌploʊdz
 upmanship	ˈʌpmənʃˌɪp
 upmarket	ˈʌpmɑːɹkˌɪt
-upon	əpˌɑːn
+upon	əpˈɑːn
 upp	ˈʌp
 upped	ˈʌpt
 upper	ˈʌpɚ
@@ -118152,7 +118152,7 @@ uruguay's	jˈʊɹɹuːɡwˌaɪz
 uruguayan	jˈʊɹɹuːɡjˌuːeɪən
 urwin	ˈʌrwɪn
 ury	ˈʌɹi
-us	ˌʌs
+us	ˈʌs
 usa	jˌuːˌɛsˈeɪ
 usa's	jˈuːzəz
 usable	jˈuːzəbəl
@@ -118276,9 +118276,9 @@ uzzle	ˈʌzəl
 v	vˈiː
 v's	vˈiːz
 v.	vˈiː
-v.'s	vˈiː ˈɛs
-v.a.	vˈiː ˈeɪ
-v.s	vˈiː ˈɛs
+v.'s	vˈiː dˈɑːtz
+v.a.	vˌiːˈeɪ
+v.s	vˌiːˈɛs
 vaal	vˈɑːl
 vaapenfabrikk	vˈɑːpənfˌæbɹɪk
 vaca	vˈeɪkə
@@ -119733,14 +119733,14 @@ viertel	vˈɪɹɾəl
 viertel's	vˈɪɹɾəlz
 viertels	vˈɪɹɾəlz
 vies	vˈaɪz
-viet	vˌiːət
+viet	vˈiːət
 vietcong	vˌiːətkˈɑːŋ
-vieth	vˌiːəθ
+vieth	vˈiːəθ
 vietnam	vˌiːətnˈɑːm
 vietnam's	vˌiːətnˈɑːmz
 vietnamese	vˌiːɛtnəmˈiːz
-vietor	vˌiːəɾɚ
-viets	vˌiːəts
+vietor	vˈiːəɾɚ
+viets	vˈiːəts
 vietti	vˈiːətˈi
 view	vjˈuː
 viewed	vjˈuːd
@@ -120520,8 +120520,8 @@ vying	vˈaɪɪŋ
 w	dˈʌbəljˌuː
 w's	dˈʌbəljˌuːz
 w.	dˈʌbəljˌuː
-w.'s	dˈʌbəljˌuː ˈɛs
-w.s	dˈʌbəljˌuː ˈɛs
+w.'s	dˈʌbəljˌuː dˈɑːtz
+w.s	dˌʌbəljˌuːˈɛs
 wa	wˈɑː
 waack	wˈɑːk
 waag	wˈɑːɡ
@@ -121210,7 +121210,7 @@ warwick	wˈɔːɹɪk
 warwick's	wˈɔːɹɪks
 wary	wˈɛɹi
 warzecha	wˈɔːɹzɛtʃə
-was	wʌz
+was	wˈʌz
 wasatch	wˈɑːsætʃ
 wasch	wˈɑːʃ
 wascher	wˈɑːʃɚ
@@ -121460,11 +121460,11 @@ wayt	wˈeɪt
 wayward	wˈeɪwɚd
 wazir	wˈæzɪɹ
 wazir's	wˈæzɪɹz
-we	wiː
-we'd	wiːd
-we'll	wiːl
-we're	wɪɹ
-we've	wiːv
+we	wˈiː
+we'd	wˈiːd
+we'll	wˈiːl
+we're	wˈɪɹ
+we've	wˈiːv
 weak	wˈiːk
 weaken	wˈiːkən
 weakened	wˈiːkənd
@@ -122032,7 +122032,7 @@ werber	wˈɜːbɚ
 werden	wˈɜːdən
 werder	wˈɜːdɚ
 werdesheim	wˈɜːdɪʃˌaɪm
-were	wɜː
+were	wˈɜː
 wereldhave	wˈɛɹldhˌeɪv
 weren't	wˈɜːnt
 werewolf	wˈɛɹwˌʊlf
@@ -122312,19 +122312,19 @@ wharfs	wˈɔːɹfs
 wharry	wˈɔːɹi
 wharton	wˈɔːɹtən
 wharton's	wˈɔːɹtənz
-what	wˌʌt
-what'd	wˌʌtd
-what'll	wˌʌɾəl
-what're	wˌʌɾɚ
-what's	wˌʌts
-what've	wˌʌɾəv
+what	wˈʌt
+what'd	wˈʌtd
+what'll	wˈʌɾəl
+what're	wˈʌɾɚ
+what's	wˈʌts
+what've	wˈʌɾəv
 what-what	wˌʌtwˈʌt
 whate	wˈʌt
 whatever	wʌtˈɛvɚ
 whatever's	wʌtˈɛvɚz
 whatley	wˈʌtli
 whatnot	wˈʌtnɑːt
-whats	wˌʌts
+whats	wˈʌts
 whatsapp	wˈʌtsæp
 whatsoever	wʌtsˌoʊˈɛvɚ
 whay-yu	wˈeɪjˈuː
@@ -122369,9 +122369,9 @@ whelchel	wˈɛltʃəl
 wheless	wˈɛləs
 whelpley	wˈɛlpli
 whelton	wˈɛltən
-when	wˌɛn
-when'll	wˌɛnəl
-when's	wˌɛnz
+when	wˈɛn
+when'll	wˈɛnəl
+when's	wˈɛnz
 whence	wˈɛns
 whenever	wɛnˈɛvɚ
 where	wˈɛɹ
@@ -122415,7 +122415,7 @@ whigs	wˈɪɡz
 whilden	wˈɪldən
 while	wˈaɪl
 whiles	wˈaɪlz
-whilst	wˌaɪlst
+whilst	wˈaɪlst
 whim	wˈɪm
 whimper	wˈɪmpɚ
 whimpering	wˈɪmpɚɹɪŋ
@@ -122663,7 +122663,7 @@ whorl	wˈɔːɹl
 whorley	wˈɔːɹli
 whorls	wˈɔːɹlz
 whorton	hˈɔːɹtən
-whose	hˌuːz
+whose	hˈuːz
 whosoever	huːsˌoʊˈɛvɚ
 why	wˈaɪ
 why'd	wˈaɪd
@@ -122675,7 +122675,7 @@ wi-fi	wˈaɪfˌaɪ
 wiacek	wˈaɪəsˌɛk
 wian	wˈaɪən
 wiant	wˈaɪənt
-wiard	wɪɚd
+wiard	wɪˈɚd
 wiater	wˈaɪəɾɚ
 wiatrowski	wˌaɪətɹˈoʊski
 wiatt	wˈaɪət
@@ -123537,7 +123537,7 @@ witchy	wˈɪtʃi
 witco	wˈɪtkoʊ
 witczak	wˈɪtkzæk
 witek	wˈaɪɾɛk
-with	wɪð
+with	wˈɪð
 witham	wɪðˈæm
 withdraw	wɪθdɹˈɔː
 withdrawal	wɪθdɹˈɔːl
@@ -124429,9 +124429,9 @@ x-acto	ˈɛksˈæktoʊ
 x-ray	ˈɛksɹˈeɪ
 x-rays	ˈɛksɹˈeɪz
 x.	ˈɛks
-x.'s	ˈɛks ˈɛs
-x.ers	ˈɛks ˈɜːz
-x.s	ˈɛks ˈɛs
+x.'s	ˈɛks dˈɑːtz
+x.ers	ˈɛks dˈɑːt ˈɜːz
+x.s	ˌɛksˈɛs
 xan	zˈæn
 xanada	zænˈɑːdə
 xanadu	zænˈɑːduː
@@ -124478,7 +124478,7 @@ xing	zˈɪŋ
 xinhua	zˈɪnhjuːə
 xinjiang	zˈɪndʒjɑːŋ
 xio	zˈiːoʊ
-xiong	kʃəŋ
+xiong	kʃˈəŋ
 xml	ˌɛksˌɛmˈɛl
 xoma	zˈoʊmə
 xoma's	zˈoʊməz
@@ -124490,7 +124490,7 @@ xudong	zjˈuːdɑːŋ
 xue	zˈuː
 xuedong	zˈuːdɑːŋ
 xuemei	zˈuːmeɪ
-xus	ksəs
+xus	ksˈəs
 xylia	zˈaɪliə
 xylina	zaɪlˈiːnə
 xylogic	zaɪlˈɑːdʒɪk
@@ -124504,9 +124504,9 @@ y'all	jˈɔːl
 y'know	jənˈoʊ
 y's	wˈaɪz
 y.	wˈaɪ
-y.'s	wˈaɪ ˈɛs
-ya	jɐ
-ya'll	jɐəl
+y.'s	wˈaɪ dˈɑːtz
+ya	jˈɐ
+ya'll	jɐˈəl
 yaacov	jˈɑːkɑːv
 yabba	jˈæbə
 yabbadabbadoo	jˈæbɐdˌæbɐdˌuː
@@ -124717,7 +124717,7 @@ ybarra	ˈɪbæɹə
 ydstie	ˈɪdsti
 ydstie's	ˈɪdstiz
 ye	jˈiː
-ye-yi	jiːji
+ye-yi	jiːjˈi
 yea	jˈeɪ
 yeadon	jˈiːdɑːn
 yeager	jˈiːɡɚ
@@ -124872,7 +124872,7 @@ yevtushenko	jˌɛvtəʃˈɛŋkoʊ
 yew	jˈuː
 yew's	jˈuːz
 yglesias	ˈɪɡəlʒəz
-yi	ji
+yi	jˈi
 yiddish	jˈɪdɪʃ
 yie	jˈaɪ
 yield	jˈiːld
@@ -125023,11 +125023,11 @@ yossi	jˈɑːsi
 yost	jˈɑːst
 yother	jˈʌðɚ
 yott	jˈɑːt
-you	juː
-you'd	juːd
-you'll	juːl
-you're	jʊɹ
-you've	juːv
+you	jˈuː
+you'd	jˈuːd
+you'll	jˈuːl
+you're	jˈʊɹ
+you've	jˈuːv
 youell	jˈaʊɛl
 youghal	jˈoʊəl
 youker	jˈaʊkɚ
@@ -125067,7 +125067,7 @@ younkin	jˈaʊŋkɪn
 younkins	jˈaʊŋkɪnz
 yount	jˈaʊnt
 younts	jˈaʊnts
-your	jʊɹ
+your	jˈʊɹ
 youree	jˈɔːɹiː
 youri	jˈɔːɹi
 yours	jˈɔːɹz
@@ -125075,7 +125075,7 @@ yourself	jɔːɹsˈɛlf
 yourselfer	jˈɔːɹsɛlfɚ
 yourselfers	jˈɔːɹsɛlfɚz
 yourselves	jɔːɹsˈɛlvz
-yous	juːz
+yous	jˈuːz
 youse	jˈaʊs
 yousef	jˈaʊsɛf
 yousef's	jˈaʊsɛfs
@@ -125182,7 +125182,7 @@ yzaguirre	ˈɪzɐɡwˌɜːɹə
 z	zˈiː
 z's	zˈiːz
 z.	zˈiː
-z.'s	zˈiː ˈɛs
+z.'s	zˈiː dˈɑːtz
 zabala	zæbˈɑːlə
 zabar's	zˈæbɑːɹz
 zabawa	zæbˈɑːwə
@@ -126008,7 +126008,7 @@ zupanja	zjuːpˈænjə
 zupko	zˈʌpkoʊ
 zurawski	zjʊɹɹˈɔːski
 zurcher	zˈɜːtʃɚ
-zurek	ʒɚk
+zurek	ʒˈɚk
 zurfluh	zˈɜːflʌ
 zuri	zjˈʊɹɹi
 zurich	zjˈʊɹɪk

@@ -331,7 +331,15 @@ static int action_optimize_tools(void* data) {
 
 // Action: Select TTS voice
 static int action_select_tts_voice(void* data) {
-    ethervox_persistent_settings_t* settings = (ethervox_persistent_settings_t*)data;
+    // Data is a struct containing settings and TTS reload callback
+    typedef struct {
+        ethervox_persistent_settings_t* settings;
+        ethervox_tts_reload_callback_t tts_reload_callback;
+        void* tts_user_data;
+    } voice_action_data_t;
+    
+    voice_action_data_t* action_data = (voice_action_data_t*)data;
+    ethervox_persistent_settings_t* settings = action_data->settings;
     
     cleanup_display();
     
@@ -389,21 +397,30 @@ static int action_select_tts_voice(void* data) {
     };
     
     voice_option_t chinese_voices[] = {
+        {"Huayan High ⭐", "zh_CN-huayan-high", "zh_CN-huayan-high.onnx", 
+         "Mandarin Chinese, high quality, natural tone", 
+         "欢迎使用EthervoxAI语音助手", "zh"},
         {"Huayan Medium", "zh_CN-huayan-medium", "zh_CN-huayan-medium.onnx", 
-         "Mandarin Chinese, natural tone", 
+         "Mandarin Chinese, medium quality, natural tone", 
          "欢迎使用EthervoxAI语音助手", "zh"}
     };
     
     voice_option_t german_voices[] = {
-        {"Thorsten Medium", "de_DE-thorsten-medium", "de_DE-thorsten-medium.onnx", 
-         "German male, clear and natural", 
-         "Willkommen beim EthervoxAI Sprachassistenten", "de"},
         {"Thorsten Emotional Medium ⭐", "de_DE-thorsten_emotional-medium", "de_DE-thorsten_emotional-medium.onnx", 
          "German male, emotional and expressive", 
          "Ich freue mich, Ihnen heute zu helfen!", "de"},
+        {"Thorsten Medium", "de_DE-thorsten-medium", "de_DE-thorsten-medium.onnx", 
+         "German male, clear and natural", 
+         "Willkommen beim EthervoxAI Sprachassistenten", "de"},
         {"Eva K Medium", "de_DE-eva_k-medium", "de_DE-eva_k-medium.onnx", 
          "German female, warm and friendly", 
          "Guten Tag! Wie kann ich Ihnen helfen?", "de"}
+    };
+    
+    voice_option_t spanish_voices[] = {
+        {"Ald Medium", "es_MX-ald-medium", "es_MX-ald-medium.onnx", 
+         "Mexican Spanish male, natural and clear", 
+         "Bienvenido al asistente de voz EthervoxAI", "es"}
     };
     
     // Language selection menu
@@ -415,12 +432,14 @@ static int action_select_tts_voice(void* data) {
         printf("Current voice settings:\n");
         printf("  English: %s\n", settings->tts.voice_en[0] ? settings->tts.voice_en : "(none)");
         printf("  Chinese: %s\n", settings->tts.voice_zh[0] ? settings->tts.voice_zh : "(none)");
-        printf("  German:  %s\n\n", settings->tts.voice_de[0] ? settings->tts.voice_de : "(none)");
+        printf("  German:  %s\n", settings->tts.voice_de[0] ? settings->tts.voice_de : "(none)");
+        printf("  Spanish: %s\n\n", settings->tts.voice_es[0] ? settings->tts.voice_es : "(none)");
         
         printf("Select language to configure:\n\n");
         printf("  [1] English\n");
         printf("  [2] Chinese (Mandarin)\n");
         printf("  [3] German\n");
+        printf("  [4] Spanish\n");
         printf("  [0] Back to main menu\n\n");
         printf("Choice: ");
         fflush(stdout);
@@ -459,6 +478,12 @@ static int action_select_tts_voice(void* data) {
                 num_voices = sizeof(german_voices) / sizeof(german_voices[0]);
                 voice_setting = settings->tts.voice_de;
                 lang_name = "German";
+                break;
+            case 4:
+                voices = spanish_voices;
+                num_voices = sizeof(spanish_voices) / sizeof(spanish_voices[0]);
+                voice_setting = settings->tts.voice_es;
+                lang_name = "Spanish";
                 break;
             default:
                 printf("\n⚠ Invalid choice\n");
@@ -651,17 +676,18 @@ static int action_select_tts_voice(void* data) {
                 strncpy(voice_setting, selected->voice_id, 64 - 1);
                 voice_setting[64 - 1] = '\0';
                 
-                // Also update the deprecated global voice field (use first English as default)
+                // Update piper_model_path to match the selected voice
+                // This ensures the voice takes effect immediately and persists correctly
+                const char* home = getenv("HOME");
+                if (home) {
+                    snprintf(settings->tts.piper_model_path, sizeof(settings->tts.piper_model_path),
+                            "%s/.ethervox/models/piper/%s.onnx", home, selected->voice_id);
+                }
+                
+                // Also update the deprecated global voice field (use English as default)
                 if (lang_choice == 1) {
                     strncpy(settings->tts.voice, selected->voice_id, sizeof(settings->tts.voice) - 1);
                     settings->tts.voice[sizeof(settings->tts.voice) - 1] = '\0';
-                    
-                    // Update piper_model_path to match the selected voice
-                    const char* home = getenv("HOME");
-                    if (home) {
-                        snprintf(settings->tts.piper_model_path, sizeof(settings->tts.piper_model_path),
-                                "%s/.ethervox/models/piper/%s.onnx", home, selected->voice_id);
-                    }
                 }
                 
                 // Ensure piper engine is selected
@@ -669,8 +695,19 @@ static int action_select_tts_voice(void* data) {
                 
                 printf("\n✓ %s voice changed to: %s\n", lang_name, selected->display_name);
                 printf("    Model path: %s\n", settings->tts.piper_model_path);
-                printf("\n⚠️  Note: Voice change will take effect after restarting EthervoxAI\n");
-                printf("    or use Ctrl+S to save and restart the application\n");
+                
+                // Try to reload TTS immediately if callback is available
+                if (action_data->tts_reload_callback) {
+                    printf("\n🔄 Reloading TTS with new voice...\n");
+                    if (action_data->tts_reload_callback(settings, action_data->tts_user_data) == 0) {
+                        printf("✓ TTS reloaded successfully - new voice is active!\n");
+                    } else {
+                        printf("⚠️  TTS reload failed - restart may be required\n");
+                    }
+                } else {
+                    printf("\n⚠️  Note: Voice change will take effect after restarting EthervoxAI\n");
+                    printf("    or use Ctrl+S to save and restart the application\n");
+                }
                 printf("\nPress Enter to continue...");
                 fgets(input, sizeof(input), stdin);
                 quit_selection = 1;
@@ -811,7 +848,8 @@ static int action_view_info(void* data) {
 
 // Main settings menu
 int ethervox_settings_menu_show(ethervox_settings_t* settings, const char* model_path,
-                                 ethervox_model_reload_callback_t reload_callback, void* user_data) {
+                                 ethervox_model_reload_callback_t reload_callback, void* user_data,
+                                 ethervox_tts_reload_callback_t tts_reload_callback, void* tts_user_data) {
     if (!settings) return -1;
     
     if (init_display() != 0) {
@@ -822,6 +860,18 @@ int ethervox_settings_menu_show(ethervox_settings_t* settings, const char* model
     // Load persistent settings
     ethervox_persistent_settings_t persistent = ethervox_settings_get_defaults();
     ethervox_settings_load(&persistent, NULL);
+    
+    // Store TTS reload callback for voice selection
+    typedef struct {
+        ethervox_persistent_settings_t* settings;
+        ethervox_tts_reload_callback_t tts_reload_callback;
+        void* tts_user_data;
+    } voice_action_data_t;
+    
+    static voice_action_data_t voice_action_data;
+    voice_action_data.settings = &persistent;
+    voice_action_data.tts_reload_callback = tts_reload_callback;
+    voice_action_data.tts_user_data = tts_user_data;
     
     // Store initial values of parameters that require model reload
     uint32_t initial_gov_gpu_layers = persistent.governor.gpu_layers;
@@ -1159,7 +1209,7 @@ int ethervox_settings_menu_show(ethervox_settings_t* settings, const char* model
             .type = MENU_ITEM_ACTION,
             .value_ptr = NULL,
             .action = action_select_tts_voice,
-            .action_data = &persistent
+            .action_data = &voice_action_data
         },
         {
             .label = "TTS Speed",
@@ -1434,7 +1484,8 @@ bool ethervox_settings_menu_available(void) {
 #else // No ncurses available
 
 int ethervox_settings_menu_show(ethervox_settings_t* settings, const char* model_path,
-                                 ethervox_model_reload_callback_t reload_callback, void* user_data) {
+                                 ethervox_model_reload_callback_t reload_callback, void* user_data,
+                                 ethervox_tts_reload_callback_t tts_reload_callback, void* tts_user_data) {
     (void)model_path;
     (void)reload_callback;
     (void)user_data;

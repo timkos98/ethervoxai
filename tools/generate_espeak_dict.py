@@ -8,35 +8,48 @@ LICENSING NOTE - GPL-Safe Usage:
   The generated .dict files are pure data and can be embedded under MIT license.
   Espeak-ng is NEVER linked or distributed with EthervoxAI.
 
-This tool uses espeak-ng locally to generate IPA pronunciations for a large
-vocabulary, which are then embedded in the phonemizer. This is legal since
-espeak is only used as a development tool, not distributed in the software.
+This tool uses espeak-ng directly (via subprocess) to generate NATIVE phoneme
+pronunciations, NOT IPA. This is what Piper TTS expects!
 
 Usage:
     python3 generate_espeak_dict.py --lang en-us --output data/espeak_en_us.dict
     python3 generate_espeak_dict.py --lang de --output data/espeak_de.dict
 
 Requirements:
-    pip install phonemizer  # Wrapper for espeak-ng (GPL, dev tool only)
+    espeak-ng must be installed and in PATH
 """
 
 import argparse
 import sys
 import os
 import signal
+import subprocess
+import multiprocessing
+from multiprocessing import cpu_count, Pool
 from pathlib import Path
-from multiprocessing import Pool, cpu_count
 from functools import partial
-try:
-    from phonemizer import phonemize
-    from phonemizer.backend import EspeakBackend
-    HAVE_PHONEMIZER = True
-except ImportError:
-    HAVE_PHONEMIZER = False
-    print("WARNING: phonemizer library not found. Install with: pip install phonemizer", file=sys.stderr)
 
 # Global flag for graceful shutdown
 _interrupted = False
+
+def _get_pronunciations_batch(words, lang):
+    """Get IPA pronunciations for a batch of words using espeak-ng (module-level for pickling)."""
+    results = []
+    for word in words:
+        try:
+            # Use --ipa for IPA format (what Piper ACTUALLY expects!)
+            # Verified: Piper models have ə (IPA), not @ (X-SAMPA) in phoneme_id_map
+            result = subprocess.run(
+                ['espeak-ng', '-v', lang, '--ipa', '-q', word],
+                capture_output=True,
+                text=True,
+                timeout=2
+            )
+            ipa = result.stdout.strip()
+            results.append((word, ipa if ipa else None))
+        except:
+            results.append((word, None))
+    return results
 
 def _signal_handler(signum, frame):
     """Handle Ctrl+C gracefully."""
@@ -68,12 +81,15 @@ def load_vocabulary(lang):
                'please', 'thank', 'sorry', 'yes', 'no', 'okay', 'help'],
         'de': ['der', 'die', 'das', 'und', 'ist', 'nicht', 'ein', 'eine',
                'hallo', 'welt', 'bitte', 'danke', 'ja', 'nein', 'gut'],
-        'zh': ['你好', '世界', '语音', '助手', '电脑', '手机', '谢谢', '对不起'],
+        'cmn': ['你好', '世界', '语音', '助手', '电脑', '手机', '谢谢', '对不起'],
         'es': ['el', 'la', 'de', 'que', 'y', 'a', 'en', 'un', 'ser', 'se',
                'hola', 'mundo', 'por favor', 'gracias', 'sí', 'no'],
     }
     
+    # Map language code to common words key
     lang_prefix = lang.split('-')[0]
+    if lang == 'cmn' or lang.startswith('zh'):
+        lang_prefix = 'cmn'
     if lang_prefix in common_words:
         vocab.update(common_words[lang_prefix])
         print(f"Added {len(common_words[lang_prefix])} common {lang_prefix} words")
@@ -86,19 +102,20 @@ def load_vocabulary(lang):
     
     return sorted(vocab)
 
-def generate_pronunciations(words, lang, batch_size=1000, num_workers=None):
-    """Use espeak to generate IPA pronunciations (using phonemizer's built-in parallelization)."""
-    if not HAVE_PHONEMIZER:
-        print("ERROR: phonemizer library required. Install: pip install phonemizer", file=sys.stderr)
-        sys.exit(1)
+def generate_pronunciations(words, lang, batch_size=100, num_workers=None):
+    """Use espeak-ng directly to generate NATIVE X-SAMPA phonemes (what Piper TTS expects)."""
     
     # Map our language codes to espeak language codes
+    # Support both simple codes and full espeak variants
     lang_map = {
         'en-us': 'en-us',
         'en-gb': 'en-gb',
+        'en-gb-rp': 'en-gb-x-rp',  # British Received Pronunciation (standard BBC)
         'de': 'de',
-        'zh': 'cmn',  # Mandarin Chinese
-        'es-mx': 'es-419',  # Latin American Spanish
+        'cmn': 'cmn',  # Mandarin Chinese (use native espeak code)
+        'zh': 'cmn',   # Alias for Mandarin
+        'es-419': 'es-419',  # Latin American Spanish (use native espeak code)
+        'es-mx': 'es-419',   # Mexican Spanish (same as Latin American)
     }
     
     espeak_lang = lang_map.get(lang, lang)
@@ -108,63 +125,42 @@ def generate_pronunciations(words, lang, batch_size=1000, num_workers=None):
         num_workers = max(1, cpu_count() - 1)  # Leave one core free
     
     print(f"Generating {len(words)} pronunciations for {espeak_lang}...")
-    print(f"  Using phonemizer with {num_workers} parallel jobs...")
-    print(f"  This may take 1-2 minutes...")
+    print(f"  Using espeak-ng IPA format (--ipa flag)")
+    print(f"  Verified: Piper models expect IPA (ə not @, ˈ not ', ð not D)")
+    print(f"  Parallel workers: {num_workers}, batch size: {batch_size} words/worker")
+    print(f"  This may take 5-10 minutes...")
     
     pronunciations = {}
-    
-    # Process in batches to show progress (phonemizer handles parallelization internally)
     total_words = len(words)
     processed = 0
     
-    for i in range(0, len(words), batch_size):
-        batch = words[i:i+batch_size]
+    # Split words into chunks for parallel processing
+    # Each worker gets batch_size words to process
+    chunks = [words[i:i+batch_size] for i in range(0, len(words), batch_size)]
+    
+    # Use multiprocessing pool
+    with multiprocessing.Pool(num_workers) as pool:
+        worker = partial(_get_pronunciations_batch, lang=espeak_lang)
         
         try:
-            # phonemizer handles parallel processing internally with njobs parameter
-            ipa_results = phonemize(
-                batch,
-                language=espeak_lang,
-                backend='espeak',
-                strip=True,
-                preserve_punctuation=False,
-                with_stress=True,
-                njobs=num_workers  # Use phonemizer's built-in parallelization
-            )
-            
-            # phonemizer returns a list of IPA strings matching input words
-            if isinstance(ipa_results, list):
-                for word, ipa in zip(batch, ipa_results):
-                    if ipa and ipa.strip():
-                        pronunciations[word] = ipa.strip()
-            elif isinstance(ipa_results, str):
-                # Fallback: split by newlines if returned as string
-                ipa_lines = ipa_results.split('\n')
-                for word, ipa in zip(batch, ipa_lines):
-                    if ipa and ipa.strip():
-                        pronunciations[word] = ipa.strip()
-            
-            processed += len(batch)
-            progress_pct = (processed / total_words) * 100
-            
-            # Show progress more frequently at first, then every 5% 
-            if processed <= 5000 or processed % 5000 == 0:
-                print(f"  Processed {processed}/{total_words} words ({progress_pct:.1f}%)...", flush=True)
-            
+            # Map chunks to workers
+            for batch_results in pool.imap_unordered(worker, chunks):
+                for word, phonemes in batch_results:
+                    if phonemes:
+                        pronunciations[word] = phonemes
+                
+                processed += len(batch_results)
+                progress_pct = (processed / total_words) * 100
+                
+                # Show progress
+                if processed <= 5000 or processed % 1000 == 0:
+                    print(f"  Processed {processed}/{total_words} words ({progress_pct:.1f}%)...", flush=True)
+                
         except KeyboardInterrupt:
             print("\n\n⚠️  Interrupted by user. Stopping...", file=sys.stderr)
-            break
+            pool.terminate()
         except Exception as e:
-            print(f"  WARNING: Error in batch at {i}: {e}", file=sys.stderr)
-            # Try smaller batch or individual words
-            for word in batch:
-                try:
-                    ipa = phonemize(word, language=espeak_lang, backend='espeak', 
-                                   strip=True, preserve_punctuation=False, with_stress=True)
-                    if ipa and ipa.strip():
-                        pronunciations[word] = ipa.strip()
-                except:
-                    pass
+            print(f"  WARNING: Error: {e}", file=sys.stderr)
     
     print(f"Generated {len(pronunciations)} pronunciations")
     return pronunciations
@@ -192,14 +188,14 @@ def read_dictionary(input_path):
     return pronunciations
 
 def write_dictionary(pronunciations, output_path):
-    """Write dictionary in our format: WORD<tab>IPA."""
+    """Write dictionary in our format: WORD<tab>PHONEMES."""
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     
     with open(output_path, 'w', encoding='utf-8') as f:
-        f.write("# espeak-generated pronunciation dictionary\n")
-        f.write(f"# Generated with espeak-ng for offline training\n")
-        f.write(f"# Format: WORD<tab>IPA_PRONUNCIATION\n\n")
+        f.write("# espeak-generated pronunciaIPA format (--ipa) for Piper TTS\n")
+        f.write(f"# Format: WORD<tab>IPA_PRONUNCIATION-SAMPA format for Piper TTS\n")
+        f.write(f"# Format: WORD<tab>X-SAMPA_PHONEMES\n\n")
         
         for word in sorted(pronunciations.keys()):
             ipa = pronunciations[word]
@@ -279,8 +275,8 @@ def main():
         epilog='Example: python3 generate_espeak_dict.py --lang en-us --output data/espeak_en_us.dict'
     )
     parser.add_argument('--lang', required=True, 
-                       choices=['en-us', 'en-gb', 'de', 'zh', 'es-mx'],
-                       help='Target language')
+                       choices=['en-us', 'en-gb-rp', 'de', 'cmn', 'es-419'],
+                       help='Target language (espeak variant)')
     parser.add_argument('--output', required=True,
                        help='Output dictionary file path')
     parser.add_argument('--format', choices=['dict', 'header'], default='dict',

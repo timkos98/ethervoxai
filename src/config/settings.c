@@ -62,18 +62,21 @@ ethervox_persistent_settings_t ethervox_settings_get_defaults(void) {
     strncpy(settings.tts.voice_en, "en_GB-alba-medium", sizeof(settings.tts.voice_en) - 1);
     strncpy(settings.tts.voice_zh, "zh_CN-huayan-medium", sizeof(settings.tts.voice_zh) - 1);
     strncpy(settings.tts.voice_de, "de_DE-thorsten-high", sizeof(settings.tts.voice_de) - 1);
+    strncpy(settings.tts.voice_es, "es_MX-ald-medium", sizeof(settings.tts.voice_es) - 1);
 #elif defined(__linux__)
     strncpy(settings.tts.engine, "piper", sizeof(settings.tts.engine) - 1);
     strncpy(settings.tts.voice, "en_GB-alba-medium", sizeof(settings.tts.voice) - 1); // Deprecated, use per-language
     strncpy(settings.tts.voice_en, "en_GB-alba-medium", sizeof(settings.tts.voice_en) - 1);
     strncpy(settings.tts.voice_zh, "zh_CN-huayan-medium", sizeof(settings.tts.voice_zh) - 1);
     strncpy(settings.tts.voice_de, "de_DE-thorsten-high", sizeof(settings.tts.voice_de) - 1);
+    strncpy(settings.tts.voice_es, "es_MX-ald-medium", sizeof(settings.tts.voice_es) - 1);
 #else
     strncpy(settings.tts.engine, "none", sizeof(settings.tts.engine) - 1);
     settings.tts.voice[0] = '\0';
     settings.tts.voice_en[0] = '\0';
     settings.tts.voice_zh[0] = '\0';
     settings.tts.voice_de[0] = '\0';
+    settings.tts.voice_es[0] = '\0';
 #endif
     settings.tts.speed = 1.0f;
     settings.tts.volume = 0.8f;
@@ -192,11 +195,12 @@ int ethervox_settings_save(const ethervox_persistent_settings_t* settings, const
     cJSON_AddStringToObject(tts, "voice_en", settings->tts.voice_en);
     cJSON_AddStringToObject(tts, "voice_zh", settings->tts.voice_zh);
     cJSON_AddStringToObject(tts, "voice_de", settings->tts.voice_de);
+    cJSON_AddStringToObject(tts, "voice_es", settings->tts.voice_es);
     cJSON_AddNumberToObject(tts, "speed", settings->tts.speed);
     cJSON_AddNumberToObject(tts, "volume", settings->tts.volume);
     cJSON_AddNumberToObject(tts, "phoneme_variance", settings->tts.phoneme_variance);
     cJSON_AddNumberToObject(tts, "prosody_variance", settings->tts.prosody_variance);
-    cJSON_AddStringToObject(tts, "piper_model_path", settings->tts.piper_model_path);
+    // Note: piper_model_path is NOT saved - it's auto-generated from voice_en/zh/de at load time
     cJSON_AddItemToObject(root, "tts", tts);
     
     // Conversation settings
@@ -445,6 +449,12 @@ int ethervox_settings_import(ethervox_persistent_settings_t* settings, const cha
                     sizeof(settings->tts.voice_de) - 1);
         }
         
+        item = cJSON_GetObjectItem(tts, "voice_es");
+        if (cJSON_IsString(item)) {
+            strncpy(settings->tts.voice_es, item->valuestring,
+                    sizeof(settings->tts.voice_es) - 1);
+        }
+        
         item = cJSON_GetObjectItem(tts, "speed");
         if (cJSON_IsNumber(item)) settings->tts.speed = (float)item->valuedouble;
         
@@ -457,19 +467,15 @@ int ethervox_settings_import(ethervox_persistent_settings_t* settings, const cha
         item = cJSON_GetObjectItem(tts, "prosody_variance");
         if (cJSON_IsNumber(item)) settings->tts.prosody_variance = (float)item->valuedouble;
         
-        item = cJSON_GetObjectItem(tts, "piper_model_path");
-        if (cJSON_IsString(item)) {
-            strncpy(settings->tts.piper_model_path, item->valuestring,
-                    sizeof(settings->tts.piper_model_path) - 1);
-        }
-        
-        // Auto-build piper_model_path from voice_en if not explicitly set
-        // This ensures the selected voice is actually used
-        if (strlen(settings->tts.piper_model_path) == 0 && strlen(settings->tts.voice_en) > 0) {
+        // Always auto-generate piper_model_path from voice_en setting
+        // This ensures voice selection persists correctly across restarts
+        if (strlen(settings->tts.voice_en) > 0) {
             const char* home = getenv("HOME");
             if (home) {
                 snprintf(settings->tts.piper_model_path, sizeof(settings->tts.piper_model_path),
                         "%s/.ethervox/models/piper/%s.onnx", home, settings->tts.voice_en);
+                ETHERVOX_LOG_DEBUG("[Settings] Auto-generated piper_model_path from voice_en: %s",
+                                   settings->tts.piper_model_path);
             }
         }
     }

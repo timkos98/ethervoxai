@@ -26,6 +26,14 @@ extern "C" {
 typedef int (*ethervox_model_reload_callback_t)(const char* model_path, void* user_data);
 
 /**
+ * TTS reload callback - called when TTS voice settings change
+ * @param settings New TTS settings
+ * @param user_data User data pointer
+ * @return 0 on success, non-zero on failure
+ */
+typedef int (*ethervox_tts_reload_callback_t)(const void* settings, void* user_data);
+
+/**
  * Settings menu context - holds all settings state
  */
 typedef struct {
@@ -51,10 +59,13 @@ typedef struct {
  * @param model_path Currently loaded model path (NULL if no model loaded)
  * @param reload_callback Callback to reload model if settings change (can be NULL)
  * @param user_data User data passed to reload callback
+ * @param tts_reload_callback Callback to reload TTS when voice settings change (can be NULL)
+ * @param tts_user_data User data passed to TTS reload callback
  * @return 0 on success, -1 on error
  */
 int ethervox_settings_menu_show(ethervox_settings_t* settings, const char* model_path,
-                                 ethervox_model_reload_callback_t reload_callback, void* user_data);
+                                 ethervox_model_reload_callback_t reload_callback, void* user_data,
+                                 ethervox_tts_reload_callback_t tts_reload_callback, void* tts_user_data);
 
 /**
  * Check if ncurses is available on this platform

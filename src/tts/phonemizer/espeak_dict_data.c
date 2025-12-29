@@ -16,10 +16,18 @@
 #include "data/espeak_dict_en_us.h"
 #endif
 
-#ifdef ESPEAK_DICT_EN_GB_ENABLED
-#include "data/espeak_dict_en_gb.h"
+#ifdef ESPEAK_DICT_EN_GB_RP_ENABLED
+#include "data/espeak_dict_en_gb_rp.h"
 #endif
 
 #ifdef ESPEAK_DICT_DE_ENABLED
 #include "data/espeak_dict_de.h"
+#endif
+
+#ifdef ESPEAK_DICT_CMN_ENABLED
+#include "data/espeak_dict_cmn.h"
+#endif
+
+#ifdef ESPEAK_DICT_ES_419_ENABLED
+#include "data/espeak_dict_es_419.h"
 #endif

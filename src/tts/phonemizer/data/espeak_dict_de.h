@@ -8,7 +8,7 @@
  * This is training data derived from espeak-ng output, NOT espeak source code.
  * Dictionary is sorted alphabetically (case-insensitive) for binary search.
  * 
- * Generation date: 1766922621.1988099
+ * Generation date: 1766946152.3708918
  * Dictionary size: 15 entries
  */
 
@@ -26,14 +26,14 @@ extern "C" {
 const espeak_dict_entry_t espeak_dict_de[] = {
     {"bitte", "bˈɪtə"},
     {"danke", "dˈaŋkə"},
-    {"das", "das"},
-    {"der", "dɛɾ"},
-    {"die", "diː"},
+    {"das", "dˈas"},
+    {"der", "dˈɛɾ"},
+    {"die", "dˈiː"},
     {"ein", "ˈaɪn"},
-    {"eine", "ˌaɪnə"},
+    {"eine", "ˈaɪnə"},
     {"gut", "ɡˈuːt"},
     {"hallo", "hˈaloː"},
-    {"ist", "ɪst"},
+    {"ist", "ˈɪst"},
     {"ja", "jˈɑː"},
     {"nein", "nˈaɪn"},
     {"nicht", "nˈɪçt"},

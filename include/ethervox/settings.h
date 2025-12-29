@@ -38,6 +38,7 @@ typedef struct {
     char voice_en[64];             /**< English voice ID */
     char voice_zh[64];             /**< Chinese voice ID */
     char voice_de[64];             /**< German voice ID */
+    char voice_es[64];             /**< Spanish voice ID */
     float speed;                   /**< Speech rate (0.5-2.0, 1.0 = normal) */
     float volume;                  /**< Volume (0.0-1.0) */
     float phoneme_variance;        /**< Phoneme duration variance (0.0-1.0, 0.667 = default, higher = more natural rhythm) */

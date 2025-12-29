@@ -530,6 +530,10 @@ static int piper_infer(piper_context_t* ctx,
     float length_scale = (ctx->config.speaking_rate > 0.0f) ? (1.0f / ctx->config.speaking_rate) : 1.0f;
     float noise_scale = (ctx->config.phoneme_variance >= 0.0f) ? ctx->config.phoneme_variance : 0.667f;
     float noise_w = (ctx->config.prosody_variance >= 0.0f) ? ctx->config.prosody_variance : 0.8f;
+    
+    ETHERVOX_LOG_DEBUG("[Piper] Synthesis scales: noise_scale=%.3f, length_scale=%.3f, noise_w=%.3f\n",
+           noise_scale, length_scale, noise_w);
+    
     float scales_data[] = {noise_scale, length_scale, noise_w};
     int64_t scales_shape[] = {3};
     

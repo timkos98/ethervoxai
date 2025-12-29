@@ -442,11 +442,25 @@ set(COMMON_SOURCES
     src/tts/phonemizer/chinese_segmenter.c
     src/tts/phonemizer/pronunciation_overrides.c
     src/tts/phonemizer/pronunciation_trainer.c
+    src/tts/phonemizer/stress_reduction.c
 )
 
-# Espeak-trained dictionary embeddings (optional, improves accuracy)
-# To enable: run tools/train_phonemizer.sh before building
-option(ENABLE_ESPEAK_DICT "Enable embedded espeak-trained dictionaries" ON)
+# Espeak-trained dictionary embeddings (VARIANT-SPECIFIC DICTIONARIES REQUIRED)
+# Each Piper model is trained with a SPECIFIC espeak language variant (e.g., en-us vs en-gb-x-rp).
+# Using the wrong variant causes poor quality because espeak phonemes differ by variant:
+#   en-us:     həlˈoʊ  (US English: /oʊ/ diphthong)
+#   en-gb-x-rp: həlˈəʊ (British RP: /əʊ/ diphthong)
+# 
+# The dictionaries must match the model's phonemes.language field from its .onnx.json config.
+# Generated dictionaries are variant-specific:
+#   - espeak_dict_en_us.h      → for models with language: "en-us"
+#   - espeak_dict_en_gb_rp.h   → for models with language: "en-gb-x-rp"
+#   - espeak_dict_de.h         → for models with language: "de"
+#   - espeak_dict_cmn.h        → for models with language: "cmn"
+#   - espeak_dict_es_419.h     → for models with language: "es-419"
+# 
+# Generate all variants with: ./tools/train_phonemizer.sh (takes ~30 min per variant)
+option(ENABLE_ESPEAK_DICT "Enable embedded espeak-trained dictionaries (variant-specific)" OFF)
 
 set(ESPEAK_DICT_ENABLED FALSE)
 if(ENABLE_ESPEAK_DICT)
@@ -461,16 +475,36 @@ if(ENABLE_ESPEAK_DICT)
         message(STATUS "⚠️  Espeak dictionary (en-us) not found. Run: tools/train_phonemizer.sh")
     endif()
     
-    if(EXISTS "${ESPEAK_DICT_DIR}/espeak_dict_en_gb.h")
-        message(STATUS "✅ Espeak dictionary (en-gb) found - enabling")
-        add_definitions(-DESPEAK_DICT_EN_GB_ENABLED)
+    if(EXISTS "${ESPEAK_DICT_DIR}/espeak_dict_en_gb_rp.h")
+        message(STATUS "✅ Espeak dictionary (en-gb-rp) found - enabling")
+        add_definitions(-DESPEAK_DICT_EN_GB_RP_ENABLED)
         set(ESPEAK_DICT_ENABLED TRUE)
+    else()
+        message(STATUS "⚠️  Espeak dictionary (en-gb-rp) not found. Run: tools/train_phonemizer.sh")
     endif()
     
     if(EXISTS "${ESPEAK_DICT_DIR}/espeak_dict_de.h")
         message(STATUS "✅ Espeak dictionary (de) found - enabling")
         add_definitions(-DESPEAK_DICT_DE_ENABLED)
         set(ESPEAK_DICT_ENABLED TRUE)
+    else()
+        message(STATUS "⚠️  Espeak dictionary (de) not found. Run: tools/train_phonemizer.sh")
+    endif()
+    
+    if(EXISTS "${ESPEAK_DICT_DIR}/espeak_dict_cmn.h")
+        message(STATUS "✅ Espeak dictionary (cmn) found - enabling")
+        add_definitions(-DESPEAK_DICT_CMN_ENABLED)
+        set(ESPEAK_DICT_ENABLED TRUE)
+    else()
+        message(STATUS "⚠️  Espeak dictionary (cmn) not found. Run: tools/train_phonemizer.sh")
+    endif()
+    
+    if(EXISTS "${ESPEAK_DICT_DIR}/espeak_dict_es_419.h")
+        message(STATUS "✅ Espeak dictionary (es-419) found - enabling")
+        add_definitions(-DESPEAK_DICT_ES_419_ENABLED)
+        set(ESPEAK_DICT_ENABLED TRUE)
+    else()
+        message(STATUS "⚠️  Espeak dictionary (es-419) not found. Run: tools/train_phonemizer.sh")
     endif()
     
     # Add the data file if any dictionaries are enabled

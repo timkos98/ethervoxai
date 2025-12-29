@@ -27,6 +27,9 @@
 extern "C" {
 #endif
 
+// Forward declarations
+typedef struct ethervox_tts_context ethervox_tts_context_t;
+
 // Intent types
 typedef enum {
   ETHERVOX_INTENT_UNKNOWN = 0,
@@ -223,7 +226,18 @@ bool ethervox_dialogue_is_language_supported(const char* language_code);
 int ethervox_dialogue_add_language_support(ethervox_dialogue_engine_t* engine,
                                            const char* language_code);
 const char** ethervox_dialogue_get_supported_languages(void);
+/**
+ * Get the global TTS instance (used by speak tool and conversation)
+ * @return Global TTS context (may be NULL if not initialized)
+ */
+ethervox_tts_context_t* ethervox_get_global_tts(void);
 
+/**
+ * Reload the global TTS instance with new settings
+ * @param tts_settings New TTS settings to apply
+ * @return 0 on success, -1 on failure
+ */
+int ethervox_reload_global_tts(const void* tts_settings);
 #ifdef __cplusplus
 }
 #endif

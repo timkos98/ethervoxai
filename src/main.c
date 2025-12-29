@@ -48,6 +48,7 @@
 #include "ethervox/unit_conversion.h"
 #include "ethervox/get_tool_info.h"
 #include "ethervox/startup_prompt_tools.h"
+#include "ethervox/dialogue.h"
 #include "ethervox/system_info_tools.h"
 #include "ethervox/voice_training.h"
 #include "ethervox/logging.h"
@@ -317,7 +318,7 @@ static const char* commands[] = {
     "/transcribe", "/stoptranscribe", "/setlang", "/translate",
     "/wakeword", "/wakeon", "/wakeoff", "/wakerecord",
     "/conversation", "/convon", "/convoff", "/convtrigger",
-    "/voice_training", "/speak",
+    "/voice_training", "/speak", "/speak-direct",
     "/models", "/modelstatus", "/modeldownload", "/modeldelete",
     "/config", "/report",
     "/quit", NULL
@@ -387,7 +388,14 @@ static int reload_model_callback(const char* model_path, void* user_data) {
         }
     }
     
-    return ethervox_governor_load_model(gov, model_path);
+    return 0;
+}
+
+// TTS reload callback for settings menu
+// TTS reload callback for settings menu
+static int tts_reload_callback(const void* tts_settings, void* user_data) {
+    (void)user_data; // Unused
+    return ethervox_reload_global_tts(tts_settings);
 }
 
 // Helper function to initialize ethervox_settings_t for the menu
@@ -1139,7 +1147,8 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
             
             // Show menu with model path and reload callback
             const char* current_model = (g_loaded_model_path[0] != '\0') ? g_loaded_model_path : NULL;
-            if (ethervox_settings_menu_show(&settings, current_model, reload_model_callback, g_governor) == 0) {
+            if (ethervox_settings_menu_show(&settings, current_model, reload_model_callback, g_governor,
+                                             tts_reload_callback, NULL) == 0) {
                 // Apply changed settings
                 g_debug_enabled = settings.debug_enabled;
                 g_quiet_mode = settings.quiet_mode;
@@ -1976,6 +1985,70 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         return;
     }
     
+    if (strncmp(line, "/speak-direct ", 14) == 0) {
+        const char* ipa = line + 14;  // Skip "/speak-direct "
+        
+        if (strlen(ipa) == 0) {
+            printf("❌ Usage: /speak-direct <ipa_phonemes>\n");
+            printf("   Example: /speak-direct həlˈoʊ ðˈɛɹ\n");
+            printf("   This bypasses the phonemizer and sends IPA directly to Piper\n");
+            return;
+        }
+        
+        printf("\n🔊 Synthesizing from IPA: \"%s\"\n", ipa);
+        
+        // Use global TTS instance
+        pthread_mutex_lock(&g_tts_mutex);
+        ethervox_tts_context_t* tts = g_global_tts;
+        pthread_mutex_unlock(&g_tts_mutex);
+        
+        if (!tts) {
+            printf("❌ TTS not initialized. Check that Piper model is configured in /config.\n");
+            return;
+        }
+        
+        // Synthesize from IPA directly (bypass phonemizer)
+        ethervox_tts_audio_t output = {0};
+        int result = ethervox_tts_synthesize_ipa(tts, ipa, &output);
+        
+        if (result == 0 && output.samples && output.sample_count > 0) {
+            printf("   ✓ Synthesized %zu samples at %d Hz\n", output.sample_count, output.sample_rate);
+            printf("   🎵 Playing audio...\n");
+            
+            // Save to temp file
+            char temp_file[512];
+            snprintf(temp_file, sizeof(temp_file), "%s/.ethervox/temp_speak_direct.wav", 
+                     getenv("HOME") ? getenv("HOME") : ".");
+            
+            if (ethervox_audio_write_wav(temp_file, output.samples, (int)output.sample_count, 
+                                         output.sample_rate, output.channels) == 0) {
+                printf("   💾 Saved to: %s\n", temp_file);
+                
+                // Play using system command (macOS/Linux)
+#ifdef __APPLE__
+                char cmd[600];
+                snprintf(cmd, sizeof(cmd), "afplay %s", temp_file);
+                system(cmd);
+#elif __linux__
+                char cmd[600];
+                snprintf(cmd, sizeof(cmd), "aplay %s 2>/dev/null", temp_file);
+                system(cmd);
+#endif
+                printf("   ✓ Playback complete\n");
+            }
+            
+            // Cleanup audio samples
+            if (output.samples) {
+                free(output.samples);
+            }
+        } else {
+            printf("   ❌ TTS synthesis failed (error: %d)\n", result);
+        }
+        
+        printf("\n");
+        return;
+    }
+    
     if (strcmp(line, "/voice_training") == 0) {
         if (!g_governor) {
             printf("❌ Governor not initialized. Please wait for system startup.\n");
@@ -2712,6 +2785,9 @@ int main(int argc, char** argv) {
     bool minimal_mode = false;  // Minimal mode: fast loading, tools disabled
     bool auto_start_conversation = false;  // Auto-start voice conversation with -convon
     bool settings_mode = false;  // Settings mode: open settings menu before loading model
+    bool tts_speak_mode = false;  // TTS-only mode: synthesize text and exit
+    bool tts_speak_direct_mode = false;  // TTS-only mode: synthesize IPA and exit
+    const char* tts_text = NULL;  // Text to synthesize in TTS mode
     
     // Track explicit flag usage for conflict detection
     bool debug_flag_set = false;
@@ -2789,6 +2865,16 @@ int main(int argc, char** argv) {
         } else if (strcmp(argv[i], "--settings") == 0 || strcmp(argv[i], "-settings") == 0) {
             settings_mode = true;
             skip_startup_prompt = true;
+        } else if ((strcmp(argv[i], "--speak") == 0 || strcmp(argv[i], "-speak") == 0) && i + 1 < argc) {
+            tts_speak_mode = true;
+            tts_text = argv[++i];
+            interactive = false;
+            skip_startup_prompt = true;
+        } else if ((strcmp(argv[i], "--speak-direct") == 0 || strcmp(argv[i], "-speak-direct") == 0) && i + 1 < argc) {
+            tts_speak_direct_mode = true;
+            tts_text = argv[++i];
+            interactive = false;
+            skip_startup_prompt = true;
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             printf("Usage: %s [options]\n\n", argv[0]);
             printf("Options:\n");
@@ -2807,6 +2893,8 @@ int main(int argc, char** argv) {
             printf("  -test              Run component tests before starting\n");
             printf("  -testllm [name]    Run LLM tool tests, optionally filter by test name\n");
             printf("  -optimize_tool_prompts  Optimize tool prompts (engineering mode + /optimize_tool_prompts)\n");
+            printf("  -speak <text>      TTS-only mode: synthesize text and exit (no governor)\n");
+            printf("  -speak-direct <ipa>  TTS-only mode: synthesize IPA phonemes directly (no phonemizer)\n");
             printf("  -help, -h          Show this help message\n");
             printf("\n");
             _exit(0);
@@ -2984,7 +3072,8 @@ int main(int argc, char** argv) {
         
         // Open settings menu (pass model_path for display, but no callback since model not loaded yet)
         // Settings will be applied automatically after menu exits via g_settings reload
-        int menu_result = ethervox_settings_menu_show(&menu_settings, model_path, NULL, NULL);
+        int menu_result = ethervox_settings_menu_show(&menu_settings, model_path, NULL, NULL,
+                                                       tts_reload_callback, NULL);
         
         // Now ncurses has cleaned up, we can print normally
         if (menu_result != 0 && g_debug_enabled) {
@@ -3052,6 +3141,71 @@ int main(int argc, char** argv) {
         }
     } else if (g_debug_enabled) {
         printf("Global TTS: Skipped (no Piper model configured)\n");
+    }
+    
+    // TTS-only modes: synthesize and exit without loading governor
+    if (tts_speak_mode || tts_speak_direct_mode) {
+        if (!g_global_tts) {
+            fprintf(stderr, "❌ TTS not initialized. Check that Piper model is configured.\n");
+            fprintf(stderr, "   Run with -settings to configure TTS engine.\n");
+            ethervox_memory_cleanup(&memory);
+            return 1;
+        }
+        
+        printf("\n🔊 TTS-only mode: %s\n", tts_speak_direct_mode ? "Direct IPA" : "Text");
+        printf("   Input: \"%s\"\n", tts_text);
+        
+        ethervox_tts_audio_t output = {0};
+        int result;
+        
+        if (tts_speak_direct_mode) {
+            // Bypass phonemizer - send IPA directly to Piper
+            result = ethervox_tts_synthesize_ipa(g_global_tts, tts_text, &output);
+        } else {
+            // Normal text-to-speech with phonemizer
+            result = ethervox_tts_synthesize_text(g_global_tts, tts_text, &output);
+        }
+        
+        if (result == 0 && output.samples && output.sample_count > 0) {
+            printf("   ✓ Synthesized %zu samples at %d Hz\n", output.sample_count, output.sample_rate);
+            
+            // Save to temp file
+            char temp_file[512];
+            const char* mode_suffix = tts_speak_direct_mode ? "direct" : "speak";
+            snprintf(temp_file, sizeof(temp_file), "%s/.ethervox/temp_%s.wav",
+                     getenv("HOME") ? getenv("HOME") : ".", mode_suffix);
+            
+            if (ethervox_audio_write_wav(temp_file, output.samples, (int)output.sample_count,
+                                         output.sample_rate, output.channels) == 0) {
+                printf("   💾 Saved to: %s\n", temp_file);
+                printf("   🎵 Playing audio...\n");
+                
+#ifdef __APPLE__
+                char cmd[600];
+                snprintf(cmd, sizeof(cmd), "afplay %s", temp_file);
+                system(cmd);
+#elif __linux__
+                char cmd[600];
+                snprintf(cmd, sizeof(cmd), "aplay %s 2>/dev/null", temp_file);
+                system(cmd);
+#endif
+                printf("   ✓ Playback complete\n\n");
+            } else {
+                fprintf(stderr, "   ❌ Failed to save audio file\n");
+            }
+            
+            free(output.samples);
+        } else {
+            fprintf(stderr, "❌ TTS synthesis failed (error: %d)\n", result);
+        }
+        
+        // Cleanup and exit
+        if (g_global_tts) {
+            ethervox_tts_destroy(g_global_tts);
+            g_global_tts = NULL;
+        }
+        ethervox_memory_cleanup(&memory);
+        return result == 0 ? 0 : 1;
     }
     
     // Initialize Governor

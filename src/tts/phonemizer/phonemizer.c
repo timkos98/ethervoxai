@@ -15,6 +15,7 @@
 #include "pinyin_to_ipa.h"
 #include "chinese_segmenter.h"
 #include "pronunciation_overrides.h"
+#include "stress_reduction.h"
 #include "ethervox/logging.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -489,6 +490,33 @@ int phonemizer_text_to_ipa(phonemizer_t* ctx, const char* text, char* ipa_output
                 continue;
             }
         }
+        
+        // Apply stress reduction for natural connected speech
+        stress_reduction_context_t context;
+        if (token_count == 1) {
+            context = STRESS_CONTEXT_ISOLATED;
+        } else if (i == 0) {
+            // Check if sentence ends with question mark
+            if (text[strlen(text) - 1] == '?') {
+                context = STRESS_CONTEXT_QUESTION;
+            } else {
+                context = STRESS_CONTEXT_SENTENCE_INITIAL;
+            }
+        } else if (i == token_count - 1) {
+            if (text[strlen(text) - 1] == '?') {
+                context = STRESS_CONTEXT_QUESTION;
+            } else {
+                context = STRESS_CONTEXT_SENTENCE_FINAL;
+            }
+        } else {
+            if (text[strlen(text) - 1] == '?') {
+                context = STRESS_CONTEXT_QUESTION;
+            } else {
+                context = STRESS_CONTEXT_SENTENCE_MEDIAL;
+            }
+        }
+        
+        apply_stress_reduction(tokens[i], word_ipa, MAX_ARPABET_LENGTH, context);
         
         // Append to output with word boundary space
         size_t current_len = strlen(ipa_output);
