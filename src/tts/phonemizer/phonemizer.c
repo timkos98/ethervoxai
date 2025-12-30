@@ -424,19 +424,19 @@ int phonemizer_text_to_ipa(phonemizer_t* ctx, const char* text, char* ipa_output
             ETHERVOX_LOG_DEBUG("[Phonemizer] ⚠️  ESPEAK_DICT_EN_US_ENABLED not defined");
             #endif
             
-            #ifdef ESPEAK_DICT_EN_GB_ENABLED
+            #ifdef ESPEAK_DICT_EN_GB_RP_ENABLED
             if (!espeak_found && ctx->language == PHONEMIZER_LANG_EN_GB) {
-                ETHERVOX_LOG_DEBUG("[Phonemizer] 📚 Searching en-gb espeak dict (%zu entries)...", espeak_dict_en_gb_size);
-                if (espeak_dict_lookup(espeak_dict_en_gb, espeak_dict_en_gb_size,
+                ETHERVOX_LOG_DEBUG("[Phonemizer] 📚 Searching en-gb-rp espeak dict (%zu entries)...", espeak_dict_en_gb_rp_size);
+                if (espeak_dict_lookup(espeak_dict_en_gb_rp, espeak_dict_en_gb_rp_size,
                                       tokens[i], espeak_ipa, sizeof(espeak_ipa)) == 0) {
                     strncpy(word_ipa, espeak_ipa, MAX_ARPABET_LENGTH - 1);
                     word_ipa[MAX_ARPABET_LENGTH - 1] = '\0';
                     found = 1;
                     override_is_ipa = 1;
                     espeak_found = 1;
-                    ETHERVOX_LOG_DEBUG("[Phonemizer] ✅ Espeak dict (en-gb): '%s' → '%s'", tokens[i], word_ipa);
+                    ETHERVOX_LOG_DEBUG("[Phonemizer] ✅ Espeak dict (en-gb-rp): '%s' → '%s'", tokens[i], word_ipa);
                 } else {
-                    ETHERVOX_LOG_DEBUG("[Phonemizer] ❌ Not found in en-gb espeak dict: '%s'", tokens[i]);
+                    ETHERVOX_LOG_DEBUG("[Phonemizer] ❌ Not found in en-gb-rp espeak dict: '%s'", tokens[i]);
                 }
             }
             #endif

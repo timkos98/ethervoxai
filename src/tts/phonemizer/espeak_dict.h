@@ -52,10 +52,10 @@ extern const espeak_dict_entry_t espeak_dict_en_us[];
 extern const size_t espeak_dict_en_us_size;
 #endif
 
-// English (GB) - generated from espeak-ng en-gb
-#ifdef ESPEAK_DICT_EN_GB_ENABLED
-extern const espeak_dict_entry_t espeak_dict_en_gb[];
-extern const size_t espeak_dict_en_gb_size;
+// English (GB-RP) - generated from espeak-ng en-gb-x-rp
+#ifdef ESPEAK_DICT_EN_GB_RP_ENABLED
+extern const espeak_dict_entry_t espeak_dict_en_gb_rp[];
+extern const size_t espeak_dict_en_gb_rp_size;
 #endif
 
 // German - generated from espeak-ng de
