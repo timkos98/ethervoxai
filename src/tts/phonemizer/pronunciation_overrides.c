@@ -196,13 +196,13 @@ int pronunciation_overrides_lookup(
     char normalized[MAX_WORD_LENGTH];
     normalize_word(word, normalized, sizeof(normalized));
     
-    fprintf(stderr, "[PronOverrides] Looking up '%s' (normalized: '%s') in %d overrides\n",
+    ETHERVOX_LOG_DEBUG("[PronOverrides] Looking up '%s' (normalized: '%s') in %d overrides\n",
             word, normalized, store->count);
     
     // Search in reverse (personal overrides loaded last, higher priority)
     for (int i = store->count - 1; i >= 0; i--) {
         if (strcmp(store->overrides[i].word, normalized) == 0) {
-            fprintf(stderr, "[PronOverrides] 🎯 Found match at index %d: ipa='%s' confidence=%.3f\n",
+            ETHERVOX_LOG_DEBUG("[PronOverrides] 🎯 Found match at index %d: ipa='%s' confidence=%.3f\n",
                     i, store->overrides[i].ipa, store->overrides[i].confidence);
             *out_override = store->overrides[i];
             return 0;
@@ -449,6 +449,43 @@ void pronunciation_overrides_get_stats(
     if (total_overrides) *total_overrides = total;
     if (community_overrides) *community_overrides = community;
     if (avg_confidence) *avg_confidence = total > 0 ? confidence_sum / total : 0.0f;
+}
+
+int pronunciation_overrides_reset(void) {
+    const char* home = getenv("HOME");
+    if (!home) home = ".";
+    
+    char personal_path[512];
+    char community_path[512];
+    
+    snprintf(personal_path, sizeof(personal_path), 
+             "%s/.ethervox/pronunciation_overrides.json", home);
+    snprintf(community_path, sizeof(community_path),
+             "%s/.ethervox/community_overrides.json", home);
+    
+    int result = 0;
+    
+    // Delete personal overrides file
+    if (remove(personal_path) == 0) {
+        printf("✓ Deleted personal pronunciation overrides\n");
+    } else if (errno != ENOENT) {
+        fprintf(stderr, "⚠️  Failed to delete %s: %s\n", personal_path, strerror(errno));
+        result = -1;
+    }
+    
+    // Delete community overrides file
+    if (remove(community_path) == 0) {
+        printf("✓ Deleted community pronunciation overrides\n");
+    } else if (errno != ENOENT) {
+        fprintf(stderr, "⚠️  Failed to delete %s: %s\n", community_path, strerror(errno));
+        result = -1;
+    }
+    
+    if (result == 0) {
+        printf("✅ Pronunciation override system reset successfully\n");
+    }
+    
+    return result;
 }
 
 void pronunciation_overrides_free(pronunciation_override_store_t* store) {

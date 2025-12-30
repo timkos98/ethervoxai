@@ -61,6 +61,7 @@
 #include "ethervox/audio.h"
 #include "ethervox/audio_recording.h"
 #include "ethervox/tts.h"
+#include "ethervox/audio_stream_player.h"
 
 // External debug flag from logging.c (declared in config.h)
 // extern int g_ethervox_debug_enabled; // Already declared in config.h
@@ -94,6 +95,17 @@ static ethervox_persistent_settings_t g_settings;
 // Defined in src/dialogue/global_tts.c
 extern ethervox_tts_context_t* g_global_tts;
 extern pthread_mutex_t g_tts_mutex;
+
+// Streaming audio player for real-time TTS playback
+static audio_stream_player_t* g_stream_player = NULL;
+
+// TTS chunk callback for streaming playback
+static void tts_stream_callback(const float* samples, size_t sample_count, void* user_data) {
+    audio_stream_player_t* player = (audio_stream_player_t*)user_data;
+    if (player) {
+        audio_stream_player_write(player, samples, sample_count);
+    }
+}
 
 // Wake word detection (triggers conversation pipeline)
 static ethervox_wake_runtime_t* g_wake_runtime = NULL;
@@ -2788,6 +2800,7 @@ int main(int argc, char** argv) {
     bool tts_speak_mode = false;  // TTS-only mode: synthesize text and exit
     bool tts_speak_direct_mode = false;  // TTS-only mode: synthesize IPA and exit
     const char* tts_text = NULL;  // Text to synthesize in TTS mode
+    const char* audio_file = NULL;  // Optional output file for -af flag
     
     // Track explicit flag usage for conflict detection
     bool debug_flag_set = false;
@@ -2875,6 +2888,8 @@ int main(int argc, char** argv) {
             tts_text = argv[++i];
             interactive = false;
             skip_startup_prompt = true;
+        } else if ((strcmp(argv[i], "--af") == 0 || strcmp(argv[i], "-af") == 0) && i + 1 < argc) {
+            audio_file = argv[++i];
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             printf("Usage: %s [options]\n\n", argv[0]);
             printf("Options:\n");
@@ -2893,8 +2908,9 @@ int main(int argc, char** argv) {
             printf("  -test              Run component tests before starting\n");
             printf("  -testllm [name]    Run LLM tool tests, optionally filter by test name\n");
             printf("  -optimize_tool_prompts  Optimize tool prompts (engineering mode + /optimize_tool_prompts)\n");
-            printf("  -speak <text>      TTS-only mode: synthesize text and exit (no governor)\n");
+            printf("  -speak <text>      TTS-only mode: synthesize text with streaming playback\n");
             printf("  -speak-direct <ipa>  TTS-only mode: synthesize IPA phonemes directly (no phonemizer)\n");
+            printf("  -af <file>         Save audio output to file (use with -speak/-speak-direct)\n");
             printf("  -help, -h          Show this help message\n");
             printf("\n");
             _exit(0);
@@ -3128,6 +3144,18 @@ int main(int argc, char** argv) {
         tts_config.phoneme_variance = g_settings.tts.phoneme_variance;
         tts_config.prosody_variance = g_settings.tts.prosody_variance;
         
+        // For -speak mode without -af, enable real-time streaming playback
+        if ((tts_speak_mode || tts_speak_direct_mode) && !audio_file) {
+            g_stream_player = audio_stream_player_create(16000, 1);
+            if (g_stream_player) {
+                tts_config.chunk_callback = tts_stream_callback;
+                tts_config.callback_user_data = g_stream_player;
+            }
+        } else {
+            tts_config.chunk_callback = NULL;
+            tts_config.callback_user_data = NULL;
+        }
+        
         g_global_tts = ethervox_tts_create(&tts_config);
         
         pthread_mutex_unlock(&g_tts_mutex);
@@ -3154,6 +3182,19 @@ int main(int argc, char** argv) {
         
         printf("\n🔊 TTS-only mode: %s\n", tts_speak_direct_mode ? "Direct IPA" : "Text");
         printf("   Input: \"%s\"\n", tts_text);
+        if (audio_file) {
+            printf("   Output: %s (batch mode)\n", audio_file);
+        } else {
+            printf("   Output: streaming playback (use -af <file> to save)\n");
+            // Start streaming player before synthesis
+            if (g_stream_player) {
+                if (audio_stream_player_start(g_stream_player) != 0) {
+                    fprintf(stderr, "   ⚠️  Failed to start audio stream, falling back to temp file\n");
+                    audio_stream_player_destroy(g_stream_player);
+                    g_stream_player = NULL;
+                }
+            }
+        }
         
         ethervox_tts_audio_t output = {0};
         int result;
@@ -3169,29 +3210,46 @@ int main(int argc, char** argv) {
         if (result == 0 && output.samples && output.sample_count > 0) {
             printf("   ✓ Synthesized %zu samples at %d Hz\n", output.sample_count, output.sample_rate);
             
-            // Save to temp file
-            char temp_file[512];
-            const char* mode_suffix = tts_speak_direct_mode ? "direct" : "speak";
-            snprintf(temp_file, sizeof(temp_file), "%s/.ethervox/temp_%s.wav",
-                     getenv("HOME") ? getenv("HOME") : ".", mode_suffix);
+            // Save to file only if -af was specified
+            if (audio_file) {
+                if (ethervox_audio_write_wav(audio_file, output.samples, (int)output.sample_count,
+                                             output.sample_rate, output.channels) == 0) {
+                    printf("   💾 Saved to: %s\n", audio_file);
+                } else {
+                    fprintf(stderr, "   ❌ Failed to save audio file\n");
+                }
+            }
             
-            if (ethervox_audio_write_wav(temp_file, output.samples, (int)output.sample_count,
-                                         output.sample_rate, output.channels) == 0) {
-                printf("   💾 Saved to: %s\n", temp_file);
-                printf("   🎵 Playing audio...\n");
-                
-#ifdef __APPLE__
-                char cmd[600];
-                snprintf(cmd, sizeof(cmd), "afplay %s", temp_file);
-                system(cmd);
-#elif __linux__
-                char cmd[600];
-                snprintf(cmd, sizeof(cmd), "aplay %s 2>/dev/null", temp_file);
-                system(cmd);
-#endif
-                printf("   ✓ Playback complete\n\n");
+            // Play audio - use streaming if available, otherwise temp file
+            printf("   🎵 Playing audio...\n");
+            
+            if (g_stream_player) {
+                // Streaming player active - chunks already playing, just wait for completion
+                if (audio_stream_player_wait(g_stream_player) == 0) {
+                    printf("   ✓ Playback complete\n\n");
+                } else {
+                    fprintf(stderr, "   ❌ Streaming playback error\n");
+                }
             } else {
-                fprintf(stderr, "   ❌ Failed to save audio file\n");
+                // Fallback: save to temp file and play
+                char temp_file[512];
+                const char* mode_suffix = tts_speak_direct_mode ? "direct" : "speak";
+                snprintf(temp_file, sizeof(temp_file), "%s/.ethervox/temp_%s.wav",
+                         getenv("HOME") ? getenv("HOME") : ".", mode_suffix);
+                
+                if (ethervox_audio_write_wav(temp_file, output.samples, (int)output.sample_count,
+                                             output.sample_rate, output.channels) == 0) {
+#ifdef __APPLE__
+                    char cmd[600];
+                    snprintf(cmd, sizeof(cmd), "afplay %s", temp_file);
+                    system(cmd);
+#elif __linux__
+                    char cmd[600];
+                    snprintf(cmd, sizeof(cmd), "aplay %s 2>/dev/null", temp_file);
+                    system(cmd);
+#endif
+                    printf("   ✓ Playback complete\n\n");
+                }
             }
             
             free(output.samples);
@@ -3200,6 +3258,10 @@ int main(int argc, char** argv) {
         }
         
         // Cleanup and exit
+        if (g_stream_player) {
+            audio_stream_player_destroy(g_stream_player);
+            g_stream_player = NULL;
+        }
         if (g_global_tts) {
             ethervox_tts_destroy(g_global_tts);
             g_global_tts = NULL;

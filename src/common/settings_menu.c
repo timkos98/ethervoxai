@@ -15,6 +15,7 @@
 #include "ethervox/governor.h"
 #include "ethervox/tts.h"
 #include "ethervox/audio.h"
+#include "../tts/phonemizer/pronunciation_overrides.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -696,6 +697,13 @@ static int action_select_tts_voice(void* data) {
                 printf("\n✓ %s voice changed to: %s\n", lang_name, selected->display_name);
                 printf("    Model path: %s\n", settings->tts.piper_model_path);
                 
+                // Save settings immediately to persist voice selection
+                if (ethervox_settings_save(settings, NULL) == 0) {
+                    printf("💾 Settings saved successfully\n");
+                } else {
+                    printf("⚠️  Warning: Failed to save settings to disk\n");
+                }
+                
                 // Try to reload TTS immediately if callback is available
                 if (action_data->tts_reload_callback) {
                     printf("\n🔄 Reloading TTS with new voice...\n");
@@ -840,6 +848,41 @@ static int action_view_info(void* data) {
     printf("Quiet Mode:     %s\n", settings->quiet_mode ? "ON" : "OFF");
     
     printf("\nPress Enter to return...\n");
+    getchar();
+    
+    init_display();
+    return 0;
+}
+
+// Action: Reset pronunciation overrides
+static int action_reset_pronunciation(void* data) {
+    cleanup_display();
+    
+    printf("\n+===================================================================+\n");
+    printf("|               RESET PRONUNCIATION OVERRIDES                   |\n");
+    printf("+===================================================================+\n\n");
+    
+    printf("⚠️  This will delete all trained pronunciation corrections.\n");
+    printf("   This action cannot be undone!\n\n");
+    
+    printf("Are you sure you want to reset? (type 'yes' to confirm): ");
+    char confirm[32];
+    if (fgets(confirm, sizeof(confirm), stdin)) {
+        confirm[strcspn(confirm, "\n")] = 0;  // Remove newline
+        
+        if (strcmp(confirm, "yes") == 0) {
+            printf("\nResetting pronunciation overrides...\n");
+            if (pronunciation_overrides_reset() == 0) {
+                printf("\n✅ Reset complete!\n");
+            } else {
+                printf("\n❌ Reset failed (some files may not exist)\n");
+            }
+        } else {
+            printf("\n❌ Reset cancelled\n");
+        }
+    }
+    
+    printf("\nPress Enter to continue...");
     getchar();
     
     init_display();
@@ -1274,6 +1317,14 @@ int ethervox_settings_menu_show(ethervox_settings_t* settings, const char* model
             .value_ptr = NULL,
             .action = action_optimize_tools,
             .action_data = settings
+        },
+        {
+            .label = "Reset Pronunciation Training",
+            .description = "Clear all learned pronunciation overrides",
+            .type = MENU_ITEM_ACTION,
+            .value_ptr = NULL,
+            .action = action_reset_pronunciation,
+            .action_data = NULL
         },
         {
             .label = "View System Info",

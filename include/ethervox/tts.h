@@ -23,6 +23,14 @@ typedef enum {
     ETHERVOX_TTS_BACKEND_SYSTEM    // Platform TTS (macOS say, Windows SAPI)
 } ethervox_tts_backend_t;
 
+// Callback for streaming audio chunks during synthesis
+// Called for each chunk as it's generated, allowing playback to start immediately
+typedef void (*ethervox_tts_chunk_callback_t)(
+    const float* samples,
+    size_t sample_count,
+    void* user_data
+);
+
 // TTS configuration
 typedef struct {
     ethervox_tts_backend_t backend;
@@ -35,6 +43,10 @@ typedef struct {
     const char* model_path;        // Path to Piper .onnx model (Piper only)
     const char* config_path;       // Path to Piper .json config (Piper only)
     const char* voice_name;        // Voice identifier (backend-specific)
+    
+    // Streaming configuration (sentence-level, not phoneme-level)
+    ethervox_tts_chunk_callback_t chunk_callback;  // Called for each audio chunk (NULL = no streaming)
+    void* callback_user_data;      // User data passed to chunk_callback
 } ethervox_tts_config_t;
 
 // Audio buffer for TTS output

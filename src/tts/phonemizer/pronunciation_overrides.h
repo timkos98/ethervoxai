@@ -131,6 +131,14 @@ void pronunciation_overrides_get_stats(
 );
 
 /**
+ * Reset/clear all pronunciation overrides
+ * Deletes both personal and community override files
+ * 
+ * @return 0 on success, -1 on error
+ */
+int pronunciation_overrides_reset(void);
+
+/**
  * Free override store
  */
 void pronunciation_overrides_free(pronunciation_override_store_t* store);

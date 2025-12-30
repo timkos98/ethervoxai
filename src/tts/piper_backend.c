@@ -22,6 +22,7 @@
 #define PIPER_SAMPLE_RATE 22050
 #define TARGET_SAMPLE_RATE 16000
 #define MAX_PHONEME_MAP_SIZE 256
+#define PIPER_DEFAULT_CHUNK_SIZE 64  // Default phonemes per chunk for streaming
 
 // Phoneme ID map entry
 typedef struct {
@@ -43,6 +44,13 @@ typedef struct {
     bool has_speaker_id_input;  // True if model expects 'sid' input
     bool initialized;
     phonemizer_t* phonemizer;  // Custom phonemizer context
+    
+    // Streaming state (sentence-level)
+    ethervox_tts_chunk_callback_t chunk_callback;
+    void* callback_user_data;
+    float* accumulated_audio;  // Buffer for complete audio (for file saving)
+    size_t accumulated_count;
+    size_t accumulated_capacity;
 } piper_context_t;
 
 // ONNX Runtime error check
@@ -403,10 +411,10 @@ static int ipa_to_phoneme_ids(piper_context_t* ctx, const char* ipa_text, int64_
     
     ETHERVOX_LOG_DEBUG("[Piper] Final phoneme sequence (%zu tokens): [", id_count);
     for (size_t i = 0; i < (id_count < 20 ? id_count : 20); i++) {
-        fprintf(stderr, "%lld%s", (long long)phoneme_ids[i], i < id_count-1 ? "," : "");
+        ETHERVOX_LOG_DEBUG("%lld%s", (long long)phoneme_ids[i], i < id_count-1 ? "," : "");
     }
-    if (id_count > 20) fprintf(stderr, "...");
-    fprintf(stderr, "]\n");
+    if (id_count > 20) ETHERVOX_LOG_DEBUG("...");
+    ETHERVOX_LOG_DEBUG("]\n");
     
     return 0;
 }
@@ -471,22 +479,105 @@ static int text_to_phonemes(piper_context_t* ctx, const char* text, int64_t* pho
     
     ETHERVOX_LOG_DEBUG("[Piper] Final phoneme sequence (%zu tokens): [", id_count);
     for (size_t i = 0; i < (id_count < 20 ? id_count : 20); i++) {
-        fprintf(stderr, "%lld%s", (long long)phoneme_ids[i], i < id_count-1 ? "," : "");
+        ETHERVOX_LOG_DEBUG("%lld%s", (long long)phoneme_ids[i], i < id_count-1 ? "," : "");
     }
-    if (id_count > 20) fprintf(stderr, "...");
-    fprintf(stderr, "]\n");
+    if (id_count > 20) ETHERVOX_LOG_DEBUG("...");
+    ETHERVOX_LOG_DEBUG("]\n");
+    
+    return 0;
+}
+
+// Forward declarations
+static int resample_audio(SpeexResamplerState* resampler,
+                         const float* input,
+                         size_t input_count,
+                         float** output,
+                         size_t* output_count);
+
+/**
+ * Split text into sentences for natural streaming
+ * Splits on .!? followed by space or end of string
+ * @return number of sentences found
+ */
+static int split_sentences(const char* text, char sentences[][512], int max_sentences) {
+    int count = 0;
+    const char* p = text;
+    char* current = sentences[count];
+    int pos = 0;
+    
+    while (*p && count < max_sentences) {
+        // Copy character
+        if (pos < 511) {
+            current[pos++] = *p;
+        }
+        
+        // Check for sentence boundary: .!? followed by space/end
+        if ((*p == '.' || *p == '!' || *p == '?') && 
+            (*(p+1) == ' ' || *(p+1) == '\0' || *(p+1) == '\n')) {
+            current[pos] = '\0';
+            
+            // Skip trailing whitespace for next sentence
+            p++;
+            while (*p == ' ' || *p == '\n') p++;
+            
+            // Start new sentence if there's more text
+            if (*p && count < max_sentences - 1) {
+                count++;
+                current = sentences[count];
+                pos = 0;
+                continue;
+            } else {
+                break;
+            }
+        }
+        
+        p++;
+    }
+    
+    // Finalize last sentence
+    if (pos > 0) {
+        current[pos] = '\0';
+        count++;
+    }
+    
+    return count;
+}
+
+/**
+ * Append audio chunk to accumulation buffer (for saving complete file)
+ */
+static int append_to_accumulator(piper_context_t* ctx, const float* samples, size_t count) {
+    size_t new_size = ctx->accumulated_count + count;
+    
+    if (new_size > ctx->accumulated_capacity) {
+        size_t new_capacity = ctx->accumulated_capacity * 2;
+        if (new_capacity < new_size) new_capacity = new_size + 16000;
+        
+        float* new_buffer = (float*)realloc(ctx->accumulated_audio, new_capacity * sizeof(float));
+        if (!new_buffer) {
+            ETHERVOX_LOG_ERROR("[Piper] Failed to expand accumulator buffer");
+            return -1;
+        }
+        
+        ctx->accumulated_audio = new_buffer;
+        ctx->accumulated_capacity = new_capacity;
+    }
+    
+    memcpy(ctx->accumulated_audio + ctx->accumulated_count, samples, count * sizeof(float));
+    ctx->accumulated_count += count;
     
     return 0;
 }
 
 /**
- * Run ONNX inference
+ * Process a single chunk of phonemes through ONNX inference
+ * (Helper for both streaming and non-streaming modes)
  */
-static int piper_infer(piper_context_t* ctx, 
-                       const int64_t* phoneme_ids,
-                       size_t phoneme_count,
-                       float** output_audio,
-                       size_t* output_sample_count) {
+static int piper_infer_chunk(piper_context_t* ctx,
+                            const int64_t* phoneme_ids,
+                            size_t phoneme_count,
+                            float** output_audio,
+                            size_t* output_sample_count) {
     
     if (!ctx->session) {
         ETHERVOX_LOG_DEBUG("[Piper] Session not initialized");
@@ -496,14 +587,6 @@ static int piper_infer(piper_context_t* ctx,
     // Create input tensor (phoneme IDs)
     int64_t input_shape[] = {1, (int64_t)phoneme_count};
     size_t input_tensor_size = phoneme_count;
-    
-    ETHERVOX_LOG_DEBUG("[Piper] ONNX input: phoneme_count=%zu, shape=[%lld, %lld]\n", 
-           phoneme_count, input_shape[0], input_shape[1]);
-    printf("[Piper] First 10 phoneme IDs: [");
-    for (size_t i = 0; i < (phoneme_count < 10 ? phoneme_count : 10); i++) {
-        printf("%lld%s", phoneme_ids[i], i < 9 && i < phoneme_count - 1 ? "," : "");
-    }
-    printf("]\n");
     
     OrtValue* input_tensor = NULL;
     ORT_CHECK(g_ort_api->CreateTensorWithDataAsOrtValue(
@@ -516,7 +599,7 @@ static int piper_infer(piper_context_t* ctx,
         &input_tensor
     ));
     
-    // Create input_lengths tensor (required by Piper models)
+    // Create input_lengths tensor
     int64_t lengths_data[] = {(int64_t)phoneme_count};
     int64_t lengths_shape[] = {1};
     
@@ -531,16 +614,10 @@ static int piper_infer(piper_context_t* ctx,
         &lengths_tensor
     ));
     
-    // Create scales tensor (noise_scale, length_scale, noise_w)
-    // noise_scale: phoneme duration variance (0.0=monotone, 1.0=very expressive)
-    // length_scale: speed control (higher=slower, lower=faster)
-    // noise_w: pitch/prosody variance (0.0=flat, 1.0=very expressive)
+    // Create scales tensor
     float length_scale = (ctx->config.speaking_rate > 0.0f) ? (1.0f / ctx->config.speaking_rate) : 1.0f;
     float noise_scale = (ctx->config.phoneme_variance >= 0.0f) ? ctx->config.phoneme_variance : 0.667f;
     float noise_w = (ctx->config.prosody_variance >= 0.0f) ? ctx->config.prosody_variance : 0.8f;
-    
-    ETHERVOX_LOG_DEBUG("[Piper] Synthesis scales: noise_scale=%.3f, length_scale=%.3f, noise_w=%.3f\n",
-           noise_scale, length_scale, noise_w);
     
     float scales_data[] = {noise_scale, length_scale, noise_w};
     int64_t scales_shape[] = {3};
@@ -559,7 +636,7 @@ static int piper_infer(piper_context_t* ctx,
     // Prepare input arrays
     const char* input_names[4];
     OrtValue* input_tensors[4];
-    size_t num_inputs = 3;  // Default: input, input_lengths, scales
+    size_t num_inputs = 3;
     
     input_names[0] = "input";
     input_names[1] = "input_lengths";
@@ -568,7 +645,7 @@ static int piper_infer(piper_context_t* ctx,
     input_tensors[1] = lengths_tensor;
     input_tensors[2] = scales_tensor;
     
-    // Create speaker_id tensor only for multi-speaker models
+    // Add speaker_id if needed
     OrtValue* speaker_id_tensor = NULL;
     int64_t speaker_id_data[] = {(int64_t)ctx->config.speaker_id};
     int64_t speaker_id_shape[] = {1};
@@ -595,7 +672,7 @@ static int piper_infer(piper_context_t* ctx,
     
     OrtStatus* status = g_ort_api->Run(
         ctx->session,
-        NULL,  // run options
+        NULL,
         input_names,
         (const OrtValue* const*)input_tensors,
         num_inputs,
@@ -614,9 +691,7 @@ static int piper_infer(piper_context_t* ctx,
     
     if (status != NULL) {
         const char* msg = g_ort_api->GetErrorMessage(status);
-        ETHERVOX_LOG_DEBUG("[Piper] ONNX Inference error: %s\n", msg);
-        fprintf(stderr, "[Piper] Input details: phoneme_count=%zu, input_names=[%s, %s, %s, %s]\n",
-                phoneme_count, input_names[0], input_names[1], input_names[2], input_names[3]);
+        ETHERVOX_LOG_ERROR("[Piper] ONNX Inference error: %s", msg);
         g_ort_api->ReleaseStatus(status);
         return -1;
     }
@@ -640,50 +715,61 @@ static int piper_infer(piper_context_t* ctx,
         sample_count *= dims[i];
     }
     
-    ETHERVOX_LOG_DEBUG("[Piper] ONNX output: dims=%zu, shape=[", num_dims);
-    for (size_t i = 0; i < num_dims; i++) {
-        printf("%lld%s", dims[i], i < num_dims - 1 ? "," : "");
-    }
-    printf("], sample_count=%zu\n", sample_count);
-    
-    // Check first few samples for sanity
-    printf("[Piper] First 10 audio samples: [");
-    for (size_t i = 0; i < (sample_count < 10 ? sample_count : 10); i++) {
-        printf("%.4f%s", output_data[i], i < 9 && i < sample_count - 1 ? "," : "");
-    }
-    printf("]\n");
-    
-    // Calculate audio statistics
-    float min_val = output_data[0], max_val = output_data[0];
-    double sum = 0.0, sum_sq = 0.0;
-    for (size_t i = 0; i < sample_count; i++) {
-        float val = output_data[i];
-        if (val < min_val) min_val = val;
-        if (val > max_val) max_val = val;
-        sum += val;
-        sum_sq += val * val;
-    }
-    float mean = sum / sample_count;
-    float rms = sqrt(sum_sq / sample_count);
-    ETHERVOX_LOG_DEBUG("[Piper] Audio stats: min=%.4f, max=%.4f, mean=%.6f, RMS=%.4f\n", 
-           min_val, max_val, mean, rms);
-    
     // Copy output
     *output_audio = (float*)malloc(sample_count * sizeof(float));
+    if (!*output_audio) {
+        free(dims);
+        g_ort_api->ReleaseTensorTypeAndShapeInfo(shape_info);
+        g_ort_api->ReleaseValue(output_tensor);
+        return -1;
+    }
+    
     memcpy(*output_audio, output_data, sample_count * sizeof(float));
     *output_sample_count = sample_count;
-    
-    // Debug: Print last 10 samples to verify ordering
-    printf("[Piper] Last 10 audio samples: [");
-    size_t start_idx = sample_count >= 10 ? sample_count - 10 : 0;
-    for (size_t i = start_idx; i < sample_count; i++) {
-        printf("%.4f%s", (*output_audio)[i], i < sample_count - 1 ? "," : "");
-    }
-    printf("]\n");
     
     free(dims);
     g_ort_api->ReleaseTensorTypeAndShapeInfo(shape_info);
     g_ort_api->ReleaseValue(output_tensor);
+    
+    return 0;
+}
+
+/**
+ * Run ONNX inference (simplified, no chunking)
+ * Used by synthesize_from_ipa for direct IPA input
+ */
+static int piper_infer(piper_context_t* ctx, 
+                       const int64_t* phoneme_ids,
+                       size_t phoneme_count,
+                       float** output_audio,
+                       size_t* output_sample_count) {
+    
+    if (!ctx->session) {
+        ETHERVOX_LOG_DEBUG("[Piper] Session not initialized");
+        return -1;
+    }
+    
+    // Single-pass inference
+    float* piper_audio = NULL;
+    size_t piper_sample_count = 0;
+    
+    if (piper_infer_chunk(ctx, phoneme_ids, phoneme_count, &piper_audio, &piper_sample_count) != 0) {
+        return -1;
+    }
+    
+    // Resample to 16kHz
+    float* resampled = NULL;
+    size_t resampled_count = 0;
+    
+    if (resample_audio(ctx->resampler, piper_audio, piper_sample_count, 
+                      &resampled, &resampled_count) != 0) {
+        free(piper_audio);
+        return -1;
+    }
+    free(piper_audio);
+    
+    *output_audio = resampled;
+    *output_sample_count = resampled_count;
     
     return 0;
 }
@@ -721,14 +807,6 @@ static int resample_audio(SpeexResamplerState* resampler,
     }
     
     *output_count = out_len;
-    
-    // Debug: Check first and last samples after resampling
-    printf("[Piper] After resampling: first sample=%.4f, last sample=%.4f, count=%u\n",
-           (*output)[0], (*output)[out_len-1], out_len);
-    
-    // Debug: Check samples at 25%, 50%, 75% to verify no reversal
-    printf("[Piper] Sample check - 25%%:%.4f, 50%%:%.4f, 75%%:%.4f\n",
-           (*output)[out_len/4], (*output)[out_len/2], (*output)[out_len*3/4]);
     
     return 0;
 }
@@ -910,7 +988,21 @@ ethervox_tts_context_t* ethervox_tts_piper_create(const ethervox_tts_config_t* c
     }
     
     ctx->initialized = true;
-    ETHERVOX_LOG_DEBUG("[Piper] Initialized (model: %s, language: %s)\n", config->model_path, ctx->piper_voice);
+    
+    // Initialize streaming state (sentence-level)
+    ctx->chunk_callback = config->chunk_callback;
+    ctx->callback_user_data = config->callback_user_data;
+    ctx->accumulated_audio = NULL;
+    ctx->accumulated_count = 0;
+    ctx->accumulated_capacity = 0;
+    
+    if (ctx->chunk_callback != NULL) {
+        printf("   🎙️  TTS streaming: ENABLED (sentence-level)\n");
+    }
+    
+    ETHERVOX_LOG_DEBUG("[Piper] Initialized (model: %s, language: %s, streaming: %s)\n", 
+           config->model_path, ctx->piper_voice,
+           (ctx->chunk_callback != NULL) ? "enabled" : "disabled");
     
     return (ethervox_tts_context_t*)ctx;
 }
@@ -924,42 +1016,101 @@ int ethervox_tts_piper_synthesize(ethervox_tts_context_t* ctx,
         return -1;
     }
     
-    // Convert text to phonemes
-    int64_t phoneme_ids[PIPER_MAX_PHONEMES];
-    size_t phoneme_count = 0;
+    // Split text into sentences for streaming
+    char sentences[32][512];  // Max 32 sentences, 512 chars each
+    int sentence_count = split_sentences(text, sentences, 32);
     
-    if (text_to_phonemes(piper, text, phoneme_ids, &phoneme_count) < 0) {
+    if (sentence_count == 0) {
+        ETHERVOX_LOG_DEBUG("[Piper] No sentences to synthesize");
         return -1;
     }
     
-    if (phoneme_count == 0) {
-        ETHERVOX_LOG_DEBUG("[Piper] No phonemes generated");
+    bool streaming_enabled = (piper->chunk_callback != NULL);
+    
+    if (streaming_enabled) {
+        printf("   🎙️  Sentence-level streaming: %d sentences\n", sentence_count);
+    }
+    
+    // Initialize accumulator for complete audio
+    if (!piper->accumulated_audio) {
+        piper->accumulated_capacity = 64000;
+        piper->accumulated_audio = (float*)malloc(piper->accumulated_capacity * sizeof(float));
+        if (!piper->accumulated_audio) {
+            ETHERVOX_LOG_ERROR("[Piper] Failed to allocate accumulator");
+            return -1;
+        }
+    }
+    piper->accumulated_count = 0;
+    
+    // Process each sentence
+    for (int i = 0; i < sentence_count; i++) {
+        if (streaming_enabled) {
+            printf("   📝 Sentence %d/%d: \"%s\"\n", i+1, sentence_count, sentences[i]);
+        }
+        
+        // Convert sentence to phonemes
+        int64_t phoneme_ids[PIPER_MAX_PHONEMES];
+        size_t phoneme_count = 0;
+        
+        if (text_to_phonemes(piper, sentences[i], phoneme_ids, &phoneme_count) < 0) {
+            ETHERVOX_LOG_ERROR("[Piper] Sentence %d phonemization failed", i+1);
+            continue;
+        }
+        
+        if (phoneme_count == 0) continue;
+        
+        // Synthesize sentence (full sequence, no phoneme chunking)
+        float* sentence_audio = NULL;
+        size_t sentence_sample_count = 0;
+        
+        if (piper_infer_chunk(piper, phoneme_ids, phoneme_count, 
+                             &sentence_audio, &sentence_sample_count) != 0) {
+            ETHERVOX_LOG_ERROR("[Piper] Sentence %d synthesis failed", i+1);
+            continue;
+        }
+        
+        // Resample to 16kHz
+        float* resampled = NULL;
+        size_t resampled_count = 0;
+        
+        if (resample_audio(piper->resampler, sentence_audio, sentence_sample_count,
+                          &resampled, &resampled_count) < 0) {
+            free(sentence_audio);
+            ETHERVOX_LOG_ERROR("[Piper] Sentence %d resampling failed", i+1);
+            continue;
+        }
+        free(sentence_audio);
+        
+        // Add to accumulator
+        if (append_to_accumulator(piper, resampled, resampled_count) != 0) {
+            free(resampled);
+            return -1;
+        }
+        
+        // Stream sentence to callback if enabled
+        if (streaming_enabled) {
+            printf("   ⏩ Streaming sentence %d: %zu samples (%.2fs)\n",
+                   i+1, resampled_count, (float)resampled_count / TARGET_SAMPLE_RATE);
+            piper->chunk_callback(resampled, resampled_count, piper->callback_user_data);
+        }
+        
+        free(resampled);
+    }
+    
+    if (streaming_enabled) {
+        printf("   ✅ Streaming complete: %d sentences, %zu total samples (%.2fs)\n",
+               sentence_count, piper->accumulated_count,
+               (float)piper->accumulated_count / TARGET_SAMPLE_RATE);
+    }
+    
+    // Return complete accumulated audio
+    output->samples = (float*)malloc(piper->accumulated_count * sizeof(float));
+    if (!output->samples) {
         return -1;
     }
     
-    // Run ONNX inference
-    float* piper_audio = NULL;
-    size_t piper_sample_count = 0;
-    
-    if (piper_infer(piper, phoneme_ids, phoneme_count, &piper_audio, &piper_sample_count) < 0) {
-        return -1;
-    }
-    
-    // Resample to 16kHz
-    float* resampled_audio = NULL;
-    size_t resampled_count = 0;
-    
-    if (resample_audio(piper->resampler, piper_audio, piper_sample_count, 
-                      &resampled_audio, &resampled_count) < 0) {
-        free(piper_audio);
-        return -1;
-    }
-    
-    free(piper_audio);
-    
-    // Fill output
-    output->samples = resampled_audio;
-    output->sample_count = resampled_count;
+    memcpy(output->samples, piper->accumulated_audio, piper->accumulated_count * sizeof(float));
+    output->sample_count = piper->accumulated_count;
     output->sample_rate = TARGET_SAMPLE_RATE;
     output->channels = 1;
     
@@ -988,6 +1139,10 @@ void ethervox_tts_piper_destroy(ethervox_tts_context_t* ctx) {
     
     if (piper->resampler) {
         speex_resampler_destroy(piper->resampler);
+    }
+    
+    if (piper->accumulated_audio) {
+        free(piper->accumulated_audio);
     }
     
     if (piper->memory_info) {

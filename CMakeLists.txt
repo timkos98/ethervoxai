@@ -430,6 +430,7 @@ set(COMMON_SOURCES
     src/config/settings.c
     src/audio/reference_buffer.c
     src/audio/aec_speex.c
+    src/audio/audio_stream_player.c
     src/tts/tts.c
     src/tts/text_normalizer.c
     src/tts/piper_backend.c
