@@ -186,8 +186,19 @@ static void draw_menu(menu_item_t* items, int item_count, int selected, int scro
         } else if (items[i].type == MENU_ITEM_FLOAT && items[i].value_ptr) {
             float* val = (float*)items[i].value_ptr;
             mvprintw(y, 40, "[%.2f]", *val);
-        } else if (items[i].type == MENU_ITEM_ACTION && items[i].action) {
-            mvprintw(y, 40, "→");
+        } else if (items[i].type == MENU_ITEM_ACTION) {
+            if (items[i].value_ptr && items[i].action) {
+                // Action with value - show value then arrow (e.g., voice selection)
+                char* str_val = (char*)items[i].value_ptr;
+                if (str_val && str_val[0]) {
+                    mvprintw(y, 40, "[%s] →", str_val);
+                } else {
+                    mvprintw(y, 40, "→");
+                }
+            } else if (items[i].action) {
+                // Action only - just show arrow
+                mvprintw(y, 40, "→");
+            }
         }
         
         if (i == selected) {
@@ -707,7 +718,7 @@ static int action_select_tts_voice(void* data) {
                 // Try to reload TTS immediately if callback is available
                 if (action_data->tts_reload_callback) {
                     printf("\n🔄 Reloading TTS with new voice...\n");
-                    if (action_data->tts_reload_callback(settings, action_data->tts_user_data) == 0) {
+                    if (action_data->tts_reload_callback(&settings->tts, action_data->tts_user_data) == 0) {
                         printf("✓ TTS reloaded successfully - new voice is active!\n");
                     } else {
                         printf("⚠️  TTS reload failed - restart may be required\n");
@@ -720,6 +731,52 @@ static int action_select_tts_voice(void* data) {
                 fgets(input, sizeof(input), stdin);
                 quit_selection = 1;
             } else if (strcmp(input, "q") == 0 || strcmp(input, "Q") == 0 || strcmp(input, "0") == 0) {
+                // Auto-select the currently highlighted voice before quitting
+                // This makes the UX more intuitive - navigating to a voice selects it
+                voice_option_t* selected = &voices[selected_idx];
+                
+                // Only update if the voice has changed
+                if (strcmp(voice_setting, selected->voice_id) != 0) {
+                    strncpy(voice_setting, selected->voice_id, 64 - 1);
+                    voice_setting[64 - 1] = '\0';
+                    
+                    // Update piper_model_path to match the selected voice
+                    const char* home = getenv("HOME");
+                    if (home) {
+                        snprintf(settings->tts.piper_model_path, sizeof(settings->tts.piper_model_path),
+                                "%s/.ethervox/models/piper/%s.onnx", home, selected->voice_id);
+                    }
+                    
+                    // Also update the deprecated global voice field (use English as default)
+                    if (lang_choice == 1) {
+                        strncpy(settings->tts.voice, selected->voice_id, sizeof(settings->tts.voice) - 1);
+                        settings->tts.voice[sizeof(settings->tts.voice) - 1] = '\0';
+                    }
+                    
+                    // Ensure piper engine is selected
+                    strncpy(settings->tts.engine, "piper", sizeof(settings->tts.engine) - 1);
+                    
+                    printf("\n✓ %s voice changed to: %s\n", lang_name, selected->display_name);
+                    printf("    Model path: %s\n", settings->tts.piper_model_path);
+                    
+                    // Save settings immediately
+                    if (ethervox_settings_save(settings, NULL) == 0) {
+                        printf("💾 Settings saved successfully\n");
+                    } else {
+                        printf("⚠️  Warning: Failed to save settings to disk\n");
+                    }
+                    
+                    // Try to reload TTS if callback is available
+                    if (action_data->tts_reload_callback) {
+                        printf("\n🔄 Reloading TTS with new voice...\n");
+                        if (action_data->tts_reload_callback(&settings->tts, action_data->tts_user_data) == 0) {
+                            printf("✓ TTS reloaded successfully - new voice is active!\n");
+                        } else {
+                            printf("⚠️  TTS reload failed - restart may be required\n");
+                        }
+                    }
+                }
+                
                 // Quit back to language menu
                 quit_selection = 1;
             } else if (input[0] == 't' || input[0] == 'T') {
@@ -1250,7 +1307,7 @@ int ethervox_settings_menu_show(ethervox_settings_t* settings, const char* model
             .label = "TTS Voice",
             .description = "Select language and voice quality (EN/ZH/DE high-quality)",
             .type = MENU_ITEM_ACTION,
-            .value_ptr = NULL,
+            .value_ptr = persistent.tts.voice_en,  // Show current English voice
             .action = action_select_tts_voice,
             .action_data = &voice_action_data
         },
