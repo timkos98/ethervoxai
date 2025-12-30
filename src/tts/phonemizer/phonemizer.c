@@ -80,10 +80,10 @@ phonemizer_t* phonemizer_create(const char* lang_code) {
         int total, community;
         float avg_conf;
         pronunciation_overrides_get_stats(ctx->overrides, &total, &community, &avg_conf);
-        printf("[Phonemizer] ✅ Loaded %d pronunciation overrides (%d community, avg confidence: %.2f)\n",
+         ETHERVOX_LOG_DEBUG("[Phonemizer] ✅ Loaded %d pronunciation overrides (%d community, avg confidence: %.2f)\n",
                total, community, avg_conf);
     } else {
-        printf("[Phonemizer] ⚠️  No pronunciation overrides loaded\n");
+         ETHERVOX_LOG_DEBUG("[Phonemizer] ⚠️  No pronunciation overrides loaded\n");
     }
     
     // Load dictionary for English

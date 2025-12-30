@@ -108,6 +108,13 @@ add_executable(test_mobile_optimization unit/test_mobile_optimization.c)
 target_link_libraries(test_mobile_optimization ethervoxai)
 target_include_directories(test_mobile_optimization PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME MobileOptimization COMMAND test_mobile_optimization)
+
+# Language detection tests (heuristic fallback for multilingual TTS)
+add_executable(test_language_detector unit/test_language_detector.c)
+target_link_libraries(test_language_detector ethervoxai)
+target_include_directories(test_language_detector PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME LanguageDetector COMMAND test_language_detector)
+set_tests_properties(LanguageDetector PROPERTIES TIMEOUT 30 LABELS "unit;language_detection")
 set_tests_properties(MobileOptimization PROPERTIES TIMEOUT 30 LABELS "unit;mobile")
 
 # Wake word detection tests

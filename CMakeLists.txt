@@ -426,6 +426,7 @@ set(COMMON_SOURCES
     src/common/error.c
     src/common/logging.c
     src/common/settings_menu.c
+    src/common/language_detector.c
     src/common/model_downloader.c
     src/config/settings.c
     src/audio/reference_buffer.c

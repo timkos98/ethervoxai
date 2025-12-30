@@ -62,6 +62,7 @@
 #include "ethervox/audio_recording.h"
 #include "ethervox/tts.h"
 #include "ethervox/audio_stream_player.h"
+#include "ethervox/language_detector.h"
 
 // External debug flag from logging.c (declared in config.h)
 // extern int g_ethervox_debug_enabled; // Already declared in config.h
@@ -324,7 +325,7 @@ static void* wake_word_listen_thread(void* arg) {
 #if defined(__APPLE__) || defined(__linux__)
 // Command completion for readline
 static const char* commands[] = {
-    "/help", "/test", "/testllm", "/testwhisper", "/optimize_tool_prompts", "/load", "/tools",
+    "/help", "/test", "/test_voices", "/testllm", "/testwhisper", "/optimize_tool_prompts", "/load", "/tools",
     "/search", "/summary", "/summarizeCache", "/export", "/archive", "/stats", "/startup", "/debug",
     "/markdown", "/toggle_tool_calls", "/clear", "/reset", "/paste", "/paths", "/setpath", "/safemode", "/secret",
     "/transcribe", "/stoptranscribe", "/setlang", "/translate",
@@ -536,6 +537,7 @@ static void print_help(void) {
     printf("  /config            View/manage persistent configuration (Whisper, conversation, wake word)\n");
     printf("  /report            Submit bug report or feature request to GitHub\n");
     printf("  /test              Run comprehensive integration tests\n");
+    printf("  /test_voices       Demonstrate all configured TTS voices\n");
     printf("  /testllm [name] [-v]  Run LLM tests, optionally filter by test name (-v for verbose)\n");
     printf("                      Examples: /testllm calculator, /testllm memory\n");
     printf("  /optimize_tool_prompts  Optimize tool prompts (incremental: only new tools, ~10s)\n");
@@ -2409,6 +2411,113 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         return;
     }
     
+    if (strcmp(line, "/test_voices") == 0 || strcmp(line, "/testvoices") == 0) {
+        printf("\n");
+        
+        if (!g_global_tts) {
+            fprintf(stderr, "❌ TTS not initialized. Check that Piper model is configured.\n");
+            fprintf(stderr, "   Run /settings to configure TTS engine.\n");
+            return;
+        }
+        
+        printf("🎭 Voice Demonstration Mode\n");
+        printf("═══════════════════════════════════════════════════════════\n\n");
+        
+        // Load settings to check configured voices
+        ethervox_persistent_settings_t test_settings = {0};
+        if (ethervox_settings_load(&test_settings, NULL) != 0) {
+            fprintf(stderr, "⚠️  Could not load settings, using defaults\n");
+        }
+        
+        // Test sentences for each language
+        typedef struct {
+            const char* lang_code;
+            const char* lang_name;
+            const char* text;
+            const char* voice_field;
+        } voice_test_t;
+        
+        voice_test_t tests[] = {
+            {"en", "English", "Hello! This is the English voice. Welcome to EthervoxAI.", 
+             test_settings.tts.voice_en},
+            {"de", "German", "Hallo! Das ist die deutsche Stimme. Willkommen bei EthervoxAI.", 
+             test_settings.tts.voice_de},
+            {"es", "Spanish", "¡Hola! Esta es la voz en español. Bienvenido a EthervoxAI.", 
+             test_settings.tts.voice_es},
+            {"zh", "Chinese", "你好！这是中文语音。欢迎使用EthervoxAI。", 
+             test_settings.tts.voice_zh}
+        };
+        
+        int total_tests = sizeof(tests) / sizeof(tests[0]);
+        int successful_tests = 0;
+        
+        printf("🎵 Using temp file playback\n\n");
+        
+        for (int i = 0; i < total_tests; i++) {
+            printf("─────────────────────────────────────────────────────────\n");
+            printf("Language: %s (%s)\n", tests[i].lang_name, tests[i].lang_code);
+            
+            // Check if voice is configured
+            if (!tests[i].voice_field || strlen(tests[i].voice_field) == 0) {
+                printf("⚠️  No voice configured in settings (skipping)\n\n");
+                continue;
+            }
+            
+            printf("Voice:    %s\n", tests[i].voice_field);
+            printf("Text:     \"%s\"\n\n", tests[i].text);
+            
+            // Detect language and switch voice
+            const char* detected_lang = ethervox_detect_and_switch_voice(
+                tests[i].text, NULL, (void**)&g_global_tts);
+            
+            if (strcmp(detected_lang, tests[i].lang_code) != 0) {
+                printf("⚠️  Expected %s but detected %s\n", tests[i].lang_code, detected_lang);
+            }
+            
+            // Synthesize
+            ethervox_tts_audio_t output = {0};
+            int result = ethervox_tts_synthesize_text(g_global_tts, tests[i].text, &output);
+            
+            if (result == 0 && output.samples && output.sample_count > 0) {
+                printf("✓ Synthesized %zu samples at %d Hz\n", 
+                       output.sample_count, output.sample_rate);
+                
+                // Play audio via temp file
+                printf("🔊 Playing...\n");
+                char temp_file[512];
+                snprintf(temp_file, sizeof(temp_file), "%s/.ethervox/temp_voice_test_%s.wav",
+                         getenv("HOME") ? getenv("HOME") : ".", tests[i].lang_code);
+                
+                if (ethervox_audio_write_wav(temp_file, output.samples, (int)output.sample_count,
+                                             output.sample_rate, output.channels) == 0) {
+#ifdef __APPLE__
+                    char cmd[600];
+                    snprintf(cmd, sizeof(cmd), "afplay %s", temp_file);
+                    system(cmd);
+#elif __linux__
+                    char cmd[600];
+                    snprintf(cmd, sizeof(cmd), "aplay %s 2>/dev/null", temp_file);
+                    system(cmd);
+#endif
+                    printf("✓ Playback complete\n\n");
+                    successful_tests++;
+                } else {
+                    fprintf(stderr, "❌ Failed to save/play audio\n\n");
+                }
+                
+                free(output.samples);
+            } else {
+                fprintf(stderr, "❌ Synthesis failed (error: %d)\n\n", result);
+            }
+        }
+        
+        // Summary
+        printf("═══════════════════════════════════════════════════════════\n");
+        printf("Voice Test Summary: %d/%d successful\n\n", successful_tests, total_tests);
+        
+        return;
+    }
+    
     if (strncmp(line, "/testllm", 8) == 0) {
         printf("\n");
         // Check for verbose flag and test name
@@ -2799,6 +2908,7 @@ int main(int argc, char** argv) {
     bool settings_mode = false;  // Settings mode: open settings menu before loading model
     bool tts_speak_mode = false;  // TTS-only mode: synthesize text and exit
     bool tts_speak_direct_mode = false;  // TTS-only mode: synthesize IPA and exit
+    bool tts_test_voices_mode = false;  // Test all configured TTS voices
     const char* tts_text = NULL;  // Text to synthesize in TTS mode
     const char* audio_file = NULL;  // Optional output file for -af flag
     
@@ -2888,6 +2998,10 @@ int main(int argc, char** argv) {
             tts_text = argv[++i];
             interactive = false;
             skip_startup_prompt = true;
+        } else if (strcmp(argv[i], "--test-voices") == 0 || strcmp(argv[i], "-test-voices") == 0) {
+            tts_test_voices_mode = true;
+            interactive = false;
+            skip_startup_prompt = true;
         } else if ((strcmp(argv[i], "--af") == 0 || strcmp(argv[i], "-af") == 0) && i + 1 < argc) {
             audio_file = argv[++i];
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
@@ -2910,6 +3024,7 @@ int main(int argc, char** argv) {
             printf("  -optimize_tool_prompts  Optimize tool prompts (engineering mode + /optimize_tool_prompts)\n");
             printf("  -speak <text>      TTS-only mode: synthesize text with streaming playback\n");
             printf("  -speak-direct <ipa>  TTS-only mode: synthesize IPA phonemes directly (no phonemizer)\n");
+            printf("  -test-voices       Demonstrate all configured TTS voices\n");
             printf("  -af <file>         Save audio output to file (use with -speak/-speak-direct)\n");
             printf("  -help, -h          Show this help message\n");
             printf("\n");
@@ -3182,6 +3297,14 @@ int main(int argc, char** argv) {
         
         printf("\n🔊 TTS-only mode: %s\n", tts_speak_direct_mode ? "Direct IPA" : "Text");
         printf("   Input: \"%s\"\n", tts_text);
+        
+        // Detect language and switch voice if needed (skip for IPA direct mode)
+        const char* detected_lang = "en";
+        if (!tts_speak_direct_mode) {
+            detected_lang = ethervox_detect_and_switch_voice(tts_text, NULL, (void**)&g_global_tts);
+            printf("   Language: %s\n", detected_lang);
+        }
+        
         if (audio_file) {
             printf("   Output: %s (batch mode)\n", audio_file);
         } else {
@@ -3268,6 +3391,148 @@ int main(int argc, char** argv) {
         }
         ethervox_memory_cleanup(&memory);
         return result == 0 ? 0 : 1;
+    }
+    
+    // Test voices mode: demonstrate all configured voices
+    if (tts_test_voices_mode) {
+        if (!g_global_tts) {
+            fprintf(stderr, "❌ TTS not initialized. Check that Piper model is configured.\n");
+            fprintf(stderr, "   Run with -settings to configure TTS engine.\n");
+            ethervox_memory_cleanup(&memory);
+            return 1;
+        }
+        
+        printf("\n🎭 Voice Demonstration Mode\n");
+        printf("═══════════════════════════════════════════════════════════\n\n");
+        
+        // Load settings to check configured voices
+        ethervox_persistent_settings_t test_settings = {0};
+        if (ethervox_settings_load(&test_settings, NULL) != 0) {
+            fprintf(stderr, "⚠️  Could not load settings, using defaults\n");
+        }
+        
+        // Start streaming player if available
+        bool using_streaming = false;
+        if (g_stream_player) {
+            if (audio_stream_player_start(g_stream_player) == 0) {
+                using_streaming = true;
+                printf("🎵 Using streaming audio playback\n\n");
+            } else {
+                audio_stream_player_destroy(g_stream_player);
+                g_stream_player = NULL;
+                printf("🎵 Using temp file playback\n\n");
+            }
+        } else {
+            printf("🎵 Using temp file playback\n\n");
+        }
+        
+        // Test sentences for each language
+        typedef struct {
+            const char* lang_code;
+            const char* lang_name;
+            const char* text;
+            const char* voice_field;
+        } voice_test_t;
+        
+        voice_test_t tests[] = {
+            {"en", "English", "Hello! This is the English voice. Welcome to EthervoxAI.", 
+             test_settings.tts.voice_en},
+            {"de", "German", "Hallo! Das ist die deutsche Stimme. Willkommen bei EthervoxAI.", 
+             test_settings.tts.voice_de},
+            {"es", "Spanish", "¡Hola! Esta es la voz en español. Bienvenido a EthervoxAI.", 
+             test_settings.tts.voice_es},
+            {"zh", "Chinese", "你好！这是中文语音。欢迎使用EthervoxAI。", 
+             test_settings.tts.voice_zh}
+        };
+        
+        int total_tests = sizeof(tests) / sizeof(tests[0]);
+        int successful_tests = 0;
+        
+        for (int i = 0; i < total_tests; i++) {
+            printf("─────────────────────────────────────────────────────────\n");
+            printf("Language: %s (%s)\n", tests[i].lang_name, tests[i].lang_code);
+            
+            // Check if voice is configured
+            if (!tests[i].voice_field || strlen(tests[i].voice_field) == 0) {
+                printf("⚠️  No voice configured in settings (skipping)\n\n");
+                continue;
+            }
+            
+            printf("Voice:    %s\n", tests[i].voice_field);
+            printf("Text:     \"%s\"\n\n", tests[i].text);
+            
+            // Detect language and switch voice
+            const char* detected_lang = ethervox_detect_and_switch_voice(
+                tests[i].text, NULL, (void**)&g_global_tts);
+            
+            if (strcmp(detected_lang, tests[i].lang_code) != 0) {
+                printf("⚠️  Expected %s but detected %s\n", tests[i].lang_code, detected_lang);
+            }
+            
+            // Synthesize
+            ethervox_tts_audio_t output = {0};
+            int result = ethervox_tts_synthesize_text(g_global_tts, tests[i].text, &output);
+            
+            if (result == 0 && output.samples && output.sample_count > 0) {
+                printf("✓ Synthesized %zu samples at %d Hz\n", 
+                       output.sample_count, output.sample_rate);
+                
+                // Play audio
+                printf("🔊 Playing...\n");
+                
+                if (using_streaming && g_stream_player) {
+                    // Wait for streaming playback
+                    if (audio_stream_player_wait(g_stream_player) == 0) {
+                        printf("✓ Playback complete\n\n");
+                        successful_tests++;
+                    } else {
+                        fprintf(stderr, "❌ Streaming playback error\n\n");
+                    }
+                } else {
+                    // Fallback to temp file
+                    char temp_file[512];
+                    snprintf(temp_file, sizeof(temp_file), "%s/.ethervox/temp_voice_test_%s.wav",
+                             getenv("HOME") ? getenv("HOME") : ".", tests[i].lang_code);
+                    
+                    if (ethervox_audio_write_wav(temp_file, output.samples, (int)output.sample_count,
+                                                 output.sample_rate, output.channels) == 0) {
+#ifdef __APPLE__
+                        char cmd[600];
+                        snprintf(cmd, sizeof(cmd), "afplay %s", temp_file);
+                        system(cmd);
+#elif __linux__
+                        char cmd[600];
+                        snprintf(cmd, sizeof(cmd), "aplay %s 2>/dev/null", temp_file);
+                        system(cmd);
+#endif
+                        printf("✓ Playback complete\n\n");
+                        successful_tests++;
+                    } else {
+                        fprintf(stderr, "❌ Failed to save/play audio\n\n");
+                    }
+                }
+                
+                free(output.samples);
+            } else {
+                fprintf(stderr, "❌ Synthesis failed (error: %d)\n\n", result);
+            }
+        }
+        
+        // Summary
+        printf("═══════════════════════════════════════════════════════════\n");
+        printf("Voice Test Summary: %d/%d successful\n\n", successful_tests, total_tests);
+        
+        // Cleanup
+        if (g_stream_player) {
+            audio_stream_player_destroy(g_stream_player);
+            g_stream_player = NULL;
+        }
+        if (g_global_tts) {
+            ethervox_tts_destroy(g_global_tts);
+            g_global_tts = NULL;
+        }
+        ethervox_memory_cleanup(&memory);
+        return successful_tests == total_tests ? 0 : 1;
     }
     
     // Initialize Governor

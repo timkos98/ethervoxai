@@ -9,6 +9,8 @@
 #include "ethervox/conversation.h"
 #include "ethervox/conversation_tools.h"
 #include "ethervox/logging.h"
+#include "ethervox/language_detector.h"
+#include "ethervox/dialogue.h"
 #include "ethervox/error.h"
 #include "ethervox/governor.h"
 #include "ethervox/stt.h"
@@ -95,6 +97,9 @@ struct ethervox_conversation_session {
     // Always-listening mode (desktop only)
     bool always_listening;
     char* pending_transcription;  // Buffer for continuous transcription
+    
+    // Language detection for multilingual TTS
+    char last_detected_language[8];  // Last detected language code ("en", "de", "zh", "es")
 };
 
 /**
@@ -127,9 +132,16 @@ static int conversation_on_speak(const char* text, bool wait_for_response,
     session->state = ETHERVOX_CONV_STATE_SPEAKING;
     pthread_mutex_unlock(&session->mutex);
     
+    // Detect language and switch TTS voice if needed (reusable function)
+    const char* detected_language = ethervox_detect_and_switch_voice(
+        text,
+        session->last_detected_language,
+        (void**)&session->tts_context
+    );
+    
     // Print to console
     printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-    printf("🤖 Assistant: %s\n", text);
+    printf("🤖 Assistant [%s]: %s\n", detected_language, text);
     printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
     
     // Synthesize and play audio with Piper TTS
@@ -315,6 +327,16 @@ static int conversation_on_listen(char** user_input, int timeout_ms,
                 // Got final transcription
                 *user_input = strdup(stt_result.text);
                 ETHERVOX_LOG_INFO("Transcribed from listen tool: %s", *user_input);
+                
+                // Capture detected language from Whisper STT for multilingual TTS
+                if (stt_result.language && strlen(stt_result.language) > 0) {
+                    strncpy(session->last_detected_language, stt_result.language, 
+                           sizeof(session->last_detected_language) - 1);
+                    session->last_detected_language[sizeof(session->last_detected_language) - 1] = '\0';
+                    ETHERVOX_LOG_INFO("[Language Detection] STT detected language: %s", 
+                                     session->last_detected_language);
+                }
+                
                 printf(" ✓\n");
                 ethervox_audio_buffer_free(&audio_chunk);
                 return 0;
@@ -329,6 +351,15 @@ static int conversation_on_listen(char** user_input, int timeout_ms,
                     if (final_result.text && strlen(final_result.text) > 0) {
                         *user_input = strdup(final_result.text);
                         ETHERVOX_LOG_INFO("Finalized transcription: %s", *user_input);
+                        
+                        // Capture detected language
+                        if (final_result.language && strlen(final_result.language) > 0) {
+                            strncpy(session->last_detected_language, final_result.language,
+                                   sizeof(session->last_detected_language) - 1);
+                            session->last_detected_language[sizeof(session->last_detected_language) - 1] = '\0';
+                            ETHERVOX_LOG_INFO("[Language Detection] Finalized STT language: %s",
+                                             session->last_detected_language);
+                        }
                     }
                 }
                 ethervox_audio_buffer_free(&audio_chunk);
@@ -580,6 +611,15 @@ static void* conversation_thread(void* arg) {
                         strncpy(recognized_text, stt_result.text, sizeof(recognized_text) - 1);
                         speech_detected = true;
                         printf("\r✓ Final: %s\n", stt_result.text);
+                        
+                        // Capture detected language from Whisper
+                        if (stt_result.language && strlen(stt_result.language) > 0) {
+                            strncpy(session->last_detected_language, stt_result.language,
+                                   sizeof(session->last_detected_language) - 1);
+                            session->last_detected_language[sizeof(session->last_detected_language) - 1] = '\0';
+                            ETHERVOX_LOG_INFO("[Language Detection] Whisper detected: %s",
+                                             session->last_detected_language);
+                        }
                     }
                 }
                 
@@ -787,6 +827,9 @@ ethervox_conversation_session_t* ethervox_conversation_init(
     // Always-listening mode
     session->always_listening = config->always_listening;
     session->pending_transcription = NULL;
+    
+    // Language detection
+    session->last_detected_language[0] = '\0';  // Initialize to empty (use fallback detection)
     
     // Initialize TTS (Piper backend)
     session->tts_initialized = false;
