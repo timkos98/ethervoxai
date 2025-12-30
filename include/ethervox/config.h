@@ -324,7 +324,7 @@ extern "C" {
 #endif
 
 #ifndef ETHERVOX_GOVERNOR_MAX_TOKENS_PER_ITERATION
-#define ETHERVOX_GOVERNOR_MAX_TOKENS_PER_ITERATION 64  // Very concise responses - most tool calls are <20 tokens
+#define ETHERVOX_GOVERNOR_MAX_TOKENS_PER_ITERATION 512
 #endif
 
 #ifndef ETHERVOX_GOVERNOR_USE_MMAP

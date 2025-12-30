@@ -408,7 +408,7 @@ static int reload_model_callback(const char* model_path, void* user_data) {
 // TTS reload callback for settings menu
 static int tts_reload_callback(const void* tts_settings, void* user_data) {
     (void)user_data; // Unused
-    return ethervox_reload_global_tts(tts_settings);
+    return ethervox_reload_global_tts(tts_settings, NULL, NULL);
 }
 
 // Helper function to initialize ethervox_settings_t for the menu
@@ -3247,8 +3247,10 @@ int main(int argc, char** argv) {
     
     // Initialize global TTS system at startup
     // This allows the speak tool to work immediately without requiring /convon
+    // For -speak mode, delay TTS init until after language detection
     if (strcmp(g_settings.tts.engine, "piper") == 0 &&
-        strlen(g_settings.tts.piper_model_path) > 0) {
+        strlen(g_settings.tts.piper_model_path) > 0 &&
+        !tts_speak_mode && !tts_speak_direct_mode) {
         
         pthread_mutex_lock(&g_tts_mutex);
         
@@ -3258,9 +3260,66 @@ int main(int argc, char** argv) {
         tts_config.speaking_rate = g_settings.tts.speed;
         tts_config.phoneme_variance = g_settings.tts.phoneme_variance;
         tts_config.prosody_variance = g_settings.tts.prosody_variance;
+        tts_config.chunk_callback = NULL;
+        tts_config.callback_user_data = NULL;
         
-        // For -speak mode without -af, enable real-time streaming playback
-        if ((tts_speak_mode || tts_speak_direct_mode) && !audio_file) {
+        g_global_tts = ethervox_tts_create(&tts_config);
+        
+        pthread_mutex_unlock(&g_tts_mutex);
+        
+        if (g_global_tts) {
+            if (g_debug_enabled) {
+                printf("Global TTS: Initialized with model: %s\n", g_settings.tts.piper_model_path);
+            }
+        } else {
+            fprintf(stderr, "Warning: Failed to initialize global TTS\n");
+        }
+    } else if (g_debug_enabled && !tts_speak_mode && !tts_speak_direct_mode) {
+        printf("Global TTS: Skipped (no Piper model configured)\n");
+    }
+    
+    // TTS-only modes: synthesize and exit without loading governor
+    if (tts_speak_mode || tts_speak_direct_mode) {
+        printf("\n🔊 TTS-only mode: %s\n", tts_speak_direct_mode ? "Direct IPA" : "Text");
+        printf("   Input: \"%s\"\n", tts_text);
+        
+        // Detect language and switch voice if needed (skip for IPA direct mode)
+        const char* detected_lang = "en";
+        if (!tts_speak_direct_mode) {
+            // Detect language but don't reload TTS yet (it's not created)
+            detected_lang = ethervox_detect_language(tts_text);
+            printf("   Language: %s\n", detected_lang);
+            
+            // Load settings and update model path for detected language
+            ethervox_persistent_settings_t temp_settings;
+            if (ethervox_settings_load(&temp_settings, NULL) == 0) {
+                const char* target_voice = ethervox_get_voice_for_language(detected_lang, &temp_settings);
+                if (target_voice) {
+                    const char* home = getenv("HOME");
+                    if (home) {
+                        snprintf(temp_settings.tts.piper_model_path,
+                                sizeof(temp_settings.tts.piper_model_path),
+                                "%s/.ethervox/models/piper/%s.onnx",
+                                home, target_voice);
+                    }
+                    // Update global settings for TTS creation
+                    g_settings = temp_settings;
+                }
+            }
+        }
+        
+        // Now create TTS with correct voice and streaming callback if needed
+        pthread_mutex_lock(&g_tts_mutex);
+        
+        ethervox_tts_config_t tts_config = ethervox_tts_default_config();
+        tts_config.backend = ETHERVOX_TTS_BACKEND_PIPER;
+        tts_config.model_path = g_settings.tts.piper_model_path;
+        tts_config.speaking_rate = g_settings.tts.speed;
+        tts_config.phoneme_variance = g_settings.tts.phoneme_variance;
+        tts_config.prosody_variance = g_settings.tts.prosody_variance;
+        
+        // For streaming mode (no -af file), set up callback
+        if (!audio_file) {
             g_stream_player = audio_stream_player_create(16000, 1);
             if (g_stream_player) {
                 tts_config.chunk_callback = tts_stream_callback;
@@ -3275,34 +3334,11 @@ int main(int argc, char** argv) {
         
         pthread_mutex_unlock(&g_tts_mutex);
         
-        if (g_global_tts) {
-            if (g_debug_enabled) {
-                printf("Global TTS: Initialized with model: %s\n", g_settings.tts.piper_model_path);
-            }
-        } else {
-            fprintf(stderr, "Warning: Failed to initialize global TTS\n");
-        }
-    } else if (g_debug_enabled) {
-        printf("Global TTS: Skipped (no Piper model configured)\n");
-    }
-    
-    // TTS-only modes: synthesize and exit without loading governor
-    if (tts_speak_mode || tts_speak_direct_mode) {
         if (!g_global_tts) {
             fprintf(stderr, "❌ TTS not initialized. Check that Piper model is configured.\n");
             fprintf(stderr, "   Run with -settings to configure TTS engine.\n");
             ethervox_memory_cleanup(&memory);
             return 1;
-        }
-        
-        printf("\n🔊 TTS-only mode: %s\n", tts_speak_direct_mode ? "Direct IPA" : "Text");
-        printf("   Input: \"%s\"\n", tts_text);
-        
-        // Detect language and switch voice if needed (skip for IPA direct mode)
-        const char* detected_lang = "en";
-        if (!tts_speak_direct_mode) {
-            detected_lang = ethervox_detect_and_switch_voice(tts_text, NULL, (void**)&g_global_tts);
-            printf("   Language: %s\n", detected_lang);
         }
         
         if (audio_file) {

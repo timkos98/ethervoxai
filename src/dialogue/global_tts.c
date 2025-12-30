@@ -20,7 +20,9 @@ ethervox_tts_context_t* ethervox_get_global_tts(void) {
     return g_global_tts;
 }
 
-int ethervox_reload_global_tts(const void* tts_settings) {
+int ethervox_reload_global_tts(const void* tts_settings,
+                               void (*chunk_callback)(const float*, size_t, void*),
+                               void* callback_user_data) {
     if (!tts_settings) {
         ETHERVOX_LOG_ERROR("[TTS Reload] NULL settings provided");
         return -1;
@@ -48,7 +50,9 @@ int ethervox_reload_global_tts(const void* tts_settings) {
         .channels = 1,
         .speaking_rate = settings->speed,
         .phoneme_variance = settings->phoneme_variance,
-        .prosody_variance = settings->prosody_variance
+        .prosody_variance = settings->prosody_variance,
+        .chunk_callback = chunk_callback,
+        .callback_user_data = callback_user_data
     };
     
     ETHERVOX_LOG_DEBUG("[TTS Reload] Creating new TTS instance with model: %s",

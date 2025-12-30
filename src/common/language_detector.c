@@ -79,7 +79,7 @@ const char* ethervox_detect_language(const char* text) {
     const char* german_words[] = {"ich", "und", "der", "die", "das", "ist", "nicht", "sich", 
                                    "auf", "für", "mit", "nach", "bei", "über", "möchte", "guten",
                                    "auch", "kann", "jetzt", "hallo", "wie", "von", "es", "wir",
-                                   "sehr", "gut", "bin", "haben", "werden", "war", NULL};
+                                   "sehr", "gut", "bin", "haben", "werden", "war", "dich", NULL};
     int german_word_count = 0;
     for (const char** word = german_words; *word != NULL; word++) {
         if (strstr(text, *word) != NULL) {
@@ -244,7 +244,7 @@ const char* ethervox_detect_and_switch_voice(const char* text,
         ETHERVOX_LOG_DEBUG("[Language Switch] New model path: %s", settings.tts.piper_model_path);
         
         // Reload TTS with new voice
-        if (ethervox_reload_global_tts(&settings.tts) == 0) {
+        if (ethervox_reload_global_tts(&settings.tts, NULL, NULL) == 0) {
             ETHERVOX_LOG_INFO("[Language Switch] ✅ TTS reloaded with %s voice", detected_language);
             
             // Update caller's TTS context pointer if provided

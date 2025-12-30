@@ -235,9 +235,13 @@ ethervox_tts_context_t* ethervox_get_global_tts(void);
 /**
  * Reload the global TTS instance with new settings
  * @param tts_settings New TTS settings to apply
+ * @param chunk_callback Optional audio chunk callback for streaming (NULL to disable)
+ * @param callback_user_data User data to pass to callback
  * @return 0 on success, -1 on failure
  */
-int ethervox_reload_global_tts(const void* tts_settings);
+int ethervox_reload_global_tts(const void* tts_settings,
+                               void (*chunk_callback)(const float*, size_t, void*),
+                               void* callback_user_data);
 #ifdef __cplusplus
 }
 #endif
