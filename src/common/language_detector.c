@@ -87,6 +87,17 @@ const char* ethervox_detect_language(const char* text) {
         }
     }
     
+    // Check for common Spanish words
+    const char* spanish_words[] = {"hola", "esta", "bienvenido", "gracias", "señor", "señora",
+                                    "donde", "cuando", "como", "porque", "también", "español",
+                                    "que", "con", "para", "por", "una", "hacer", "todo", "bueno", NULL};
+    int spanish_word_count = 0;
+    for (const char** word = spanish_words; *word != NULL; word++) {
+        if (strstr(text, *word) != NULL) {
+            spanish_word_count++;
+        }
+    }
+    
     const char* ptr = text;
     while (*ptr) {
         unsigned int codepoint = decode_utf8(&ptr);
@@ -131,8 +142,8 @@ const char* ethervox_detect_language(const char* text) {
         return "de";
     }
     
-    // Spanish markers (inverted punctuation is very distinctive)
-    if (spanish_markers > 0 && (spanish_markers * 100 / total_chars) > 3) {
+    // Spanish detection: markers OR 2+ common Spanish words
+    if (spanish_markers > 0 || spanish_word_count >= 2) {
         return "es";
     }
     

@@ -16,6 +16,9 @@
 #include "chinese_segmenter.h"
 #include "pronunciation_overrides.h"
 #include "stress_reduction.h"
+#include "data/espeak_dict_en_us.h"
+#include "data/espeak_dict_de.h"
+#include "data/espeak_dict_es_419.h"
 #include "ethervox/logging.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -57,6 +60,10 @@ static phonemizer_language_t parse_language_code(const char* code) {
     }
     if (strncmp(code, "es-mx", 5) == 0 || strncmp(code, "es_mx", 5) == 0) {
         return PHONEMIZER_LANG_ES_MX;
+    }
+    if (strncmp(code, "es-419", 6) == 0 || strncmp(code, "es_419", 6) == 0 ||
+        strncmp(code, "es", 2) == 0) {  // Generic Spanish
+        return PHONEMIZER_LANG_ES_419;
     }
     
     return PHONEMIZER_LANG_UNKNOWN;
@@ -270,9 +277,10 @@ static int phonemize_chinese(phonemizer_t* ctx, const char* text, char* ipa_outp
 }
 
 /**
- * Phonemize German text using rules
+ * Phonemize German text using espeak dictionary + fallback rules
+ * Matches English phonemization structure for consistency
  */
-static int phonemize_german(const char* text, char* ipa_output, size_t max_len) {
+static int phonemize_german(phonemizer_t* ctx, const char* text, char* ipa_output, size_t max_len) {
     ipa_output[0] = '\0';
     
     // Tokenize text into words (same as English)
@@ -283,9 +291,12 @@ static int phonemize_german(const char* text, char* ipa_output, size_t max_len) 
         return -1;
     }
     
-    // Process each word with German G2P rules
+    ETHERVOX_LOG_DEBUG("[Phonemizer DEBUG] Processing %d German tokens from text: '%s'\n", token_count, text);
+    
+    // Process each word
     for (int i = 0; i < token_count; i++) {
         char word_ipa[MAX_ARPABET_LENGTH];
+        int found = 0;
         
         // Check if this token is punctuation
         if (strlen(tokens[i]) == 1 && ispunct(tokens[i][0])) {
@@ -298,9 +309,49 @@ static int phonemize_german(const char* text, char* ipa_output, size_t max_len) 
             continue;
         }
         
-        if (apply_german_g2p_rules(tokens[i], word_ipa, MAX_ARPABET_LENGTH) != 0) {
-            ETHERVOX_LOG_ERROR("Failed to phonemize German: %s\n", tokens[i]);
-            continue;
+        // Priority 1: User pronunciation overrides
+        pronunciation_override_t override;
+        if (ctx->overrides && 
+            pronunciation_overrides_lookup(ctx->overrides, tokens[i], &override) == 0) {
+            
+            ETHERVOX_LOG_DEBUG("[Phonemizer] 🎯 Override found for '%s': ipa='%s' (confidence=%.3f)\n", 
+                    tokens[i], override.ipa, override.confidence);
+            
+            if (strlen(override.ipa) > 0) {
+                strncpy(word_ipa, override.ipa, MAX_ARPABET_LENGTH - 1);
+                word_ipa[MAX_ARPABET_LENGTH - 1] = '\0';
+                found = 1;
+                ETHERVOX_LOG_DEBUG("[Phonemizer] Using IPA from override: '%s'\n", word_ipa);
+            }
+            
+            pronunciation_overrides_record_usage(ctx->overrides, tokens[i]);
+        }
+        
+        // Priority 2: Espeak dictionary (high-quality pre-trained pronunciations)
+        #ifdef ESPEAK_DICT_DE_ENABLED
+        if (!found) {
+            char espeak_ipa[256];
+            ETHERVOX_LOG_DEBUG("[Phonemizer] 📚 Searching de espeak dict (%zu entries)...", espeak_dict_de_size);
+            if (espeak_dict_lookup(espeak_dict_de, espeak_dict_de_size,
+                                  tokens[i], espeak_ipa, sizeof(espeak_ipa)) == 0) {
+                strncpy(word_ipa, espeak_ipa, MAX_ARPABET_LENGTH - 1);
+                word_ipa[MAX_ARPABET_LENGTH - 1] = '\0';
+                found = 1;
+                ETHERVOX_LOG_DEBUG("[Phonemizer] ✅ Espeak dict (de): '%s' → '%s'", tokens[i], word_ipa);
+            } else {
+                ETHERVOX_LOG_DEBUG("[Phonemizer] ❌ Not found in de espeak dict: '%s'", tokens[i]);
+            }
+        }
+        #endif
+        
+        // Priority 3: German G2P rules (fallback)
+        if (!found) {
+            if (apply_german_g2p_rules(tokens[i], word_ipa, MAX_ARPABET_LENGTH) != 0) {
+                ETHERVOX_LOG_ERROR("[Phonemizer] Failed to phonemize German: %s\n", tokens[i]);
+                continue;
+            } else {
+                ETHERVOX_LOG_DEBUG("[Phonemizer] G2P rules produced '%s' → '%s'\n", tokens[i], word_ipa);
+            }
         }
         
         // Append to output with word boundary space
@@ -309,6 +360,99 @@ static int phonemize_german(const char* text, char* ipa_output, size_t max_len) 
         
         if (current_len + word_len + 4 > max_len) {
             fprintf(stderr, "German IPA output buffer overflow\n");
+            return -1;
+        }
+        
+        if (current_len > 0) {
+            strcat(ipa_output, " ");  // Word boundary
+        }
+        strcat(ipa_output, word_ipa);
+    }
+    
+    return 0;
+}
+
+/**
+ * Phonemize Spanish text using espeak dictionary
+ * Spanish is mostly phonetic, so espeak dictionary should cover most words
+ */
+static int phonemize_spanish(phonemizer_t* ctx, const char* text, char* ipa_output, size_t max_len) {
+    ipa_output[0] = '\0';
+    
+    // Tokenize text into words (same as English/German)
+    char tokens[MAX_TOKENS][MAX_TOKEN_LENGTH];
+    int token_count = tokenize_text(text, tokens, MAX_TOKENS);
+    
+    if (token_count == 0) {
+        return -1;
+    }
+    
+    ETHERVOX_LOG_DEBUG("[Phonemizer DEBUG] Processing %d Spanish tokens from text: '%s'\n", token_count, text);
+    
+    // Process each word
+    for (int i = 0; i < token_count; i++) {
+        char word_ipa[MAX_ARPABET_LENGTH];
+        int found = 0;
+        
+        // Check if this token is punctuation
+        if (strlen(tokens[i]) == 1 && ispunct(tokens[i][0])) {
+            // Pass punctuation through directly - Piper uses it for pauses
+            size_t current_len = strlen(ipa_output);
+            if (current_len + 3 < max_len) {
+                if (current_len > 0) strcat(ipa_output, " ");
+                strcat(ipa_output, tokens[i]);
+            }
+            continue;
+        }
+        
+        // Priority 1: User pronunciation overrides
+        pronunciation_override_t override;
+        if (ctx->overrides && 
+            pronunciation_overrides_lookup(ctx->overrides, tokens[i], &override) == 0) {
+            
+            ETHERVOX_LOG_DEBUG("[Phonemizer] 🎯 Override found for '%s': ipa='%s' (confidence=%.3f)\n", 
+                    tokens[i], override.ipa, override.confidence);
+            
+            if (strlen(override.ipa) > 0) {
+                strncpy(word_ipa, override.ipa, MAX_ARPABET_LENGTH - 1);
+                word_ipa[MAX_ARPABET_LENGTH - 1] = '\0';
+                found = 1;
+                ETHERVOX_LOG_DEBUG("[Phonemizer] Using IPA from override: '%s'\n", word_ipa);
+            }
+            
+            pronunciation_overrides_record_usage(ctx->overrides, tokens[i]);
+        }
+        
+        // Priority 2: Espeak dictionary (high-quality pre-trained pronunciations)
+        #ifdef ESPEAK_DICT_ES_419_ENABLED
+        if (!found) {
+            char espeak_ipa[256];
+            ETHERVOX_LOG_DEBUG("[Phonemizer] 📚 Searching es espeak dict (%zu entries)...", espeak_dict_es_419_size);
+            if (espeak_dict_lookup(espeak_dict_es_419, espeak_dict_es_419_size,
+                                  tokens[i], espeak_ipa, sizeof(espeak_ipa)) == 0) {
+                strncpy(word_ipa, espeak_ipa, MAX_ARPABET_LENGTH - 1);
+                word_ipa[MAX_ARPABET_LENGTH - 1] = '\0';
+                found = 1;
+                ETHERVOX_LOG_DEBUG("[Phonemizer] ✅ Espeak dict (es): '%s' → '%s'", tokens[i], word_ipa);
+            } else {
+                ETHERVOX_LOG_DEBUG("[Phonemizer] ❌ Not found in es espeak dict: '%s'", tokens[i]);
+            }
+        }
+        #endif
+        
+        // Priority 3: Spanish is mostly phonetic, so if not in dict, log error
+        if (!found) {
+            ETHERVOX_LOG_ERROR("[Phonemizer] Spanish word not in dictionary (no G2P fallback yet): %s\n", tokens[i]);
+            // For now, skip unknown words rather than failing completely
+            continue;
+        }
+        
+        // Append to output with word boundary space
+        size_t current_len = strlen(ipa_output);
+        size_t word_len = strlen(word_ipa);
+        
+        if (current_len + word_len + 4 > max_len) {
+            fprintf(stderr, "Spanish IPA output buffer overflow\n");
             return -1;
         }
         
@@ -332,13 +476,16 @@ int phonemizer_text_to_ipa(phonemizer_t* ctx, const char* text, char* ipa_output
     }
     
     if (ctx->language == PHONEMIZER_LANG_DE_DE) {
-        return phonemize_german(text, ipa_output, max_len);
+        return phonemize_german(ctx, text, ipa_output, max_len);
     }
     
-    if (ctx->language != PHONEMIZER_LANG_EN_US && ctx->language != PHONEMIZER_LANG_EN_GB) {
-        fprintf(stderr, "Language not yet implemented\n");
-        return -1;
+    if (ctx->language == PHONEMIZER_LANG_ES_MX || ctx->language == PHONEMIZER_LANG_ES_419) {
+        return phonemize_spanish(ctx, text, ipa_output, max_len);
     }
+    
+    // English (EN_US, EN_GB) continues below with the original implementation
+    // Language dispatch based on phonemizer context
+    // Each language has its own phonemization function
     
     // Tokenize text into words
     char tokens[MAX_TOKENS][MAX_TOKEN_LENGTH];

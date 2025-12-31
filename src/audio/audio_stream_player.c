@@ -190,12 +190,30 @@ int audio_stream_player_write(audio_stream_player_t* player,
 int audio_stream_player_wait(audio_stream_player_t* player) {
     if (!player || !player->started) return -1;
     
-    // Wait until all buffers are played
+    // Wait until all buffers are played by the AudioQueue
     pthread_mutex_lock(&player->mutex);
     while (player->buffers_in_use > 0) {
-        pthread_cond_wait(&player->buffer_available, &player->mutex);
+        // Use timed wait to prevent indefinite hang if callback missed
+        struct timespec timeout;
+        clock_gettime(CLOCK_REALTIME, &timeout);
+        timeout.tv_sec += 5;  // 5 second timeout
+        
+        int result = pthread_cond_timedwait(&player->buffer_available, &player->mutex, &timeout);
+        if (result == ETIMEDOUT) {
+            ETHERVOX_LOG_ERROR("[AudioStream] Wait timeout - %d buffers still in use", player->buffers_in_use);
+            break;
+        }
     }
     pthread_mutex_unlock(&player->mutex);
+    
+    // Stop the queue gracefully (immediate=false lets queued audio finish)
+    AudioQueueStop(player->queue, false);
+    
+    // Calculate how long the last buffer should take to play
+    // Buffer size is BUFFER_SIZE samples at sample_rate Hz
+    float buffer_duration = (float)BUFFER_SIZE / (float)player->sample_rate;
+    int wait_us = (int)(buffer_duration * 1000000.0f) + 100000;  // Add 100ms margin
+    usleep(wait_us);
     
     return 0;
 }

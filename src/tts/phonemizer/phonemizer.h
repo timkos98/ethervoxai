@@ -27,6 +27,7 @@ typedef enum {
     PHONEMIZER_LANG_ZH_CN,      // Chinese (Mandarin, Simplified)
     PHONEMIZER_LANG_DE_DE,      // German (Standard)
     PHONEMIZER_LANG_ES_MX,      // Spanish (Mexican)
+    PHONEMIZER_LANG_ES_419,     // Spanish (Latin America)
 } phonemizer_language_t;
 
 /**

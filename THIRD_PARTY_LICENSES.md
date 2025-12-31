@@ -281,9 +281,20 @@ When using EthervoxAI, you must provide attribution for:
    https://www.unicode.org/charts/unihan.html
    ```
 
-4. **German Phonemizer**: No external attribution required (original implementation, part of EthervoxAI core)
+4. **FrequencyWords Vocabulary Lists** (German and Spanish dictionary generation):
+   ```
+   Word frequency lists from hermitdave/FrequencyWords
+   Copyright © 2016 Hermit Dave
+   MIT License
+   https://github.com/hermitdave/FrequencyWords
+   
+   Used as input vocabulary for espeak-ng pronunciation generation.
+   The generated IPA pronunciations (output data) are embedded in EthervoxAI.
+   ```
 
-5. **Other dependencies**: Follow individual license requirements (MIT/BSD typically require copyright notice in distributions)
+5. **German Phonemizer**: No external attribution required (original implementation, part of EthervoxAI core)
+
+6. **Other dependencies**: Follow individual license requirements (MIT/BSD typically require copyright notice in distributions)
 
 ---
 

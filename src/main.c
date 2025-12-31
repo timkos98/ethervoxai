@@ -2911,6 +2911,7 @@ int main(int argc, char** argv) {
     bool tts_test_voices_mode = false;  // Test all configured TTS voices
     const char* tts_text = NULL;  // Text to synthesize in TTS mode
     const char* audio_file = NULL;  // Optional output file for -af flag
+    const char* tts_voice_override = NULL;  // Language code override for -voice flag
     
     // Track explicit flag usage for conflict detection
     bool debug_flag_set = false;
@@ -3004,6 +3005,8 @@ int main(int argc, char** argv) {
             skip_startup_prompt = true;
         } else if ((strcmp(argv[i], "--af") == 0 || strcmp(argv[i], "-af") == 0) && i + 1 < argc) {
             audio_file = argv[++i];
+        } else if ((strcmp(argv[i], "--voice") == 0 || strcmp(argv[i], "-voice") == 0) && i + 1 < argc) {
+            tts_voice_override = argv[++i];
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             printf("Usage: %s [options]\n\n", argv[0]);
             printf("Options:\n");
@@ -3024,6 +3027,7 @@ int main(int argc, char** argv) {
             printf("  -optimize_tool_prompts  Optimize tool prompts (engineering mode + /optimize_tool_prompts)\n");
             printf("  -speak <text>      TTS-only mode: synthesize text with streaming playback\n");
             printf("  -speak-direct <ipa>  TTS-only mode: synthesize IPA phonemes directly (no phonemizer)\n");
+            printf("  -voice <lang>      Override language detection (en, de, es, zh) for TTS\n");
             printf("  -test-voices       Demonstrate all configured TTS voices\n");
             printf("  -af <file>         Save audio output to file (use with -speak/-speak-direct)\n");
             printf("  -help, -h          Show this help message\n");
@@ -3286,9 +3290,15 @@ int main(int argc, char** argv) {
         // Detect language and switch voice if needed (skip for IPA direct mode)
         const char* detected_lang = "en";
         if (!tts_speak_direct_mode) {
-            // Detect language but don't reload TTS yet (it's not created)
-            detected_lang = ethervox_detect_language(tts_text);
-            printf("   Language: %s\n", detected_lang);
+            // Use -voice flag if provided, otherwise detect from text
+            if (tts_voice_override) {
+                detected_lang = tts_voice_override;
+                printf("   Language: %s (forced by -voice flag)\n", detected_lang);
+            } else {
+                // Detect language but don't reload TTS yet (it's not created)
+                detected_lang = ethervox_detect_language(tts_text);
+                printf("   Language: %s (auto-detected)\n", detected_lang);
+            }
             
             // Load settings and update model path for detected language
             ethervox_persistent_settings_t temp_settings;
