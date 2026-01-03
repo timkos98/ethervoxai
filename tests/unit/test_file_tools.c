@@ -13,6 +13,7 @@
  */
 
 #include "ethervox/file_tools.h"
+#include "ethervox/error.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -197,7 +198,7 @@ void test_code_file_not_binary(void) {
         "int main() {\n"
         "    printf(\"Hello, world!\\n\");\n"
         "    char* str = \"test\\ttabs\\nand\\rescapes\";\n"
-        "    return 0;\n"
+        "    return ETHERVOX_SUCCESS;\n"
         "}\n";
     
     create_text_file("code.c", code_content);
@@ -457,5 +458,5 @@ int main(void) {
     
     printf("\n=== All tests passed! ✓ ===\n\n");
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }

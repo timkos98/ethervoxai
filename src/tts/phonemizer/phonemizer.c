@@ -6,6 +6,7 @@
  */
 
 #include "phonemizer.h"
+#include "ethervox/error.h"
 #include "dictionary.h"
 #include "arpabet_to_ipa.h"
 #include "espeak_dict.h"
@@ -106,7 +107,7 @@ phonemizer_t* phonemizer_create(const char* lang_code) {
         for (int i = 0; dict_paths[i]; i++) {
             ctx->dictionary = dict_load(dict_paths[i]);
             if (ctx->dictionary) {
-                printf("Loaded dictionary from: %s\n", dict_paths[i]);
+                ETHERVOX_LOG_INFO("Loaded dictionary from: %s\n", dict_paths[i]);
                 break;
             }
         }
@@ -128,7 +129,7 @@ phonemizer_t* phonemizer_create(const char* lang_code) {
         for (int i = 0; unihan_paths[i]; i++) {
             ctx->chinese_dict = dict_chinese_load(unihan_paths[i]);
             if (ctx->chinese_dict) {
-                printf("Loaded Chinese dictionary from: %s\n", unihan_paths[i]);
+                ETHERVOX_LOG_INFO("Loaded Chinese dictionary from: %s\n", unihan_paths[i]);
                 break;
             }
         }
@@ -465,8 +466,14 @@ static int phonemize_spanish(phonemizer_t* ctx, const char* text, char* ipa_outp
     return 0;
 }
 
-int phonemizer_text_to_ipa(phonemizer_t* ctx, const char* text, char* ipa_output, size_t max_len) {
-    if (!ctx || !text || !ipa_output || max_len == 0) return -1;
+ethervox_result_t phonemizer_text_to_ipa(phonemizer_t* ctx, const char* text, char* ipa_output, size_t max_len) {
+    ETHERVOX_CHECK_PTR(ctx);
+    ETHERVOX_CHECK_PTR(text);
+    ETHERVOX_CHECK_PTR(ipa_output);
+    
+    if (max_len == 0) {
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
     
     ipa_output[0] = '\0';
     
@@ -493,7 +500,7 @@ int phonemizer_text_to_ipa(phonemizer_t* ctx, const char* text, char* ipa_output
     
     if (token_count == 0) {
         ETHERVOX_LOG_DEBUG("[Phonemizer] No tokens found in text: '%s'\n", text);
-        return -1; // No words found
+        return ETHERVOX_ERROR_TTS_PHONEMIZATION_FAILED; // No words found
     }
     
     ETHERVOX_LOG_DEBUG("[Phonemizer DEBUG] Processing %d tokens from text: '%s'\n", token_count, text);
@@ -671,7 +678,7 @@ int phonemizer_text_to_ipa(phonemizer_t* ctx, const char* text, char* ipa_output
         
         if (current_len + word_len + 2 > max_len) {
             fprintf(stderr, "IPA output buffer overflow\n");
-            return -1;
+            return ETHERVOX_ERROR_TTS_TEXT_TOO_LONG;
         }
         
         if (current_len > 0) {
@@ -680,7 +687,7 @@ int phonemizer_text_to_ipa(phonemizer_t* ctx, const char* text, char* ipa_output
         strcat(ipa_output, word_ipa);
     }
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 phonemizer_language_t phonemizer_get_language(phonemizer_t* ctx) {

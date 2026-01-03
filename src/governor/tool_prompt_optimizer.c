@@ -12,6 +12,7 @@
 #include "ethervox/tool_prompt_optimizer.h"
 #include "ethervox/governor.h"
 #include "ethervox/config.h"
+#include "ethervox/error.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -86,9 +87,9 @@ static char* ask_llm(ethervox_governor_t* governor, const char* question) {
 /**
  * Run the optimization process - generates per-tool prompts
  */
-int ethervox_optimize_tool_prompts(ethervox_governor_t* governor, const char* model_path) {
+ethervox_result_t ethervox_optimize_tool_prompts(ethervox_governor_t* governor, const char* model_path) {
     if (!governor || !model_path) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     OPT_LOG("Starting tool prompt optimization for model: %s", model_path);
@@ -126,7 +127,7 @@ int ethervox_optimize_tool_prompts(ethervox_governor_t* governor, const char* mo
     const ethervox_tool_registry_t* registry = ethervox_governor_get_registry(governor);
     if (!registry || registry->tool_count == 0) {
         printf("ERROR: No tools registered\n");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     printf("\nFound %u tools to optimize:\n", registry->tool_count);
@@ -155,7 +156,7 @@ int ethervox_optimize_tool_prompts(ethervox_governor_t* governor, const char* mo
     char* pref_response = ask_llm(governor, q1);
     if (!pref_response) {
         printf("ERROR: Failed to get preferences from model\n");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     printf("Model preferences: %s\n\n", pref_response);
@@ -169,7 +170,7 @@ int ethervox_optimize_tool_prompts(ethervox_governor_t* governor, const char* mo
     
     if (!tool_when_prompts || !tool_examples) {
         free(pref_response);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Iterate through each tool and generate its prompt
@@ -247,7 +248,7 @@ int ethervox_optimize_tool_prompts(ethervox_governor_t* governor, const char* mo
         }
         free(tool_when_prompts);
         free(tool_examples);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Write JSON with per-tool prompts
@@ -395,13 +396,13 @@ int ethervox_optimize_tool_prompts(ethervox_governor_t* governor, const char* mo
     printf("3. Run /testllm to verify improved tool usage\n");
     printf("\n");
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
  * Load optimized prompts for a model
  */
-int ethervox_load_optimized_prompts(
+ethervox_result_t ethervox_load_optimized_prompts(
     const char* model_path,
     char* instruction_out,
     size_t instruction_size,
@@ -409,7 +410,7 @@ int ethervox_load_optimized_prompts(
     size_t examples_size
 ) {
     if (!model_path || !instruction_out || !examples_out) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     char prompt_file[512];
@@ -421,7 +422,7 @@ int ethervox_load_optimized_prompts(
     if (!fp) {
         // File doesn't exist - use defaults
         OPT_LOG("Optimized prompts file not found (tried: %s)", prompt_file);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     OPT_LOG("Loading optimized prompts from: %s", prompt_file);
@@ -489,9 +490,9 @@ int ethervox_load_optimized_prompts(
     
     if (inst_pos > 0 && ex_pos > 0) {
         OPT_LOG("Loaded optimized prompts successfully");
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     OPT_ERROR("Failed to parse prompt file");
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
 }

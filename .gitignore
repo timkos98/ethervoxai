@@ -194,6 +194,7 @@ esp32-project/dependencies.lock
 run-artifacts/
 *.md.bak
 *.bak
+*.bak_*
 *.bak[0-9]
 *.bak[0-9][0-9]
 bin/act

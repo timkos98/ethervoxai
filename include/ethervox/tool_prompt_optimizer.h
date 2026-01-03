@@ -11,6 +11,7 @@
 
 #include <stddef.h>
 #include <stdbool.h>
+#include "error.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -31,7 +32,7 @@ struct tool_manifest_registry;
  * @param model_path Path to the model file (used for naming output file)
  * @return 0 on success, negative on error
  */
-int ethervox_optimize_tool_prompts(ethervox_governor_t* governor, const char* model_path);
+ethervox_result_t ethervox_optimize_tool_prompts(ethervox_governor_t* governor, const char* model_path);
 
 /**
  * Optimize tool prompts with JSON output and batch processing (V2)
@@ -46,7 +47,7 @@ int ethervox_optimize_tool_prompts(ethervox_governor_t* governor, const char* mo
  * @param optimize_new_only If true, only optimize tools not already in the JSON file
  * @return 0 on success, negative on error
  */
-int ethervox_optimize_tool_prompts_v2(
+ethervox_result_t ethervox_optimize_tool_prompts_v2(
     ethervox_governor_t* governor,
     const char* model_path,
     struct tool_manifest_registry* manifest_registry,
@@ -65,7 +66,7 @@ int ethervox_optimize_tool_prompts_v2(
  * @param examples_size Size of examples buffer
  * @return 0 if loaded successfully, negative if file not found or parse error
  */
-int ethervox_load_optimized_prompts(
+ethervox_result_t ethervox_load_optimized_prompts(
     const char* model_path,
     char* instruction_out,
     size_t instruction_size,

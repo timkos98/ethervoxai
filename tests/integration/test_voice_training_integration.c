@@ -13,6 +13,7 @@
  */
 
 #include "ethervox/audio_recording.h"
+#include "ethervox/error.h"
 #include "ethervox/pronunciation_trainer.h"
 #include "ethervox/logging.h"
 #include "tts/phonemizer/pronunciation_overrides.h"
@@ -50,7 +51,7 @@ int main(int argc, char** argv) {
         printf("❌ Audio recording failed\n");
         printf("Note: This may fail if no microphone is available.\n");
         printf("      On CI/headless systems, this is expected.\n");
-        return 1;  // Non-fatal for CI
+        return ETHERVOX_SUCCESS;  // Non-fatal for CI
     }
     
     printf("✅ Audio recorded successfully\n");
@@ -60,7 +61,7 @@ int main(int argc, char** argv) {
     FILE* f = fopen(test_audio, "rb");
     if (!f) {
         printf("❌ Failed to open recorded WAV file\n");
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
     
     fseek(f, 0, SEEK_END);
@@ -69,7 +70,7 @@ int main(int argc, char** argv) {
     
     if (file_size < 1000) {
         printf("❌ WAV file too small: %ld bytes\n", file_size);
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
     
     printf("✅ WAV file verified: %ld bytes\n", file_size);
@@ -99,7 +100,7 @@ int main(int argc, char** argv) {
         printf("❌ Override lookup failed\n");
         pronunciation_overrides_save(store);
         pronunciation_overrides_free(store);
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
     
     printf("✅ Pronunciation overrides working\n");
@@ -117,5 +118,5 @@ int main(int argc, char** argv) {
     printf("Note: Full pronunciation training test requires TTS/STT contexts\n");
     printf("      which are available in the main application with /voice_training\n\n");
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }

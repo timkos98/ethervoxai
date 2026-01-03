@@ -10,6 +10,7 @@
  */
 
 #include <assert.h>
+#include "ethervox/error.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

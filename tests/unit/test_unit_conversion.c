@@ -7,6 +7,7 @@
  */
 
 #include <stdio.h>
+#include "ethervox/error.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -461,9 +462,9 @@ int main(void) {
     
     if (passed_count == test_count) {
         printf("\n✅ All tests PASSED!\n\n");
-        return 0;
+        return ETHERVOX_SUCCESS;
     } else {
         printf("\n❌ Some tests FAILED!\n\n");
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
 }

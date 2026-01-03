@@ -7,6 +7,7 @@
  */
 
 #include "ethervox/chat_template.h"
+#include "ethervox/error.h"
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
@@ -169,13 +170,13 @@ const chat_template_t* chat_template_get(chat_template_type_t type, const char* 
     }
 }
 
-int chat_template_format_system(
+ethervox_result_t chat_template_format_system(
     const chat_template_t* template,
     const char* content,
     char* output,
     size_t output_size
 ) {
-    if (!template || !content || !output || output_size == 0) return -1;
+    if (!template || !content || !output || output_size == 0) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     return snprintf(output, output_size, "%s%s%s",
                    template->system_start,
@@ -183,13 +184,13 @@ int chat_template_format_system(
                    template->system_end);
 }
 
-int chat_template_format_user(
+ethervox_result_t chat_template_format_user(
     const chat_template_t* template,
     const char* content,
     char* output,
     size_t output_size
 ) {
-    if (!template || !content || !output || output_size == 0) return -1;
+    if (!template || !content || !output || output_size == 0) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     return snprintf(output, output_size, "%s%s%s",
                    template->user_start,
@@ -197,23 +198,23 @@ int chat_template_format_user(
                    template->user_end);
 }
 
-int chat_template_format_assistant_start(
+ethervox_result_t chat_template_format_assistant_start(
     const chat_template_t* template,
     char* output,
     size_t output_size
 ) {
-    if (!template || !output || output_size == 0) return -1;
+    if (!template || !output || output_size == 0) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     return snprintf(output, output_size, "%s", template->assistant_start);
 }
 
-int chat_template_format_tool_result(
+ethervox_result_t chat_template_format_tool_result(
     const chat_template_t* template,
     const char* result,
     char* output,
     size_t output_size
 ) {
-    if (!template || !result || !output || output_size == 0) return -1;
+    if (!template || !result || !output || output_size == 0) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     return snprintf(output, output_size, "%s%s%s",
                    template->tool_result_start,

@@ -186,7 +186,7 @@ int pipeline_init(voice_pipeline_t* pipeline, const char* language_override, boo
   printf("=== EthervoxAI Voice Assistant ===\n\n");
 
   // Initialize platform
-  if (ethervox_platform_init(&pipeline->platform) != 0) {
+  if (ethervox_is_error(ethervox_platform_init(&pipeline->platform))) {
     fprintf(stderr, "Failed to initialize platform\n");
     return -1;
   }

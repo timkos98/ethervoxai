@@ -18,6 +18,8 @@
 #include <stdint.h>
 #include <time.h>
 #include "chat_template.h"
+#include "ethervox/error.h"
+#include "error.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -61,9 +63,9 @@ typedef struct {
      * @param wait_for_response If true, open microphone after speaking
      * @param allow_interrupt If true, user can interrupt by speaking
      * @param user_data Typically the conversation session
-     * @return 0 on success, negative on error
+     * @return ETHERVOX_SUCCESS or error code
      */
-    int (*on_speak)(const char* text, bool wait_for_response, bool allow_interrupt, void* user_data);
+    ethervox_result_t (*on_speak)(const char* text, bool wait_for_response, bool allow_interrupt, void* user_data);
     
     /**
      * Called when LLM invokes "listen" tool
@@ -71,16 +73,16 @@ typedef struct {
      * @param timeout_ms Maximum wait time in milliseconds
      * @param prompt_hint Optional hint about what to listen for
      * @param user_data Typically the conversation session
-     * @return 0 on success, negative on error
+     * @return ETHERVOX_SUCCESS or error code
      */
-    int (*on_listen)(char** user_input, int timeout_ms, const char* prompt_hint, void* user_data);
+    ethervox_result_t (*on_listen)(char** user_input, int timeout_ms, const char* prompt_hint, void* user_data);
     
     /**
      * Called when user interrupts during TTS playback
      * @param user_data Typically the conversation session
-     * @return 0 on success, negative on error
+     * @return ETHERVOX_SUCCESS or error code
      */
-    int (*on_interrupt)(void* user_data);
+    ethervox_result_t (*on_interrupt)(void* user_data);
     
     void* user_data;  // Opaque pointer (typically conversation_session)
 } ethervox_conversation_callbacks_t;
@@ -164,7 +166,7 @@ typedef struct {
  * @param binary_path Output path for tools.bin
  * @return 0 on success, negative on error
  */
-int ethervox_tool_registry_export_manifest(
+ethervox_result_t ethervox_tool_registry_export_manifest(
     const ethervox_tool_registry_t* registry,
     const char* binary_path
 );
@@ -307,12 +309,12 @@ typedef struct ethervox_governor ethervox_governor_t;
 /**
  * Initialize tool registry
  */
-int ethervox_tool_registry_init(ethervox_tool_registry_t* registry, uint32_t initial_capacity);
+ethervox_result_t ethervox_tool_registry_init(ethervox_tool_registry_t* registry, uint32_t initial_capacity);
 
 /**
  * Register a tool
  */
-int ethervox_tool_registry_add(ethervox_tool_registry_t* registry, const ethervox_tool_t* tool);
+ethervox_result_t ethervox_tool_registry_add(ethervox_tool_registry_t* registry, const ethervox_tool_t* tool);
 
 /**
  * Find tool by name
@@ -332,7 +334,7 @@ const ethervox_tool_t* ethervox_tool_registry_find(
  * @param memory_store Optional memory store for adaptive learning (can be NULL)
  * @param model_path Optional model path for loading optimized prompts (can be NULL)
  */
-int ethervox_tool_registry_build_system_prompt(
+ethervox_result_t ethervox_tool_registry_build_system_prompt(
     const ethervox_tool_registry_t* registry,
     const chat_template_t* chat_template,
     char* buffer,
@@ -358,7 +360,7 @@ void ethervox_tool_registry_cleanup(ethervox_tool_registry_t* registry);
  * @param registry Tool registry
  * @return 0 on success, negative on error
  */
-int ethervox_governor_init(
+ethervox_result_t ethervox_governor_init(
     ethervox_governor_t** governor,
     const ethervox_governor_config_t* config,
     ethervox_tool_registry_t* tool_registry
@@ -371,7 +373,7 @@ int ethervox_governor_init(
  * @param model_path Path to GGUF model file
  * @return 0 on success, negative on error
  */
-int ethervox_governor_load_model(
+ethervox_result_t ethervox_governor_load_model(
     ethervox_governor_t* governor,
     const char* model_path
 );
@@ -383,7 +385,7 @@ int ethervox_governor_load_model(
  * @param governor Governor instance
  * @return 0 on success, negative on error
  */
-int ethervox_governor_unload_model(ethervox_governor_t* governor);
+ethervox_result_t ethervox_governor_unload_model(ethervox_governor_t* governor);
 
 /**
  * Reload the Governor model using the previously saved model path
@@ -391,7 +393,7 @@ int ethervox_governor_unload_model(ethervox_governor_t* governor);
  * @param governor Governor instance
  * @return 0 on success, negative on error
  */
-int ethervox_governor_reload_model(ethervox_governor_t* governor);
+ethervox_result_t ethervox_governor_reload_model(ethervox_governor_t* governor);
 
 /**
  * Check if the Governor model is currently loaded
@@ -467,7 +469,7 @@ uint32_t ethervox_governor_get_last_iteration_count(ethervox_governor_t* governo
  * @param governor Governor instance
  * @return 0 on success, negative on error
  */
-int ethervox_governor_reset_conversation(ethervox_governor_t* governor);
+ethervox_result_t ethervox_governor_reset_conversation(ethervox_governor_t* governor);
 
 /**
  * Manually trigger conversation summarization and KV cache clearing
@@ -480,7 +482,7 @@ int ethervox_governor_reset_conversation(ethervox_governor_t* governor);
  * @param force_clear If true, clears cache regardless of usage level
  * @return 0 on success, negative on error
  */
-int ethervox_governor_summarize_and_clear_cache(ethervox_governor_t* governor, bool force_clear);
+ethervox_result_t ethervox_governor_summarize_and_clear_cache(ethervox_governor_t* governor, bool force_clear);
 
 /**
  * Enable or disable tool call execution
@@ -543,7 +545,7 @@ void ethervox_governor_request_interrupt(ethervox_governor_t* governor);
  * @param config New configuration to apply
  * @return 0 on success, -1 on error
  */
-int ethervox_governor_update_config(ethervox_governor_t* governor, const ethervox_governor_config_t* config);
+ethervox_result_t ethervox_governor_update_config(ethervox_governor_t* governor, const ethervox_governor_config_t* config);
 
 /**
  * Get chat template from Governor instance
@@ -571,7 +573,7 @@ const chat_template_t* ethervox_governor_get_chat_template(ethervox_governor_t* 
  * @param manifest_registry Output: Tool manifest registry
  * @return 0 on success, negative on error
  */
-int ethervox_governor_init_with_manifest(
+ethervox_result_t ethervox_governor_init_with_manifest(
     ethervox_governor_t* governor,
     const char* model_path,
     tool_manifest_registry_t* manifest_registry
@@ -588,7 +590,7 @@ int ethervox_governor_init_with_manifest(
  * @param manifest_out Receives allocated manifest on success (caller must free)
  * @return 0=success, negative=error
  */
-int ethervox_governor_setup_manifest(
+ethervox_result_t ethervox_governor_setup_manifest(
     ethervox_governor_t* governor,
     const char* model_path,
     tool_manifest_registry_t** manifest_out
@@ -604,7 +606,7 @@ int ethervox_governor_setup_manifest(
  * @param output_size Buffer size
  * @return Number of bytes written, or negative on error
  */
-int ethervox_governor_build_system_prompt_with_manifest(
+ethervox_result_t ethervox_governor_build_system_prompt_with_manifest(
     const tool_manifest_registry_t* manifest_registry,
     char* output,
     size_t output_size

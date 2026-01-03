@@ -1,4 +1,5 @@
 /**
+#include "ethervox/error.h"
  * @file listen.c
  * @brief LLM tool for capturing user speech input with timeout
  *
@@ -119,7 +120,7 @@ static int tool_listen_wrapper(
 ) {
     if (!args_json || !result || !error) {
         if (error) *error = strdup("Invalid parameters to listen tool");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Get callbacks
@@ -130,7 +131,7 @@ static int tool_listen_wrapper(
         // Not in voice mode
         LOG_DEBUG("listen tool called but no microphone callback set (CLI mode?)");
         *result = strdup("{\"success\":false,\"error\":\"Microphone not available in CLI mode\"}");
-        return 0; // Not a failure, just not applicable
+        return ETHERVOX_SUCCESS; // Not a failure, just not applicable
     }
     
     // Parse optional parameters
@@ -153,7 +154,7 @@ static int tool_listen_wrapper(
     if (ret != 0) {
         *error = strdup("Microphone capture failed");
         if (user_input) free(user_input);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Format response
@@ -164,7 +165,7 @@ static int tool_listen_wrapper(
         if (!escaped_input) {
             *error = strdup("Memory allocation failed");
             free(user_input);
-            return -1;
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
         }
         
         char* src = user_input;
@@ -191,7 +192,7 @@ static int tool_listen_wrapper(
     }
     
     *result = strdup(response_buf);
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**

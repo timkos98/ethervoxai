@@ -3,6 +3,7 @@
  */
 
 #include <stdio.h>
+#include "ethervox/error.h"
 #include "tts/phonemizer/phonemizer.h"
 
 int main() {
@@ -71,10 +72,10 @@ int main() {
         printf("  - English: Dictionary-based (CMU Dict) + rules fallback\n");
         printf("  - Chinese: Unicode Unihan database (44K characters)\n");
         printf("  - German: Rule-based (100%% accurate on common words)\n");
-        return 0;
+        return ETHERVOX_SUCCESS;
     } else {
         printf("\n⚠ Some phonemizers not available (likely missing dictionaries)\n");
         printf("Run: ./scripts/download_phonemizer_data.sh\n");
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
 }

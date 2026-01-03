@@ -12,13 +12,14 @@
 #include "ethervox/tool_manifest.h"
 #include "ethervox/tool_prompt_optimizer.h"
 #include "ethervox/logging.h"
+#include "ethervox/error.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-int ethervox_tool_registry_init(ethervox_tool_registry_t* registry, uint32_t initial_capacity) {
+ethervox_result_t ethervox_tool_registry_init(ethervox_tool_registry_t* registry, uint32_t initial_capacity) {
     if (!registry) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     if (initial_capacity == 0) {
@@ -27,18 +28,18 @@ int ethervox_tool_registry_init(ethervox_tool_registry_t* registry, uint32_t ini
     
     registry->tools = (ethervox_tool_t*)calloc(initial_capacity, sizeof(ethervox_tool_t));
     if (!registry->tools) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     registry->tool_count = 0;
     registry->capacity = initial_capacity;
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
-int ethervox_tool_registry_add(ethervox_tool_registry_t* registry, const ethervox_tool_t* tool) {
+ethervox_result_t ethervox_tool_registry_add(ethervox_tool_registry_t* registry, const ethervox_tool_t* tool) {
     if (!registry || !tool) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Check if tool already exists
@@ -57,7 +58,7 @@ int ethervox_tool_registry_add(ethervox_tool_registry_t* registry, const ethervo
         );
         
         if (!new_tools) {
-            return -1;
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
         }
         
         registry->tools = new_tools;
@@ -68,7 +69,7 @@ int ethervox_tool_registry_add(ethervox_tool_registry_t* registry, const ethervo
     memcpy(&registry->tools[registry->tool_count], tool, sizeof(ethervox_tool_t));
     registry->tool_count++;
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 const ethervox_tool_t* ethervox_tool_registry_find(
@@ -88,19 +89,19 @@ const ethervox_tool_t* ethervox_tool_registry_find(
     return NULL;
 }
 
-int ethervox_tool_registry_export_manifest(
+ethervox_result_t ethervox_tool_registry_export_manifest(
     const ethervox_tool_registry_t* registry,
     const char* binary_path
 ) {
     if (!registry || !binary_path) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Open output file
     FILE* fp = fopen(binary_path, "wb");
     if (!fp) {
         fprintf(stderr, "Failed to create manifest: %s\n", binary_path);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Write header
@@ -117,7 +118,7 @@ int ethervox_tool_registry_export_manifest(
     
     if (fwrite(&header, sizeof(tool_manifest_header_t), 1, fp) != 1) {
         fclose(fp);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Write index entries and collect detail info
@@ -142,7 +143,7 @@ int ethervox_tool_registry_export_manifest(
         
         if (fwrite(&entry, sizeof(tool_index_entry_t), 1, fp) != 1) {
             fclose(fp);
-            return -1;
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
         }
         
         current_detail_offset += detail_size;
@@ -161,7 +162,7 @@ int ethervox_tool_registry_export_manifest(
         
         if (fwrite(&detail, sizeof(tool_detail_header_t), 1, fp) != 1) {
             fclose(fp);
-            return -1;
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
         }
     }
     
@@ -181,7 +182,7 @@ int ethervox_tool_registry_export_manifest(
     fclose(fp);
     
     ETHERVOX_LOG_DEBUG("Exported %u tools to manifest: %s", registry->tool_count, binary_path);
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 // Platform type detection helper
@@ -237,7 +238,7 @@ static int build_json_tool_definition(
         schema);
 }
 
-int ethervox_tool_registry_build_system_prompt(
+ethervox_result_t ethervox_tool_registry_build_system_prompt(
     const ethervox_tool_registry_t* registry,
     const chat_template_t* chat_template,
     char* buffer,
@@ -246,7 +247,7 @@ int ethervox_tool_registry_build_system_prompt(
     const char* model_path  // Added parameter for optimized prompts
 ) {
     if (!registry || !chat_template || !buffer || buffer_size == 0) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     bool is_mobile = is_mobile_platform();
@@ -297,7 +298,7 @@ int ethervox_tool_registry_build_system_prompt(
             chat_template->system_start,
             optimization_warning);
         
-        if (written < 0 || (size_t)written >= remaining) return -1;
+        if (written < 0 || (size_t)written >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;
         ptr += written;
         remaining -= written;
         
@@ -313,14 +314,14 @@ int ethervox_tool_registry_build_system_prompt(
             if (json_len < 0 || json_len >= (int)sizeof(json_tool)) continue;
             
             int tool_written = snprintf(ptr, remaining, "%s\n", json_tool);
-            if (tool_written < 0 || (size_t)tool_written >= remaining) return -1;
+            if (tool_written < 0 || (size_t)tool_written >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;
             ptr += tool_written;
             remaining -= tool_written;
         }
         
         // Close tools and add list of ALL available tools
         int tools_list_written = snprintf(ptr, remaining, "</tools>\n\nOther available tools (use get_tool_info to learn about these):\n");
-        if (tools_list_written < 0 || (size_t)tools_list_written >= remaining) return -1;
+        if (tools_list_written < 0 || (size_t)tools_list_written >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;
         ptr += tools_list_written;
         remaining -= tools_list_written;
         
@@ -330,7 +331,7 @@ int ethervox_tool_registry_build_system_prompt(
             if (is_fast_path_tool(tool->name)) continue;  // Skip fast-path tools already listed
             
             int name_written = snprintf(ptr, remaining, "  - %s\n", tool->name);
-            if (name_written < 0 || (size_t)name_written >= remaining) return -1;
+            if (name_written < 0 || (size_t)name_written >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;
             ptr += name_written;
             remaining -= name_written;
         }
@@ -370,7 +371,7 @@ int ethervox_tool_registry_build_system_prompt(
             "%s",
             chat_template->system_end);
             
-        if (instr_written < 0 || (size_t)instr_written >= remaining) return -1;
+        if (instr_written < 0 || (size_t)instr_written >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;
         
     } else {
         // XML attribute format (Qwen, Phi, Llama, etc.)
@@ -403,7 +404,7 @@ int ethervox_tool_registry_build_system_prompt(
             optimization_warning
         );
         
-        if (written < 0 || (size_t)written >= remaining) return -1;
+        if (written < 0 || (size_t)written >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;
         ptr += written;
         remaining -= written;
         
@@ -413,14 +414,14 @@ int ethervox_tool_registry_build_system_prompt(
             "1. For ALL math/calculations, you MUST call calculator_compute - never calculate mentally\n"
             "2. For time/date queries, call get_date or get_time\n"
             "3. For tools without schemas below, call get_tool_info first to learn parameters\n\n");
-        if (instruction_written < 0 || (size_t)instruction_written >= remaining) return -1;
+        if (instruction_written < 0 || (size_t)instruction_written >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;
         ptr += instruction_written;
         remaining -= instruction_written;
         
         // Tool list header - minimal mode for KV cache efficiency
         int tools_header = snprintf(ptr, remaining, 
             "Available Tools:\n");
-        if (tools_header < 0 || (size_t)tools_header >= remaining) return -1;
+        if (tools_header < 0 || (size_t)tools_header >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;
         ptr += tools_header;
         remaining -= tools_header;
         
@@ -446,7 +447,7 @@ int ethervox_tool_registry_build_system_prompt(
                     tool->name);
             }
             
-            if (tool_written < 0 || (size_t)tool_written >= remaining) return -1;
+            if (tool_written < 0 || (size_t)tool_written >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;
             
             ptr += tool_written;
             remaining -= tool_written;
@@ -484,14 +485,14 @@ int ethervox_tool_registry_build_system_prompt(
               "CRITICAL: For math, ALWAYS use calculator_compute. For other tools, call get_tool_info first.\n");
         
         int instr_written = snprintf(ptr, remaining, "%s", usage_section);
-        if (instr_written < 0 || (size_t)instr_written >= remaining) return -1;
+        if (instr_written < 0 || (size_t)instr_written >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Debug: Print system prompt for verification (first 500 chars)
     ETHERVOX_LOG_DEBUG("System prompt (tool_format=%d, length=%zu, first 500 chars): %.500s...", 
                        tool_format, strlen(buffer), buffer);
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 void ethervox_tool_registry_cleanup(ethervox_tool_registry_t* registry) {

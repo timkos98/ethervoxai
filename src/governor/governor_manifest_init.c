@@ -12,6 +12,7 @@
 #include "ethervox/tool_manifest.h"
 #include "ethervox/config.h"
 #include "ethervox/logging.h"
+#include "ethervox/error.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,13 +34,13 @@
  * @param manifest_registry Output: Tool manifest registry
  * @return 0 on success, negative on error
  */
-int ethervox_governor_init_with_manifest(
+ethervox_result_t ethervox_governor_init_with_manifest(
     ethervox_governor_t* governor,
     const char* model_path,
     tool_manifest_registry_t* manifest_registry
 ) {
     if (!governor || !model_path || !manifest_registry) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Get runtime tool registry (from governor)
@@ -48,7 +49,7 @@ int ethervox_governor_init_with_manifest(
     
     if (!runtime_registry) {
         ETHERVOX_LOGE("No runtime tool registry available");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Get Android files directory once for all path operations (used in STEP 1 and STEP 4)
@@ -56,7 +57,7 @@ int ethervox_governor_init_with_manifest(
     const char* android_files_dir = ethervox_android_get_files_dir();
     if (!android_files_dir || android_files_dir[0] == '\0') {
         ETHERVOX_LOGE("Android files directory not set!");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
 #endif
     
@@ -115,7 +116,7 @@ int ethervox_governor_init_with_manifest(
         manifest_registry->fallback_level = 2;
         
         // Still functional - deterministic toolkit always available
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     // Tools binary manifest was found and loaded
@@ -206,7 +207,7 @@ int ethervox_governor_init_with_manifest(
                   manifest_registry->fallback_level,
                   ethervox_tool_fallback_level_name(manifest_registry->fallback_level));
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -219,13 +220,13 @@ int ethervox_governor_init_with_manifest(
  * @param output_size Buffer size
  * @return Number of bytes written, or negative on error
  */
-int ethervox_governor_build_system_prompt_with_manifest(
+ethervox_result_t ethervox_governor_build_system_prompt_with_manifest(
     const tool_manifest_registry_t* manifest_registry,
     char* output,
     size_t output_size
 ) {
     if (!output || output_size == 0) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     int offset = 0;
@@ -236,7 +237,7 @@ int ethervox_governor_build_system_prompt_with_manifest(
         "Respond naturally and conversationally to the user.\n\n");
     
     if (offset < 0 || (size_t)offset >= output_size) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Add tool index (minimal prompt) - uses optimized prompts (Level 0) or one-liners (Level 1)
@@ -286,7 +287,7 @@ int ethervox_governor_build_system_prompt_with_manifest(
  * @param manifest_out Receives allocated manifest on success (caller must free on error)
  * @return 0=success, negative=error
  */
-int ethervox_governor_setup_manifest(
+ethervox_result_t ethervox_governor_setup_manifest(
     ethervox_governor_t* governor,
     const char* model_path,
     tool_manifest_registry_t** manifest_out
@@ -294,14 +295,14 @@ int ethervox_governor_setup_manifest(
     if (!governor || !model_path || !manifest_out) {
         ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__,
                     "Invalid parameters to manifest setup");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     tool_manifest_registry_t* manifest = malloc(sizeof(tool_manifest_registry_t));
     if (!manifest) {
         ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__,
                     "Failed to allocate manifest registry");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     memset(manifest, 0, sizeof(tool_manifest_registry_t));
@@ -325,7 +326,7 @@ int ethervox_governor_setup_manifest(
                         "Manifest fallback: Level 2 (LLM-only, consider optimization)");
         }
         
-        return 0;
+        return ETHERVOX_SUCCESS;
     } else {
         free(manifest);
         *manifest_out = NULL;

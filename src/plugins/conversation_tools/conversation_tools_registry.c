@@ -1,4 +1,5 @@
 /**
+#include "ethervox/error.h"
  * @file conversation_tools_registry.c
  * @brief Registration of conversation tools with Governor
  *
@@ -20,10 +21,10 @@ extern ethervox_tool_t* ethervox_tool_speak_create(void);
 extern ethervox_tool_t* ethervox_tool_listen_create(void);
 extern ethervox_tool_t* ethervox_tool_train_pronunciation_create(void);
 
-int ethervox_conversation_tools_register(ethervox_tool_registry_t* registry) {
+ethervox_result_t ethervox_conversation_tools_register(ethervox_tool_registry_t* registry) {
     if (!registry) {
         LOG_ERROR("NULL registry passed to conversation_tools_register");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     int ret = 0;

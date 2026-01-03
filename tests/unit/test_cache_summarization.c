@@ -7,6 +7,7 @@
  */
 
 #include <stdio.h>
+#include "ethervox/error.h"
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -28,7 +29,7 @@ static int total_assertions = 0;
     if (!(condition)) { \
         printf("  ✗ ASSERTION FAILED: %s\n", message); \
         tests_failed++; \
-        return -1; \
+        return ETHERVOX_ERROR_INVALID_ARGUMENT; \
     } else { \
         printf("  ✓ %s\n", message); \
         tests_passed++; \
@@ -73,7 +74,7 @@ static int test_manual_summarization_minimal() {
     ethervox_tool_registry_cleanup(&registry);
     ethervox_memory_cleanup(&memory);
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -121,7 +122,7 @@ static int test_summary_storage() {
     // Cleanup
     ethervox_memory_cleanup(&memory);
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -156,7 +157,7 @@ static int test_cache_health_check() {
     ethervox_tool_registry_cleanup(&registry);
     ethervox_memory_cleanup(&memory);
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -173,7 +174,7 @@ static int test_null_pointer_safety() {
     ret = ethervox_governor_summarize_and_clear_cache(NULL, false);
     TEST_ASSERT(ret != 0, "Non-forced summarization fails with NULL governor");
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -232,7 +233,7 @@ static int test_conversation_history() {
     ethervox_tool_registry_cleanup(&registry);
     ethervox_memory_cleanup(&memory);
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**

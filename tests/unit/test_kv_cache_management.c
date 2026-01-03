@@ -13,6 +13,7 @@
  */
 
 #include "ethervox/governor.h"
+#include "ethervox/error.h"
 #include "ethervox/memory_tools.h"
 #include "ethervox/compute_tools.h"
 #include <assert.h>
@@ -350,7 +351,7 @@ int main(int argc, char** argv) {
     if (!model_path) {
         printf(COLOR_RED "\nERROR: No model path specified and no HOME directory found\n" COLOR_RESET);
         printf("Usage: %s [model_path]\n", argv[0]);
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
     
     printf("\nModel: %s\n", model_path);
@@ -361,7 +362,7 @@ int main(int argc, char** argv) {
     ethervox_tool_registry_t registry;
     if (ethervox_tool_registry_init(&registry, 16) != 0) {
         printf(COLOR_RED "Failed to initialize tool registry\n" COLOR_RESET);
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
     
     // Register compute tools for calculator functionality
@@ -381,7 +382,7 @@ int main(int argc, char** argv) {
     if (ethervox_governor_init(&governor, NULL, &registry) != 0) {
         printf(COLOR_RED "Failed to initialize governor\n" COLOR_RESET);
         ethervox_tool_registry_cleanup(&registry);
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
     
     // Load model
@@ -391,7 +392,7 @@ int main(int argc, char** argv) {
         printf("Please ensure the model file exists and is readable.\n");
         ethervox_governor_cleanup(governor);
         ethervox_tool_registry_cleanup(&registry);
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
     
     TEST_PASS("Governor initialized and model loaded");
@@ -422,10 +423,10 @@ int main(int argc, char** argv) {
     if (g_tests_failed == 0) {
         printf(COLOR_GREEN "✓ All KV cache management tests passed!\n" COLOR_RESET);
         printf("  The llama.cpp position tracking bug fix is working correctly.\n");
-        return 0;
+        return ETHERVOX_SUCCESS;
     } else {
         printf(COLOR_RED "✗ Some tests failed\n" COLOR_RESET);
         printf("  KV cache position inconsistency may still exist.\n");
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
 }

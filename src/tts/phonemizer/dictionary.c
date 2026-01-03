@@ -7,6 +7,7 @@
  */
 
 #include "dictionary.h"
+#include "ethervox/error.h"
 #include "ethervox/logging.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -140,12 +141,18 @@ dict_t* dict_load(const char* path) {
     fclose(f);
     dict->entry_count = loaded;
     
-    printf("Loaded %zu dictionary entries\n", loaded);
+    ETHERVOX_LOG_INFO("Loaded %zu dictionary entries\n", loaded);
     return dict;
 }
 
-int dict_lookup(dict_t* dict, const char* word, char* arpabet_out, size_t max_len) {
-    if (!dict || !word || !arpabet_out) return -1;
+ethervox_result_t dict_lookup(dict_t* dict, const char* word, char* arpabet_out, size_t max_len) {
+    ETHERVOX_CHECK_PTR(dict);
+    ETHERVOX_CHECK_PTR(word);
+    ETHERVOX_CHECK_PTR(arpabet_out);
+    
+    if (max_len == 0) {
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
     
     // Normalize input word
     char normalized[MAX_WORD_LENGTH];
@@ -160,12 +167,12 @@ int dict_lookup(dict_t* dict, const char* word, char* arpabet_out, size_t max_le
         if (strcmp(entry->word, normalized) == 0) {
             strncpy(arpabet_out, entry->pronunciation, max_len - 1);
             arpabet_out[max_len - 1] = '\0';
-            return 0;
+            return ETHERVOX_SUCCESS;
         }
         entry = entry->next;
     }
     
-    return -1; // Not found
+    return ETHERVOX_ERROR_NOT_FOUND; // Not found
 }
 
 void dict_free(dict_t* dict) {

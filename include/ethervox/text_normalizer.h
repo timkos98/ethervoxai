@@ -9,6 +9,7 @@
 #ifndef ETHERVOX_TEXT_NORMALIZER_H
 #define ETHERVOX_TEXT_NORMALIZER_H
 
+#include "ethervox/error.h"
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -27,9 +28,9 @@ extern "C" {
  * @param input Input text with numbers/times
  * @param output Buffer for normalized text
  * @param output_size Size of output buffer
- * @return 0 on success, -1 on error
+ * @return ETHERVOX_SUCCESS on success, error code otherwise
  */
-int ethervox_tts_normalize_text(const char* input, char* output, size_t output_size);
+ethervox_result_t ethervox_tts_normalize_text(const char* input, char* output, size_t output_size);
 
 #ifdef __cplusplus
 }

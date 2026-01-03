@@ -22,6 +22,7 @@
 #include <math.h>
 
 #include "ethervox/audio.h"
+#include "ethervox/error.h"
 
 #if defined(__ANDROID__)
 
@@ -89,12 +90,15 @@ static void aaudio_error_callback(AAudioStream* stream, void* user_data, aaudio_
   LOGE("AAudio error callback: %s", AAudio_convertResultToText(error));
 }
 
-static int aaudio_init(ethervox_audio_runtime_t* runtime,
+static ethervox_result_t aaudio_init(ethervox_audio_runtime_t* runtime,
                        const ethervox_audio_config_t* config) {
+  ETHERVOX_CHECK_PTR(runtime);
+  ETHERVOX_CHECK_PTR(config);
+  
   aaudio_data_t* audio_data = (aaudio_data_t*)calloc(1, sizeof(aaudio_data_t));
   if (!audio_data) {
     LOGE("Failed to allocate AAudio data");
-    return -1;
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_OUT_OF_MEMORY, "Failed to allocate AAudio data");
   }
   
   runtime->platform_data = audio_data;
@@ -104,14 +108,17 @@ static int aaudio_init(ethervox_audio_runtime_t* runtime,
   if (!audio_data->capture_buffer) {
     LOGE("Failed to allocate capture buffer");
     free(audio_data);
-    return -1;
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_OUT_OF_MEMORY, "Failed to allocate capture buffer");
   }
   
   LOGI("AAudio driver initialized (API 26+)");
-  return 0;
+  return ETHERVOX_SUCCESS;
 }
 
-static int aaudio_start_capture(ethervox_audio_runtime_t* runtime) {
+static ethervox_result_t aaudio_start_capture(ethervox_audio_runtime_t* runtime) {
+  ETHERVOX_CHECK_PTR(runtime);
+  ETHERVOX_CHECK_PTR(runtime->platform_data);
+  
   aaudio_data_t* audio_data = (aaudio_data_t*)runtime->platform_data;
   if (!audio_data) {
     LOGE("AAudio data not initialized");
@@ -155,13 +162,16 @@ static int aaudio_start_capture(ethervox_audio_runtime_t* runtime) {
 
   audio_data->is_recording = true;
   LOGI("AAudio capture started");
-  return 0;
+  return ETHERVOX_SUCCESS;
 }
 
-static int aaudio_stop_capture(ethervox_audio_runtime_t* runtime) {
+static ethervox_result_t aaudio_stop_capture(ethervox_audio_runtime_t* runtime) {
+  ETHERVOX_CHECK_PTR(runtime);
+  ETHERVOX_CHECK_PTR(runtime->platform_data);
+  
   aaudio_data_t* audio_data = (aaudio_data_t*)runtime->platform_data;
-  if (!audio_data || !audio_data->input_stream) {
-    return 0;
+  if (!audio_data->input_stream) {
+    return ETHERVOX_SUCCESS;
   }
 
   AAudioStream_requestStop(audio_data->input_stream);
@@ -170,21 +180,20 @@ static int aaudio_stop_capture(ethervox_audio_runtime_t* runtime) {
   audio_data->is_recording = false;
   
   LOGI("AAudio capture stopped");
-  return 0;
+  return ETHERVOX_SUCCESS;
 }
 
-static int aaudio_start_playback(ethervox_audio_runtime_t* runtime) {
+static ethervox_result_t aaudio_start_playback(ethervox_audio_runtime_t* runtime) {
+  ETHERVOX_CHECK_PTR(runtime);
+  ETHERVOX_CHECK_PTR(runtime->platform_data);
+  
   aaudio_data_t* audio_data = (aaudio_data_t*)runtime->platform_data;
-  if (!audio_data) {
-    LOGE("AAudio data not initialized");
-    return -1;
-  }
 
   AAudioStreamBuilder* builder;
   aaudio_result_t result = AAudio_createStreamBuilder(&builder);
   if (result != AAUDIO_OK) {
     LOGE("Failed to create AAudio stream builder: %s", AAudio_convertResultToText(result));
-    return -1;
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_AUDIO_INIT, "AAudio stream builder creation failed");
   }
 
   AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_OUTPUT);
@@ -200,7 +209,7 @@ static int aaudio_start_playback(ethervox_audio_runtime_t* runtime) {
 
   if (result != AAUDIO_OK) {
     LOGE("Failed to open AAudio output stream: %s", AAudio_convertResultToText(result));
-    return -1;
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_AUDIO_INIT, "AAudio output stream open failed");
   }
 
   result = AAudioStream_requestStart(audio_data->output_stream);
@@ -208,18 +217,21 @@ static int aaudio_start_playback(ethervox_audio_runtime_t* runtime) {
     LOGE("Failed to start AAudio output stream: %s", AAudio_convertResultToText(result));
     AAudioStream_close(audio_data->output_stream);
     audio_data->output_stream = NULL;
-    return -1;
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_AUDIO_INIT, "AAudio output stream start failed");
   }
 
   audio_data->is_playing = true;
   LOGI("AAudio playback started");
-  return 0;
+  return ETHERVOX_SUCCESS;
 }
 
-static int aaudio_stop_playback(ethervox_audio_runtime_t* runtime) {
+static ethervox_result_t aaudio_stop_playback(ethervox_audio_runtime_t* runtime) {
+  ETHERVOX_CHECK_PTR(runtime);
+  ETHERVOX_CHECK_PTR(runtime->platform_data);
+  
   aaudio_data_t* audio_data = (aaudio_data_t*)runtime->platform_data;
-  if (!audio_data || !audio_data->output_stream) {
-    return 0;
+  if (!audio_data->output_stream) {
+    return ETHERVOX_SUCCESS;
   }
 
   AAudioStream_requestStop(audio_data->output_stream);
@@ -228,13 +240,17 @@ static int aaudio_stop_playback(ethervox_audio_runtime_t* runtime) {
   audio_data->is_playing = false;
   
   LOGI("AAudio playback stopped");
-  return 0;
+  return ETHERVOX_SUCCESS;
 }
 
-static int aaudio_read_audio(ethervox_audio_runtime_t* runtime, ethervox_audio_buffer_t* buffer) {
+static ethervox_result_t aaudio_read_audio(ethervox_audio_runtime_t* runtime, ethervox_audio_buffer_t* buffer) {
+  ETHERVOX_CHECK_PTR(runtime);
+  ETHERVOX_CHECK_PTR(buffer);
+  ETHERVOX_CHECK_PTR(runtime->platform_data);
+  
   aaudio_data_t* audio_data = (aaudio_data_t*)runtime->platform_data;
-  if (!audio_data || !audio_data->input_stream || !buffer) {
-    return -1;
+  if (!audio_data->input_stream) {
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_INITIALIZED, "Input stream not initialized");
   }
 
   int32_t frames_to_read = (int32_t)(buffer->size / runtime->config.channels);
@@ -243,7 +259,7 @@ static int aaudio_read_audio(ethervox_audio_runtime_t* runtime, ethervox_audio_b
   
   if (frames_read < 0) {
     LOGE("AAudio read error: %s", AAudio_convertResultToText((aaudio_result_t)frames_read));
-    return -1;
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_AUDIO_INIT, "AAudio read failed");
   }
 
   buffer->size = (uint32_t)frames_read * runtime->config.channels;
@@ -252,14 +268,18 @@ static int aaudio_read_audio(ethervox_audio_runtime_t* runtime, ethervox_audio_b
   clock_gettime(CLOCK_MONOTONIC, &ts);
   buffer->timestamp_us = (uint64_t)ts.tv_sec * 1000000ULL + (uint64_t)ts.tv_nsec / 1000ULL;
   
-  return frames_read;
+  return ETHERVOX_SUCCESS;
 }
 
-static int aaudio_write_audio(ethervox_audio_runtime_t* runtime, 
+static ethervox_result_t aaudio_write_audio(ethervox_audio_runtime_t* runtime, 
                               const ethervox_audio_buffer_t* buffer) {
+  ETHERVOX_CHECK_PTR(runtime);
+  ETHERVOX_CHECK_PTR(buffer);
+  ETHERVOX_CHECK_PTR(runtime->platform_data);
+  
   aaudio_data_t* audio_data = (aaudio_data_t*)runtime->platform_data;
-  if (!audio_data || !audio_data->output_stream || !buffer) {
-    return -1;
+  if (!audio_data->output_stream) {
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_INITIALIZED, "Output stream not initialized");
   }
 
   int32_t frames_to_write = (int32_t)(buffer->size / runtime->config.channels);
@@ -268,10 +288,10 @@ static int aaudio_write_audio(ethervox_audio_runtime_t* runtime,
   
   if (frames_written < 0) {
     LOGE("AAudio write error: %s", AAudio_convertResultToText((aaudio_result_t)frames_written));
-    return -1;
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_AUDIO_INIT, "AAudio write failed");
   }
 
-  return frames_written;
+  return ETHERVOX_SUCCESS;
 }
 
 static void aaudio_cleanup(ethervox_audio_runtime_t* runtime) {
@@ -372,12 +392,15 @@ static void opensl_recorder_callback(SLAndroidSimpleBufferQueueItf bq, void* con
                  data->buffer_size * sizeof(int16_t) * data->runtime->config.channels);
 }
 
-static int opensl_init(ethervox_audio_runtime_t* runtime,
+static ethervox_result_t opensl_init(ethervox_audio_runtime_t* runtime,
                        const ethervox_audio_config_t* config) {
+  ETHERVOX_CHECK_PTR(runtime);
+  ETHERVOX_CHECK_PTR(config);
+  
   opensl_data_t* audio_data = (opensl_data_t*)calloc(1, sizeof(opensl_data_t));
   if (!audio_data) {
     LOGE("Failed to allocate OpenSL ES data");
-    return -1;
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_OUT_OF_MEMORY, "Failed to allocate OpenSL ES data");
   }
 
   runtime->platform_data = audio_data;
@@ -400,7 +423,7 @@ static int opensl_init(ethervox_audio_runtime_t* runtime,
     free(audio_data->playback_buffer);
     free(audio_data->ring_buffer);
     free(audio_data);
-    return -1;
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_OUT_OF_MEMORY, "Failed to allocate OpenSL buffers");
   }
 
   // Create OpenSL ES engine
@@ -409,8 +432,9 @@ static int opensl_init(ethervox_audio_runtime_t* runtime,
     LOGE("Failed to create OpenSL ES engine: %d", result);
     free(audio_data->capture_buffer);
     free(audio_data->playback_buffer);
+    free(audio_data->ring_buffer);
     free(audio_data);
-    return -1;
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_AUDIO_INIT, "OpenSL engine creation failed");
   }
 
   result = (*audio_data->engine_object)->Realize(audio_data->engine_object, SL_BOOLEAN_FALSE);
@@ -419,8 +443,9 @@ static int opensl_init(ethervox_audio_runtime_t* runtime,
     (*audio_data->engine_object)->Destroy(audio_data->engine_object);
     free(audio_data->capture_buffer);
     free(audio_data->playback_buffer);
+    free(audio_data->ring_buffer);
     free(audio_data);
-    return -1;
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_AUDIO_INIT, "OpenSL engine realize failed");
   }
 
   result = (*audio_data->engine_object)->GetInterface(audio_data->engine_object, 
@@ -538,7 +563,7 @@ static int opensl_start_capture(ethervox_audio_runtime_t* runtime) {
     LOGE("Failed to enqueue initial buffer: %d", result);
     (*audio_data->recorder_object)->Destroy(audio_data->recorder_object);
     audio_data->recorder_object = NULL;
-    return -1;
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_AUDIO_INIT, "OpenSL buffer enqueue failed");
   }
 
   result = (*audio_data->recorder_record)->SetRecordState(audio_data->recorder_record,
@@ -547,18 +572,21 @@ static int opensl_start_capture(ethervox_audio_runtime_t* runtime) {
     LOGE("Failed to start recording: %d", result);
     (*audio_data->recorder_object)->Destroy(audio_data->recorder_object);
     audio_data->recorder_object = NULL;
-    return -1;
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_AUDIO_INIT, "OpenSL recording start failed");
   }
 
   audio_data->is_recording = true;
   LOGI("OpenSL ES capture started");
-  return 0;
+  return ETHERVOX_SUCCESS;
 }
 
-static int opensl_stop_capture(ethervox_audio_runtime_t* runtime) {
+static ethervox_result_t opensl_stop_capture(ethervox_audio_runtime_t* runtime) {
+  ETHERVOX_CHECK_PTR(runtime);
+  ETHERVOX_CHECK_PTR(runtime->platform_data);
+  
   opensl_data_t* audio_data = (opensl_data_t*)runtime->platform_data;
-  if (!audio_data || !audio_data->recorder_object) {
-    return 0;
+  if (!audio_data->recorder_object) {
+    return ETHERVOX_SUCCESS;
   }
 
   if (audio_data->recorder_record) {
@@ -800,10 +828,8 @@ static void opensl_cleanup(ethervox_audio_runtime_t* runtime) {
 // Platform Driver Registration
 // ===========================================================================
 
-int ethervox_audio_register_platform_driver(ethervox_audio_runtime_t* runtime) {
-  if (!runtime) {
-    return -1;
-  }
+ethervox_result_t ethervox_audio_register_platform_driver(ethervox_audio_runtime_t* runtime) {
+  ETHERVOX_CHECK_PTR(runtime);
 
 #ifdef USE_AAUDIO
   runtime->driver.init = aaudio_init;
@@ -829,7 +855,7 @@ int ethervox_audio_register_platform_driver(ethervox_audio_runtime_t* runtime) {
 #error "No audio driver available for this Android API level"
 #endif
 
-  return 0;
+  return ETHERVOX_SUCCESS;
 }
 
 /**

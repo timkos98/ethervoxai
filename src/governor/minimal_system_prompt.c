@@ -26,16 +26,16 @@
  * @param output Output buffer for system prompt
  * @param output_size Size of output buffer
  * @param min_priority Minimum priority (0=highest, 255=lowest)
- * @return Number of bytes written, or -1 on error
+ * @return ETHERVOX_SUCCESS or error code
  */
-int ethervox_tool_build_minimal_system_prompt(
+ethervox_result_t ethervox_tool_build_minimal_system_prompt(
     const tool_manifest_registry_t* registry,
     char* output,
     size_t output_size,
     uint8_t min_priority
 ) {
     if (!registry || !output || output_size == 0) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     int offset = 0;
@@ -64,7 +64,7 @@ int ethervox_tool_build_minimal_system_prompt(
         "Available tools:\n\n");
     
     if (offset < 0 || (size_t)offset >= output_size) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Track tool categories for grouping
@@ -158,16 +158,16 @@ int ethervox_tool_build_minimal_system_prompt(
  * @param tool_name Name of tool to get schema for
  * @param output Output buffer for schema
  * @param output_size Size of output buffer
- * @return Number of bytes written, or -1 on error
+ * @return ETHERVOX_SUCCESS or error code
  */
-int ethervox_tool_build_schema_injection(
+ethervox_result_t ethervox_tool_build_schema_injection(
     const tool_manifest_registry_t* registry,
     const char* tool_name,
     char* output,
     size_t output_size
 ) {
     if (!registry || !tool_name || !output || output_size == 0) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Get tool detail from manifest
@@ -177,7 +177,7 @@ int ethervox_tool_build_schema_injection(
     
     if (ethervox_tool_get_detail(registry, tool_name, &detail, params, &param_count) != 0) {
         ETHERVOX_LOGE("Tool schema not found: %s", tool_name);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     int offset = 0;
@@ -190,7 +190,7 @@ int ethervox_tool_build_schema_injection(
         tool_name, detail.description);
     
     if (offset < 0 || (size_t)offset >= output_size) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Parameters

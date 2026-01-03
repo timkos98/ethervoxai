@@ -16,6 +16,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
+#include "error.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -173,7 +174,7 @@ typedef struct tool_manifest_registry {
  * @param binary_path Path to tools.bin file
  * @return 0 on success, negative on error
  */
-int ethervox_tool_manifest_init(
+ethervox_result_t ethervox_tool_manifest_init(
     tool_manifest_registry_t* registry,
     const char* binary_path
 );
@@ -190,7 +191,7 @@ void ethervox_tool_manifest_cleanup(tool_manifest_registry_t* registry);
  * @param json_path Path to optimized/<model>.json
  * @return 0 on success, negative on error (non-fatal)
  */
-int ethervox_tool_manifest_load_optimized(
+ethervox_result_t ethervox_tool_manifest_load_optimized(
     tool_manifest_registry_t* registry,
     const char* json_path
 );
@@ -213,7 +214,7 @@ const tool_index_entry_t* ethervox_tool_get_index(
  * @param param_count Output: actual parameter count
  * @return 0 on success, negative on error
  */
-int ethervox_tool_get_detail(
+ethervox_result_t ethervox_tool_get_detail(
     const tool_manifest_registry_t* registry,
     const char* name,
     tool_detail_header_t* detail,
@@ -270,7 +271,7 @@ void ethervox_tool_foreach(
  * @param min_priority Minimum priority (0=all, 255=none)
  * @return Number of bytes written, or negative on error
  */
-int ethervox_tool_build_index_prompt(
+ethervox_result_t ethervox_tool_build_index_prompt(
     const tool_manifest_registry_t* registry,
     char* output,
     size_t output_size,
@@ -284,7 +285,7 @@ int ethervox_tool_build_index_prompt(
 /**
  * Enable tool at runtime
  */
-int ethervox_tool_manifest_enable(
+ethervox_result_t ethervox_tool_manifest_enable(
     tool_manifest_registry_t* registry,
     const char* name
 );
@@ -292,7 +293,7 @@ int ethervox_tool_manifest_enable(
 /**
  * Disable tool at runtime
  */
-int ethervox_tool_manifest_disable(
+ethervox_result_t ethervox_tool_manifest_disable(
     tool_manifest_registry_t* registry,
     const char* name
 );
@@ -300,7 +301,7 @@ int ethervox_tool_manifest_disable(
 /**
  * Set tool priority (affects system prompt ordering)
  */
-int ethervox_tool_manifest_set_priority(
+ethervox_result_t ethervox_tool_manifest_set_priority(
     tool_manifest_registry_t* registry,
     const char* name,
     uint8_t priority
@@ -343,7 +344,7 @@ const char* ethervox_tool_fallback_level_name(uint8_t level);
  * @param min_priority Minimum priority (0=all, 255=none)
  * @return Number of bytes written, or -1 on error
  */
-int ethervox_tool_build_minimal_system_prompt(
+ethervox_result_t ethervox_tool_build_minimal_system_prompt(
     const tool_manifest_registry_t* registry,
     char* output,
     size_t output_size,
@@ -363,7 +364,7 @@ int ethervox_tool_build_minimal_system_prompt(
  * @param output_size Size of output buffer
  * @return Number of bytes written, or -1 on error
  */
-int ethervox_tool_build_schema_injection(
+ethervox_result_t ethervox_tool_build_schema_injection(
     const tool_manifest_registry_t* registry,
     const char* tool_name,
     char* output,

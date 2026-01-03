@@ -9,6 +9,7 @@
 #include "ethervox/tts.h"
 #include "ethervox/text_normalizer.h"
 #include "ethervox/logging.h"
+#include "ethervox/error.h"
 #include "phonemizer/phonemizer.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -53,7 +54,7 @@ typedef struct {
     size_t accumulated_capacity;
 } piper_context_t;
 
-// ONNX Runtime error check
+// ONNX Runtime error check macro (for internal functions returning int)
 #define ORT_CHECK(expr) \
     do { \
         OrtStatus* status = (expr); \
@@ -814,13 +815,17 @@ static int resample_audio(SpeexResamplerState* resampler,
 /**
  * Synthesize speech from IPA phonemes directly (Piper-specific)
  */
-int ethervox_tts_piper_synthesize_ipa(ethervox_tts_context_t* ctx_generic,
+ethervox_result_t ethervox_tts_piper_synthesize_ipa(ethervox_tts_context_t* ctx_generic,
                                       const char* ipa_phonemes,
                                       ethervox_tts_audio_t* output) {
     piper_context_t* ctx = (piper_context_t*)ctx_generic;
     
-    if (!ctx || !ctx->initialized) {
-        return -1;
+    ETHERVOX_CHECK_PTR(ctx);
+    ETHERVOX_CHECK_PTR(ipa_phonemes);
+    ETHERVOX_CHECK_PTR(output);
+    
+    if (!ctx->initialized) {
+        return ETHERVOX_ERROR_NOT_INITIALIZED;
     }
     
     // Convert IPA directly to phoneme IDs (bypass phonemizer)
@@ -828,7 +833,7 @@ int ethervox_tts_piper_synthesize_ipa(ethervox_tts_context_t* ctx_generic,
     size_t phoneme_count = 0;
     
     if (ipa_to_phoneme_ids(ctx, ipa_phonemes, phoneme_ids, &phoneme_count) != 0) {
-        return -1;
+        return ETHERVOX_ERROR_TTS_SYNTHESIS_FAILED;
     }
     
     // Run inference
@@ -836,7 +841,7 @@ int ethervox_tts_piper_synthesize_ipa(ethervox_tts_context_t* ctx_generic,
     size_t sample_count = 0;
     
     if (piper_infer(ctx, phoneme_ids, phoneme_count, &audio_samples, &sample_count) != 0) {
-        return -1;
+        return ETHERVOX_ERROR_TTS_SYNTHESIS_FAILED;
     }
     
     output->samples = audio_samples;
@@ -844,7 +849,7 @@ int ethervox_tts_piper_synthesize_ipa(ethervox_tts_context_t* ctx_generic,
     output->sample_rate = TARGET_SAMPLE_RATE;
     output->channels = 1;
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 ethervox_tts_context_t* ethervox_tts_piper_create(const ethervox_tts_config_t* config) {
@@ -1007,13 +1012,17 @@ ethervox_tts_context_t* ethervox_tts_piper_create(const ethervox_tts_config_t* c
     return (ethervox_tts_context_t*)ctx;
 }
 
-int ethervox_tts_piper_synthesize(ethervox_tts_context_t* ctx,
+ethervox_result_t ethervox_tts_piper_synthesize(ethervox_tts_context_t* ctx,
                                    const char* text,
                                    ethervox_tts_audio_t* output) {
     piper_context_t* piper = (piper_context_t*)ctx;
     
-    if (!piper || !piper->initialized) {
-        return -1;
+    ETHERVOX_CHECK_PTR(piper);
+    ETHERVOX_CHECK_PTR(text);
+    ETHERVOX_CHECK_PTR(output);
+    
+    if (!piper->initialized) {
+        return ETHERVOX_ERROR_NOT_INITIALIZED;
     }
     
     // Split text into sentences for streaming
@@ -1022,7 +1031,7 @@ int ethervox_tts_piper_synthesize(ethervox_tts_context_t* ctx,
     
     if (sentence_count == 0) {
         ETHERVOX_LOG_DEBUG("[Piper] No sentences to synthesize");
-        return -1;
+        return ETHERVOX_ERROR_OUT_OF_MEMORY;
     }
     
     bool streaming_enabled = (piper->chunk_callback != NULL);
@@ -1037,7 +1046,7 @@ int ethervox_tts_piper_synthesize(ethervox_tts_context_t* ctx,
         piper->accumulated_audio = (float*)malloc(piper->accumulated_capacity * sizeof(float));
         if (!piper->accumulated_audio) {
             ETHERVOX_LOG_ERROR("[Piper] Failed to allocate accumulator");
-            return -1;
+            return ETHERVOX_ERROR_OUT_OF_MEMORY;
         }
     }
     piper->accumulated_count = 0;
@@ -1084,7 +1093,7 @@ int ethervox_tts_piper_synthesize(ethervox_tts_context_t* ctx,
         // Add to accumulator
         if (append_to_accumulator(piper, resampled, resampled_count) != 0) {
             free(resampled);
-            return -1;
+            return ETHERVOX_ERROR_OUT_OF_MEMORY;
         }
         
         // Stream sentence to callback if enabled
@@ -1106,7 +1115,7 @@ int ethervox_tts_piper_synthesize(ethervox_tts_context_t* ctx,
     // Return complete accumulated audio
     output->samples = (float*)malloc(piper->accumulated_count * sizeof(float));
     if (!output->samples) {
-        return -1;
+        return ETHERVOX_ERROR_OUT_OF_MEMORY;
     }
     
     memcpy(output->samples, piper->accumulated_audio, piper->accumulated_count * sizeof(float));
@@ -1114,7 +1123,7 @@ int ethervox_tts_piper_synthesize(ethervox_tts_context_t* ctx,
     output->sample_rate = TARGET_SAMPLE_RATE;
     output->channels = 1;
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 void* ethervox_tts_piper_get_phonemizer(void* piper_impl) {

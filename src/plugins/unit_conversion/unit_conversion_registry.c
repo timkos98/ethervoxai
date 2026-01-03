@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include "ethervox/error.h"
 // Copyright (c) 2025 Tim Kos
 
 /**
@@ -25,7 +26,7 @@ static int parse_json_number(const char* json, const char* key, double* out) {
         snprintf(search_key, sizeof(search_key), "\"%s\" :", key);
         pos = strstr(json, search_key);
         if (!pos) {
-            return -1;
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
         }
     }
     
@@ -36,10 +37,10 @@ static int parse_json_number(const char* json, const char* key, double* out) {
     *out = strtod(pos, &end);
     
     if (pos == end) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 // Helper: Parse JSON string field
@@ -53,7 +54,7 @@ static int parse_json_string(const char* json, const char* key, char* out, size_
         snprintf(search_key, sizeof(search_key), "\"%s\" : \"", key);
         pos = strstr(json, search_key);
         if (!pos) {
-            return -1;
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
         }
     }
     
@@ -76,7 +77,7 @@ static int parse_json_string(const char* json, const char* key, char* out, size_
     strncpy(out, pos, len);
     out[len] = '\0';
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -94,19 +95,19 @@ static int tool_unit_convert_wrapper(
     // Parse parameters
     if (parse_json_number(args_json, "value", &value) != 0) {
         *error = strdup("Missing or invalid 'value' parameter");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     if (parse_json_string(args_json, "from", from_unit, sizeof(from_unit)) != 0 &&
         parse_json_string(args_json, "from_unit", from_unit, sizeof(from_unit)) != 0) {
         *error = strdup("Missing 'from' or 'from_unit' parameter");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     if (parse_json_string(args_json, "to", to_unit, sizeof(to_unit)) != 0 &&
         parse_json_string(args_json, "to_unit", to_unit, sizeof(to_unit)) != 0) {
         *error = strdup("Missing 'to' or 'to_unit' parameter");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Perform conversion
@@ -116,7 +117,7 @@ static int tool_unit_convert_wrapper(
     
     if (ret != 0) {
         *error = err_msg ? err_msg : strdup("Conversion failed");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Format result
@@ -130,19 +131,19 @@ static int tool_unit_convert_wrapper(
     ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
                 "Converted %.6f %s to %.6f %s", value, from_unit, converted, to_unit);
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
  * @brief Register unit conversion tool with the tool registry
  */
-int ethervox_unit_conversion_register(void* registry_ptr) {
+ethervox_result_t ethervox_unit_conversion_register(void* registry_ptr) {
     ethervox_tool_registry_t* registry = (ethervox_tool_registry_t*)registry_ptr;
     
     if (!registry) {
         ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__,
                     "Cannot register unit conversion: NULL registry");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     ethervox_tool_t tool = {

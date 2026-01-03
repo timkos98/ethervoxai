@@ -7,6 +7,7 @@
  */
 
 #include "ethervox/memory_tools.h"
+#include "ethervox/error.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -248,5 +249,5 @@ int main(void) {
     test_multiple_corrections_and_patterns();
     
     printf("\n=== All adaptive memory tests passed! ===\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }

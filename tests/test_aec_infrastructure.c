@@ -4,6 +4,7 @@
  */
 
 #include <stdio.h>
+#include "ethervox/error.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -142,8 +143,8 @@ static void test_aec_passthrough(void) {
     generate_sine_wave(input, FRAME_SIZE, 440.0f, 0.5f);
     memcpy(original, input, sizeof(input));
     
-    int result = ethervox_aec_process(aec, input, FRAME_SIZE);
-    assert(result == 0);
+    ethervox_result_t result = ethervox_aec_process(aec, input, FRAME_SIZE);
+    assert(result == ETHERVOX_SUCCESS);
     
     // Verify input unchanged (passthrough)
     for (size_t i = 0; i < FRAME_SIZE; i++) {
@@ -201,8 +202,8 @@ static void test_aec_speex(void) {
     printf("✓ Generated mic input (50%% echo + 50%% voice)\n");
     
     // Process with AEC (in-place)
-    int result = ethervox_aec_process(aec, mic_input, FRAME_SIZE);
-    assert(result == 0);
+    ethervox_result_t result = ethervox_aec_process(aec, mic_input, FRAME_SIZE);
+    assert(result == ETHERVOX_SUCCESS);
     printf("✓ AEC processing successful\n");
     
     // Calculate RMS energy of original vs processed
@@ -267,7 +268,8 @@ static void test_full_workflow(void) {
         }
         
         // Process with AEC (in-place)
-        ethervox_aec_process(aec, mic_input, FRAME_SIZE);
+        ethervox_result_t process_result = ethervox_aec_process(aec, mic_input, FRAME_SIZE);
+        assert(process_result == ETHERVOX_SUCCESS);
         
         printf("  Frame %d: processed %d samples\n", frame + 1, FRAME_SIZE);
     }
@@ -295,5 +297,5 @@ int main(void) {
     printf("║              ✓ All Tests Passed                        ║\n");
     printf("╚════════════════════════════════════════════════════════╝\n");
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }

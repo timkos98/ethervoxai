@@ -1,4 +1,5 @@
 /**
+#include "ethervox/error.h"
  * Meta-tool: get_tool_info
  * 
  * Returns detailed schema and documentation for any tool.
@@ -141,7 +142,7 @@ static int tool_get_tool_info_wrapper(const char* params_json, char** result, ch
     if (!params_json) {
         *result = NULL;
         *error = strdup("No parameters provided");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Simple JSON parsing for tool_name parameter
@@ -149,7 +150,7 @@ static int tool_get_tool_info_wrapper(const char* params_json, char** result, ch
     if (!tool_name_start) {
         *result = NULL;
         *error = strdup("Missing 'tool_name' parameter");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Find the value after the colon
@@ -157,7 +158,7 @@ static int tool_get_tool_info_wrapper(const char* params_json, char** result, ch
     if (!colon) {
         *result = NULL;
         *error = strdup("Invalid JSON format");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Skip whitespace and opening quote
@@ -166,7 +167,7 @@ static int tool_get_tool_info_wrapper(const char* params_json, char** result, ch
     if (*value_start != '"') {
         *result = NULL;
         *error = strdup("Tool name must be a string");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     value_start++;  // Skip opening quote
     
@@ -175,7 +176,7 @@ static int tool_get_tool_info_wrapper(const char* params_json, char** result, ch
     if (!value_end) {
         *result = NULL;
         *error = strdup("Invalid JSON string");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Extract tool name
@@ -184,7 +185,7 @@ static int tool_get_tool_info_wrapper(const char* params_json, char** result, ch
     if (len >= sizeof(tool_name)) {
         *result = NULL;
         *error = strdup("Tool name too long");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     memcpy(tool_name, value_start, len);
     tool_name[len] = '\0';
@@ -199,15 +200,15 @@ static int tool_get_tool_info_wrapper(const char* params_json, char** result, ch
     }
     
     *error = NULL;
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
  * Register get_tool_info meta-tool
  */
-int ethervox_get_tool_info_register(ethervox_tool_registry_t* registry) {
+ethervox_result_t ethervox_get_tool_info_register(ethervox_tool_registry_t* registry) {
     if (!registry) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     ethervox_tool_t tool = {

@@ -12,6 +12,7 @@
 #ifndef RULES_DE_H
 #define RULES_DE_H
 
+#include "ethervox/error.h"
 #include <stddef.h>
 
 /**
@@ -20,12 +21,12 @@
  * @param word Input German word (UTF-8)
  * @param ipa_out Output IPA string
  * @param max_len Maximum output buffer size
- * @return 0 on success, -1 on error
+ * @return ETHERVOX_SUCCESS on success, error code otherwise
  * 
  * Example:
  *   apply_german_g2p_rules("Haus", ipa_out, 256);
  *   // ipa_out: "haʊs"
  */
-int apply_german_g2p_rules(const char* word, char* ipa_out, size_t max_len);
+ethervox_result_t apply_german_g2p_rules(const char* word, char* ipa_out, size_t max_len);
 
 #endif // RULES_DE_H

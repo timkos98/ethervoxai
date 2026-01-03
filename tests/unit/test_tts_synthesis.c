@@ -13,6 +13,7 @@
  */
 
 #include <stdio.h>
+#include "ethervox/error.h"
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
@@ -25,7 +26,7 @@
         if (!(cond)) { \
             printf("✗ FAIL: %s\n", msg); \
             printf("   Condition: %s\n", #cond); \
-            return -1; \
+            return ETHERVOX_ERROR_INVALID_ARGUMENT; \
         } \
     } while(0)
 
@@ -40,7 +41,7 @@
  */
 static int validate_audio_quality(const ethervox_tts_audio_t* audio) {
     if (!audio || !audio->samples) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Check sample count is reasonable (at least 0.1 seconds worth)
@@ -60,7 +61,7 @@ static int validate_audio_quality(const ethervox_tts_audio_t* audio) {
     float silence_ratio = (float)silent_samples / audio->sample_count;
     if (silence_ratio > 0.95f) {
         printf("   Warning: Audio is %.1f%% silent\n", silence_ratio * 100);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Check for clipping (samples at extremes)
@@ -91,7 +92,7 @@ static int validate_audio_quality(const ethervox_tts_audio_t* audio) {
         printf("   Warning: RMS level unusual (%.3f)\n", rms);
     }
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -129,7 +130,7 @@ static int test_english_synthesis(ethervox_tts_context_t* ctx) {
     }
     
     printf("  ✓ PASSED\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -158,7 +159,7 @@ static int test_chinese_synthesis(ethervox_tts_context_t* ctx) {
     }
     
     printf("  ✓ PASSED\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -187,7 +188,7 @@ static int test_german_synthesis(ethervox_tts_context_t* ctx) {
     }
     
     printf("  ✓ PASSED\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -207,7 +208,7 @@ static int test_empty_text(ethervox_tts_context_t* ctx) {
     }
     
     printf("  ✓ PASSED\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -246,7 +247,7 @@ static int test_long_text(ethervox_tts_context_t* ctx) {
     }
     
     printf("  ✓ PASSED\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -271,7 +272,7 @@ static int test_punctuation(ethervox_tts_context_t* ctx) {
     }
     
     printf("  ✓ PASSED\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -298,7 +299,7 @@ static int test_null_handling(ethervox_tts_context_t* ctx) {
     printf("  ✓ NULL output rejected\n");
     
     printf("  ✓ PASSED\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -327,7 +328,7 @@ int main(int argc, char** argv) {
     if (!model_path) {
         printf("✗ No model path provided\n");
         printf("Usage: %s [model_path.onnx]\n", argv[0]);
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
     
     printf("\nInitializing TTS with model: %s\n", model_path);
@@ -343,13 +344,13 @@ int main(int argc, char** argv) {
     if (!ctx) {
         printf("✗ Failed to create TTS context\n");
         printf("  Check if model exists and ONNX Runtime is installed\n");
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
     
     if (!ethervox_tts_is_ready(ctx)) {
         printf("✗ TTS context not ready\n");
         ethervox_tts_destroy(ctx);
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
     
     printf("✓ TTS initialized successfully\n");

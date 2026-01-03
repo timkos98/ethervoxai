@@ -35,7 +35,7 @@ typedef struct phonemizer_context phonemizer_t;
  * @param stt STT system for transcription (internal stt_context_t*, pass as void*, optional)
  * @return 0 on success, -1 on error
  */
-int ethervox_voice_training_run(
+ethervox_result_t ethervox_voice_training_run(
     ethervox_governor_t* governor,
     phonemizer_t* phonemizer,
     void* tts,

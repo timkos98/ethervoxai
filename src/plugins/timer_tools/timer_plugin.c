@@ -1,4 +1,5 @@
 /**
+#include "ethervox/error.h"
  * @file timer_plugin.c
  * @brief Timer and alarm management tool implementation
  *
@@ -90,7 +91,7 @@ static int extract_json_int(const char* json, const char* key, int default_value
  */
 static int timer_create_execute(const char* args_json, char** result, char** error) {
     if (!args_json || !result || !error) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Extract parameters
@@ -100,7 +101,7 @@ static int timer_create_execute(const char* args_json, char** result, char** err
     if (duration <= 0) {
         *error = strdup("Invalid duration - must be positive number of seconds");
         free(label);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Find free slot
@@ -115,7 +116,7 @@ static int timer_create_execute(const char* args_json, char** result, char** err
     if (slot == -1) {
         *error = strdup("Maximum number of timers reached (10)");
         free(label);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Create timer
@@ -138,7 +139,7 @@ static int timer_create_execute(const char* args_json, char** result, char** err
     // Return result
     char* result_json = malloc(256);
     if (!result_json) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     snprintf(result_json, 256, 
@@ -146,7 +147,7 @@ static int timer_create_execute(const char* args_json, char** result, char** err
              timers[slot].id, timers[slot].label, duration);
     *result = result_json;
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -155,14 +156,14 @@ static int timer_create_execute(const char* args_json, char** result, char** err
  */
 static int timer_cancel_execute(const char* args_json, char** result, char** error) {
     if (!args_json || !result || !error) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     int timer_id = extract_json_int(args_json, "timer_id", -1);
     
     if (timer_id < 0) {
         *error = strdup("Invalid timer_id");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Find and cancel timer
@@ -178,19 +179,19 @@ static int timer_cancel_execute(const char* args_json, char** result, char** err
     
     if (!found) {
         *error = strdup("Timer not found or already completed");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Return result
     char* result_json = malloc(128);
     if (!result_json) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     snprintf(result_json, 128, "{\"success\": true, \"message\": \"Timer canceled\"}");
     *result = result_json;
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -200,7 +201,7 @@ static int timer_cancel_execute(const char* args_json, char** result, char** err
  */
 static int alarm_create_execute(const char* args_json, char** result, char** error) {
     if (!args_json || !result || !error) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Extract parameters
@@ -211,7 +212,7 @@ static int alarm_create_execute(const char* args_json, char** result, char** err
     if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
         *error = strdup("Invalid time - hour must be 0-23, minute must be 0-59");
         free(label);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Find free slot
@@ -226,7 +227,7 @@ static int alarm_create_execute(const char* args_json, char** result, char** err
     if (slot == -1) {
         *error = strdup("Maximum number of timers reached (10)");
         free(label);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Calculate trigger time (today or tomorrow)
@@ -269,7 +270,7 @@ static int alarm_create_execute(const char* args_json, char** result, char** err
     // Return result
     char* result_json = malloc(256);
     if (!result_json) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     snprintf(result_json, 256, 
@@ -277,7 +278,7 @@ static int alarm_create_execute(const char* args_json, char** result, char** err
              timers[slot].id, timers[slot].label, hour, minute);
     *result = result_json;
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -286,13 +287,13 @@ static int alarm_create_execute(const char* args_json, char** result, char** err
  */
 static int timer_list_execute(const char* args_json, char** result, char** error) {
     if (!result || !error) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Build JSON array of active timers
     char* result_json = malloc(2048);
     if (!result_json) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     strcpy(result_json, "{\"timers\": [");
@@ -321,7 +322,7 @@ static int timer_list_execute(const char* args_json, char** result, char** error
     strcat(result_json, "]}");
     *result = result_json;
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 // Tool definitions
@@ -444,7 +445,7 @@ int* ethervox_timer_check_triggered(int* count) {
 /**
  * Get timer details by ID
  */
-int ethervox_timer_get_info(int timer_id, char* label_out, size_t label_size, int* remaining_seconds) {
+ethervox_result_t ethervox_timer_get_info(int timer_id, char* label_out, size_t label_size, int* remaining_seconds) {
     for (int i = 0; i < MAX_TIMERS; i++) {
         if (timers[i].is_active && timers[i].id == timer_id) {
             if (label_out && label_size > 0) {
@@ -455,10 +456,10 @@ int ethervox_timer_get_info(int timer_id, char* label_out, size_t label_size, in
                 time_t now = time(NULL);
                 *remaining_seconds = (int)difftime(timers[i].trigger_time, now);
             }
-            return 0;
+            return ETHERVOX_SUCCESS;
         }
     }
-    return -1;  // Not found
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;  // Not found
 }
 
 /**

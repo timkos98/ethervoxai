@@ -6,6 +6,7 @@
 #ifndef STRESS_REDUCTION_H
 #define STRESS_REDUCTION_H
 
+#include "ethervox/error.h"
 #include <stddef.h>
 
 /**
@@ -26,9 +27,9 @@ typedef enum {
  * @param ipa IPA string (modified in-place)
  * @param max_len Maximum length of IPA buffer
  * @param context Sentence context for the word
- * @return 0 on success, -1 on error
+ * @return ETHERVOX_SUCCESS on success, error code otherwise
  */
-int apply_stress_reduction(
+ethervox_result_t apply_stress_reduction(
     const char* word,
     char* ipa,
     size_t max_len,

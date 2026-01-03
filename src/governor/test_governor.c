@@ -9,6 +9,7 @@
  * SPDX-License-Identifier: CC-BY-NC-SA-4.0
  */
 
+#include "ethervox/error.h"
 #include "ethervox/governor.h"
 #include "ethervox/compute_tools.h"
 #include <stdio.h>

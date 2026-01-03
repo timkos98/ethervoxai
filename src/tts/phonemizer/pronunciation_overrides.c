@@ -4,6 +4,7 @@
  */
 
 #include "pronunciation_overrides.h"
+#include "ethervox/error.h"
 #include "ethervox/logging.h"
 #include "cJSON.h"
 #include <stdlib.h>
@@ -182,16 +183,14 @@ pronunciation_override_store_t* pronunciation_overrides_load(void) {
     return store;
 }
 
-int pronunciation_overrides_lookup(
+ethervox_result_t pronunciation_overrides_lookup(
     pronunciation_override_store_t* store,
     const char* word,
     pronunciation_override_t* out_override
 ) {
-    if (!store || !word || !out_override) {
-        fprintf(stderr, "[PronOverrides] Lookup failed: store=%p word=%p override=%p\n",
-                (void*)store, (void*)word, (void*)out_override);
-        return -1;
-    }
+    ETHERVOX_CHECK_PTR(store);
+    ETHERVOX_CHECK_PTR(word);
+    ETHERVOX_CHECK_PTR(out_override);
     
     char normalized[MAX_WORD_LENGTH];
     normalize_word(word, normalized, sizeof(normalized));
@@ -205,20 +204,21 @@ int pronunciation_overrides_lookup(
             ETHERVOX_LOG_DEBUG("[PronOverrides] 🎯 Found match at index %d: ipa='%s' confidence=%.3f\n",
                     i, store->overrides[i].ipa, store->overrides[i].confidence);
             *out_override = store->overrides[i];
-            return 0;
+            return ETHERVOX_SUCCESS;
         }
     }
     
     ETHERVOX_LOG_DEBUG("[PronOverrides] ❌ No match found for '%s'\n", normalized);
     
-    return -1;
+    return ETHERVOX_ERROR_NOT_FOUND;
 }
 
-int pronunciation_overrides_add(
+ethervox_result_t pronunciation_overrides_add(
     pronunciation_override_store_t* store,
     const pronunciation_override_t* override
 ) {
-    if (!store || !override) return -1;
+    ETHERVOX_CHECK_PTR(store);
+    ETHERVOX_CHECK_PTR(override);
     
     // Check if override already exists
     for (int i = 0; i < store->count; i++) {
@@ -238,14 +238,14 @@ int pronunciation_overrides_add(
                 store->overrides[i].trained_speaker_id = override->trained_speaker_id;
             }
             
-            return 0;
+            return ETHERVOX_SUCCESS;
         }
     }
     
     // Add new override
     if (store->count >= store->capacity) {
         ETHERVOX_LOG_DEBUG("[PronOverrides] Store full, cannot add more overrides");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     store->overrides[store->count++] = *override;
@@ -253,14 +253,15 @@ int pronunciation_overrides_add(
     store->overrides[store->count - 1].last_used = time(NULL);
     store->overrides[store->count - 1].is_community = false;
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
-int pronunciation_overrides_record_usage(
+ethervox_result_t pronunciation_overrides_record_usage(
     pronunciation_override_store_t* store,
     const char* word
 ) {
-    if (!store || !word) return -1;
+    ETHERVOX_CHECK_PTR(store);
+    ETHERVOX_CHECK_PTR(word);
     
     char normalized[MAX_WORD_LENGTH];
     normalize_word(word, normalized, sizeof(normalized));
@@ -269,11 +270,11 @@ int pronunciation_overrides_record_usage(
         if (strcmp(store->overrides[i].word, normalized) == 0) {
             store->overrides[i].usage_count++;
             store->overrides[i].last_used = time(NULL);
-            return 0;
+            return ETHERVOX_SUCCESS;
         }
     }
     
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
 }
 
 /**
@@ -296,8 +297,8 @@ static cJSON* override_to_json(const pronunciation_override_t* override) {
     return obj;
 }
 
-int pronunciation_overrides_save(pronunciation_override_store_t* store) {
-    if (!store) return -1;
+ethervox_result_t pronunciation_overrides_save(pronunciation_override_store_t* store) {
+    ETHERVOX_CHECK_PTR(store);
     
     cJSON* personal_root = cJSON_CreateObject();
     cJSON* community_root = cJSON_CreateObject();
@@ -305,7 +306,7 @@ int pronunciation_overrides_save(pronunciation_override_store_t* store) {
     if (!personal_root || !community_root) {
         if (personal_root) cJSON_Delete(personal_root);
         if (community_root) cJSON_Delete(community_root);
-        return -1;
+        return ETHERVOX_ERROR_FILE_WRITE;
     }
     
     // Separate personal and community overrides
@@ -349,11 +350,11 @@ int pronunciation_overrides_save(pronunciation_override_store_t* store) {
     ETHERVOX_LOG_DEBUG("[PronOverrides] Saved to %s and %s\n", 
            store->personal_path, store->community_path);
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
-int pronunciation_overrides_promote(pronunciation_override_store_t* store) {
-    if (!store) return -1;
+ethervox_result_t pronunciation_overrides_promote(pronunciation_override_store_t* store) {
+    ETHERVOX_CHECK_PTR(store);
     
     int promoted = 0;
     
@@ -379,14 +380,15 @@ int pronunciation_overrides_promote(pronunciation_override_store_t* store) {
     return promoted;
 }
 
-int pronunciation_overrides_export_to_core(
+ethervox_result_t pronunciation_overrides_export_to_core(
     pronunciation_override_store_t* store,
     const char* output_path
 ) {
-    if (!store || !output_path) return -1;
+    ETHERVOX_CHECK_PTR(store);
+    ETHERVOX_CHECK_PTR(output_path);
     
     FILE* f = fopen(output_path, "w");
-    if (!f) return -1;
+    if (!f) return ETHERVOX_ERROR_FILE_WRITE;
     
     fprintf(f, "/**\n");
     fprintf(f, " * @file overrides_learned.c\n");
@@ -451,7 +453,7 @@ void pronunciation_overrides_get_stats(
     if (avg_confidence) *avg_confidence = total > 0 ? confidence_sum / total : 0.0f;
 }
 
-int pronunciation_overrides_reset(void) {
+ethervox_result_t pronunciation_overrides_reset(void) {
     const char* home = getenv("HOME");
     if (!home) home = ".";
     

@@ -20,6 +20,7 @@
 #include <string.h>
 #include <sys/time.h>
 
+#include "ethervox/error.h"
 #include "ethervox/wake_word.h"
 
 #define DEFAULT_WAKE_WORD "hey ethervox"
@@ -272,10 +273,8 @@ ethervox_wake_config_t ethervox_wake_get_default_config(void) {
   return config;
 }
 
-int ethervox_wake_init(ethervox_wake_runtime_t* runtime, const ethervox_wake_config_t* config) {
-  if (!runtime) {
-    return -1;
-  }
+ethervox_result_t ethervox_wake_init(ethervox_wake_runtime_t* runtime, const ethervox_wake_config_t* config) {
+  ETHERVOX_CHECK_PTR(runtime);
 
   memset(runtime, 0, sizeof(*runtime));
 
@@ -288,14 +287,14 @@ int ethervox_wake_init(ethervox_wake_runtime_t* runtime, const ethervox_wake_con
   runtime->buffer_size = (uint32_t)(runtime->config.sample_rate * TEMPLATE_MAX_LENGTH_SEC);
   runtime->audio_buffer = (float*)calloc(runtime->buffer_size, sizeof(float));
   if (!runtime->audio_buffer) {
-    return -1;
+    return ETHERVOX_ERROR_NULL_POINTER;
   }
 
   // Allocate internal state
   wake_word_state_t* state = (wake_word_state_t*)calloc(1, sizeof(wake_word_state_t));
   if (!state) {
     free(runtime->audio_buffer);
-    return -1;
+    return ETHERVOX_ERROR_NULL_POINTER;
   }
   
   state->noise_floor = 0.01f;  // Initial estimate
@@ -315,14 +314,18 @@ int ethervox_wake_init(ethervox_wake_runtime_t* runtime, const ethervox_wake_con
   printf("  Sensitivity: %.2f\n", runtime->config.sensitivity);
   printf("  Expected syllables: %d\n", EXPECTED_SYLLABLES);
   
-  return 0;
+  return ETHERVOX_SUCCESS;
 }
 
-int ethervox_wake_process(ethervox_wake_runtime_t* runtime,
+ethervox_result_t ethervox_wake_process(ethervox_wake_runtime_t* runtime,
                           const ethervox_audio_buffer_t* audio_buffer,
                           ethervox_wake_result_t* result) {
-  if (!runtime || !runtime->is_initialized || !audio_buffer || !audio_buffer->data || !result) {
-    return -1;
+  ETHERVOX_CHECK_PTR(runtime);
+  ETHERVOX_CHECK_PTR(audio_buffer);
+  ETHERVOX_CHECK_PTR(audio_buffer->data);
+  ETHERVOX_CHECK_PTR(result);
+  if (!runtime->is_initialized) {
+    return ETHERVOX_ERROR_NOT_INITIALIZED;
   }
 
   memset(result, 0, sizeof(*result));
@@ -330,7 +333,7 @@ int ethervox_wake_process(ethervox_wake_runtime_t* runtime,
 
   wake_word_state_t* state = (wake_word_state_t*)runtime->detector_context;
   if (!state) {
-    return -1;
+    return ETHERVOX_ERROR_NULL_POINTER;
   }
 
   const float* samples = (const float*)audio_buffer->data;
@@ -338,14 +341,14 @@ int ethervox_wake_process(ethervox_wake_runtime_t* runtime,
   const uint64_t timestamp_us = audio_buffer->timestamp_us;
 
   if (sample_count == 0) {
-    return 1;
+    return ETHERVOX_SUCCESS;
   }
 
   // Check debounce - don't retrigger within cooldown period
   if (state->last_detection_time_us > 0) {
     uint64_t time_since_detection = timestamp_us - state->last_detection_time_us;
     if (time_since_detection < DEBOUNCE_TIME_MS * 1000ULL) {
-      return 1;  // Still in cooldown
+      return ETHERVOX_SUCCESS;  // Still in cooldown
     }
   }
 
@@ -366,7 +369,7 @@ int ethervox_wake_process(ethervox_wake_runtime_t* runtime,
     state->noise_zcr = (state->noise_zcr * state->noise_adapt_count + zcr) / 
                        (state->noise_adapt_count + 1);
     state->noise_adapt_count++;
-    return 1;  // Still learning background
+    return ETHERVOX_SUCCESS;  // Still learning background
   }
 
   // Voice Activity Detection
@@ -452,7 +455,7 @@ int ethervox_wake_process(ethervox_wake_runtime_t* runtime,
             // Reset syllable counter
             state->syllable_count = 0;
             
-            return 0;  // Detection success
+            return ETHERVOX_SUCCESS;  // Detection success
           }
         }
       }
@@ -462,18 +465,21 @@ int ethervox_wake_process(ethervox_wake_runtime_t* runtime,
     }
   }
 
-  return 1;  // No detection
+  return ETHERVOX_SUCCESS;  // No detection
 }
 
-int ethervox_wake_record_template(ethervox_wake_runtime_t* runtime,
+ethervox_result_t ethervox_wake_record_template(ethervox_wake_runtime_t* runtime,
                                    const ethervox_audio_buffer_t* audio_buffer) {
-  if (!runtime || !runtime->is_initialized || !audio_buffer || !audio_buffer->data) {
-    return -1;
+  ETHERVOX_CHECK_PTR(runtime);
+  ETHERVOX_CHECK_PTR(audio_buffer);
+  ETHERVOX_CHECK_PTR(audio_buffer->data);
+  if (!runtime->is_initialized) {
+    return ETHERVOX_ERROR_NOT_INITIALIZED;
   }
 
   wake_word_state_t* state = (wake_word_state_t*)runtime->detector_context;
   if (!state) {
-    return -1;
+    return ETHERVOX_ERROR_NULL_POINTER;
   }
 
   const float* samples = (const float*)audio_buffer->data;
@@ -487,7 +493,7 @@ int ethervox_wake_record_template(ethervox_wake_runtime_t* runtime,
   // Allocate and copy new template
   state->template_audio = (float*)malloc(sample_count * sizeof(float));
   if (!state->template_audio) {
-    return -1;
+    return ETHERVOX_ERROR_NULL_POINTER;
   }
 
   memcpy(state->template_audio, samples, sample_count * sizeof(float));
@@ -497,7 +503,7 @@ int ethervox_wake_record_template(ethervox_wake_runtime_t* runtime,
   printf("✓ Wake word template recorded (%.2f seconds, %u samples)\n", 
          duration_sec, sample_count);
 
-  return 0;
+  return ETHERVOX_SUCCESS;
 }
 
 void ethervox_wake_reset(ethervox_wake_runtime_t* runtime) {

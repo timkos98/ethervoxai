@@ -11,6 +11,7 @@
  */
 
 #include <stdio.h>
+#include "ethervox/error.h"
 #include <string.h>
 #include <assert.h>
 #include "ethervox/language_detector.h"
@@ -115,10 +116,10 @@ int main(void) {
     if (pass_count == test_count) {
         printf(GREEN "✓ ALL TESTS PASSED" RESET " (%d/%d)\n", pass_count, test_count);
         printf("========================================\n\n");
-        return 0;
+        return ETHERVOX_SUCCESS;
     } else {
         printf(RED "✗ SOME TESTS FAILED" RESET " (%d/%d passed)\n", pass_count, test_count);
         printf("========================================\n\n");
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
 }

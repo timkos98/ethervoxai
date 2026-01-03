@@ -10,6 +10,7 @@
 #include "ethervox/config.h"
 #include "ethervox/logging.h"
 #include "ethervox/platform.h"
+#include "ethervox/error.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -244,9 +245,10 @@ static uint64_t get_dir_size(const char* path) {
 // Public API Implementation
 // ============================================================================
 
-int ethervox_model_get_base_dir(char* buffer, size_t buffer_size) {
-    if (!buffer || buffer_size == 0) {
-        return -1;
+ethervox_result_t ethervox_model_get_base_dir(char* buffer, size_t buffer_size) {
+    ETHERVOX_CHECK_PTR(buffer);
+    if (buffer_size == 0) {
+        ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_INVALID_ARGUMENT, "Buffer size is zero");
     }
     
 #ifdef __ANDROID__
@@ -254,28 +256,28 @@ int ethervox_model_get_base_dir(char* buffer, size_t buffer_size) {
     const char* android_dir = ethervox_get_android_files_dir();
     if (!android_dir || android_dir[0] == '\0') {
         ETHERVOX_LOG_ERROR("Android files directory not set");
-        return -2;
+        ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_PLATFORM_INIT, "Android files directory not set");
     }
     
     int written = snprintf(buffer, buffer_size, "%s/models", android_dir);
     if (written < 0 || (size_t)written >= buffer_size) {
-        return -3;
+        ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_BUFFER_TOO_SMALL, "Buffer too small for Android model path");
     }
     
     // Ensure directory exists
     mkdir(buffer, 0755);
     ETHERVOX_LOG_DEBUG("Android base directory: %s", buffer);
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 #else
     const char* home = getenv("HOME");
     if (!home) {
-        return -2;
+        ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_PLATFORM_INIT, "HOME environment variable not set");
     }
     
     int written = snprintf(buffer, buffer_size, "%s/.ethervox/models", home);
     if (written < 0 || (size_t)written >= buffer_size) {
-        return -3;
+        ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_BUFFER_TOO_SMALL, "Buffer too small for model path");
     }
     
     // Ensure directory exists
@@ -285,7 +287,7 @@ int ethervox_model_get_base_dir(char* buffer, size_t buffer_size) {
     
     mkdir(buffer, 0755);
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 #endif
 }
 
@@ -303,7 +305,7 @@ ethervox_model_status_t ethervox_model_check_status(
     }
     
     char base_dir[512];
-    if (ethervox_model_get_base_dir(base_dir, sizeof(base_dir)) != 0) {
+    if (ethervox_is_error(ethervox_model_get_base_dir(base_dir, sizeof(base_dir)))) {
         ETHERVOX_LOG_ERROR("Failed to get base directory");
         return ETHERVOX_MODEL_STATUS_UNKNOWN;
     }
@@ -429,26 +431,23 @@ ethervox_model_status_t ethervox_model_check_status(
     return status;
 }
 
-int ethervox_model_get_default(
+ethervox_result_t ethervox_model_get_default(
     ethervox_model_type_t type,
     ethervox_model_info_t* info
 ) {
-    if (!info) {
-        return -1;
-    }
+    ETHERVOX_CHECK_PTR(info);
     
     ethervox_model_check_status(type, NULL, info);
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
-int ethervox_model_list(
+ethervox_result_t ethervox_model_list(
     ethervox_model_type_t type,
     ethervox_model_info_t** models,
     uint32_t* count
 ) {
-    if (!models || !count) {
-        return -1;
-    }
+    ETHERVOX_CHECK_PTR(models);
+    ETHERVOX_CHECK_PTR(count);
     
     const model_definition_t* defs = NULL;
     uint32_t def_count = 0;
@@ -473,12 +472,12 @@ int ethervox_model_list(
         case ETHERVOX_MODEL_TYPE_WAKE_TEMPLATE:
             *models = NULL;
             *count = 0;
-            return 0;  // Wake templates are custom
+            return ETHERVOX_SUCCESS;  // Wake templates are custom
     }
     
     ethervox_model_info_t* result = calloc(def_count, sizeof(ethervox_model_info_t));
     if (!result) {
-        return -2;
+        ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_OUT_OF_MEMORY, "Failed to allocate model list");
     }
     
     for (uint32_t i = 0; i < def_count; i++) {
@@ -488,7 +487,7 @@ int ethervox_model_list(
     *models = result;
     *count = def_count;
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 int ethervox_model_download(
@@ -503,13 +502,14 @@ int ethervox_model_download(
     const model_definition_t* def = get_model_definition(type, model_name, NULL);
     if (!def) {
         ETHERVOX_LOG_ERROR("Unknown model: %s", model_name ? model_name : "(default)");
-        return -1;
+        ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_FOUND, "Model not found");
     }
     
     char base_dir[512];
-    if (ethervox_model_get_base_dir(base_dir, sizeof(base_dir)) != 0) {
+    ethervox_result_t result = ethervox_model_get_base_dir(base_dir, sizeof(base_dir));
+    if (ethervox_is_error(result)) {
         ETHERVOX_LOG_ERROR("Failed to get model base directory");
-        return -2;
+        return result;
     }
     
     // Create subdirectory
@@ -549,17 +549,17 @@ int ethervox_model_download(
     ETHERVOX_LOG_INFO("Downloading %s...", def->name);
     ETHERVOX_LOG_DEBUG("Command: %s", cmd);
     
-    int result = system(cmd);
-    if (result != 0) {
-        ETHERVOX_LOG_ERROR("Download failed with exit code: %d", result);
-        return -3;
+    int cmd_result = system(cmd);
+    if (cmd_result != 0) {
+        ETHERVOX_LOG_ERROR("Download failed with exit code: %d", cmd_result);
+        ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_DOWNLOAD_FAILED, "Download command failed");
     }
     
     ETHERVOX_LOG_INFO("Download complete: %s", def->name);
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
-int ethervox_model_cancel_download(
+ethervox_result_t ethervox_model_cancel_download(
     ethervox_model_type_t type,
     const char* model_name
 ) {
@@ -569,16 +569,17 @@ int ethervox_model_cancel_download(
     // TODO: Implement download cancellation
     // Would require tracking active downloads in a global registry
     ETHERVOX_LOG_WARN("Download cancellation not yet implemented");
-    return -1;
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_IMPLEMENTED, "Download cancellation not implemented");
 }
 
-int ethervox_model_delete(
+ethervox_result_t ethervox_model_delete(
     ethervox_model_type_t type,
     const char* model_name
 ) {
     char base_dir[512];
-    if (ethervox_model_get_base_dir(base_dir, sizeof(base_dir)) != 0) {
-        return -1;
+    ethervox_result_t result = ethervox_model_get_base_dir(base_dir, sizeof(base_dir));
+    if (ethervox_is_error(result)) {
+        return result;
     }
     
     const char* subdir = "";
@@ -597,10 +598,17 @@ int ethervox_model_delete(
         // Delete directory recursively
         char cmd[1536];
         snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", model_path);
-        return system(cmd) == 0 ? 0 : -2;
+        int cmd_result = system(cmd);
+        if (cmd_result != 0) {
+            ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_FILE_DELETE_FAILED, "Failed to delete model directory");
+        }
+        return ETHERVOX_SUCCESS;
     } else {
         // Delete file
-        return unlink(model_path) == 0 ? 0 : -2;
+        if (unlink(model_path) != 0) {
+            ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_FILE_DELETE_FAILED, "Failed to delete model file");
+        }
+        return ETHERVOX_SUCCESS;
     }
 }
 
@@ -703,18 +711,17 @@ const char* ethervox_model_type_string(ethervox_model_type_t type) {
     }
 }
 
-int ethervox_model_get_disk_usage(uint64_t* bytes_used) {
-    if (!bytes_used) {
-        return -1;
-    }
+ethervox_result_t ethervox_model_get_disk_usage(uint64_t* bytes_used) {
+    ETHERVOX_CHECK_PTR(bytes_used);
     
     char base_dir[512];
-    if (ethervox_model_get_base_dir(base_dir, sizeof(base_dir)) != 0) {
-        return -2;
+    ethervox_result_t result = ethervox_model_get_base_dir(base_dir, sizeof(base_dir));
+    if (ethervox_is_error(result)) {
+        return result;
     }
     
     *bytes_used = get_dir_size(base_dir);
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 bool ethervox_model_check_disk_space(
@@ -727,7 +734,7 @@ bool ethervox_model_check_disk_space(
     }
     
     char base_dir[512];
-    if (ethervox_model_get_base_dir(base_dir, sizeof(base_dir)) != 0) {
+    if (ethervox_is_error(ethervox_model_get_base_dir(base_dir, sizeof(base_dir)))) {
         return false;
     }
     

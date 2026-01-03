@@ -139,13 +139,13 @@ static bool find_key(json_parser_t* parser, const char* key) {
     return false;
 }
 
-int ethervox_tool_manifest_load_optimized(
+ethervox_result_t ethervox_tool_manifest_load_optimized(
     tool_manifest_registry_t* registry,
     const char* json_path
 ) {
     if (!registry || !json_path) {
         ETHERVOX_LOGE("Invalid arguments to load_optimized");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Open JSON file
@@ -153,7 +153,7 @@ int ethervox_tool_manifest_load_optimized(
     if (!fp) {
         ETHERVOX_LOGW("Optimized prompts not found: %s (fallback to level 1)", json_path);
         registry->fallback_level = 1;  // Use binary one-liners
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Get file size
@@ -165,7 +165,7 @@ int ethervox_tool_manifest_load_optimized(
         ETHERVOX_LOGE("Invalid JSON file size: %ld", file_size);
         fclose(fp);
         registry->fallback_level = 1;
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Read entire file
@@ -174,7 +174,7 @@ int ethervox_tool_manifest_load_optimized(
         ETHERVOX_LOGE("Failed to allocate JSON buffer");
         fclose(fp);
         registry->fallback_level = 1;
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     size_t read = fread(json_data, 1, file_size, fp);
@@ -184,7 +184,7 @@ int ethervox_tool_manifest_load_optimized(
         ETHERVOX_LOGE("Failed to read JSON file");
         free(json_data);
         registry->fallback_level = 1;
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     json_data[file_size] = '\0';
@@ -198,7 +198,7 @@ int ethervox_tool_manifest_load_optimized(
         ETHERVOX_LOGE("Failed to allocate cache");
         free(json_data);
         registry->fallback_level = 1;
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Expect opening brace
@@ -207,7 +207,7 @@ int ethervox_tool_manifest_load_optimized(
         free(cache);
         free(json_data);
         registry->fallback_level = 1;
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Parse model_name field
@@ -229,7 +229,7 @@ int ethervox_tool_manifest_load_optimized(
         free(cache);
         free(json_data);
         registry->fallback_level = 1;
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     if (!expect_char(&parser, '[')) {
@@ -238,7 +238,7 @@ int ethervox_tool_manifest_load_optimized(
         free(cache);
         free(json_data);
         registry->fallback_level = 1;
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Count tools first
@@ -267,7 +267,7 @@ int ethervox_tool_manifest_load_optimized(
         free(cache);
         free(json_data);
         registry->fallback_level = 1;
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     // Allocate prompts array
@@ -278,7 +278,7 @@ int ethervox_tool_manifest_load_optimized(
         free(cache);
         free(json_data);
         registry->fallback_level = 1;
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Parse each tool
@@ -348,7 +348,7 @@ int ethervox_tool_manifest_load_optimized(
         free(cache->model_name);
         free(cache);
         registry->fallback_level = 1;
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     registry->optimized_cache = cache;
@@ -357,5 +357,5 @@ int ethervox_tool_manifest_load_optimized(
     ETHERVOX_LOGI("Loaded %u optimized prompts for model: %s", 
                   cache->prompt_count, cache->model_name);
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }

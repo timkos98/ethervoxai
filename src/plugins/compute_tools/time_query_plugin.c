@@ -1,4 +1,5 @@
 /**
+#include "ethervox/error.h"
  * @file time_query_plugin.c
  * @brief Time and date query tools
  *
@@ -22,7 +23,7 @@ static int time_get_current_execute(const char* args_json, char** result, char**
     (void)args_json;  // No parameters needed
     
     if (!result || !error) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     time_t now = time(NULL);
@@ -30,7 +31,7 @@ static int time_get_current_execute(const char* args_json, char** result, char**
     
     if (!local) {
         *error = strdup("Failed to get local time");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     char result_buffer[256];
@@ -58,10 +59,10 @@ static int time_get_current_execute(const char* args_json, char** result, char**
     *result = strdup(result_buffer);
     if (!*result) {
         *error = strdup("Memory allocation failed");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 static ethervox_tool_t time_get_current_tool = {
@@ -87,7 +88,7 @@ static int time_get_date_execute(const char* args_json, char** result, char** er
     (void)args_json;
     
     if (!result || !error) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     time_t now = time(NULL);
@@ -95,7 +96,7 @@ static int time_get_date_execute(const char* args_json, char** result, char** er
     
     if (!local) {
         *error = strdup("Failed to get local time");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     const char* days[] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
@@ -111,10 +112,10 @@ static int time_get_date_execute(const char* args_json, char** result, char** er
     *result = strdup(result_buffer);
     if (!*result) {
         *error = strdup("Memory allocation failed");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 static ethervox_tool_t time_get_date_tool = {
@@ -140,7 +141,7 @@ static int time_get_day_of_week_execute(const char* args_json, char** result, ch
     (void)args_json;
     
     if (!result || !error) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     time_t now = time(NULL);
@@ -148,7 +149,7 @@ static int time_get_day_of_week_execute(const char* args_json, char** result, ch
     
     if (!local) {
         *error = strdup("Failed to get local time");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     const char* days[] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
@@ -164,10 +165,10 @@ static int time_get_day_of_week_execute(const char* args_json, char** result, ch
     *result = strdup(result_buffer);
     if (!*result) {
         *error = strdup("Memory allocation failed");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 static ethervox_tool_t time_get_day_of_week_tool = {
@@ -193,7 +194,7 @@ static int time_get_week_number_execute(const char* args_json, char** result, ch
     (void)args_json;
     
     if (!result || !error) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     time_t now = time(NULL);
@@ -201,7 +202,7 @@ static int time_get_week_number_execute(const char* args_json, char** result, ch
     
     if (!local) {
         *error = strdup("Failed to get local time");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     char week_str[8];
@@ -218,10 +219,10 @@ static int time_get_week_number_execute(const char* args_json, char** result, ch
     *result = strdup(result_buffer);
     if (!*result) {
         *error = strdup("Memory allocation failed");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 static ethervox_tool_t time_get_week_number_tool = {

@@ -11,6 +11,7 @@
 #include "ethervox/tts.h"
 #include "ethervox/settings.h"
 #include "ethervox/logging.h"
+#include "ethervox/error.h"
 
 // Global TTS instance (for standalone speak tool, shared with conversation)
 ethervox_tts_context_t* g_global_tts = NULL;
@@ -20,12 +21,12 @@ ethervox_tts_context_t* ethervox_get_global_tts(void) {
     return g_global_tts;
 }
 
-int ethervox_reload_global_tts(const void* tts_settings,
+ethervox_result_t ethervox_reload_global_tts(const void* tts_settings,
                                void (*chunk_callback)(const float*, size_t, void*),
                                void* callback_user_data) {
     if (!tts_settings) {
         ETHERVOX_LOG_ERROR("[TTS Reload] NULL settings provided");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     const ethervox_tts_settings_t* settings = (const ethervox_tts_settings_t*)tts_settings;
@@ -64,9 +65,9 @@ int ethervox_reload_global_tts(const void* tts_settings,
     
     if (!g_global_tts) {
         ETHERVOX_LOG_ERROR("[TTS Reload] Failed to create new TTS instance");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     ETHERVOX_LOG_INFO("[TTS Reload] ✅ TTS reloaded successfully");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }

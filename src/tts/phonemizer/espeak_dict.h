@@ -26,6 +26,7 @@
 #ifndef ETHERVOX_ESPEAK_DICT_H
 #define ETHERVOX_ESPEAK_DICT_H
 
+#include "ethervox/error.h"
 #include <stddef.h>
 #include <stdbool.h>
 
@@ -72,9 +73,9 @@ extern const size_t espeak_dict_de_size;
  * @param word Word to lookup (case-insensitive)
  * @param ipa_out Output buffer for IPA
  * @param max_len Maximum output length
- * @return 0 on success, -1 if not found
+ * @return ETHERVOX_SUCCESS on success, ETHERVOX_ERROR_NOT_FOUND if not found
  */
-int espeak_dict_lookup(
+ethervox_result_t espeak_dict_lookup(
     const espeak_dict_entry_t* entries,
     size_t size,
     const char* word,

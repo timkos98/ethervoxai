@@ -1,4 +1,5 @@
 /**
+#include "ethervox/error.h"
  * @file context_actions.c
  * @brief Implementation of context management actions
  *
@@ -59,19 +60,19 @@ typedef struct {
 // Action: Shift Window
 // ============================================================================
 
-int context_action_shift_window(
+ethervox_result_t context_action_shift_window(
     ethervox_governor_t* governor,
     uint32_t keep_last_n_turns,
     context_action_result_t* result
 ) {
-    if (!governor || !result) return -1;
+    if (!governor || !result) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     memset(result, 0, sizeof(context_action_result_t));
     
 #if !defined(ETHERVOX_WITH_LLAMA) || !LLAMA_HEADER_AVAILABLE
     snprintf(result->error_msg, sizeof(result->error_msg), 
              "llama.cpp not available - cannot manage context");
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
 #else
     
     governor_internal_t* gov = (governor_internal_t*)governor;
@@ -83,13 +84,13 @@ int context_action_shift_window(
         snprintf(result->error_msg, sizeof(result->error_msg),
                  "Cannot shift: only %u turns exist, requested to keep %u",
                  total_turns, keep_last_n_turns);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     uint32_t turns_to_drop = total_turns - keep_last_n_turns;
     if (turns_to_drop == 0) {
         result->success = true;
-        return 0;  // Nothing to do
+        return ETHERVOX_SUCCESS;  // Nothing to do
     }
     
     CTX_LOG("[Context] Shifting window: dropping %u turns, keeping %u",
@@ -106,7 +107,7 @@ int context_action_shift_window(
         CTX_ERROR("[Context] Failed to get memory handle");
         snprintf(result->error_msg, sizeof(result->error_msg),
                  "Failed to get KV cache memory handle");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Remove the specified range from KV cache (sequence 0 is the main conversation)
@@ -142,7 +143,7 @@ int context_action_shift_window(
     CTX_LOG("[Context] Shift complete: freed %d tokens from KV cache, current pos now %d",
             tokens_to_free, gov->current_kv_pos);
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 #endif
 }
 
@@ -376,21 +377,21 @@ static char* generate_summary_simple(
     return summary;
 }
 
-int context_action_summarize_old(
+ethervox_result_t context_action_summarize_old(
     ethervox_governor_t* governor,
     ethervox_memory_store_t* memory_store,
     uint32_t keep_last_n_turns,
     const char* detail_level,
     context_action_result_t* result
 ) {
-    if (!governor || !result) return -1;
+    if (!governor || !result) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     memset(result, 0, sizeof(context_action_result_t));
     
 #if !defined(ETHERVOX_WITH_LLAMA) || !LLAMA_HEADER_AVAILABLE
     snprintf(result->error_msg, sizeof(result->error_msg), 
              "llama.cpp not available - cannot manage context");
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
 #else
     
     governor_internal_t* gov = (governor_internal_t*)governor;
@@ -402,13 +403,13 @@ int context_action_summarize_old(
         snprintf(result->error_msg, sizeof(result->error_msg),
                  "Cannot summarize: only %u turns exist, requested to keep %u",
                  total_turns, keep_last_n_turns);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     uint32_t turns_to_summarize = total_turns - keep_last_n_turns;
     if (turns_to_summarize == 0) {
         result->success = true;
-        return 0;  // Nothing to do
+        return ETHERVOX_SUCCESS;  // Nothing to do
     }
     
     CTX_LOG("[Context] Summarizing old turns: %u turns -> %s summary, keeping last %u",
@@ -419,7 +420,7 @@ int context_action_summarize_old(
     if (!summary) {
         snprintf(result->error_msg, sizeof(result->error_msg),
                  "Failed to generate summary");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Store summary in memory system (if available)
@@ -485,7 +486,7 @@ int context_action_summarize_old(
     CTX_LOG("[Context] Summarize complete: freed %d tokens from KV cache, stored summary ID %llu",
             tokens_to_free, (unsigned long long)summary_id);
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 #endif
 }
 
@@ -493,16 +494,16 @@ int context_action_summarize_old(
 // Action: Prune Unimportant (Stub)
 // ============================================================================
 
-int context_action_prune_unimportant(
+ethervox_result_t context_action_prune_unimportant(
     ethervox_governor_t* governor,
     float importance_threshold,
     context_action_result_t* result
 ) {
-    if (!governor || !result) return -1;
+    if (!governor || !result) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     memset(result, 0, sizeof(context_action_result_t));
     
     snprintf(result->error_msg, sizeof(result->error_msg),
              "Prune action not yet implemented");
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
 }

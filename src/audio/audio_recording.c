@@ -12,6 +12,7 @@
 #include "ethervox/audio_recording.h"
 #include "ethervox/audio.h"
 #include "ethervox/logging.h"
+#include "ethervox/error.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -51,22 +52,23 @@ typedef struct {
 /**
  * Write audio buffer to WAV file
  */
-int ethervox_audio_write_wav(
+ethervox_result_t ethervox_audio_write_wav(
     const char* output_path,
     const float* samples,
     int num_samples,
     int sample_rate,
     int channels
 ) {
-    if (!output_path || !samples || num_samples <= 0) {
-        ETHERVOX_LOG_ERROR("Invalid arguments for WAV writing");
-        return -1;
+    ETHERVOX_CHECK_PTR(output_path);
+    ETHERVOX_CHECK_PTR(samples);
+    if (num_samples <= 0) {
+        ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_INVALID_ARGUMENT, "Invalid sample count");
     }
 
     FILE* fp = fopen(output_path, "wb");
     if (!fp) {
         ETHERVOX_LOG_ERROR("Failed to create WAV file: %s", output_path);
-        return -1;
+        ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_FILE_WRITE, "Cannot create WAV file");
     }
 
     // Convert float samples to 16-bit PCM
@@ -74,7 +76,7 @@ int ethervox_audio_write_wav(
     if (!pcm_samples) {
         ETHERVOX_LOG_ERROR("Failed to allocate PCM buffer");
         fclose(fp);
-        return -1;
+        ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_OUT_OF_MEMORY, "PCM buffer allocation failed");
     }
 
     for (int i = 0; i < num_samples; i++) {
@@ -125,7 +127,7 @@ int ethervox_audio_write_wav(
     fclose(fp);
 
     ETHERVOX_LOG_INFO("Wrote %d samples to %s", num_samples, output_path);
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -133,15 +135,15 @@ int ethervox_audio_write_wav(
  * 
  * Uses existing audio capture infrastructure (same pattern as voice_tools.c)
  */
-int ethervox_audio_record_to_file(
+ethervox_result_t ethervox_audio_record_to_file(
     const char* output_path,
     int duration_seconds,
     int sample_rate,
     int channels
 ) {
-    if (!output_path || duration_seconds <= 0) {
-        ETHERVOX_LOG_ERROR("Invalid arguments for audio recording");
-        return -1;
+    ETHERVOX_CHECK_PTR(output_path);
+    if (duration_seconds <= 0) {
+        ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_INVALID_ARGUMENT, "Invalid duration");
     }
 
     ETHERVOX_LOG_INFO("Recording %d seconds of audio to: %s", duration_seconds, output_path);
@@ -152,16 +154,18 @@ int ethervox_audio_record_to_file(
     config.sample_rate = sample_rate;
     config.channels = channels;
     
-    if (ethervox_audio_init(&audio_runtime, &config) != 0) {
+    ethervox_result_t result = ethervox_audio_init(&audio_runtime, &config);
+    if (ethervox_is_error(result)) {
         ETHERVOX_LOG_ERROR("Failed to initialize audio runtime");
-        return -1;
+        return result;
     }
     
     // Start audio capture
-    if (ethervox_audio_start_capture(&audio_runtime) != 0) {
+    result = ethervox_audio_start_capture(&audio_runtime);
+    if (ethervox_is_error(result)) {
         ETHERVOX_LOG_ERROR("Failed to start audio capture");
         ethervox_audio_cleanup(&audio_runtime);
-        return -1;
+        return result;
     }
     
     // Allocate buffer for entire recording
@@ -171,7 +175,7 @@ int ethervox_audio_record_to_file(
         ETHERVOX_LOG_ERROR("Failed to allocate recording buffer");
         ethervox_audio_stop_capture(&audio_runtime);
         ethervox_audio_cleanup(&audio_runtime);
-        return -1;
+        ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_OUT_OF_MEMORY, "Recording buffer allocation failed");
     }
     
     // Record in small chunks with sleep to allow audio accumulation
@@ -193,7 +197,7 @@ int ethervox_audio_record_to_file(
         free(recording_buffer);
         ethervox_audio_stop_capture(&audio_runtime);
         ethervox_audio_cleanup(&audio_runtime);
-        return -1;
+        ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_OUT_OF_MEMORY, "Audio buffer allocation failed");
     }
     
     ETHERVOX_LOG_INFO("Recording started... (press Ctrl+C to stop early)");
@@ -237,12 +241,12 @@ int ethervox_audio_record_to_file(
     ETHERVOX_LOG_INFO("Recording complete: %d samples captured", samples_recorded);
     
     // Write to WAV file
-    int result = ethervox_audio_write_wav(output_path, recording_buffer, 
+    result = ethervox_audio_write_wav(output_path, recording_buffer, 
                                          samples_recorded, sample_rate, channels);
     
     free(recording_buffer);
     
-    if (result == 0) {
+    if (ethervox_is_success(result)) {
         ETHERVOX_LOG_INFO("Successfully saved audio to: %s", output_path);
     }
     
@@ -254,12 +258,15 @@ int ethervox_audio_record_to_file(
  * 
  * TODO: Needs integration with audio capture system (same as above)
  */
-int ethervox_audio_record_with_vad(
+ethervox_result_t ethervox_audio_record_with_vad(
     const char* output_path,
     int max_duration_seconds,
     float silence_threshold,
     int silence_duration_ms
 ) {
+    (void)silence_threshold;
+    (void)silence_duration_ms;
+    
     ETHERVOX_LOG_WARN("VAD recording not yet implemented");
     
     // For now, fall back to simple recording

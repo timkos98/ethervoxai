@@ -7,6 +7,7 @@
  */
 
 #include "ethervox/voice_training.h"
+#include "ethervox/error.h"
 #include "ethervox/pronunciation_trainer.h"
 #include "ethervox/audio_recording.h"
 #include "ethervox/logging.h"
@@ -283,5 +284,5 @@ int main(int argc, char** argv) {
     printf("\n=== Basic tests passed! ===\n");
     printf("Note: Additional tests (mel extraction, variants, comparison) disabled\n");
     printf("      pending API stabilization.\n\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }

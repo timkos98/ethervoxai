@@ -22,6 +22,7 @@
 #include <AudioToolbox/AudioToolbox.h>
 
 #include "ethervox/audio.h"
+#include "ethervox/error.h"
 
 #ifdef ETHERVOX_PLATFORM_MACOS
 
@@ -92,11 +93,11 @@ static void input_callback(void* user_data, AudioQueueRef queue,
   AudioQueueEnqueueBuffer(queue, buffer, 0, NULL);
 }
 
-static int macos_audio_init(ethervox_audio_runtime_t* runtime,
+static ethervox_result_t macos_audio_init(ethervox_audio_runtime_t* runtime,
                             const ethervox_audio_config_t* config) {
   macos_audio_state_t* state = (macos_audio_state_t*)calloc(1, sizeof(macos_audio_state_t));
   if (!state) {
-    return -1;
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_OUT_OF_MEMORY, "Failed to allocate macOS audio state");
   }
   
   state->sample_rate = config->sample_rate ? config->sample_rate : 16000;
@@ -107,7 +108,7 @@ static int macos_audio_init(ethervox_audio_runtime_t* runtime,
   state->ring_buffer = (int16_t*)calloc(state->ring_buffer_size, sizeof(int16_t));
   if (!state->ring_buffer) {
     free(state);
-    return -1;
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_OUT_OF_MEMORY, "Failed to allocate capture ring buffer");
   }
   
   // Allocate playback ring buffer (60 seconds of audio for long TTS responses)
@@ -117,7 +118,7 @@ static int macos_audio_init(ethervox_audio_runtime_t* runtime,
   if (!state->playback_ring_buffer) {
     free(state->ring_buffer);
     free(state);
-    return -1;
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_OUT_OF_MEMORY, "Failed to allocate playback ring buffer");
   }
   
   pthread_mutex_init(&state->lock, NULL);
@@ -125,17 +126,17 @@ static int macos_audio_init(ethervox_audio_runtime_t* runtime,
 
   runtime->platform_data = state;
   // Debug message removed - too verbose for normal startup
-  return 0;
+  return ETHERVOX_SUCCESS;
 }
 
-static int macos_audio_start_capture(ethervox_audio_runtime_t* runtime) {
+static ethervox_result_t macos_audio_start_capture(ethervox_audio_runtime_t* runtime) {
   macos_audio_state_t* state = (macos_audio_state_t*)runtime->platform_data;
   if (!state) {
-    return -1;
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_INITIALIZED, "Audio state not initialized");
   }
   
   if (state->is_recording) {
-    return 0; // Already recording
+    return ETHERVOX_SUCCESS; // Already recording
   }
   
   // Configure audio format
@@ -155,24 +156,21 @@ static int macos_audio_start_capture(ethervox_audio_runtime_t* runtime) {
                                        &state->capture_queue);
   if (status != noErr) {
     if (status == kAudioQueueErr_InvalidDevice) {
-      fprintf(stderr, "Failed to create audio input queue: Invalid device\n");
+      ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_AUDIO_DEVICE_NOT_FOUND, "Invalid audio device");
     } else if (status == kAudioQueueErr_Permissions || status == -50) {
-      fprintf(stderr, "Failed to create audio input queue: Permission denied or device busy (error %d)\n", status);
-      fprintf(stderr, "Tip: Make sure microphone permissions are granted and no other app is using the mic\n");
+      ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_AUDIO_INIT, "Permission denied or device busy - check microphone permissions");
     } else {
-      fprintf(stderr, "Failed to create audio input queue: %d\n", status);
+      ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_AUDIO_INIT, "Failed to create audio input queue");
     }
-    return -1;
   }
   
   // Allocate and enqueue buffers
   for (int i = 0; i < NUM_BUFFERS; i++) {
     status = AudioQueueAllocateBuffer(state->capture_queue, BUFFER_SIZE, &state->capture_buffers[i]);
     if (status != noErr) {
-      fprintf(stderr, "Failed to allocate audio buffer %d: %d\n", i, status);
       AudioQueueDispose(state->capture_queue, true);
       state->capture_queue = NULL;
-      return -1;
+      ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_AUDIO_INIT, "Failed to allocate audio buffer");
     }
     AudioQueueEnqueueBuffer(state->capture_queue, state->capture_buffers[i], 0, NULL);
   }
@@ -180,21 +178,20 @@ static int macos_audio_start_capture(ethervox_audio_runtime_t* runtime) {
   // Start recording
   status = AudioQueueStart(state->capture_queue, NULL);
   if (status != noErr) {
-    fprintf(stderr, "Failed to start audio queue: %d\n", status);
     AudioQueueDispose(state->capture_queue, true);
     state->capture_queue = NULL;
-    return -1;
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_AUDIO_INIT, "Failed to start audio queue");
   }
   
   state->is_recording = true;
   printf("🎤 Started microphone capture\n");
-  return 0;
+  return ETHERVOX_SUCCESS;
 }
 
-static int macos_audio_stop_capture(ethervox_audio_runtime_t* runtime) {
+static ethervox_result_t macos_audio_stop_capture(ethervox_audio_runtime_t* runtime) {
   macos_audio_state_t* state = (macos_audio_state_t*)runtime->platform_data;
   if (!state || !state->is_recording) {
-    return -1;
+    return ETHERVOX_SUCCESS;
   }
 
   // Stop and dispose queue
@@ -206,7 +203,7 @@ static int macos_audio_stop_capture(ethervox_audio_runtime_t* runtime) {
   
   state->is_recording = false;
   printf("⏹️  Stopped microphone capture\n");
-  return 0;
+  return ETHERVOX_SUCCESS;
 }
 
 // Audio queue callback for output (playback)
@@ -243,14 +240,14 @@ static void output_callback(void* user_data, AudioQueueRef queue,
   AudioQueueEnqueueBuffer(queue, buffer, 0, NULL);
 }
 
-static int macos_audio_start_playback(ethervox_audio_runtime_t* runtime) {
+static ethervox_result_t macos_audio_start_playback(ethervox_audio_runtime_t* runtime) {
   macos_audio_state_t* state = (macos_audio_state_t*)runtime->platform_data;
   if (!state) {
-    return -1;
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_INITIALIZED, "Audio state not initialized");
   }
   
   if (state->is_playing) {
-    return 0; // Already playing
+    return ETHERVOX_SUCCESS; // Already playing
   }
   
   // Configure audio format (same as capture)
@@ -269,8 +266,7 @@ static int macos_audio_start_playback(ethervox_audio_runtime_t* runtime) {
                                        NULL, kCFRunLoopCommonModes, 0,
                                        &state->playback_queue);
   if (status != noErr) {
-    fprintf(stderr, "Failed to create audio output queue: %d\n", status);
-    return -1;
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_AUDIO_INIT, "Failed to create audio output queue");
   }
   
   // Allocate buffers for playback
@@ -278,10 +274,9 @@ static int macos_audio_start_playback(ethervox_audio_runtime_t* runtime) {
     status = AudioQueueAllocateBuffer(state->playback_queue, BUFFER_SIZE, 
                                      &state->playback_buffers[i]);
     if (status != noErr) {
-      fprintf(stderr, "Failed to allocate playback buffer %d: %d\n", i, status);
       AudioQueueDispose(state->playback_queue, true);
       state->playback_queue = NULL;
-      return -1;
+      ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_AUDIO_INIT, "Failed to allocate playback buffer");
     }
     
     // Prime buffers with silence
@@ -293,21 +288,20 @@ static int macos_audio_start_playback(ethervox_audio_runtime_t* runtime) {
   // Start playback
   status = AudioQueueStart(state->playback_queue, NULL);
   if (status != noErr) {
-    fprintf(stderr, "Failed to start playback queue: %d\n", status);
     AudioQueueDispose(state->playback_queue, true);
     state->playback_queue = NULL;
-    return -1;
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_AUDIO_INIT, "Failed to start playback queue");
   }
   
   state->is_playing = true;
   printf("🔊 Started audio playback\n");
-  return 0;
+  return ETHERVOX_SUCCESS;
 }
 
-static int macos_audio_stop_playback(ethervox_audio_runtime_t* runtime) {
+static ethervox_result_t macos_audio_stop_playback(ethervox_audio_runtime_t* runtime) {
   macos_audio_state_t* state = (macos_audio_state_t*)runtime->platform_data;
   if (!state || !state->is_playing) {
-    return 0;
+    return ETHERVOX_SUCCESS;
   }
   
   if (state->playback_queue) {
@@ -318,20 +312,21 @@ static int macos_audio_stop_playback(ethervox_audio_runtime_t* runtime) {
   
   state->is_playing = false;
   printf("⏹️  Stopped audio playback\n");
-  return 0;
+  return ETHERVOX_SUCCESS;
 }
 
-static int macos_audio_write(ethervox_audio_runtime_t* runtime, 
+static ethervox_result_t macos_audio_write(ethervox_audio_runtime_t* runtime, 
                              const ethervox_audio_buffer_t* buffer) {
   macos_audio_state_t* state = (macos_audio_state_t*)runtime->platform_data;
-  if (!state || !buffer || !buffer->data) {
-    return -1;
-  }
+  ETHERVOX_CHECK_PTR(state);
+  ETHERVOX_CHECK_PTR(buffer);
+  ETHERVOX_CHECK_PTR(buffer->data);
   
   if (!state->is_playing) {
     // Auto-start playback if not already started
-    if (macos_audio_start_playback(runtime) != 0) {
-      return -1;
+    ethervox_result_t result = macos_audio_start_playback(runtime);
+    if (ethervox_is_error(result)) {
+      return result;
     }
   }
   
@@ -376,14 +371,13 @@ static int macos_audio_write(ethervox_audio_runtime_t* runtime,
   
   pthread_mutex_unlock(&state->playback_lock);
   
-  return 0; // Success
+  return ETHERVOX_SUCCESS;
 }
 
-static int macos_audio_read(ethervox_audio_runtime_t* runtime, ethervox_audio_buffer_t* buffer) {
+static ethervox_result_t macos_audio_read(ethervox_audio_runtime_t* runtime, ethervox_audio_buffer_t* buffer) {
   macos_audio_state_t* state = (macos_audio_state_t*)runtime->platform_data;
-  if (!state || !buffer) {
-    return -1;
-  }
+  ETHERVOX_CHECK_PTR(state);
+  ETHERVOX_CHECK_PTR(buffer);
   
   pthread_mutex_lock(&state->lock);
   
@@ -397,7 +391,8 @@ static int macos_audio_read(ethervox_audio_runtime_t* runtime, ethervox_audio_bu
   
   if (available == 0) {
     pthread_mutex_unlock(&state->lock);
-    return 0; // No data available
+    buffer->size = 0;
+    return ETHERVOX_SUCCESS; // No data available (not an error)
   }
   
   // Read up to buffer capacity
@@ -409,12 +404,11 @@ static int macos_audio_read(ethervox_audio_runtime_t* runtime, ethervox_audio_bu
     state->read_pos = (state->read_pos + 1) % state->ring_buffer_size;
   }
   
-  // NOTE: Do NOT overwrite buffer->size - it's the capacity, not the actual count
-  // The return value indicates how many samples were actually read
+  buffer->size = to_read;
   
   pthread_mutex_unlock(&state->lock);
   
-  return to_read;
+  return ETHERVOX_SUCCESS;
 }
 
 static void macos_audio_cleanup(ethervox_audio_runtime_t* runtime) {
@@ -443,10 +437,8 @@ static void macos_audio_cleanup(ethervox_audio_runtime_t* runtime) {
   printf("macOS CoreAudio driver cleaned up\n");
 }
 
-int ethervox_audio_register_platform_driver(ethervox_audio_runtime_t* runtime) {
-  if (!runtime) {
-    return -1;
-  }
+ethervox_result_t ethervox_audio_register_platform_driver(ethervox_audio_runtime_t* runtime) {
+  ETHERVOX_CHECK_PTR(runtime);
 
   runtime->driver.init = macos_audio_init;
   runtime->driver.start_capture = macos_audio_start_capture;
@@ -457,7 +449,7 @@ int ethervox_audio_register_platform_driver(ethervox_audio_runtime_t* runtime) {
   runtime->driver.write_audio = macos_audio_write;
   runtime->driver.cleanup = macos_audio_cleanup;
 
-  return 0;
+  return ETHERVOX_SUCCESS;
 }
 
 #endif  // ETHERVOX_PLATFORM_MACOS

@@ -1,4 +1,5 @@
 /**
+#include "ethervox/error.h"
  * @file train_pronunciation.c
  * @brief LLM tool for adaptive pronunciation training
  *
@@ -104,7 +105,7 @@ static int tool_train_pronunciation_wrapper(
 ) {
     if (!params_json || !result || !error) {
         if (error) *error = strdup("Invalid tool invocation");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     *result = NULL;
@@ -119,7 +120,7 @@ static int tool_train_pronunciation_wrapper(
         *error = strdup("Missing required parameters: 'word' and 'audio_path'");
         free(word);
         free(audio_path);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Check if TTS/phonemizer are available
@@ -127,7 +128,7 @@ static int tool_train_pronunciation_wrapper(
         *error = strdup("TTS/phonemizer not initialized");
         free(word);
         free(audio_path);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     LOG_INFO("Training pronunciation for word: %s (audio: %s)", word, audio_path);
@@ -187,7 +188,7 @@ static int tool_train_pronunciation_wrapper(
         pronunciation_training_result_free(&training_result);
         free(word);
         free(audio_path);
-        return 0;
+        return ETHERVOX_SUCCESS;
     } else {
         LOG_ERROR("Pronunciation training failed for '%s': %s",
                   word, training_result.error_message ? training_result.error_message : "unknown error");
@@ -198,7 +199,7 @@ static int tool_train_pronunciation_wrapper(
         pronunciation_training_result_free(&training_result);
         free(word);
         free(audio_path);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
 }
 

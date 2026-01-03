@@ -7,6 +7,7 @@
  */
 
 #include "ethervox/governor.h"
+#include "ethervox/error.h"
 #include "ethervox/context_tools.h"
 #include "ethervox/memory_tools.h"
 #include <assert.h>
@@ -223,5 +224,5 @@ int main(void) {
     test_automatic_warning_injection();
     
     printf("\n=== All Tests Passed ===\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }

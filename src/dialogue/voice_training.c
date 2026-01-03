@@ -13,6 +13,7 @@
 #include "ethervox/tts.h"
 #include "ethervox/stt.h"
 #include "ethervox/logging.h"
+#include "ethervox/error.h"
 #include "ethervox/pronunciation_trainer.h"
 #include "ethervox/audio_recording.h"
 #include "../tts/phonemizer/phonemizer.h"
@@ -160,7 +161,7 @@ static int trim_silence(float* audio, int n_samples, int* start_idx, int* end_id
         }
     }
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -179,7 +180,7 @@ static int record_user_audio(const char* output_path, int duration_seconds) {
     // Read the recorded audio
     FILE* f = fopen(temp_path, "rb");
     if (!f) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Skip WAV header (44 bytes)
@@ -236,7 +237,7 @@ static int train_word_pronunciation(
     if (!session->phonemizer) {
         printf("  ⚠️  Phonemizer not available (recording saved but cannot train)\n");
         printf("  💡 This is needed for pronunciation analysis\n");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     pronunciation_training_config_t config = pronunciation_trainer_default_config();
@@ -297,19 +298,19 @@ static int train_word_pronunciation(
         session->words_trained++;
         
         pronunciation_training_result_free(&result);
-        return 0;
+        return ETHERVOX_SUCCESS;
     } else {
         printf("  ✗ Training failed: %s\n",
                result.error_message ? result.error_message : "unknown error");
         pronunciation_training_result_free(&result);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
 }
 
 /**
  * Run interactive training session
  */
-int ethervox_voice_training_run(
+ethervox_result_t ethervox_voice_training_run(
     ethervox_governor_t* governor,
     phonemizer_t* phonemizer,
     void* tts,  // tts_context_t* (internal type)
@@ -317,7 +318,7 @@ int ethervox_voice_training_run(
 ) {
     if (!governor) {
         printf("❌ Governor not initialized\n");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Initialize session
@@ -375,7 +376,7 @@ int ethervox_voice_training_run(
     
     char input[256];
     if (!fgets(input, sizeof(input), stdin)) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Check for initial command
@@ -624,5 +625,5 @@ int ethervox_voice_training_run(
         printf("Training interrupted by user.\n");
     }
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }

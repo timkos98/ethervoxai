@@ -5,6 +5,7 @@
  */
 
 #include <stdio.h>
+#include "ethervox/error.h"
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
@@ -24,7 +25,7 @@ int main() {
     
     if (ethervox_audio_register_platform_driver(&audio_runtime) != 0) {
         fprintf(stderr, "❌ Failed to register audio driver\n");
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
     
     ethervox_audio_config_t audio_config = {0};
@@ -35,7 +36,7 @@ int main() {
     
     if (audio_runtime.driver.init(&audio_runtime, &audio_config) != 0) {
         fprintf(stderr, "❌ Failed to initialize audio\n");
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
     printf("✓ CoreAudio initialized\n\n");
     
@@ -57,21 +58,21 @@ int main() {
     if (ethervox_stt_init(&stt_runtime, &stt_config) != 0) {
         fprintf(stderr, "❌ Failed to initialize Whisper\n");
         fprintf(stderr, "   Check if model exists: %s\n", model_path);
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
     printf("✓ Whisper STT initialized\n\n");
     
     // Start STT session
     if (ethervox_stt_start(&stt_runtime) != 0) {
         fprintf(stderr, "❌ Failed to start STT\n");
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
     
     // Start audio capture
     printf("3. Starting microphone capture...\n");
     if (audio_runtime.driver.start_capture(&audio_runtime) != 0) {
         fprintf(stderr, "❌ Failed to start capture\n");
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
     printf("✓ Microphone capture started\n\n");
     

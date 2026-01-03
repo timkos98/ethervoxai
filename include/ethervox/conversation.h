@@ -23,6 +23,7 @@
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include "ethervox/error.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -114,7 +115,7 @@ ethervox_conversation_session_t* ethervox_conversation_init(
  * @param session Session handle
  * @return 0 on success, negative on error
  */
-int ethervox_conversation_start(ethervox_conversation_session_t* session);
+ethervox_result_t ethervox_conversation_start(ethervox_conversation_session_t* session);
 
 /**
  * @brief Stop conversation session (disable background thread)
@@ -124,7 +125,7 @@ int ethervox_conversation_start(ethervox_conversation_session_t* session);
  * @param session Session handle
  * @return 0 on success, negative on error
  */
-int ethervox_conversation_stop(ethervox_conversation_session_t* session);
+ethervox_result_t ethervox_conversation_stop(ethervox_conversation_session_t* session);
 
 /**
  * @brief Trigger conversation from wake word detection
@@ -135,7 +136,7 @@ int ethervox_conversation_stop(ethervox_conversation_session_t* session);
  * @param session Session handle
  * @return 0 on success, negative on error
  */
-int ethervox_conversation_trigger(ethervox_conversation_session_t* session);
+ethervox_result_t ethervox_conversation_trigger(ethervox_conversation_session_t* session);
 
 /**
  * @brief Get current conversation state

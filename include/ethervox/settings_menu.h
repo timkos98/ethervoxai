@@ -12,6 +12,7 @@
 #define ETHERVOX_SETTINGS_MENU_H
 
 #include <stdbool.h>
+#include "ethervox/error.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -21,17 +22,17 @@ extern "C" {
  * Model reload callback - called when settings requiring reload are changed
  * @param model_path Path to model to reload
  * @param user_data User data pointer
- * @return 0 on success, non-zero on failure
+ * @return ETHERVOX_SUCCESS or error code
  */
-typedef int (*ethervox_model_reload_callback_t)(const char* model_path, void* user_data);
+typedef ethervox_result_t (*ethervox_model_reload_callback_t)(const char* model_path, void* user_data);
 
 /**
  * TTS reload callback - called when TTS voice settings change
  * @param settings New TTS settings
  * @param user_data User data pointer
- * @return 0 on success, non-zero on failure
+ * @return ETHERVOX_SUCCESS or error code
  */
-typedef int (*ethervox_tts_reload_callback_t)(const void* settings, void* user_data);
+typedef ethervox_result_t (*ethervox_tts_reload_callback_t)(const void* settings, void* user_data);
 
 /**
  * Settings menu context - holds all settings state
@@ -63,7 +64,7 @@ typedef struct {
  * @param tts_user_data User data passed to TTS reload callback
  * @return 0 on success, -1 on error
  */
-int ethervox_settings_menu_show(ethervox_settings_t* settings, const char* model_path,
+ethervox_result_t ethervox_settings_menu_show(ethervox_settings_t* settings, const char* model_path,
                                  ethervox_model_reload_callback_t reload_callback, void* user_data,
                                  ethervox_tts_reload_callback_t tts_reload_callback, void* tts_user_data);
 

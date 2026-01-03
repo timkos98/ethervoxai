@@ -13,6 +13,7 @@
 
 #include <stddef.h>
 #include <stdbool.h>
+#include "ethervox/error.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -31,9 +32,9 @@ audio_stream_player_t* audio_stream_player_create(int sample_rate, int channels)
 /**
  * Start playback (must be called before feeding chunks)
  * @param player Player context
- * @return 0 on success, -1 on failure
+ * @return ETHERVOX_SUCCESS on success, error code otherwise
  */
-int audio_stream_player_start(audio_stream_player_t* player);
+ethervox_result_t audio_stream_player_start(audio_stream_player_t* player);
 
 /**
  * Feed audio chunk for playback (non-blocking)
@@ -41,18 +42,18 @@ int audio_stream_player_start(audio_stream_player_t* player);
  * @param player Player context
  * @param samples Audio samples (float, -1.0 to 1.0)
  * @param sample_count Number of samples
- * @return 0 on success, -1 on failure
+ * @return ETHERVOX_SUCCESS on success, error code otherwise
  */
-int audio_stream_player_write(audio_stream_player_t* player, 
+ethervox_result_t audio_stream_player_write(audio_stream_player_t* player, 
                                const float* samples, 
                                size_t sample_count);
 
 /**
  * Wait for all queued audio to finish playing
  * @param player Player context
- * @return 0 on success, -1 on failure
+ * @return ETHERVOX_SUCCESS on success, error code otherwise
  */
-int audio_stream_player_wait(audio_stream_player_t* player);
+ethervox_result_t audio_stream_player_wait(audio_stream_player_t* player);
 
 /**
  * Stop playback and clear queue

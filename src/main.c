@@ -33,6 +33,7 @@
 #endif
 
 #include "ethervox/config.h"
+#include "ethervox/error.h"
 #include "ethervox/platform.h"
 #include "ethervox/governor.h"
 #include "ethervox/tool_manifest.h"
@@ -132,13 +133,16 @@ static void stream_token_callback(const char* token, void* user_data) {
  * Standalone speak callback for use without /convon
  * Allows the LLM to use the speak tool even in CLI mode
  */
-static int standalone_speak_callback(const char* text, bool wait_for_response,
+static ethervox_result_t standalone_speak_callback(const char* text, bool wait_for_response,
                                     bool allow_interrupt, void* user_data) {
     (void)wait_for_response;
     (void)allow_interrupt;
     (void)user_data;
     
-    if (!text) return -1;
+    if (!text) {
+        ETHERVOX_ERROR_SET(ETHERVOX_ERROR_NULL_POINTER, "Text parameter is NULL");
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
     
     pthread_mutex_lock(&g_tts_mutex);
     
@@ -148,18 +152,18 @@ static int standalone_speak_callback(const char* text, bool wait_for_response,
         printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
         printf("🤖 Assistant: %s\n", text);
         printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     printf("\n🔊 Synthesizing: \"%s\"\n", text);
     
     // Synthesize
     ethervox_tts_audio_t output = {0};
-    int result = ethervox_tts_synthesize_text(g_global_tts, text, &output);
+    ethervox_result_t result = ethervox_tts_synthesize_text(g_global_tts, text, &output);
     
     pthread_mutex_unlock(&g_tts_mutex);
     
-    if (result == 0 && output.samples && output.sample_count > 0) {
+    if (result == ETHERVOX_SUCCESS && output.samples && output.sample_count > 0) {
         printf("   ✓ Synthesized %zu samples at %d Hz\n", output.sample_count, output.sample_rate);
         
         // Save and play
@@ -168,7 +172,7 @@ static int standalone_speak_callback(const char* text, bool wait_for_response,
                  getenv("HOME") ? getenv("HOME") : ".");
         
         if (ethervox_audio_write_wav(temp_file, output.samples, (int)output.sample_count,
-                                     output.sample_rate, output.channels) == 0) {
+                                     output.sample_rate, output.channels) == ETHERVOX_SUCCESS) {
             printf("   🎵 Playing audio...\n");
             
 #ifdef __APPLE__
@@ -184,24 +188,24 @@ static int standalone_speak_callback(const char* text, bool wait_for_response,
         }
         
         free(output.samples);
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     printf("   ❌ TTS synthesis failed\n\n");
-    return -1;
+    return ETHERVOX_ERROR_TTS_SYNTHESIS_FAILED;
 }
 
 /**
  * Standalone listen callback (not yet implemented)
  */
-static int standalone_listen_callback(char** user_input, int timeout_ms,
+static ethervox_result_t standalone_listen_callback(char** user_input, int timeout_ms,
                                      const char* prompt_hint, void* user_data) {
     (void)user_input;
     (void)timeout_ms;
     (void)prompt_hint;
     (void)user_data;
     // Not implemented for CLI mode - listen tool only works in /convon
-    return -1;
+    return ETHERVOX_ERROR_NOT_IMPLEMENTED;
 }
 
 /**
@@ -218,20 +222,28 @@ static void* wake_word_listen_thread(void* arg) {
     audio_config.bits_per_sample = 16;
     audio_config.buffer_size = 4096;
     
-    if (ethervox_audio_register_platform_driver(&audio_runtime) != 0) {
-        fprintf(stderr, "[Wake] Failed to register audio driver\n");
+    ethervox_result_t result = ethervox_audio_register_platform_driver(&audio_runtime);
+    if (ethervox_is_error(result)) {
+        const ethervox_error_context_t* ctx = ethervox_error_get_context();
+        fprintf(stderr, "[Wake] Failed to register audio driver: %s\n", 
+                ethervox_error_string(result));
+        if (ctx && ctx->message) {
+            fprintf(stderr, "       %s at %s:%d\n", ctx->message, ctx->file, ctx->line);
+        }
         g_wake_thread_running = false;
         return NULL;
     }
     
-    if (audio_runtime.driver.init(&audio_runtime, &audio_config) != 0) {
-        fprintf(stderr, "[Wake] Failed to initialize audio\n");
+    result = audio_runtime.driver.init(&audio_runtime, &audio_config);
+    if (result != 0) {
+        fprintf(stderr, "[Wake] Failed to initialize audio (code: %d)\n", result);
         g_wake_thread_running = false;
         return NULL;
     }
     
-    if (audio_runtime.driver.start_capture(&audio_runtime) != 0) {
-        fprintf(stderr, "[Wake] Failed to start audio capture\n");
+    result = audio_runtime.driver.start_capture(&audio_runtime);
+    if (result != 0) {
+        fprintf(stderr, "[Wake] Failed to start audio capture (code: %d)\n", result);
         audio_runtime.driver.cleanup(&audio_runtime);
         g_wake_thread_running = false;
         return NULL;
@@ -371,13 +383,18 @@ static char g_loaded_model_path[512] = {0};  // Track loaded model path for /res
 static tool_manifest_registry_t g_manifest_registry = {0};  // Tool Manifest System registry
 
 // Model reload callback for settings menu
-static int reload_model_callback(const char* model_path, void* user_data) {
+static ethervox_result_t reload_model_callback(const char* model_path, void* user_data) {
     ethervox_governor_t* gov = (ethervox_governor_t*)user_data;
-    if (!gov || !model_path) return -1;
+    if (!gov || !model_path) {
+        ETHERVOX_ERROR_SET(ETHERVOX_ERROR_NULL_POINTER, 
+                          "Governor or model_path is NULL in reload callback");
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
     
     // Reload settings from disk and update global settings
     ethervox_persistent_settings_t updated_settings;
-    if (ethervox_settings_load(&updated_settings, NULL) == 0) {
+    ethervox_result_t load_result = ethervox_settings_load(&updated_settings, NULL);
+    if (ethervox_is_success(load_result)) {
         g_settings = updated_settings;
         
         // Apply to governor via new config
@@ -401,12 +418,11 @@ static int reload_model_callback(const char* model_path, void* user_data) {
         }
     }
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 // TTS reload callback for settings menu
-// TTS reload callback for settings menu
-static int tts_reload_callback(const void* tts_settings, void* user_data) {
+static ethervox_result_t tts_reload_callback(const void* tts_settings, void* user_data) {
     (void)user_data; // Unused
     return ethervox_reload_global_tts(tts_settings, NULL, NULL);
 }
@@ -637,8 +653,8 @@ static void ensure_ethervox_directories(void) {
 // Component test functions
 static bool test_platform(ethervox_platform_t* platform) {
     printf("[TEST] Platform detection... ");
-    int result = ethervox_platform_register_hal(platform);
-    if (result != 0) {
+    ethervox_result_t result = ethervox_platform_register_hal(platform);
+    if (ethervox_is_error(result)) {
         printf("✗ FAILED\n");
         return false;
     }
@@ -1220,17 +1236,19 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         const char* subcmd = line + 8;
         
         if (strcmp(subcmd, "save") == 0) {
-            if (ethervox_settings_save(&g_settings, NULL) == 0) {
+            ethervox_result_t result = ethervox_settings_save(&g_settings, NULL);
+            if (ethervox_is_success(result)) {
                 printf("✓ Settings saved to %s\n", ethervox_settings_get_default_path());
             } else {
-                printf("✗ Failed to save settings\n");
+                printf("✗ Failed to save settings: %s\n", ethervox_error_string(result));
             }
         } else if (strcmp(subcmd, "load") == 0) {
-            if (ethervox_settings_load(&g_settings, NULL) == 0) {
+            ethervox_result_t result = ethervox_settings_load(&g_settings, NULL);
+            if (ethervox_is_success(result)) {
                 printf("✓ Settings loaded from %s\n", ethervox_settings_get_default_path());
                 ethervox_settings_print(&g_settings);
             } else {
-                printf("✗ Failed to load settings\n");
+                printf("✗ Failed to load settings: %s\n", ethervox_error_string(result));
             }
         } else if (strcmp(subcmd, "reset") == 0) {
             g_settings = ethervox_settings_get_defaults();
@@ -1343,7 +1361,7 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         ethervox_user_path_t* paths = NULL;
         uint32_t count = 0;
         
-        if (ethervox_path_config_list(path_config, &paths, &count) == 0) {
+        if (ethervox_is_success(ethervox_path_config_list(path_config, &paths, &count))) {
             if (count == 0) {
                 printf("No paths configured. Use /setpath to add paths.\n");
             } else {
@@ -1442,17 +1460,16 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
             }
         }
         
-        int result = ethervox_path_config_set(path_config, label, path,
+        ethervox_result_t result = ethervox_path_config_set(path_config, label, path,
                                                description[0] ? description : NULL);
-        if (result == 0) {
+        if (ethervox_is_success(result)) {
             printf("✓ Path configured: %s -> %s\n", label, path);
-        } else if (result == -2) {
-            printf("✗ Path does not exist or is not accessible: %s\n", path);
-            printf("  Please create the directory first or check permissions.\n");
-        } else if (result == -3) {
-            printf("✗ Maximum paths (%d) reached\n", ETHERVOX_MAX_USER_PATHS);
         } else {
-            printf("✗ Failed to set path\n");
+            printf("✗ Failed to set path: %s\n", ethervox_error_string(result));
+            const ethervox_error_context_t* ctx = ethervox_error_get_context();
+            if (ctx && ctx->message) {
+                printf("  %s\n", ctx->message);
+            }
         }
         return;
     }
@@ -2101,10 +2118,10 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
             
             // Load settings to get TTS configuration
             ethervox_persistent_settings_t settings;
-            int load_result = ethervox_settings_load(&settings, NULL);
-            printf("  [DEBUG] Settings load result: %d\n", load_result);
+            ethervox_result_t load_result = ethervox_settings_load(&settings, NULL);
+            printf("  [DEBUG] Settings load result: %d (%s)\n", load_result, ethervox_error_string(load_result));
             
-            if (load_result == 0) {
+            if (ethervox_is_success(load_result)) {
                 printf("  [DEBUG] TTS engine: '%s'\n", settings.tts.engine);
                 printf("  [DEBUG] Piper model path: '%s'\n", settings.tts.piper_model_path);
                 printf("  [DEBUG] Path length: %zu\n", strlen(settings.tts.piper_model_path));
@@ -2189,7 +2206,7 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
             ethervox_model_info_t* models = NULL;
             uint32_t count = 0;
             
-            if (ethervox_model_list(types[i], &models, &count) == 0) {
+            if (ethervox_is_success(ethervox_model_list(types[i], &models, &count))) {
                 for (uint32_t j = 0; j < count; j++) {
                     const char* status_icon = "❌";
                     if (models[j].status == ETHERVOX_MODEL_STATUS_FOUND) {
@@ -2249,7 +2266,7 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         ethervox_model_info_t* models = NULL;
         uint32_t count = 0;
         
-        if (ethervox_model_list(type, &models, &count) == 0) {
+        if (ethervox_is_success(ethervox_model_list(type, &models, &count))) {
             for (uint32_t i = 0; i < count; i++) {
                 printf("%s%s\n", models[i].name, models[i].is_default ? " [DEFAULT]" : "");
                 printf("  Description: %s\n", models[i].description);
@@ -2326,7 +2343,7 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         printf("📥 Downloading %s model: %s\n", ethervox_model_type_string(type), model_name);
         printf("   This may take several minutes depending on model size...\n\n");
         
-        if (ethervox_model_download(type, model_name, NULL, NULL) == 0) {
+        if (ethervox_is_success(ethervox_model_download(type, model_name, NULL, NULL))) {
             printf("\n✅ Download complete: %s\n", model_name);
             
             // Verify the download
@@ -2392,7 +2409,7 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         if (fgets(confirm, sizeof(confirm), stdin) && 
             (confirm[0] == 'y' || confirm[0] == 'Y')) {
             
-            if (ethervox_model_delete(type, model_name) == 0) {
+            if (ethervox_is_success(ethervox_model_delete(type, model_name))) {
                 printf("✅ Model deleted: %s\n", model_name);
             } else {
                 printf("❌ Failed to delete model\n");
@@ -2425,7 +2442,7 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         
         // Load settings to check configured voices
         ethervox_persistent_settings_t test_settings = {0};
-        if (ethervox_settings_load(&test_settings, NULL) != 0) {
+        if (ethervox_is_error(ethervox_settings_load(&test_settings, NULL))) {
             fprintf(stderr, "⚠️  Could not load settings, using defaults\n");
         }
         
@@ -3104,26 +3121,59 @@ int main(int argc, char** argv) {
     
     // Initialize platform
     ethervox_platform_t platform = {0};
-    int result = ethervox_platform_register_hal(&platform);
+    ethervox_result_t result = ethervox_platform_register_hal(&platform);
+    if (ethervox_is_error(result)) {
+        const ethervox_error_context_t* ctx = ethervox_error_get_context();
+        fprintf(stderr, "❌ Platform initialization failed: %s\n", 
+                ethervox_error_string(result));
+        if (ctx && ctx->message) {
+            fprintf(stderr, "   %s\n", ctx->message);
+            if (g_debug_enabled) {
+                fprintf(stderr, "   at %s:%d in %s()\n", 
+                        ctx->file, ctx->line, ctx->function);
+            }
+        }
+        return 1;
+    }
     
     // Initialize memory store
     ethervox_memory_store_t memory;
-    if (ethervox_memory_init(&memory, NULL, memory_dir) != 0) {
-        fprintf(stderr, "Failed to initialize memory store\n");
+    result = ethervox_memory_init(&memory, NULL, memory_dir);
+    if (ethervox_is_error(result)) {
+        const ethervox_error_context_t* ctx = ethervox_error_get_context();
+        fprintf(stderr, "❌ Failed to initialize memory store: %s\n",
+                ethervox_error_string(result));
+        if (ctx && ctx->message) {
+            fprintf(stderr, "   %s\n", ctx->message);
+            if (g_debug_enabled && ctx->file) {
+                fprintf(stderr, "   at %s:%d\n", ctx->file, ctx->line);
+            }
+        }
+        if (memory_dir) {
+            fprintf(stderr, "   Memory directory: %s\n", memory_dir);
+            fprintf(stderr, "   Hint: Check directory exists and has write permissions\n");
+        }
         return 1;
     }
     
     // Initialize path configuration
     ethervox_path_config_t path_config;
-    if (ethervox_path_config_init(&path_config, &memory) != 0) {
-        fprintf(stderr, "Failed to initialize path configuration\n");
+    result = ethervox_path_config_init(&path_config, &memory);
+    if (ethervox_is_error(result)) {
+        const ethervox_error_context_t* ctx = ethervox_error_get_context();
+        fprintf(stderr, "❌ Failed to initialize path configuration: %s\n",
+                ethervox_error_string(result));
+        if (ctx && ctx->message) {
+            fprintf(stderr, "   %s\n", ctx->message);
+        }
+        ethervox_memory_cleanup(&memory);
         return 1;
     }
     
     // Check for unverified paths and prompt user
     ethervox_user_path_t* unverified = NULL;
     uint32_t unverified_count = 0;
-    if (ethervox_path_config_get_unverified(&path_config, &unverified, &unverified_count) == 0) {
+    if (ethervox_is_success(ethervox_path_config_get_unverified(&path_config, &unverified, &unverified_count))) {
         if (unverified_count > 0) {
             printf("\n⚠️  Some default paths don't exist on your system:\n");
             for (uint32_t i = 0; i < unverified_count; i++) {
@@ -3183,7 +3233,7 @@ int main(int argc, char** argv) {
     }
     
     // Load persistent settings
-    if (ethervox_settings_load(&g_settings, NULL) != 0) {
+    if (ethervox_is_error(ethervox_settings_load(&g_settings, NULL))) {
         // Failed to load - use defaults
         g_settings = ethervox_settings_get_defaults();
         if (g_debug_enabled) {
@@ -3216,7 +3266,7 @@ int main(int argc, char** argv) {
         }
         
         // Reload settings from disk in case they were changed
-        if (ethervox_settings_load(&g_settings, NULL) != 0) {
+        if (ethervox_is_error(ethervox_settings_load(&g_settings, NULL))) {
             g_settings = ethervox_settings_get_defaults();
         }
         
@@ -3302,7 +3352,7 @@ int main(int argc, char** argv) {
             
             // Load settings and update model path for detected language
             ethervox_persistent_settings_t temp_settings;
-            if (ethervox_settings_load(&temp_settings, NULL) == 0) {
+            if (ethervox_is_success(ethervox_settings_load(&temp_settings, NULL))) {
                 const char* target_voice = ethervox_get_voice_for_language(detected_lang, &temp_settings);
                 if (target_voice) {
                     const char* home = getenv("HOME");
@@ -3394,7 +3444,7 @@ int main(int argc, char** argv) {
             
             if (g_stream_player) {
                 // Streaming player active - chunks already playing, just wait for completion
-                if (audio_stream_player_wait(g_stream_player) == 0) {
+                if (ethervox_is_success(audio_stream_player_wait(g_stream_player))) {
                     printf("   ✓ Playback complete\n\n");
                 } else {
                     fprintf(stderr, "   ❌ Streaming playback error\n");
@@ -3453,14 +3503,14 @@ int main(int argc, char** argv) {
         
         // Load settings to check configured voices
         ethervox_persistent_settings_t test_settings = {0};
-        if (ethervox_settings_load(&test_settings, NULL) != 0) {
+        if (ethervox_is_error(ethervox_settings_load(&test_settings, NULL))) {
             fprintf(stderr, "⚠️  Could not load settings, using defaults\n");
         }
         
         // Start streaming player if available
         bool using_streaming = false;
         if (g_stream_player) {
-            if (audio_stream_player_start(g_stream_player) == 0) {
+            if (ethervox_is_success(audio_stream_player_start(g_stream_player))) {
                 using_streaming = true;
                 printf("🎵 Using streaming audio playback\n\n");
             } else {
@@ -3528,7 +3578,7 @@ int main(int argc, char** argv) {
                 
                 if (using_streaming && g_stream_player) {
                     // Wait for streaming playback
-                    if (audio_stream_player_wait(g_stream_player) == 0) {
+                    if (ethervox_is_success(audio_stream_player_wait(g_stream_player))) {
                         printf("✓ Playback complete\n\n");
                         successful_tests++;
                     } else {
@@ -3586,8 +3636,14 @@ int main(int argc, char** argv) {
     ethervox_voice_session_t voice_state;
     void* voice_session = NULL;
     
-    if (ethervox_tool_registry_init(&registry, 16) != 0) {
-        fprintf(stderr, "Failed to initialize tool registry\n");
+    result = ethervox_tool_registry_init(&registry, 16);
+    if (ethervox_is_error(result)) {
+        const ethervox_error_context_t* ctx = ethervox_error_get_context();
+        fprintf(stderr, "❌ Failed to initialize tool registry: %s\n",
+                ethervox_error_string(result));
+        if (ctx && ctx->message && g_debug_enabled) {
+            fprintf(stderr, "   %s at %s:%d\n", ctx->message, ctx->file, ctx->line);
+        }
         ethervox_memory_cleanup(&memory);
         return 1;
     }
@@ -3625,9 +3681,24 @@ int main(int argc, char** argv) {
         printf("   Tools disabled for maximum loading speed\n");
     }
     
-    if (ethervox_governor_init(&g_governor, &gov_config, &registry) != 0) {
-        fprintf(stderr, "Failed to initialize Governor\n");
+    result = ethervox_governor_init(&g_governor, &gov_config, &registry);
+    if (ethervox_is_error(result)) {
+        const ethervox_error_context_t* ctx = ethervox_error_get_context();
+        fprintf(stderr, "❌ Failed to initialize Governor: %s\n",
+                ethervox_error_string(result));
+        if (ctx && ctx->message) {
+            fprintf(stderr, "   %s\n", ctx->message);
+            if (g_debug_enabled && ctx->file) {
+                fprintf(stderr, "   at %s:%d in %s()\n", ctx->file, ctx->line, ctx->function);
+            }
+        }
+        fprintf(stderr, "\n⚡ Troubleshooting:\n");
+        fprintf(stderr, "   1. Check that you have enough free RAM\n");
+        fprintf(stderr, "   2. Try reducing gpu_layers in settings (-settings flag)\n");
+        fprintf(stderr, "   3. Try reducing context_size in settings\n");
+        fprintf(stderr, "   4. Check model file exists and is not corrupted\n");
         ethervox_tool_registry_cleanup(&registry);
+        ethervox_path_config_cleanup(&path_config);
         ethervox_memory_cleanup(&memory);
         return 1;
     }

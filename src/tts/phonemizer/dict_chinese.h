@@ -6,6 +6,7 @@
 #ifndef ETHERVOX_DICT_CHINESE_H
 #define ETHERVOX_DICT_CHINESE_H
 
+#include "ethervox/error.h"
 #include <stddef.h>
 #include <stdbool.h>
 
@@ -27,11 +28,11 @@ dict_chinese_t* dict_chinese_load(const char* path);
  * @param character Single Chinese character (UTF-8)
  * @param pinyin_out Output buffer for pinyin
  * @param max_len Maximum output length
- * @return 0 on success, -1 if not found
+ * @return ETHERVOX_SUCCESS on success, ETHERVOX_ERROR_NOT_FOUND if not found
  * 
  * Example: "你" → "nǐ" (with Unicode tone marks)
  */
-int dict_chinese_lookup(dict_chinese_t* dict, const char* character, char* pinyin_out, size_t max_len);
+ethervox_result_t dict_chinese_lookup(dict_chinese_t* dict, const char* character, char* pinyin_out, size_t max_len);
 
 /**
  * Free dictionary resources

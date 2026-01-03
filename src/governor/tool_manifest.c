@@ -11,6 +11,7 @@
 #include "ethervox/tool_manifest.h"
 #include "ethervox/config.h"
 #include "ethervox/logging.h"
+#include "ethervox/error.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -79,13 +80,13 @@ static uint16_t swap_uint16(uint16_t val) {
 // Tool Manifest Initialization
 // ============================================================================
 
-int ethervox_tool_manifest_init(
+ethervox_result_t ethervox_tool_manifest_init(
     tool_manifest_registry_t* registry,
     const char* binary_path
 ) {
     if (!registry || !binary_path) {
         ETHERVOX_LOGE("Invalid arguments to tool_manifest_init");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     memset(registry, 0, sizeof(tool_manifest_registry_t));
@@ -96,7 +97,7 @@ int ethervox_tool_manifest_init(
         ETHERVOX_LOGW("Failed to open tool manifest: %s (tools will be unavailable)", binary_path);
         registry->tools_available = false;
         registry->fallback_level = 2;  // LLM-only mode
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Read header
@@ -106,7 +107,7 @@ int ethervox_tool_manifest_init(
         fclose(fp);
         registry->tools_available = false;
         registry->fallback_level = 2;
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Check magic number (detects endianness)
@@ -119,7 +120,7 @@ int ethervox_tool_manifest_init(
             fclose(fp);
             registry->tools_available = false;
             registry->fallback_level = 2;
-            return -1;
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
         }
     }
     
@@ -137,7 +138,7 @@ int ethervox_tool_manifest_init(
         fclose(fp);
         registry->tools_available = false;
         registry->fallback_level = 2;
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Allocate index array
@@ -150,7 +151,7 @@ int ethervox_tool_manifest_init(
         fclose(fp);
         registry->tools_available = false;
         registry->fallback_level = 2;
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Read index
@@ -163,7 +164,7 @@ int ethervox_tool_manifest_init(
         fclose(fp);
         registry->tools_available = false;
         registry->fallback_level = 2;
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Byte swap index if needed
@@ -182,7 +183,7 @@ int ethervox_tool_manifest_init(
     ETHERVOX_LOGI("Tool manifest loaded: %u tools from %s", 
                   registry->header.tool_count, binary_path);
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 // ============================================================================
@@ -239,7 +240,7 @@ const tool_index_entry_t* ethervox_tool_get_index(
     return NULL;
 }
 
-int ethervox_tool_get_detail(
+ethervox_result_t ethervox_tool_get_detail(
     const tool_manifest_registry_t* registry,
     const char* name,
     tool_detail_header_t* detail,
@@ -249,7 +250,7 @@ int ethervox_tool_get_detail(
     if (!registry || !name || !detail || !params || !param_count) {
         ETHERVOX_LOGE("ethervox_tool_get_detail: Invalid parameters (registry=%p, name=%p, detail=%p, params=%p, param_count=%p)",
                      (void*)registry, (void*)name, (void*)detail, (void*)params, (void*)param_count);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Check if manifest file is available (not tools_available flag)
@@ -259,14 +260,14 @@ int ethervox_tool_get_detail(
         ETHERVOX_LOGE("ethervox_tool_get_detail: Manifest file is NULL for tool '%s'", name);
         ETHERVOX_LOGE("  registry=%p, header.tool_count=%u, tools_available=%d",
                      (void*)registry, registry->header.tool_count, registry->tools_available);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Find in index
     const tool_index_entry_t* index_entry = ethervox_tool_get_index(registry, name);
     if (!index_entry) {
         ETHERVOX_LOGE("ethervox_tool_get_detail: Tool '%s' not found in index", name);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Seek to detail
@@ -276,7 +277,7 @@ int ethervox_tool_get_detail(
     size_t read = fread(detail, sizeof(tool_detail_header_t), 1, registry->manifest_file);
     if (read != 1) {
         ETHERVOX_LOGE("Failed to read detail for tool: %s", name);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Read parameters
@@ -285,11 +286,11 @@ int ethervox_tool_get_detail(
         read = fread(params, sizeof(tool_param_t), detail->param_count, registry->manifest_file);
         if (read != detail->param_count) {
             ETHERVOX_LOGE("Failed to read parameters for tool: %s", name);
-            return -1;
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
         }
     }
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 const char* ethervox_tool_get_optimized_prompt(
@@ -341,20 +342,20 @@ void ethervox_tool_foreach(
     }
 }
 
-int ethervox_tool_build_index_prompt(
+ethervox_result_t ethervox_tool_build_index_prompt(
     const tool_manifest_registry_t* registry,
     char* output,
     size_t output_size,
     uint8_t min_priority
 ) {
     if (!registry || !output || output_size == 0) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     if (!registry->tools_available) {
         // No tools available - return empty
         output[0] = '\0';
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     int offset = 0;
@@ -420,59 +421,59 @@ int ethervox_tool_build_index_prompt(
 // Runtime Management
 // ============================================================================
 
-int ethervox_tool_manifest_enable(
+ethervox_result_t ethervox_tool_manifest_enable(
     tool_manifest_registry_t* registry,
     const char* name
 ) {
     if (!registry || !name || !registry->tools_available) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     for (uint32_t i = 0; i < registry->header.tool_count; i++) {
         if (strcmp(registry->index[i].name, name) == 0) {
             registry->index[i].enabled = 1;
-            return 0;
+            return ETHERVOX_SUCCESS;
         }
     }
     
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
 }
 
-int ethervox_tool_manifest_disable(
+ethervox_result_t ethervox_tool_manifest_disable(
     tool_manifest_registry_t* registry,
     const char* name
 ) {
     if (!registry || !name || !registry->tools_available) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     for (uint32_t i = 0; i < registry->header.tool_count; i++) {
         if (strcmp(registry->index[i].name, name) == 0) {
             registry->index[i].enabled = 0;
-            return 0;
+            return ETHERVOX_SUCCESS;
         }
     }
     
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
 }
 
-int ethervox_tool_manifest_set_priority(
+ethervox_result_t ethervox_tool_manifest_set_priority(
     tool_manifest_registry_t* registry,
     const char* name,
     uint8_t priority
 ) {
     if (!registry || !name || !registry->tools_available) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     for (uint32_t i = 0; i < registry->header.tool_count; i++) {
         if (strcmp(registry->index[i].name, name) == 0) {
             registry->index[i].priority = priority;
-            return 0;
+            return ETHERVOX_SUCCESS;
         }
     }
     
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
 }
 
 // ============================================================================

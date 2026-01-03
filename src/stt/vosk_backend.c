@@ -15,6 +15,7 @@
 #include <stdbool.h>
 
 #include "ethervox/stt.h"
+#include "ethervox/error.h"
 #include "ethervox/logging.h"
 #include "ethervox/config.h"
 
@@ -87,16 +88,13 @@ static char* parse_vosk_json_text(const char* json) {
 /**
  * @brief Initialize Vosk backend
  */
-int ethervox_stt_vosk_init(ethervox_stt_runtime_t* runtime) {
-    if (!runtime) {
-        LOG_ERROR("NULL runtime");
-        return -1;
-    }
+ethervox_result_t ethervox_stt_vosk_init(ethervox_stt_runtime_t* runtime) {
+    ETHERVOX_CHECK_PTR(runtime);
     
     vosk_backend_context_t* ctx = (vosk_backend_context_t*)calloc(1, sizeof(vosk_backend_context_t));
     if (!ctx) {
         LOG_ERROR("Failed to allocate Vosk context");
-        return -1;
+        return ETHERVOX_ERROR_OUT_OF_MEMORY;
     }
     
     // Set Vosk log level (0 = errors only, -1 = silent)
@@ -114,7 +112,7 @@ int ethervox_stt_vosk_init(ethervox_stt_runtime_t* runtime) {
         } else {
             LOG_ERROR("No model path specified and HOME not set");
             free(ctx);
-            return -1;
+            return ETHERVOX_ERROR_FILE_NOT_FOUND;
         }
     }
     
@@ -125,7 +123,7 @@ int ethervox_stt_vosk_init(ethervox_stt_runtime_t* runtime) {
         LOG_ERROR("Download model: https://alphacephei.com/vosk/models");
         LOG_ERROR("Suggested: vosk-model-small-en-us-0.15 (~40MB)");
         free(ctx);
-        return -1;
+        return ETHERVOX_ERROR_STT_INIT;
     }
     
     // Create recognizer
@@ -135,7 +133,7 @@ int ethervox_stt_vosk_init(ethervox_stt_runtime_t* runtime) {
         LOG_ERROR("Failed to create Vosk recognizer");
         vosk_model_free(ctx->model);
         free(ctx);
-        return -1;
+        return ETHERVOX_ERROR_STT_INIT;
     }
     
     // Enable partial results for streaming
@@ -148,16 +146,17 @@ int ethervox_stt_vosk_init(ethervox_stt_runtime_t* runtime) {
     
     LOG_INFO("Vosk backend initialized (sample_rate=%.0f Hz)", sample_rate);
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
  * @brief Start Vosk recognition session
  */
-int ethervox_stt_vosk_start(ethervox_stt_runtime_t* runtime) {
-    if (!runtime || !runtime->backend_context) {
+ethervox_result_t ethervox_stt_vosk_start(ethervox_stt_runtime_t* runtime) {
+    ETHERVOX_CHECK_PTR(runtime);
+    if (!runtime->backend_context) {
         LOG_ERROR("Invalid runtime or context");
-        return -1;
+        return ETHERVOX_ERROR_NOT_INITIALIZED;
     }
     
     vosk_backend_context_t* ctx = (vosk_backend_context_t*)runtime->backend_context;
@@ -175,19 +174,19 @@ int ethervox_stt_vosk_start(ethervox_stt_runtime_t* runtime) {
     
     LOG_DEBUG("Vosk recognition started");
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
  * @brief Process audio frame with Vosk
  */
-int ethervox_stt_vosk_process(ethervox_stt_runtime_t* runtime,
+ethervox_result_t ethervox_stt_vosk_process(ethervox_stt_runtime_t* runtime,
                                const ethervox_audio_buffer_t* audio_buffer,
                                ethervox_stt_result_t* result) {
-    if (!runtime || !runtime->backend_context || !audio_buffer || !result) {
-        LOG_ERROR("Invalid parameters");
-        return -1;
-    }
+    ETHERVOX_CHECK_PTR(runtime);
+    ETHERVOX_CHECK_PTR(runtime->backend_context);
+    ETHERVOX_CHECK_PTR(audio_buffer);
+    ETHERVOX_CHECK_PTR(result);
     
     vosk_backend_context_t* ctx = (vosk_backend_context_t*)runtime->backend_context;
     
@@ -196,7 +195,7 @@ int ethervox_stt_vosk_process(ethervox_stt_runtime_t* runtime,
     int16_t* pcm_data = (int16_t*)malloc(sample_count * sizeof(int16_t));
     if (!pcm_data) {
         LOG_ERROR("Failed to allocate PCM buffer");
-        return -1;
+        return ETHERVOX_ERROR_OUT_OF_MEMORY;
     }
     
     for (size_t i = 0; i < sample_count; i++) {
@@ -233,7 +232,7 @@ int ethervox_stt_vosk_process(ethervox_stt_runtime_t* runtime,
             
             LOG_DEBUG("Vosk final result: %s", text);
             
-            return 0;  // Success with final result
+            return ETHERVOX_SUCCESS;  // Success with final result
         } else {
             if (text) free(text);
         }
@@ -255,7 +254,7 @@ int ethervox_stt_vosk_process(ethervox_stt_runtime_t* runtime,
                 
                 LOG_DEBUG("Vosk partial result: %s", text);
                 
-                return 0;  // Success with partial result
+                return ETHERVOX_SUCCESS;  // Success with partial result
             } else {
                 if (text) free(text);
             }
@@ -268,11 +267,10 @@ int ethervox_stt_vosk_process(ethervox_stt_runtime_t* runtime,
 /**
  * @brief Finalize Vosk recognition
  */
-int ethervox_stt_vosk_finalize(ethervox_stt_runtime_t* runtime, ethervox_stt_result_t* result) {
-    if (!runtime || !runtime->backend_context || !result) {
-        LOG_ERROR("Invalid parameters");
-        return -1;
-    }
+ethervox_result_t ethervox_stt_vosk_finalize(ethervox_stt_runtime_t* runtime, ethervox_stt_result_t* result) {
+    ETHERVOX_CHECK_PTR(runtime);
+    ETHERVOX_CHECK_PTR(runtime->backend_context);
+    ETHERVOX_CHECK_PTR(result);
     
     vosk_backend_context_t* ctx = (vosk_backend_context_t*)runtime->backend_context;
     
@@ -288,7 +286,7 @@ int ethervox_stt_vosk_finalize(ethervox_stt_runtime_t* runtime, ethervox_stt_res
         
         LOG_INFO("Vosk finalized: %s", text);
         
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     // No final result, use last final if available
@@ -298,13 +296,13 @@ int ethervox_stt_vosk_finalize(ethervox_stt_runtime_t* runtime, ethervox_stt_res
         result->is_final = true;
         result->is_partial = false;
         
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     if (text) free(text);
     
     LOG_WARN("Vosk finalize: no result available");
-    return -1;
+    return ETHERVOX_ERROR_STT_NO_RESULT;
 }
 
 /**
@@ -357,31 +355,31 @@ void ethervox_stt_vosk_cleanup(ethervox_stt_runtime_t* runtime) {
 #else
 // Vosk not available - provide stubs
 
-int ethervox_stt_vosk_init(ethervox_stt_runtime_t* runtime) {
+ethervox_result_t ethervox_stt_vosk_init(ethervox_stt_runtime_t* runtime) {
     (void)runtime;
     ETHERVOX_LOG_ERROR("Vosk backend not available - recompile with VOSK_AVAILABLE=1");
     ETHERVOX_LOG_ERROR("Download Vosk: https://github.com/alphacep/vosk-api");
-    return -1;
+    return ETHERVOX_ERROR_NOT_SUPPORTED;
 }
 
-int ethervox_stt_vosk_start(ethervox_stt_runtime_t* runtime) {
+ethervox_result_t ethervox_stt_vosk_start(ethervox_stt_runtime_t* runtime) {
     (void)runtime;
-    return -1;
+    return ETHERVOX_ERROR_NOT_SUPPORTED;
 }
 
-int ethervox_stt_vosk_process(ethervox_stt_runtime_t* runtime,
+ethervox_result_t ethervox_stt_vosk_process(ethervox_stt_runtime_t* runtime,
                                const ethervox_audio_buffer_t* audio_buffer,
                                ethervox_stt_result_t* result) {
     (void)runtime;
     (void)audio_buffer;
     (void)result;
-    return -1;
+    return ETHERVOX_ERROR_NOT_SUPPORTED;
 }
 
-int ethervox_stt_vosk_finalize(ethervox_stt_runtime_t* runtime, ethervox_stt_result_t* result) {
+ethervox_result_t ethervox_stt_vosk_finalize(ethervox_stt_runtime_t* runtime, ethervox_stt_result_t* result) {
     (void)runtime;
     (void)result;
-    return -1;
+    return ETHERVOX_ERROR_NOT_SUPPORTED;
 }
 
 void ethervox_stt_vosk_stop(ethervox_stt_runtime_t* runtime) {

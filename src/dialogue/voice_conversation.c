@@ -122,7 +122,7 @@ static int conversation_on_speak(const char* text, bool wait_for_response,
                                   bool allow_interrupt, void* user_data) {
     ethervox_conversation_session_t* session = (ethervox_conversation_session_t*)user_data;
     if (!session || !text) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     ETHERVOX_LOG_INFO("[Speak Tool] Synthesizing: %s (wait=%d, interrupt=%d)",
@@ -132,10 +132,12 @@ static int conversation_on_speak(const char* text, bool wait_for_response,
     session->state = ETHERVOX_CONV_STATE_SPEAKING;
     pthread_mutex_unlock(&session->mutex);
     
-    // Detect language and switch TTS voice if needed (reusable function)
+    // Detect language and switch TTS voice if needed
+    // NOTE: Pass NULL for last_detected_language so we detect from the assistant's text,
+    // not reuse the user's STT language (which might be different)
     const char* detected_language = ethervox_detect_and_switch_voice(
         text,
-        session->last_detected_language,
+        NULL,  // Force detection from text, don't inherit user's STT language
         (void**)&session->tts_context
     );
     
@@ -253,7 +255,7 @@ static int conversation_on_speak(const char* text, bool wait_for_response,
         ETHERVOX_LOG_DEBUG("TTS not initialized, text-only mode");
     }
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -263,7 +265,7 @@ static int conversation_on_listen(char** user_input, int timeout_ms,
                                    const char* prompt_hint, void* user_data) {
     ethervox_conversation_session_t* session = (ethervox_conversation_session_t*)user_data;
     if (!session || !user_input) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     ETHERVOX_LOG_INFO("[Listen Tool] Capturing audio (timeout=%dms, hint=%s)",
@@ -283,7 +285,7 @@ static int conversation_on_listen(char** user_input, int timeout_ms,
     // For now, return placeholder
     if (!session->stt_initialized) {
         ETHERVOX_LOG_WARN("STT not initialized, cannot capture audio");
-        return -1;  // Failure - no STT available
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;  // Failure - no STT available
     }
     
     // Start audio capture with timeout
@@ -339,7 +341,7 @@ static int conversation_on_listen(char** user_input, int timeout_ms,
                 
                 printf(" ✓\n");
                 ethervox_audio_buffer_free(&audio_chunk);
-                return 0;
+                return ETHERVOX_SUCCESS;
             }
         } else if (speech_detected) {
             silence_frames++;
@@ -363,7 +365,7 @@ static int conversation_on_listen(char** user_input, int timeout_ms,
                     }
                 }
                 ethervox_audio_buffer_free(&audio_chunk);
-                return 0;
+                return ETHERVOX_SUCCESS;
             }
         }
         
@@ -384,7 +386,7 @@ static int conversation_on_listen(char** user_input, int timeout_ms,
     }
     
     ETHERVOX_LOG_INFO("Listen timeout reached after %dms", timeout_ms);
-    return 0;  // Return 0 for success even on timeout
+    return ETHERVOX_SUCCESS;  // Return 0 for success even on timeout
 }
 
 /**
@@ -393,7 +395,7 @@ static int conversation_on_listen(char** user_input, int timeout_ms,
 static int conversation_on_interrupt(void* user_data) {
     ethervox_conversation_session_t* session = (ethervox_conversation_session_t*)user_data;
     if (!session) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Check if thread should exit or conversation should stop
@@ -403,10 +405,10 @@ static int conversation_on_interrupt(void* user_data) {
     
     if (should_interrupt) {
         ETHERVOX_LOG_INFO("[Interrupt] Conversation interrupted");
-        return 0;  // Interrupt detected
+        return ETHERVOX_SUCCESS;  // Interrupt detected
     }
     
-    return -1;  // No interrupt
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;  // No interrupt
 }
 
 /**
@@ -837,7 +839,7 @@ ethervox_conversation_session_t* ethervox_conversation_init(
     
     // Load settings for TTS and AEC configuration
     ethervox_persistent_settings_t settings;
-    bool settings_loaded = (ethervox_settings_load(&settings, NULL) == 0);
+    bool settings_loaded = ethervox_is_success(ethervox_settings_load(&settings, NULL));
     
     // Check if global TTS is already initialized (from app startup)
     // If so, reuse it instead of creating a new instance
@@ -916,7 +918,7 @@ ethervox_conversation_session_t* ethervox_conversation_init(
     return session;
 }
 
-int ethervox_conversation_start(ethervox_conversation_session_t* session) {
+ethervox_result_t ethervox_conversation_start(ethervox_conversation_session_t* session) {
     if (!session) {
         ETHERVOX_LOG_ERROR("conversation_start: NULL session");
         return -EINVAL;
@@ -927,7 +929,7 @@ int ethervox_conversation_start(ethervox_conversation_session_t* session) {
     if (session->thread_running) {
         pthread_mutex_unlock(&session->mutex);
         ETHERVOX_LOG_WARN("conversation_start: already running");
-        return 0; // Not an error
+        return ETHERVOX_SUCCESS; // Not an error
     }
     
     session->thread_should_exit = false;
@@ -945,10 +947,10 @@ int ethervox_conversation_start(ethervox_conversation_session_t* session) {
     
     ETHERVOX_LOG_INFO("Conversation thread started");
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
-int ethervox_conversation_stop(ethervox_conversation_session_t* session) {
+ethervox_result_t ethervox_conversation_stop(ethervox_conversation_session_t* session) {
     if (!session) {
         ETHERVOX_LOG_ERROR("conversation_stop: NULL session");
         return -EINVAL;
@@ -958,7 +960,7 @@ int ethervox_conversation_stop(ethervox_conversation_session_t* session) {
     
     if (!session->thread_running) {
         pthread_mutex_unlock(&session->mutex);
-        return 0; // Already stopped
+        return ETHERVOX_SUCCESS; // Already stopped
     }
     
     session->thread_should_exit = true;
@@ -971,10 +973,10 @@ int ethervox_conversation_stop(ethervox_conversation_session_t* session) {
     
     ETHERVOX_LOG_INFO("Conversation thread stopped");
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
-int ethervox_conversation_trigger(ethervox_conversation_session_t* session) {
+ethervox_result_t ethervox_conversation_trigger(ethervox_conversation_session_t* session) {
     if (!session) {
         ETHERVOX_LOG_ERROR("conversation_trigger: NULL session");
         return -EINVAL;
@@ -999,7 +1001,7 @@ int ethervox_conversation_trigger(ethervox_conversation_session_t* session) {
     
     pthread_mutex_unlock(&session->mutex);
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 ethervox_conversation_state_t ethervox_conversation_get_state(

@@ -9,6 +9,7 @@
 #ifndef ETHERVOX_RULES_EN_H
 #define ETHERVOX_RULES_EN_H
 
+#include "ethervox/error.h"
 #include <stddef.h>
 
 /**
@@ -16,8 +17,8 @@
  * @param word Input word (lowercase)
  * @param arpabet_out Output ARPAbet (space-separated)
  * @param max_len Maximum output length
- * @return 0 on success, -1 on error
+ * @return ETHERVOX_SUCCESS on success, error code otherwise
  */
-int apply_english_g2p_rules(const char* word, char* arpabet_out, size_t max_len);
+ethervox_result_t apply_english_g2p_rules(const char* word, char* arpabet_out, size_t max_len);
 
 #endif // ETHERVOX_RULES_EN_H

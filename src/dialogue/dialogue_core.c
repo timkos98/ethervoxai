@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "ethervox/error.h"
 
 #ifdef ETHERVOX_PLATFORM_ANDROID
 #include <android/log.h>
@@ -532,10 +533,10 @@ static char* generate_conversation_id(void) {
 }
 
 // Initialize dialogue engine
-int ethervox_dialogue_init(ethervox_dialogue_engine_t* engine,
+ethervox_result_t ethervox_dialogue_init(ethervox_dialogue_engine_t* engine,
                            const ethervox_llm_config_t* config) {
   if (!engine) {
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
 
   memset(engine, 0, sizeof(ethervox_dialogue_engine_t));
@@ -579,7 +580,7 @@ int ethervox_dialogue_init(ethervox_dialogue_engine_t* engine,
   engine->contexts = (ethervox_dialogue_context_t*)calloc(engine->max_contexts,
                                                           sizeof(ethervox_dialogue_context_t));
   if (!engine->contexts) {
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
 
   // Initialize intent patterns (simplified - in production would load from files)
@@ -771,7 +772,7 @@ int ethervox_dialogue_init(ethervox_dialogue_engine_t* engine,
   printf("Dialogue engine initialized with %s model\n",
          engine->llm_config.model_name ? engine->llm_config.model_name : "default");
 
-  return 0;
+  return ETHERVOX_SUCCESS;
 }
 
 // Cleanup dialogue engine
@@ -848,11 +849,11 @@ void ethervox_dialogue_cleanup(ethervox_dialogue_engine_t* engine) {
 }
 
 // Parse intent from text
-int ethervox_dialogue_parse_intent(ethervox_dialogue_engine_t* engine,
+ethervox_result_t ethervox_dialogue_parse_intent(ethervox_dialogue_engine_t* engine,
                                    const ethervox_dialogue_intent_request_t* request,
                                    ethervox_intent_t* intent) {
   if (!engine || !request || !request->text || !intent) {
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
 
   const char* language_code = request->language_code;
@@ -939,7 +940,7 @@ int ethervox_dialogue_parse_intent(ethervox_dialogue_engine_t* engine,
     free(punctuated_text);
   }
 
-  return 0;
+  return ETHERVOX_SUCCESS;
 }
 
 // Infer punctuation for unpunctuated STT output
@@ -1556,11 +1557,11 @@ static bool is_listening_check(const char* normalized_text) {
 }
 
 // Process with LLM
-int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
+ethervox_result_t ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
                                   const ethervox_intent_t* intent, const char* context_id,
                                   ethervox_llm_response_t* response) {
   if (!engine || !intent || !response) {
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
 
   memset(response, 0, sizeof(ethervox_llm_response_t));
@@ -1598,7 +1599,7 @@ int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
       response->conversation_ended = true;
       free(gov_response);
       if (gov_error) free(gov_error);
-      return 0;
+      return ETHERVOX_SUCCESS;
     }
     if (gov_error) free(gov_error);
     if (gov_response) free(gov_response);
@@ -1619,7 +1620,7 @@ int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
         response->confidence = 0.7f;
         response->processing_time_ms = kEthervoxResponseProcessingTimeMs;
         response->conversation_ended = (intent->type != ETHERVOX_INTENT_UNKNOWN);
-        return 0;
+        return ETHERVOX_SUCCESS;
       }
     }
   }
@@ -1680,7 +1681,7 @@ int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
           ETHERVOX_LOGI( 
                              "Governor response: %s (conf=%.2f)", response->text, metrics.confidence);
 #endif
-          return 0;
+          return ETHERVOX_SUCCESS;
         } else if (gov_error) {
 #ifdef ETHERVOX_PLATFORM_ANDROID
           ETHERVOX_LOGW( 
@@ -1713,7 +1714,7 @@ int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
               response->confidence = 0.7f;
               response->processing_time_ms = kEthervoxResponseProcessingTimeMs;
               response->conversation_ended = true;  // LLM questions also end conversation
-              return 0;
+              return ETHERVOX_SUCCESS;
             }
           }
         }
@@ -1805,7 +1806,7 @@ int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
 #else
               printf("LLM backend generated response: %s\n", response->text);
 #endif
-              return 0;
+              return ETHERVOX_SUCCESS;
             } else {
 #ifdef ETHERVOX_PLATFORM_ANDROID
               ETHERVOX_LOGW(
@@ -1868,11 +1869,11 @@ int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
   printf("LLM response generated: %s (confidence: %.0f%%, conversation_ended: %s)\n",
          response->text, response->confidence * 100.0f, conversation_ended ? "true" : "false");
 
-  return 0;
+  return ETHERVOX_SUCCESS;
 }
 
 // Process LLM with streaming token generation
-int ethervox_dialogue_process_llm_stream(ethervox_dialogue_engine_t* engine,
+ethervox_result_t ethervox_dialogue_process_llm_stream(ethervox_dialogue_engine_t* engine,
                                          const ethervox_intent_t* intent,
                                          const ethervox_dialogue_context_t* context,
                                          void (*token_callback)(const char* token, void* user_data),
@@ -1880,7 +1881,7 @@ int ethervox_dialogue_process_llm_stream(ethervox_dialogue_engine_t* engine,
                                          bool* conversation_ended,
                                          ethervox_governor_progress_callback governor_progress_callback) {
   if (!engine || !intent || !token_callback) {
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
 
   // Route to Governor for ALL intents if enabled (not just questions/unknown)
@@ -1917,7 +1918,7 @@ int ethervox_dialogue_process_llm_stream(ethervox_dialogue_engine_t* engine,
       
       free(gov_response);
       if (gov_error) free(gov_error);
-      return 0;
+      return ETHERVOX_SUCCESS;
     } else if (gov_error) {
 #ifdef ETHERVOX_PLATFORM_ANDROID
       ETHERVOX_LOGW( 
@@ -1980,7 +1981,7 @@ int ethervox_dialogue_process_llm_stream(ethervox_dialogue_engine_t* engine,
     }
 
     ethervox_llm_response_free(&response);
-    return 0;
+    return ETHERVOX_SUCCESS;
   }
 
   ethervox_llm_response_free(&response);
@@ -1988,11 +1989,11 @@ int ethervox_dialogue_process_llm_stream(ethervox_dialogue_engine_t* engine,
 }
 
 // Create dialogue context
-int ethervox_dialogue_create_context(ethervox_dialogue_engine_t* engine,
+ethervox_result_t ethervox_dialogue_create_context(ethervox_dialogue_engine_t* engine,
                                      const ethervox_dialogue_context_request_t* request,
                                      char** context_id) {
   if (!engine || !request || !request->user_id || !context_id) {
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
 
   const char* language_code = request->language_code;
@@ -2016,33 +2017,33 @@ int ethervox_dialogue_create_context(ethervox_dialogue_engine_t* engine,
       engine->active_contexts++;
 
       printf("Created dialogue context: %s for user: %s\n", ctx->conversation_id, request->user_id);
-      return 0;
+      return ETHERVOX_SUCCESS;
     }
   }
 
-  return -1;  // No available slots
+  return ETHERVOX_ERROR_INVALID_ARGUMENT;  // No available slots
 }
 
-int ethervox_dialogue_set_language(ethervox_dialogue_engine_t* engine, const char* language_code) {
+ethervox_result_t ethervox_dialogue_set_language(ethervox_dialogue_engine_t* engine, const char* language_code) {
   if (!engine || !language_code) {
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
 
   char normalized[8] = {0};
   sanitize_language_code(language_code, normalized, sizeof(normalized));
 
   if (normalized[0] == '\0') {
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
 
   if (!ethervox_dialogue_is_language_supported(normalized)) {
     fprintf(stderr, "Dialogue language '%s' not supported; keeping current setting\n", normalized);
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
 
   if (engine->llm_config.language_code &&
       strcmp(engine->llm_config.language_code, normalized) == 0) {
-    return 0;
+    return ETHERVOX_SUCCESS;
   }
 
   if (engine->llm_config.language_code) {
@@ -2052,7 +2053,7 @@ int ethervox_dialogue_set_language(ethervox_dialogue_engine_t* engine, const cha
 
   engine->llm_config.language_code = strdup(normalized);
   if (!engine->llm_config.language_code) {
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
 
   for (uint32_t i = 0; i < engine->max_contexts; i++) {
@@ -2063,7 +2064,7 @@ int ethervox_dialogue_set_language(ethervox_dialogue_engine_t* engine, const cha
     }
   }
 
-  return 0;
+  return ETHERVOX_SUCCESS;
 }
 
 const char* ethervox_dialogue_get_language(const ethervox_dialogue_engine_t* engine) {
@@ -2149,9 +2150,9 @@ void ethervox_dialogue_set_memory_store(struct ethervox_memory_store_t* store) {
 }
 
 // Reload manifest registry (for model switching)
-int ethervox_dialogue_reload_manifest(ethervox_dialogue_engine_t* engine, const char* model_path) {
+ethervox_result_t ethervox_dialogue_reload_manifest(ethervox_dialogue_engine_t* engine, const char* model_path) {
   if (!engine || !model_path) {
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
   
   if (!engine->governor || !engine->use_governor) {
@@ -2203,7 +2204,7 @@ int ethervox_dialogue_reload_manifest(ethervox_dialogue_engine_t* engine, const 
     printf("Manifest reloaded successfully (fallback level: %u)\n", 
            manifest->fallback_level);
 #endif
-    return 0;
+    return ETHERVOX_SUCCESS;
   } else {
     // Failed to reload - free and return error
     free(manifest);

@@ -9,6 +9,7 @@
 #ifndef ETHERVOX_PHONEMIZER_H
 #define ETHERVOX_PHONEMIZER_H
 
+#include "ethervox/error.h"
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -50,12 +51,12 @@ phonemizer_t* phonemizer_create(const char* lang_code);
  * @param text Input text (UTF-8)
  * @param ipa_output Buffer for IPA output (UTF-8)
  * @param max_len Maximum output buffer size
- * @return 0 on success, -1 on error
+ * @return ETHERVOX_SUCCESS on success, error code otherwise
  * 
  * Output format: Space-separated IPA tokens with stress markers
  * Example: "hello world" → "h ə ˈ l o ʊ   w ɝ l d"
  */
-int phonemizer_text_to_ipa(phonemizer_t* ctx,
+ethervox_result_t phonemizer_text_to_ipa(phonemizer_t* ctx,
                            const char* text,
                            char* ipa_output,
                            size_t max_len);

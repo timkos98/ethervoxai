@@ -15,6 +15,7 @@
 #ifndef PRONUNCIATION_OVERRIDES_H
 #define PRONUNCIATION_OVERRIDES_H
 
+#include "ethervox/error.h"
 #include <stdint.h>
 #include <stdbool.h>
 #include <time.h>
@@ -51,9 +52,9 @@ pronunciation_override_store_t* pronunciation_overrides_load(void);
  * @param store Override store
  * @param word Word to look up (case-insensitive)
  * @param out_override Output override (caller allocates)
- * @return 0 if found, -1 if not found
+ * @return ETHERVOX_SUCCESS if found, ETHERVOX_ERROR_NOT_FOUND if not found
  */
-int pronunciation_overrides_lookup(
+ethervox_result_t pronunciation_overrides_lookup(
     pronunciation_override_store_t* store,
     const char* word,
     pronunciation_override_t* out_override
@@ -77,9 +78,9 @@ int pronunciation_overrides_add(
  * 
  * @param store Override store
  * @param word Word that was used
- * @return 0 on success, -1 on error
+ * @return ETHERVOX_SUCCESS on success, error code otherwise
  */
-int pronunciation_overrides_record_usage(
+ethervox_result_t pronunciation_overrides_record_usage(
     pronunciation_override_store_t* store,
     const char* word
 );
@@ -134,9 +135,9 @@ void pronunciation_overrides_get_stats(
  * Reset/clear all pronunciation overrides
  * Deletes both personal and community override files
  * 
- * @return 0 on success, -1 on error
+ * @return ETHERVOX_SUCCESS on success, error code otherwise
  */
-int pronunciation_overrides_reset(void);
+ethervox_result_t pronunciation_overrides_reset(void);
 
 /**
  * Free override store

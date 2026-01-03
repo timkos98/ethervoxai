@@ -4,14 +4,15 @@
  */
 
 #include "ethervox/tts.h"
+#include "ethervox/error.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 
 // Forward declarations for backend implementations
 extern ethervox_tts_context_t* ethervox_tts_piper_create(const ethervox_tts_config_t* config);
-extern int ethervox_tts_piper_synthesize(ethervox_tts_context_t* ctx, const char* text, ethervox_tts_audio_t* output);
-extern int ethervox_tts_piper_synthesize_ipa(ethervox_tts_context_t* ctx, const char* ipa_phonemes, ethervox_tts_audio_t* output);
+extern ethervox_result_t ethervox_tts_piper_synthesize(ethervox_tts_context_t* ctx, const char* text, ethervox_tts_audio_t* output);
+extern ethervox_result_t ethervox_tts_piper_synthesize_ipa(ethervox_tts_context_t* ctx, const char* ipa_phonemes, ethervox_tts_audio_t* output);
 extern void ethervox_tts_piper_destroy(ethervox_tts_context_t* ctx);
 extern void* ethervox_tts_piper_get_phonemizer(void* piper_impl);
 
@@ -81,43 +82,43 @@ ethervox_tts_context_t* ethervox_tts_create(const ethervox_tts_config_t* config)
     return ctx;
 }
 
-int ethervox_tts_synthesize_text(ethervox_tts_context_t* ctx,
+ethervox_result_t ethervox_tts_synthesize_text(ethervox_tts_context_t* ctx,
                                  const char* text,
                                  ethervox_tts_audio_t* output) {
-    if (!ctx || !text || !output) {
-        return -1;
-    }
+    ETHERVOX_CHECK_PTR(ctx);
+    ETHERVOX_CHECK_PTR(text);
+    ETHERVOX_CHECK_PTR(output);
     
     switch (ctx->backend) {
         case ETHERVOX_TTS_BACKEND_PIPER:
 #ifdef HAVE_PIPER_TTS
             return ethervox_tts_piper_synthesize(ctx->impl, text, output);
 #else
-            return -1;
+            return ETHERVOX_ERROR_NOT_SUPPORTED;
 #endif
             
         case ETHERVOX_TTS_BACKEND_SYSTEM:
             // TODO
-            return -1;
+            return ETHERVOX_ERROR_NOT_IMPLEMENTED;
             
         default:
-            return -1;
+            return ETHERVOX_ERROR_NOT_SUPPORTED;
     }
 }
 
-int ethervox_tts_synthesize_ipa(ethervox_tts_context_t* ctx,
+ethervox_result_t ethervox_tts_synthesize_ipa(ethervox_tts_context_t* ctx,
                                 const char* ipa_phonemes,
                                 ethervox_tts_audio_t* output) {
-    if (!ctx || !ipa_phonemes || !output) {
-        return -1;
-    }
+    ETHERVOX_CHECK_PTR(ctx);
+    ETHERVOX_CHECK_PTR(ipa_phonemes);
+    ETHERVOX_CHECK_PTR(output);
     
     // Only Piper backend supports direct IPA synthesis
     if (ctx->backend == ETHERVOX_TTS_BACKEND_PIPER) {
 #ifdef HAVE_PIPER_TTS
         return ethervox_tts_piper_synthesize_ipa(ctx->impl, ipa_phonemes, output);
 #else
-        return -1;
+        return ETHERVOX_ERROR_NOT_SUPPORTED;
 #endif
     }
     

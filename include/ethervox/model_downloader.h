@@ -15,6 +15,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
+#include "ethervox/error.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -79,9 +80,9 @@ typedef void (*ethervox_download_progress_callback_t)(
  * 
  * @param buffer Output buffer
  * @param buffer_size Buffer size
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_model_get_base_dir(char* buffer, size_t buffer_size);
+ethervox_result_t ethervox_model_get_base_dir(char* buffer, size_t buffer_size);
 
 /**
  * @brief Check if a specific model exists and is valid
@@ -102,9 +103,9 @@ ethervox_model_status_t ethervox_model_check_status(
  * 
  * @param type Model type
  * @param info Output model information
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_model_get_default(
+ethervox_result_t ethervox_model_get_default(
     ethervox_model_type_t type,
     ethervox_model_info_t* info
 );
@@ -113,11 +114,11 @@ int ethervox_model_get_default(
  * @brief List available models of a specific type
  * 
  * @param type Model type
- * @param models Output array of model info (allocated by function)
+ * @param models Output array of model info (allocated by function, caller must free)
  * @param count Number of models found
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_model_list(
+ethervox_result_t ethervox_model_list(
     ethervox_model_type_t type,
     ethervox_model_info_t** models,
     uint32_t* count
@@ -130,9 +131,9 @@ int ethervox_model_list(
  * @param model_name Model name/identifier
  * @param progress_callback Optional progress callback
  * @param user_data User data for callback
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_model_download(
+ethervox_result_t ethervox_model_download(
     ethervox_model_type_t type,
     const char* model_name,
     ethervox_download_progress_callback_t progress_callback,
@@ -144,9 +145,9 @@ int ethervox_model_download(
  * 
  * @param type Model type
  * @param model_name Model name
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_model_cancel_download(
+ethervox_result_t ethervox_model_cancel_download(
     ethervox_model_type_t type,
     const char* model_name
 );
@@ -156,9 +157,9 @@ int ethervox_model_cancel_download(
  * 
  * @param type Model type
  * @param model_name Model name
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_model_delete(
+ethervox_result_t ethervox_model_delete(
     ethervox_model_type_t type,
     const char* model_name
 );
@@ -241,9 +242,9 @@ const char* ethervox_model_type_string(ethervox_model_type_t type);
  * @brief Get total disk usage for all models
  * 
  * @param bytes_used Output total bytes used
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_model_get_disk_usage(uint64_t* bytes_used);
+ethervox_result_t ethervox_model_get_disk_usage(uint64_t* bytes_used);
 
 /**
  * @brief Check if sufficient disk space for model

@@ -31,7 +31,7 @@ extern "C" {
  * @param registry Tool registry to register into
  * @return 0 on success, negative on error
  */
-int ethervox_conversation_tools_register(ethervox_tool_registry_t* registry);
+ethervox_result_t ethervox_conversation_tools_register(ethervox_tool_registry_t* registry);
 
 /**
  * Set the conversation callbacks for real-time tool execution

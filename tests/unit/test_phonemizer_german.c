@@ -3,6 +3,7 @@
  */
 
 #include <stdio.h>
+#include "ethervox/error.h"
 #include <string.h>
 #include "tts/phonemizer/rules_de.h"
 
@@ -53,9 +54,9 @@ int main() {
     
     if (passed == num_tests) {
         printf("\n✓ SUCCESS - All German phonemization tests passed!\n");
-        return 0;
+        return ETHERVOX_SUCCESS;
     } else {
         printf("\n✗ Some tests failed\n");
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
 }

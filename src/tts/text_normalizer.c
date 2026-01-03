@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: CC-BY-NC-SA-4.0
  */
 
+#include "ethervox/error.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -164,11 +165,14 @@ static bool normalize_number(const char* input, char* output, size_t output_size
  * @param input Input text with numbers/times
  * @param output Buffer for normalized text
  * @param output_size Size of output buffer
- * @return 0 on success, -1 on error
+ * @return ETHERVOX_SUCCESS on success, error code otherwise
  */
-int ethervox_tts_normalize_text(const char* input, char* output, size_t output_size) {
-    if (!input || !output || output_size == 0) {
-        return -1;
+ethervox_result_t ethervox_tts_normalize_text(const char* input, char* output, size_t output_size) {
+    ETHERVOX_CHECK_PTR(input);
+    ETHERVOX_CHECK_PTR(output);
+    
+    if (output_size == 0) {
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     const char* in_ptr = input;
@@ -216,5 +220,5 @@ int ethervox_tts_normalize_text(const char* input, char* output, size_t output_s
     }
     
     *out_ptr = '\0';
-    return 0;
+    return ETHERVOX_SUCCESS;
 }

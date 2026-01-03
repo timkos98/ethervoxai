@@ -6,6 +6,7 @@
 #include "ethervox/settings.h"
 #include "ethervox/config.h"
 #include "ethervox/logging.h"
+#include "ethervox/error.h"
 #include "cJSON.h"
 
 #include <stdio.h>
@@ -157,11 +158,8 @@ static void ensure_config_dir(const char* filepath) {
     }
 }
 
-int ethervox_settings_save(const ethervox_persistent_settings_t* settings, const char* filepath) {
-    if (!settings) {
-        ETHERVOX_LOG_ERROR("Settings pointer is NULL");
-        return -1;
-    }
+ethervox_result_t ethervox_settings_save(const ethervox_persistent_settings_t* settings, const char* filepath) {
+    ETHERVOX_CHECK_PTR(settings);
     
     if (!filepath) {
         filepath = ethervox_settings_get_default_path();
@@ -172,7 +170,7 @@ int ethervox_settings_save(const ethervox_persistent_settings_t* settings, const
     cJSON* root = cJSON_CreateObject();
     if (!root) {
         ETHERVOX_LOG_ERROR("Failed to create JSON root object");
-        return -1;
+        ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_OUT_OF_MEMORY, "Failed to create JSON root object");
     }
     
     cJSON_AddNumberToObject(root, "version", settings->version);
@@ -264,14 +262,16 @@ int ethervox_settings_save(const ethervox_persistent_settings_t* settings, const
     
     if (!json_string) {
         ETHERVOX_LOG_ERROR("Failed to serialize JSON");
-        return -1;
+        ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_CONFIG_SAVE_FAILED, "Failed to serialize settings to JSON");
     }
     
     FILE* f = fopen(filepath, "w");
     if (!f) {
         ETHERVOX_LOG_ERROR("Failed to open %s for writing: %s", filepath, strerror(errno));
         free(json_string);
-        return -1;
+        char msg[512];
+        snprintf(msg, sizeof(msg), "Cannot open settings file for writing: %s", filepath);
+        ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_FILE_WRITE, msg);
     }
     
     fprintf(f, "%s", json_string);
@@ -279,14 +279,11 @@ int ethervox_settings_save(const ethervox_persistent_settings_t* settings, const
     free(json_string);
     
     ETHERVOX_LOG_INFO("Settings saved to %s", filepath);
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
-int ethervox_settings_load(ethervox_persistent_settings_t* settings, const char* filepath) {
-    if (!settings) {
-        ETHERVOX_LOG_ERROR("Settings pointer is NULL");
-        return -1;
-    }
+ethervox_result_t ethervox_settings_load(ethervox_persistent_settings_t* settings, const char* filepath) {
+    ETHERVOX_CHECK_PTR(settings);
     
     if (!filepath) {
         filepath = ethervox_settings_get_default_path();
@@ -296,7 +293,7 @@ int ethervox_settings_load(ethervox_persistent_settings_t* settings, const char*
     if (!f) {
         ETHERVOX_LOG_INFO("Settings file not found at %s, using defaults", filepath);
         *settings = ethervox_settings_get_defaults();
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     // Read file contents
@@ -308,28 +305,26 @@ int ethervox_settings_load(ethervox_persistent_settings_t* settings, const char*
     if (!buffer) {
         ETHERVOX_LOG_ERROR("Failed to allocate buffer for settings file");
         fclose(f);
-        return -1;
+        ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_OUT_OF_MEMORY, "Failed to allocate memory for settings file");
     }
     
     size_t read_size = fread(buffer, 1, size, f);
     buffer[read_size] = '\0';
     fclose(f);
     
-    int ret = ethervox_settings_import(settings, buffer);
+    ethervox_result_t ret = ethervox_settings_import(settings, buffer);
     free(buffer);
     
-    if (ret == 0) {
+    if (ethervox_is_success(ret)) {
         ETHERVOX_LOG_INFO("Settings loaded from %s", filepath);
     }
     
     return ret;
 }
 
-int ethervox_settings_import(ethervox_persistent_settings_t* settings, const char* json_string) {
-    if (!settings || !json_string) {
-        ETHERVOX_LOG_ERROR("Invalid arguments to settings_import");
-        return -1;
-    }
+ethervox_result_t ethervox_settings_import(ethervox_persistent_settings_t* settings, const char* json_string) {
+    ETHERVOX_CHECK_PTR(settings);
+    ETHERVOX_CHECK_PTR(json_string);
     
     // Start with defaults
     *settings = ethervox_settings_get_defaults();
@@ -337,7 +332,9 @@ int ethervox_settings_import(ethervox_persistent_settings_t* settings, const cha
     cJSON* root = cJSON_Parse(json_string);
     if (!root) {
         ETHERVOX_LOG_ERROR("Failed to parse JSON: %s", cJSON_GetErrorPtr());
-        return -1;
+        char msg[256];
+        snprintf(msg, sizeof(msg), "JSON parse error: %s", cJSON_GetErrorPtr());
+        ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_CONFIG_PARSE_ERROR, msg);
     }
     
     // Parse version
@@ -595,7 +592,7 @@ int ethervox_settings_import(ethervox_persistent_settings_t* settings, const cha
     }
     
     cJSON_Delete(root);
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 char* ethervox_settings_export(const ethervox_persistent_settings_t* settings) {

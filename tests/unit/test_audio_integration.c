@@ -7,6 +7,7 @@
  */
 
 #include <stdio.h>
+#include "ethervox/error.h"
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
@@ -31,7 +32,7 @@ static int test_audio_config(void) {
     assert(config.bits_per_sample == 16);
     
     printf("PASS\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -65,7 +66,7 @@ static int test_audio_init(void) {
     runtime.driver.cleanup(&runtime);
     
     printf("PASS\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -115,7 +116,7 @@ static int test_audio_capture(void) {
     runtime.driver.cleanup(&runtime);
     
     printf("PASS\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -146,7 +147,7 @@ static int test_audio_buffer(void) {
     free(buffer.data);
     
     printf("PASS\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -197,7 +198,7 @@ static int test_audio_multiple_reads(void) {
     runtime.driver.cleanup(&runtime);
     
     printf("PASS\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -209,7 +210,7 @@ static int test_audio_multiple_reads(void) {
  */
 static int test_audio_errors(void) {
     printf("  - test_audio_errors... SKIPPED (known issue with driver cleanup)\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
     
     /* Commented out until driver cleanup is fixed
     ethervox_audio_runtime_t runtime = {0};
@@ -238,7 +239,7 @@ static int test_audio_errors(void) {
     }
     
     printf("PASS\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
     */
 }
 
@@ -261,7 +262,7 @@ static int test_audio_device_busy(void) {
     if (result != 0) {
         // Microphone is busy - this is expected if EthervoxAI is already running
         printf("PASS (mic busy - expected)\n");
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     // If we got the mic, try to start capture
@@ -269,7 +270,7 @@ static int test_audio_device_busy(void) {
     if (result != 0) {
         printf("PASS (capture failed - mic may be busy)\n");
         runtime1.driver.cleanup(&runtime1);
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     // Try to initialize a second runtime while first is active
@@ -288,7 +289,7 @@ static int test_audio_device_busy(void) {
     }
     
     printf("PASS\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -310,9 +311,9 @@ int main(void) {
     printf("\n");
     if (failed == 0) {
         printf("✓ All audio integration tests passed!\n\n");
-        return 0;
+        return ETHERVOX_SUCCESS;
     } else {
         printf("✗ %d test(s) failed\n\n", failed);
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
 }

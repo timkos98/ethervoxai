@@ -11,6 +11,7 @@
 
 #include <stddef.h>
 #include <stdbool.h>
+#include "ethervox/error.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -72,9 +73,9 @@ void ethervox_aec_set_reference(ethervox_aec_t* aec, const float* samples, size_
  * @param aec AEC context
  * @param mic_input Microphone samples (will be modified in-place)
  * @param count Number of samples (must match frame_size from config)
- * @return 0 on success, -1 on error
+ * @return ETHERVOX_SUCCESS on success, error code otherwise
  */
-int ethervox_aec_process(ethervox_aec_t* aec, float* mic_input, size_t count);
+ethervox_result_t ethervox_aec_process(ethervox_aec_t* aec, float* mic_input, size_t count);
 
 /**
  * Check if AEC is currently active (TTS playing)

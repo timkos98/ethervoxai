@@ -1,4 +1,5 @@
 /**
+#include "ethervox/error.h"
  * @file speak.c
  * @brief LLM tool for text-to-speech output with conversational control
  *
@@ -146,7 +147,7 @@ static int tool_speak_wrapper(
 ) {
     if (!args_json || !result || !error) {
         if (error) *error = strdup("Invalid parameters to speak tool");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Check if callbacks are set
@@ -154,7 +155,7 @@ static int tool_speak_wrapper(
         // Not an error - just means we're in CLI mode, not voice mode
         LOG_DEBUG("speak tool called but no TTS callback set (CLI mode?)");
         *result = strdup("{\"success\":true,\"mode\":\"text_only\",\"message\":\"TTS not available, printed to console\"}");
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     // Parse text parameter (required)
@@ -162,7 +163,7 @@ static int tool_speak_wrapper(
     if (!text || strlen(text) == 0) {
         if (text) free(text);
         *error = strdup("Missing or empty 'text' parameter");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Parse optional parameters
@@ -208,7 +209,7 @@ static int tool_speak_wrapper(
     
     if (ret != 0) {
         *error = strdup("TTS playback failed");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Format success response
@@ -219,7 +220,7 @@ static int tool_speak_wrapper(
              allow_interrupt ? "true" : "false");
     
     *result = strdup(response_buf);
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**

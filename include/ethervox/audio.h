@@ -20,6 +20,7 @@
 #include <stdint.h>
 
 #include "ethervox/config.h"
+#include "ethervox/error.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -68,13 +69,13 @@ typedef struct ethervox_audio_runtime ethervox_audio_runtime_t;
 
 // Function pointers for platform-specific implementations
 typedef struct {
-  int (*init)(ethervox_audio_runtime_t* runtime, const ethervox_audio_config_t* config);
-  int (*start_capture)(ethervox_audio_runtime_t* runtime);
-  int (*stop_capture)(ethervox_audio_runtime_t* runtime);
-  int (*start_playback)(ethervox_audio_runtime_t* runtime);
-  int (*stop_playback)(ethervox_audio_runtime_t* runtime);
-  int (*read_audio)(ethervox_audio_runtime_t* runtime, ethervox_audio_buffer_t* buffer);
-  int (*write_audio)(ethervox_audio_runtime_t* runtime, const ethervox_audio_buffer_t* buffer);
+  ethervox_result_t (*init)(ethervox_audio_runtime_t* runtime, const ethervox_audio_config_t* config);
+  ethervox_result_t (*start_capture)(ethervox_audio_runtime_t* runtime);
+  ethervox_result_t (*stop_capture)(ethervox_audio_runtime_t* runtime);
+  ethervox_result_t (*start_playback)(ethervox_audio_runtime_t* runtime);
+  ethervox_result_t (*stop_playback)(ethervox_audio_runtime_t* runtime);
+  ethervox_result_t (*read_audio)(ethervox_audio_runtime_t* runtime, ethervox_audio_buffer_t* buffer);
+  ethervox_result_t (*write_audio)(ethervox_audio_runtime_t* runtime, const ethervox_audio_buffer_t* buffer);
   void (*cleanup)(ethervox_audio_runtime_t* runtime);
 } ethervox_audio_driver_t;
 
@@ -99,18 +100,18 @@ struct ethervox_audio_runtime {
 };
 
 // Public API functions
-int ethervox_audio_init(ethervox_audio_runtime_t* runtime, const ethervox_audio_config_t* config);
-int ethervox_audio_start(ethervox_audio_runtime_t* runtime);
-int ethervox_audio_stop(ethervox_audio_runtime_t* runtime);
+ethervox_result_t ethervox_audio_init(ethervox_audio_runtime_t* runtime, const ethervox_audio_config_t* config);
+ethervox_result_t ethervox_audio_start(ethervox_audio_runtime_t* runtime);
+ethervox_result_t ethervox_audio_stop(ethervox_audio_runtime_t* runtime);
 void ethervox_audio_cleanup(ethervox_audio_runtime_t* runtime);
-int ethervox_audio_start_capture(ethervox_audio_runtime_t* runtime);
-int ethervox_audio_stop_capture(ethervox_audio_runtime_t* runtime);
-int ethervox_audio_read(ethervox_audio_runtime_t* runtime, ethervox_audio_buffer_t* buffer);
+ethervox_result_t ethervox_audio_start_capture(ethervox_audio_runtime_t* runtime);
+ethervox_result_t ethervox_audio_stop_capture(ethervox_audio_runtime_t* runtime);
+ethervox_result_t ethervox_audio_read(ethervox_audio_runtime_t* runtime, ethervox_audio_buffer_t* buffer);
 
 // Speech processing functions
-int ethervox_tts_synthesize(ethervox_audio_runtime_t* runtime,
+ethervox_result_t ethervox_tts_synthesize(ethervox_audio_runtime_t* runtime,
                             const ethervox_tts_request_t* request, ethervox_audio_buffer_t* output);
-int ethervox_language_detect(const ethervox_audio_buffer_t* buffer,
+ethervox_result_t ethervox_language_detect(const ethervox_audio_buffer_t* buffer,
                              ethervox_language_detect_t* result);
 
 // Utility functions
@@ -128,7 +129,7 @@ void ethervox_audio_buffer_free(ethervox_audio_buffer_t* buffer);
 float ethervox_audio_calculate_rms_energy(const float* samples, uint32_t count);
 
 // Platform-specific driver registration
-int ethervox_audio_register_platform_driver(ethervox_audio_runtime_t* runtime);
+ethervox_result_t ethervox_audio_register_platform_driver(ethervox_audio_runtime_t* runtime);
 
 #ifdef __cplusplus
 }

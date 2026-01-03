@@ -11,6 +11,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "ethervox/error.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -135,17 +136,17 @@ ethervox_persistent_settings_t ethervox_settings_get_defaults(void);
  * @brief Load settings from JSON file
  * @param settings Output settings structure
  * @param filepath Path to JSON settings file (NULL = default location)
- * @return 0 on success, -1 on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_settings_load(ethervox_persistent_settings_t* settings, const char* filepath);
+ethervox_result_t ethervox_settings_load(ethervox_persistent_settings_t* settings, const char* filepath);
 
 /**
  * @brief Save settings to JSON file
  * @param settings Settings to save
  * @param filepath Path to JSON settings file (NULL = default location)
- * @return 0 on success, -1 on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_settings_save(const ethervox_persistent_settings_t* settings, const char* filepath);
+ethervox_result_t ethervox_settings_save(const ethervox_persistent_settings_t* settings, const char* filepath);
 
 /**
  * @brief Get default settings file path
@@ -157,9 +158,9 @@ const char* ethervox_settings_get_default_path(void);
  * @brief Import settings from JSON string
  * @param settings Output settings structure
  * @param json_string JSON string containing settings
- * @return 0 on success, -1 on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_settings_import(ethervox_persistent_settings_t* settings, const char* json_string);
+ethervox_result_t ethervox_settings_import(ethervox_persistent_settings_t* settings, const char* json_string);
 
 /**
  * @brief Export settings to JSON string

@@ -13,6 +13,7 @@
  */
 
 #include "espeak_dict.h"
+#include "ethervox/error.h"
 #include "ethervox/logging.h"
 #include <string.h>
 #include <ctype.h>
@@ -34,17 +35,20 @@ static int strcasecmp_portable(const char* s1, const char* s2) {
 /**
  * Binary search in sorted dictionary
  */
-int espeak_dict_lookup(
+ethervox_result_t espeak_dict_lookup(
     const espeak_dict_entry_t* entries,
     size_t size,
     const char* word,
     char* ipa_out,
     size_t max_len
 ) {
-    if (!entries || !word || !ipa_out || size == 0 || max_len == 0) {
-        ETHERVOX_LOG_DEBUG("[EspeakDict] Lookup failed: invalid parameters (entries=%p, word=%p, ipa_out=%p, size=%zu, max_len=%zu)",
-                           (void*)entries, (void*)word, (void*)ipa_out, size, max_len);
-        return -1;
+    ETHERVOX_CHECK_PTR(entries);
+    ETHERVOX_CHECK_PTR(word);
+    ETHERVOX_CHECK_PTR(ipa_out);
+    
+    if (size == 0 || max_len == 0) {
+        ETHERVOX_LOG_DEBUG("[EspeakDict] Lookup failed: size=%zu, max_len=%zu", size, max_len);
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     ETHERVOX_LOG_DEBUG("[EspeakDict] 🔍 Looking up '%s' in dictionary (size=%zu entries)", word, size);
@@ -73,7 +77,7 @@ int espeak_dict_lookup(
             strncpy(ipa_out, entries[mid].ipa, max_len - 1);
             ipa_out[max_len - 1] = '\0';
             ETHERVOX_LOG_DEBUG("[EspeakDict] ✅ Found '%s' → '%s' (after %zu iterations)", word, ipa_out, iterations);
-            return 0;
+            return ETHERVOX_SUCCESS;
         } else if (cmp < 0) {
             if (mid == 0) {
                 ETHERVOX_LOG_DEBUG("[EspeakDict] ❌ Search exhausted (mid=0, would underflow)");
@@ -87,5 +91,5 @@ int espeak_dict_lookup(
     
     ETHERVOX_LOG_DEBUG("[EspeakDict] ❌ Not found: '%s' (searched %zu iterations, final left=%zu, right=%zu)",
                        word, iterations, left, right);
-    return -1;  // Not found
+    return ETHERVOX_ERROR_NOT_FOUND;  // Not found
 }

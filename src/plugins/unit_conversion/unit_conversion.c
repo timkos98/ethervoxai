@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include "ethervox/error.h"
 // Copyright (c) 2025 Tim Kos
 
 /**
@@ -327,7 +328,7 @@ static double linear_convert(double value, const char* from, const char* to,
 // Main Conversion Function
 // ============================================================================
 
-int ethervox_unit_convert(
+ethervox_result_t ethervox_unit_convert(
     double value,
     const char* from_unit,
     const char* to_unit,
@@ -338,7 +339,7 @@ int ethervox_unit_convert(
         if (error_message) {
             *error_message = strdup("Missing required parameters");
         }
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Try each conversion category
@@ -351,7 +352,7 @@ int ethervox_unit_convert(
         ethervox_log(ETHERVOX_LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__,
                     "Converted %.6f %s to %.6f %s (temperature)", 
                     value, from_unit, converted, to_unit);
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     // Length
@@ -362,7 +363,7 @@ int ethervox_unit_convert(
         ethervox_log(ETHERVOX_LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__,
                     "Converted %.6f %s to %.6f %s (length)", 
                     value, from_unit, converted, to_unit);
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     // Mass
@@ -373,7 +374,7 @@ int ethervox_unit_convert(
         ethervox_log(ETHERVOX_LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__,
                     "Converted %.6f %s to %.6f %s (mass)", 
                     value, from_unit, converted, to_unit);
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     // Volume
@@ -384,7 +385,7 @@ int ethervox_unit_convert(
         ethervox_log(ETHERVOX_LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__,
                     "Converted %.6f %s to %.6f %s (volume)", 
                     value, from_unit, converted, to_unit);
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     // Speed
@@ -395,7 +396,7 @@ int ethervox_unit_convert(
         ethervox_log(ETHERVOX_LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__,
                     "Converted %.6f %s to %.6f %s (speed)", 
                     value, from_unit, converted, to_unit);
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     // Pressure
@@ -406,7 +407,7 @@ int ethervox_unit_convert(
         ethervox_log(ETHERVOX_LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__,
                     "Converted %.6f %s to %.6f %s (pressure)", 
                     value, from_unit, converted, to_unit);
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     // Energy
@@ -417,7 +418,7 @@ int ethervox_unit_convert(
         ethervox_log(ETHERVOX_LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__,
                     "Converted %.6f %s to %.6f %s (energy)", 
                     value, from_unit, converted, to_unit);
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     // Power
@@ -428,7 +429,7 @@ int ethervox_unit_convert(
         ethervox_log(ETHERVOX_LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__,
                     "Converted %.6f %s to %.6f %s (power)", 
                     value, from_unit, converted, to_unit);
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     // Area
@@ -439,7 +440,7 @@ int ethervox_unit_convert(
         ethervox_log(ETHERVOX_LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__,
                     "Converted %.6f %s to %.6f %s (area)", 
                     value, from_unit, converted, to_unit);
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     // Data
@@ -450,7 +451,7 @@ int ethervox_unit_convert(
         ethervox_log(ETHERVOX_LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__,
                     "Converted %.6f %s to %.6f %s (data)", 
                     value, from_unit, converted, to_unit);
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     // No conversion found
@@ -465,5 +466,5 @@ int ethervox_unit_convert(
     ethervox_log(ETHERVOX_LOG_LEVEL_WARN, __FILE__, __LINE__, __func__,
                 "Failed to convert %s to %s: no matching conversion", from_unit, to_unit);
     
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
 }

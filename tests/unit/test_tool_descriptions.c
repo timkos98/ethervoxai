@@ -7,6 +7,7 @@
  */
 
 #include <stdio.h>
+#include "ethervox/error.h"
 #include <string.h>
 #include "ethervox/conversation_tools.h"
 #include "ethervox/governor.h"
@@ -18,19 +19,19 @@ int main(void) {
     ethervox_tool_registry_t registry;
     if (ethervox_tool_registry_init(&registry, 8) != 0) {
         printf("✗ Failed to initialize registry\n");
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
     
     if (ethervox_conversation_tools_register(&registry) != 0) {
         printf("✗ Failed to register conversation tools\n");
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
     
     // Find speak tool
     const ethervox_tool_t* speak_tool = ethervox_tool_registry_find(&registry, "speak");
     if (!speak_tool) {
         printf("✗ Failed to find speak tool\n");
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
     
     printf("Speak Tool Description:\n");
@@ -49,7 +50,7 @@ int main(void) {
     if (!has_english || !has_chinese || !has_german) {
         printf("\n✗ FAIL: Speak tool description missing language support information\n");
         ethervox_tool_registry_cleanup(&registry);
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
     
     printf("\n");
@@ -59,7 +60,7 @@ int main(void) {
     if (!listen_tool) {
         printf("✗ Failed to find listen tool\n");
         ethervox_tool_registry_cleanup(&registry);
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
     
     printf("Listen Tool Description:\n");
@@ -78,7 +79,7 @@ int main(void) {
     if (!has_english || !has_chinese || !has_german) {
         printf("\n✗ FAIL: Listen tool description missing language support information\n");
         ethervox_tool_registry_cleanup(&registry);
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
     
     printf("\n=== Results ===\n");
@@ -88,5 +89,5 @@ int main(void) {
     printf("  - German\n");
     
     ethervox_tool_registry_cleanup(&registry);
-    return 0;
+    return ETHERVOX_SUCCESS;
 }

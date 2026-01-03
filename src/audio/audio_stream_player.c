@@ -6,6 +6,7 @@
  */
 
 #include "ethervox/audio_stream_player.h"
+#include "ethervox/error.h"
 #include "ethervox/logging.h"
 #include <stdlib.h>
 #include <string.h>
@@ -111,24 +112,32 @@ audio_stream_player_t* audio_stream_player_create(int sample_rate, int channels)
     return player;
 }
 
-int audio_stream_player_start(audio_stream_player_t* player) {
-    if (!player || player->started) return -1;
+ethervox_result_t audio_stream_player_start(audio_stream_player_t* player) {
+    ETHERVOX_CHECK_PTR(player);
+    if (player->started) {
+        return ETHERVOX_ERROR_ALREADY_INITIALIZED;
+    }
     
     OSStatus status = AudioQueueStart(player->queue, NULL);
     if (status != noErr) {
-        ETHERVOX_LOG_ERROR("[AudioStream] Failed to start playback: %d", (int)status);
-        return -1;
+        ETHERVOX_LOG_ERROR("[AudioStream] Failed to start AudioQueue playback: %d", (int)status);
+        return ETHERVOX_ERROR_AUDIO_INIT;
     }
     
     player->started = true;
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
-int audio_stream_player_write(audio_stream_player_t* player, 
+ethervox_result_t audio_stream_player_write(audio_stream_player_t* player, 
                                const float* samples, 
                                size_t sample_count) {
-    if (!player || !player->started || player->stopping) return -1;
-    if (!samples || sample_count == 0) return 0;
+    ETHERVOX_CHECK_PTR(player);
+    if (!player->started || player->stopping) {
+        return ETHERVOX_ERROR_NOT_INITIALIZED;
+    }
+    if (!samples || sample_count == 0) {
+        return ETHERVOX_SUCCESS;
+    }
     
     size_t offset = 0;
     
@@ -141,7 +150,7 @@ int audio_stream_player_write(audio_stream_player_t* player,
         
         if (player->stopping) {
             pthread_mutex_unlock(&player->mutex);
-            return -1;
+            return ETHERVOX_ERROR_NOT_INITIALIZED;
         }
         
         // Find free buffer
@@ -174,21 +183,24 @@ int audio_stream_player_write(audio_stream_player_t* player,
         
         OSStatus status = AudioQueueEnqueueBuffer(player->queue, buffer, 0, NULL);
         if (status != noErr) {
-            ETHERVOX_LOG_ERROR("[AudioStream] Failed to enqueue buffer: %d", (int)status);
+            ETHERVOX_LOG_ERROR("[AudioStream] Failed to enqueue audio buffer: %d", (int)status);
             pthread_mutex_lock(&player->mutex);
             player->buffers_in_use--;
             pthread_mutex_unlock(&player->mutex);
-            return -1;
+            return ETHERVOX_ERROR_AUDIO_INIT;
         }
         
         offset += chunk_size;
     }
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
-int audio_stream_player_wait(audio_stream_player_t* player) {
-    if (!player || !player->started) return -1;
+ethervox_result_t audio_stream_player_wait(audio_stream_player_t* player) {
+    ETHERVOX_CHECK_PTR(player);
+    if (!player->started) {
+        return ETHERVOX_ERROR_NOT_INITIALIZED;
+    }
     
     // Wait until all buffers are played by the AudioQueue
     pthread_mutex_lock(&player->mutex);
@@ -215,7 +227,7 @@ int audio_stream_player_wait(audio_stream_player_t* player) {
     int wait_us = (int)(buffer_duration * 1000000.0f) + 100000;  // Add 100ms margin
     usleep(wait_us);
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 void audio_stream_player_stop(audio_stream_player_t* player) {
@@ -265,9 +277,15 @@ audio_stream_player_t* audio_stream_player_create(int sample_rate, int channels)
     return NULL;
 }
 
-int audio_stream_player_start(audio_stream_player_t* player) { return -1; }
-int audio_stream_player_write(audio_stream_player_t* player, const float* samples, size_t sample_count) { return -1; }
-int audio_stream_player_wait(audio_stream_player_t* player) { return -1; }
+ethervox_result_t audio_stream_player_start(audio_stream_player_t* player) { 
+    return ETHERVOX_ERROR_NOT_SUPPORTED; 
+}
+ethervox_result_t audio_stream_player_write(audio_stream_player_t* player, const float* samples, size_t sample_count) { 
+    return ETHERVOX_ERROR_NOT_SUPPORTED; 
+}
+ethervox_result_t audio_stream_player_wait(audio_stream_player_t* player) { 
+    return ETHERVOX_ERROR_NOT_SUPPORTED; 
+}
 void audio_stream_player_stop(audio_stream_player_t* player) {}
 void audio_stream_player_destroy(audio_stream_player_t* player) { free(player); }
 

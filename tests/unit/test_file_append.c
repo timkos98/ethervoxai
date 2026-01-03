@@ -8,6 +8,7 @@
  */
 
 #include <stdio.h>
+#include "ethervox/error.h"
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -43,14 +44,14 @@ static void cleanup_test_files(void) {
 
 // Helper function to simulate file_append behavior
 static int file_append(const char* path, const char* content) {
-    if (!path || !content) return -1;
+    if (!path || !content) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     FILE* f = fopen(path, "a");
-    if (!f) return -1;
+    if (!f) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     fprintf(f, "%s", content);
     fclose(f);
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 static void test_append_basic(void) {

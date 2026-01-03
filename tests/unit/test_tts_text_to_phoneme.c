@@ -14,6 +14,7 @@
  */
 
 #include <stdio.h>
+#include "ethervox/error.h"
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
@@ -42,7 +43,7 @@ extern phonemizer_language_t phonemizer_get_language(phonemizer_t* ctx);
         if (!(cond)) { \
             printf("✗ FAIL: %s\n", msg); \
             printf("   Condition: %s\n", #cond); \
-            return -1; \
+            return ETHERVOX_ERROR_INVALID_ARGUMENT; \
         } \
     } while(0)
 
@@ -85,7 +86,7 @@ static int test_english_text_to_phoneme(void) {
     
     phonemizer_destroy(phonemizer);
     printf("  ✓ PASSED\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -120,7 +121,7 @@ static int test_chinese_text_to_phoneme(void) {
     
     phonemizer_destroy(phonemizer);
     printf("  ✓ PASSED\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -157,7 +158,7 @@ static int test_german_text_to_phoneme(void) {
     
     phonemizer_destroy(phonemizer);
     printf("  ✓ PASSED\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -184,7 +185,7 @@ static int test_sentence_phonemization(void) {
     
     phonemizer_destroy(phonemizer);
     printf("  ✓ PASSED\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -224,7 +225,7 @@ static int test_case_handling(void) {
     
     phonemizer_destroy(phonemizer);
     printf("  ✓ PASSED\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -260,7 +261,7 @@ static int test_punctuation_handling(void) {
     
     phonemizer_destroy(phonemizer);
     printf("  ✓ PASSED\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -290,7 +291,7 @@ static int test_long_text(void) {
     
     phonemizer_destroy(phonemizer);
     printf("  ✓ PASSED\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -322,7 +323,7 @@ static int test_edge_cases(void) {
     
     phonemizer_destroy(phonemizer);
     printf("  ✓ PASSED\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -359,7 +360,7 @@ static int test_language_switching(void) {
     phonemizer_destroy(phonemizer_de);
     
     printf("  ✓ PASSED\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**

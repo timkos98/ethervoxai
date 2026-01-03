@@ -11,6 +11,7 @@
  */
 
 #include "stress_reduction.h"
+#include "ethervox/error.h"
 #include <string.h>
 #include <ctype.h>
 #include <stdbool.h>
@@ -164,13 +165,18 @@ static void primary_to_secondary_stress(char* ipa) {
     }
 }
 
-int apply_stress_reduction(
+ethervox_result_t apply_stress_reduction(
     const char* word,
     char* ipa,
     size_t max_len,
     stress_reduction_context_t context
 ) {
-    if (!word || !ipa || max_len == 0) return -1;
+    ETHERVOX_CHECK_PTR(word);
+    ETHERVOX_CHECK_PTR(ipa);
+    
+    if (max_len == 0) {
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
     
     // Check if word should be fully unstressed or have secondary stress
     bool should_remove_stress = false;
@@ -229,7 +235,7 @@ int apply_stress_reduction(
         primary_to_secondary_stress(ipa);
     }
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 int strcasecmp(const char* s1, const char* s2) {

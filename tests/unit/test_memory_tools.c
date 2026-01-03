@@ -7,6 +7,7 @@
  */
 
 #include "ethervox/memory_tools.h"
+#include "ethervox/error.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -176,5 +177,5 @@ int main(void) {
     test_summarize();
     
     printf("\n=== All tests passed! ===\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }

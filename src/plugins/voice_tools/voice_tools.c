@@ -1,4 +1,5 @@
 /**
+#include "ethervox/error.h"
  * @file voice_tools.c
  * @brief Voice tools implementation with Whisper STT
  *
@@ -64,7 +65,7 @@ static int download_whisper_model(const char* model_name, const char* dest_dir) 
     LOG_ERROR("Download script not found. Please manually download the model.");
     LOG_ERROR("Visit: https://huggingface.co/ggerganov/whisper.cpp/tree/main");
     LOG_ERROR("Download: ggml-%s.bin and place in %s/", model_name, dest_dir);
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
 
   // Create destination directory
@@ -80,11 +81,11 @@ static int download_whisper_model(const char* model_name, const char* dest_dir) 
   int result = system(command);
   if (result != 0) {
     LOG_ERROR("Model download failed with code %d", result);
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
 
   LOG_INFO("Model download completed successfully");
-  return 0;
+  return ETHERVOX_SUCCESS;
 }
 
 // Global session pointer for tool wrappers
@@ -230,10 +231,10 @@ static void* audio_capture_thread(void* arg) {
 /**
  * Initialize voice tools with Whisper backend
  */
-int ethervox_voice_tools_init(ethervox_voice_session_t* session, void* memory) {
+ethervox_result_t ethervox_voice_tools_init(ethervox_voice_session_t* session, void* memory) {
   if (!session) {
     LOG_ERROR("Session is NULL");
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
 
   memset(session, 0, sizeof(ethervox_voice_session_t));
@@ -244,12 +245,12 @@ int ethervox_voice_tools_init(ethervox_voice_session_t* session, void* memory) {
 
   if (!session->full_transcript) {
     LOG_ERROR("Failed to allocate transcript buffer");
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
 
   // Initialize path config to use standard directories
   ethervox_path_config_t path_config;
-  if (ethervox_path_config_init(&path_config, memory) != 0) {
+  if (ethervox_is_error(ethervox_path_config_init(&path_config, memory))) {
     LOG_WARN("Failed to initialize path config, using fallback paths");
   }
 
@@ -268,13 +269,12 @@ int ethervox_voice_tools_init(ethervox_voice_session_t* session, void* memory) {
   bool found_multilingual = false;
 
   char custom_path[ETHERVOX_FILE_MAX_PATH];
-  bool has_custom_path = (ethervox_path_config_get(&path_config, "WhisperModels", custom_path,
-                                                   sizeof(custom_path)) == 0);
+  bool has_custom_path = ethervox_is_success(ethervox_path_config_get(&path_config, "WhisperModels", custom_path,
+                                                   sizeof(custom_path)));
 
   ethervox_user_path_t* user_paths = NULL;
   uint32_t user_path_count = 0;
-  bool has_user_paths =
-      (ethervox_path_config_list(&path_config, &user_paths, &user_path_count) == 0);
+  bool has_user_paths = ethervox_is_success(ethervox_path_config_list(&path_config, &user_paths, &user_path_count));
 
   // Platform-specific default paths
   const char* android_files_dir = ethervox_get_android_files_dir();
@@ -546,7 +546,7 @@ int ethervox_voice_tools_init(ethervox_voice_session_t* session, void* memory) {
         LOG_ERROR("Download completed but model file not found in %s", download_dir);
         ethervox_path_config_cleanup(&path_config);
         free(session->full_transcript);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
       }
     } else {
       LOG_ERROR("Auto-download failed. Manual download required:");
@@ -564,7 +564,7 @@ int ethervox_voice_tools_init(ethervox_voice_session_t* session, void* memory) {
 
       ethervox_path_config_cleanup(&path_config);
       free(session->full_transcript);
-      return -1;
+      return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
   }
 
@@ -605,7 +605,7 @@ int ethervox_voice_tools_init(ethervox_voice_session_t* session, void* memory) {
     session->model_path = NULL;
     ethervox_path_config_cleanup(&path_config);
     free(session->full_transcript);
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
 
   // Initialize audio (will use platform-specific implementation)
@@ -627,21 +627,21 @@ int ethervox_voice_tools_init(ethervox_voice_session_t* session, void* memory) {
   session->is_initialized = true;
   LOG_INFO("Voice tools initialized with Whisper STT backend");
 
-  return 0;
+  return ETHERVOX_SUCCESS;
 }
 
 /**
  * Start listening session
  */
-int ethervox_voice_tools_start_listen(ethervox_voice_session_t* session) {
+ethervox_result_t ethervox_voice_tools_start_listen(ethervox_voice_session_t* session) {
   if (!session || !session->is_initialized) {
     LOG_ERROR("Session not initialized");
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
 
   if (session->is_recording) {
     LOG_WARN("Already recording");
-    return 0;
+    return ETHERVOX_SUCCESS;
   }
 
   // Reset transcript
@@ -665,7 +665,7 @@ int ethervox_voice_tools_start_listen(ethervox_voice_session_t* session) {
   // Start STT
   if (ethervox_stt_start(&session->stt_runtime) != 0) {
     LOG_ERROR("Failed to start STT");
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
 
   LOG_INFO("Voice recording started - listening for speech...");
@@ -676,13 +676,13 @@ int ethervox_voice_tools_start_listen(ethervox_voice_session_t* session) {
   if (!session->audio_runtime.is_initialized) {
     LOG_ERROR("Audio runtime not initialized");
     ethervox_stt_stop(&session->stt_runtime);
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
 
   if (ethervox_audio_start_capture(&session->audio_runtime) != 0) {
     LOG_ERROR("Failed to start audio capture");
     ethervox_stt_stop(&session->stt_runtime);
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
 
   session->is_recording = true;
@@ -748,20 +748,20 @@ int ethervox_voice_tools_start_listen(ethervox_voice_session_t* session) {
     ethervox_audio_stop_capture(&session->audio_runtime);
     ethervox_stt_stop(&session->stt_runtime);
     session->is_recording = false;
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
 
-  return 0;
+  return ETHERVOX_SUCCESS;
 }
 
 /**
  * Stop listening and get transcript
  */
-int ethervox_voice_tools_stop_listen(ethervox_voice_session_t* session,
+ethervox_result_t ethervox_voice_tools_stop_listen(ethervox_voice_session_t* session,
                                      const char** transcript_out) {
   if (!session || !session->is_initialized) {
     LOG_ERROR("Session not initialized");
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
 
   bool was_recording = session->is_recording;
@@ -769,7 +769,7 @@ int ethervox_voice_tools_stop_listen(ethervox_voice_session_t* session,
 
   if (!was_recording && !has_thread) {
     LOG_WARN("Not currently recording");
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
 
   // Signal thread to stop (even if flag already dropped)
@@ -889,7 +889,7 @@ int ethervox_voice_tools_stop_listen(ethervox_voice_session_t* session,
 
   LOG_INFO("Voice recording session stopped - %zu chars transcribed", session->transcript_len);
 
-  return 0;
+  return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -945,9 +945,9 @@ void ethervox_voice_tools_cleanup(ethervox_voice_session_t* session) {
 /**
  * Prompt user to assign names to speakers and update transcript file
  */
-int ethervox_voice_tools_assign_speaker_names(ethervox_voice_session_t* session) {
+ethervox_result_t ethervox_voice_tools_assign_speaker_names(ethervox_voice_session_t* session) {
   if (!session || session->max_speaker_id < 0) {
-    return -1;  // No speakers detected
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;  // No speakers detected
   }
   
   int num_speakers = session->max_speaker_id + 1;
@@ -961,7 +961,7 @@ int ethervox_voice_tools_assign_speaker_names(ethervox_voice_session_t* session)
   speaker_examples_t* examples = (speaker_examples_t*)calloc(num_speakers, sizeof(speaker_examples_t));
   if (!examples) {
     LOG_ERROR("Failed to allocate speaker examples array");
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
   
   // Read transcript file to extract examples
@@ -1045,7 +1045,7 @@ int ethervox_voice_tools_assign_speaker_names(ethervox_voice_session_t* session)
         }
       }
       free(examples);
-      return -1;
+      return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Trim newline and whitespace
@@ -1083,7 +1083,7 @@ int ethervox_voice_tools_assign_speaker_names(ethervox_voice_session_t* session)
       }
     }
     free(examples);
-    return 1;  // User declined
+    return ETHERVOX_SUCCESS;  // User declined
   }
   
   // Cleanup examples now that we're done showing them
@@ -1099,7 +1099,7 @@ int ethervox_voice_tools_assign_speaker_names(ethervox_voice_session_t* session)
   session->speaker_names = (char**)calloc(num_speakers, sizeof(char*));
   if (!session->speaker_names) {
     LOG_ERROR("Failed to allocate speaker names array");
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
   
   // Prompt for each speaker's name
@@ -1146,14 +1146,14 @@ int ethervox_voice_tools_assign_speaker_names(ethervox_voice_session_t* session)
   // Update transcript file with named speakers
   if (session->last_transcript_file[0] == '\0') {
     LOG_WARN("No transcript file to update");
-    return 0;  // Names saved but no file to update
+    return ETHERVOX_SUCCESS;  // Names saved but no file to update
   }
   
   // Read current transcript file
   FILE* f = fopen(session->last_transcript_file, "r");
   if (!f) {
     LOG_ERROR("Failed to open transcript file for reading: %s", session->last_transcript_file);
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
   
   // Read entire file into memory
@@ -1165,7 +1165,7 @@ int ethervox_voice_tools_assign_speaker_names(ethervox_voice_session_t* session)
   if (!file_content) {
     fclose(f);
     LOG_ERROR("Failed to allocate memory for file content");
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
   
   size_t bytes_read = fread(file_content, 1, file_size, f);
@@ -1177,7 +1177,7 @@ int ethervox_voice_tools_assign_speaker_names(ethervox_voice_session_t* session)
   if (!updated_content) {
     free(file_content);
     LOG_ERROR("Failed to allocate memory for updated content");
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
   
   // Process content and replace speaker markers
@@ -1211,7 +1211,7 @@ int ethervox_voice_tools_assign_speaker_names(ethervox_voice_session_t* session)
     free(file_content);
     free(updated_content);
     LOG_ERROR("Failed to open transcript file for writing: %s", session->last_transcript_file);
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
   
   fprintf(f, "%s", updated_content);
@@ -1304,7 +1304,7 @@ int ethervox_voice_tools_assign_speaker_names(ethervox_voice_session_t* session)
   printf("✓ Transcript updated with speaker names\n");
   printf("  File: %s\n\n", session->last_transcript_file);
   
-  return 0;
+  return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -1318,7 +1318,7 @@ static int tool_listen_and_summarize_wrapper(const char* args_json, char** resul
 
   if (!session || !session->is_initialized) {
     *error = strdup("Voice tools not initialized");
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
 
   // Parse action parameter
@@ -1342,20 +1342,20 @@ static int tool_listen_and_summarize_wrapper(const char* args_json, char** resul
     // Start recording
     if (ethervox_voice_tools_start_listen(session) != 0) {
       *error = strdup("Failed to start listening");
-      return -1;
+      return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
 
     *result = strdup(
         "{\"status\":\"recording\",\"message\":\"Voice recording started. Use /end command or call "
         "with action='stop' to finish.\"}");
-    return 0;
+    return ETHERVOX_SUCCESS;
 
   } else if (strcmp(action, "stop") == 0) {
     // Stop recording and get transcript
     const char* transcript;
     if (ethervox_voice_tools_stop_listen(session, &transcript) != 0) {
       *error = strdup("Failed to stop listening or not recording");
-      return -1;
+      return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
 
     // Build JSON response with transcript
@@ -1379,7 +1379,7 @@ static int tool_listen_and_summarize_wrapper(const char* args_json, char** resul
       LOG_INFO("Stored voice transcript in memory (ID: %llu)", (unsigned long long)memory_id);
     }
 
-    return 0;
+    return ETHERVOX_SUCCESS;
 
   } else if (strcmp(action, "status") == 0) {
     // Check recording status
@@ -1389,11 +1389,11 @@ static int tool_listen_and_summarize_wrapper(const char* args_json, char** resul
              session->is_recording ? "true" : "false", session->transcript_len,
              session->segment_count);
     *result = strdup(status_msg);
-    return 0;
+    return ETHERVOX_SUCCESS;
 
   } else {
     *error = strdup("Invalid action. Use 'start', 'stop', or 'status'");
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
 }
 
@@ -1427,10 +1427,10 @@ static ethervox_tool_t listen_tool = {
  * 
  * Base tools: listen_and_summarize (always available)
  */
-int ethervox_voice_tools_register(void* registry, ethervox_voice_session_t* session) {
+ethervox_result_t ethervox_voice_tools_register(void* registry, ethervox_voice_session_t* session) {
   if (!registry || !session) {
     LOG_ERROR("Invalid parameters for voice tools registration");
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
 
   g_voice_session = session;
@@ -1439,12 +1439,12 @@ int ethervox_voice_tools_register(void* registry, ethervox_voice_session_t* sess
 
   if (ethervox_tool_registry_add(reg, &listen_tool) != 0) {
     LOG_ERROR("Failed to register listen_and_summarize tool");
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
 
   LOG_INFO("Registered listen_and_summarize tool with Governor (Whisper STT)");
 
-  return 0;
+  return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -1460,7 +1460,7 @@ int ethervox_voice_tools_register(void* registry, ethervox_voice_session_t* sess
  * @param stt_ctx STT context for transcription
  * @return 0 on success, -1 on error
  */
-int ethervox_voice_tools_register_training(
+ethervox_result_t ethervox_voice_tools_register_training(
     void* registry, 
     ethervox_voice_session_t* session,
     void* phonemizer_ctx,
@@ -1469,7 +1469,7 @@ int ethervox_voice_tools_register_training(
 ) {
   if (!registry || !session) {
     LOG_ERROR("Invalid parameters for training tools registration");
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
 
   // Training tools are registered in conversation_tools plugin
@@ -1477,5 +1477,5 @@ int ethervox_voice_tools_register_training(
   
   LOG_INFO("Training tools registration placeholder (tools in conversation_tools)");
   
-  return 0;
+  return ETHERVOX_SUCCESS;
 }

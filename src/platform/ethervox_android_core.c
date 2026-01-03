@@ -765,8 +765,8 @@ Java_com_droid_ethervox_1core_NativeLib_platformInit(
         return -1;
     }
     
-    int result = ethervox_platform_init(g_platform);
-    if (result != 0) {
+    ethervox_result_t result = ethervox_platform_init(g_platform);
+    if (ethervox_is_error(result)) {
         LOGE("Failed to initialize platform");
         free(g_platform);
         g_platform = NULL;

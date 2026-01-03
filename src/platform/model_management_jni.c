@@ -146,7 +146,7 @@ Java_com_droid_ethervox_1core_NativeLib_getModelBaseDir(
     (void)thiz;
     
     char base_dir[512];
-    if (ethervox_model_get_base_dir(base_dir, sizeof(base_dir)) != 0) {
+    if (ethervox_is_error(ethervox_model_get_base_dir(base_dir, sizeof(base_dir)))) {
         return NULL;
     }
     
@@ -191,8 +191,8 @@ Java_com_droid_ethervox_1core_NativeLib_getDefaultModel(
     ethervox_model_info_t info;
     memset(&info, 0, sizeof(info));
     
-    int result = ethervox_model_get_default((ethervox_model_type_t)type, &info);
-    if (result != 0) {
+    ethervox_result_t result = ethervox_model_get_default((ethervox_model_type_t)type, &info);
+    if (ethervox_is_error(result)) {
         return NULL;
     }
     
@@ -207,8 +207,8 @@ Java_com_droid_ethervox_1core_NativeLib_listModels(
     ethervox_model_info_t* models = NULL;
     uint32_t count = 0;
     
-    int result = ethervox_model_list((ethervox_model_type_t)type, &models, &count);
-    if (result != 0 || count == 0) {
+    ethervox_result_t result = ethervox_model_list((ethervox_model_type_t)type, &models, &count);
+    if (ethervox_is_error(result) || count == 0) {
         // Return empty array
         jclass modelInfoClass = (*env)->FindClass(env, "com/droid/ethervox_core/ModelInfo");
         return (*env)->NewObjectArray(env, 0, modelInfoClass, NULL);
@@ -240,7 +240,7 @@ Java_com_droid_ethervox_1core_NativeLib_downloadModel(
     
     const char* name = (*env)->GetStringUTFChars(env, modelName, NULL);
     
-    int result = ethervox_model_download(
+    ethervox_result_t result = ethervox_model_download(
         (ethervox_model_type_t)type, name, NULL, NULL);
     
     (*env)->ReleaseStringUTFChars(env, modelName, name);
@@ -255,7 +255,7 @@ Java_com_droid_ethervox_1core_NativeLib_cancelModelDownload(
     
     const char* name = (*env)->GetStringUTFChars(env, modelName, NULL);
     
-    int result = ethervox_model_cancel_download(
+    ethervox_result_t result = ethervox_model_cancel_download(
         (ethervox_model_type_t)type, name);
     
     (*env)->ReleaseStringUTFChars(env, modelName, name);
@@ -270,7 +270,7 @@ Java_com_droid_ethervox_1core_NativeLib_deleteModel(
     
     const char* name = (*env)->GetStringUTFChars(env, modelName, NULL);
     
-    int result = ethervox_model_delete(
+    ethervox_result_t result = ethervox_model_delete(
         (ethervox_model_type_t)type, name);
     
     (*env)->ReleaseStringUTFChars(env, modelName, name);

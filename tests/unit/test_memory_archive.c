@@ -7,6 +7,7 @@
  */
 
 #include "ethervox/memory_tools.h"
+#include "ethervox/error.h"
 #include "ethervox/logging.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,7 +38,7 @@ static void create_test_session_file(const char* filename, const char* content) 
 
 static int count_files_in_dir(const char* dir_path) {
     DIR* dir = opendir(dir_path);
-    if (!dir) return 0;
+    if (!dir) return ETHERVOX_SUCCESS;
     
     int count = 0;
     struct dirent* entry;
@@ -232,5 +233,5 @@ int main(void) {
     
     printf("\n━━━ All tests passed! ━━━\n");
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }

@@ -4,6 +4,7 @@
  */
 
 #include "tts/phonemizer/phonemizer.h"
+#include "ethervox/error.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -17,7 +18,7 @@ int main(int argc, char* argv[]) {
     phonemizer_t* phonemizer = phonemizer_create("zh-cn");
     if (!phonemizer) {
         fprintf(stderr, "ERROR: Failed to create phonemizer\n");
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
     
     // Convert text to IPA

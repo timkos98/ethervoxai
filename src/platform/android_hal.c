@@ -26,6 +26,7 @@
 
 #include "ethervox/platform.h"
 #include "ethervox/config.h"
+#include "ethervox/error.h"
 
 #define LOGD(...) ETHERVOX_LOGD(__VA_ARGS__)
 #define LOGE(...) ETHERVOX_LOGE(__VA_ARGS__)
@@ -39,14 +40,13 @@ typedef struct {
   int api_level;
 } android_platform_data_t;
 
-static int android_init(ethervox_platform_info_t* info) {
+static ethervox_result_t android_init(ethervox_platform_info_t* info) {
   LOGI("Initializing Android platform HAL");
 
   android_platform_data_t* platform_data = 
       (android_platform_data_t*)calloc(1, sizeof(android_platform_data_t));
   if (!platform_data) {
-    LOGE("Failed to allocate platform data");
-    return -1;
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_OUT_OF_MEMORY, "Failed to allocate platform data");
   }
 
   info->platform_specific_data = platform_data;
@@ -99,7 +99,7 @@ static int android_init(ethervox_platform_info_t* info) {
   LOGI("Android HAL initialized: API %d, %u cores, %u MB RAM",
        platform_data->api_level, info->core_count, info->capabilities.ram_size_mb);
   
-  return 0;
+  return ETHERVOX_SUCCESS;
 }
 
 static void android_cleanup(ethervox_platform_info_t* info) {
@@ -112,17 +112,16 @@ static void android_cleanup(ethervox_platform_info_t* info) {
 }
 
 // GPIO functions - not available on Android
-static int android_gpio_configure(uint32_t pin, ethervox_gpio_mode_t mode) {
+static ethervox_result_t android_gpio_configure(uint32_t pin, ethervox_gpio_mode_t mode) {
   (void)pin;
   (void)mode;
-  LOGD("GPIO not supported on Android");
-  return -1;
+  ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_SUPPORTED, "GPIO not supported on Android");
 }
 
-static int android_gpio_write(uint32_t pin, bool state) {
+static ethervox_result_t android_gpio_write(uint32_t pin, bool state) {
   (void)pin;
   (void)state;
-  return -1;
+  ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_SUPPORTED, "GPIO not supported on Android");
 }
 
 static bool android_gpio_read(uint32_t pin) {
@@ -130,36 +129,36 @@ static bool android_gpio_read(uint32_t pin) {
   return false;
 }
 
-static int android_gpio_set_pwm(uint32_t pin, uint32_t duty_cycle) {
+static ethervox_result_t android_gpio_set_pwm(uint32_t pin, uint32_t duty_cycle) {
   (void)pin;
   (void)duty_cycle;
-  return -1;
+  ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_SUPPORTED, "PWM not supported on Android");
 }
 
 // I2C functions - not available on standard Android
-static int android_i2c_init(uint32_t bus, uint32_t sda_pin, uint32_t scl_pin) {
+static ethervox_result_t android_i2c_init(uint32_t bus, uint32_t sda_pin, uint32_t scl_pin) {
   (void)bus;
   (void)sda_pin;
   (void)scl_pin;
-  return -1;
+  ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_SUPPORTED, "I2C not supported on Android");
 }
 
-static int android_i2c_write(uint32_t bus, uint8_t device_addr, 
-                             const uint8_t* data, uint32_t len) {
+static ethervox_result_t android_i2c_write(uint32_t bus, uint8_t device_addr, 
+                            const uint8_t* data, uint32_t len) {
   (void)bus;
   (void)device_addr;
   (void)data;
   (void)len;
-  return -1;
+  ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_SUPPORTED, "I2C not supported on Android");
 }
 
-static int android_i2c_read(uint32_t bus, uint8_t device_addr, 
+static ethervox_result_t android_i2c_read(uint32_t bus, uint8_t device_addr, 
                            uint8_t* data, uint32_t len) {
   (void)bus;
   (void)device_addr;
   (void)data;
   (void)len;
-  return -1;
+  ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_SUPPORTED, "I2C not supported on Android");
 }
 
 static void android_i2c_cleanup(uint32_t bus) {
@@ -167,23 +166,23 @@ static void android_i2c_cleanup(uint32_t bus) {
 }
 
 // SPI functions - not available on standard Android
-static int android_spi_init(uint32_t bus, uint32_t mosi_pin, uint32_t miso_pin,
+static ethervox_result_t android_spi_init(uint32_t bus, uint32_t mosi_pin, uint32_t miso_pin,
                            uint32_t clk_pin, uint32_t cs_pin) {
   (void)bus;
   (void)mosi_pin;
   (void)miso_pin;
   (void)clk_pin;
   (void)cs_pin;
-  return -1;
+  ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_SUPPORTED, "SPI not supported on Android");
 }
 
-static int android_spi_transfer(uint32_t bus, const uint8_t* tx_data,
+static ethervox_result_t android_spi_transfer(uint32_t bus, const uint8_t* tx_data,
                                uint8_t* rx_data, uint32_t len) {
   (void)bus;
   (void)tx_data;
   (void)rx_data;
   (void)len;
-  return -1;
+  ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_SUPPORTED, "SPI not supported on Android");
 }
 
 static void android_spi_cleanup(uint32_t bus) {
@@ -232,16 +231,14 @@ static uint32_t android_get_free_heap_size(void) {
 }
 
 // Power management
-static int android_set_cpu_frequency(uint32_t frequency_mhz) {
+static ethervox_result_t android_set_cpu_frequency(uint32_t frequency_mhz) {
   (void)frequency_mhz;
-  LOGD("CPU frequency control managed by Android");
-  return -1;  // Not accessible from NDK
+  ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_SUPPORTED, "CPU frequency control managed by Android");
 }
 
-static int android_enable_power_saving(bool enable) {
+static ethervox_result_t android_enable_power_saving(bool enable) {
   (void)enable;
-  LOGD("Power saving mode managed by Android");
-  return -1;  // Would need JNI callback
+  ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_SUPPORTED, "Power saving mode managed by Android");
 }
 
 static float android_get_battery_voltage(void) {
@@ -260,11 +257,8 @@ static uint32_t android_delay_ms(uint32_t ms) {
 }
 
 // Register Android HAL implementation
-int ethervox_platform_hal_register_android(ethervox_platform_t* platform) {
-  if (!platform) {
-    LOGE("Invalid platform pointer");
-    return -1;
-  }
+ethervox_result_t ethervox_platform_hal_register_android(ethervox_platform_t* platform) {
+  ETHERVOX_CHECK_PTR(platform);
 
   // Register HAL function pointers (init will be called by platform_init)
   platform->hal.init = android_init;
@@ -303,7 +297,7 @@ int ethervox_platform_hal_register_android(ethervox_platform_t* platform) {
   platform->hal.delay_ms = android_delay_ms;
 
   LOGI("Android HAL registered successfully");
-  return 0;
+  return ETHERVOX_SUCCESS;
 }
 
 #endif  // __ANDROID__

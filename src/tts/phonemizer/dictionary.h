@@ -6,6 +6,7 @@
 #ifndef ETHERVOX_DICTIONARY_H
 #define ETHERVOX_DICTIONARY_H
 
+#include "ethervox/error.h"
 #include <stddef.h>
 #include <stdbool.h>
 
@@ -27,11 +28,11 @@ dict_t* dict_load(const char* path);
  * @param word Word to lookup (case-insensitive)
  * @param arpabet_out Output buffer for ARPAbet (space-separated)
  * @param max_len Maximum output length
- * @return 0 on success, -1 if not found
+ * @return ETHERVOX_SUCCESS on success, ETHERVOX_ERROR_NOT_FOUND if not found
  * 
  * Example: "HELLO" → "HH AH0 L OW1"
  */
-int dict_lookup(dict_t* dict, const char* word, char* arpabet_out, size_t max_len);
+ethervox_result_t dict_lookup(dict_t* dict, const char* word, char* arpabet_out, size_t max_len);
 
 /**
  * Free dictionary resources

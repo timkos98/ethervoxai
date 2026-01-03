@@ -6,6 +6,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include "ethervox/error.h"
 
 #ifdef __cplusplus
 extern "C" {

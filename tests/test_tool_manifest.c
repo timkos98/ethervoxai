@@ -7,6 +7,7 @@
  */
 
 #include "ethervox/tool_manifest.h"
+#include "ethervox/error.h"
 #include "ethervox/governor.h"
 #include "ethervox/logging.h"
 #include <stdio.h>
@@ -185,5 +186,5 @@ int main(void) {
     printf("═══════════════════════════════════════════════════════════\n");
     printf("\n");
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }

@@ -15,6 +15,7 @@
  */
 
 #include <assert.h>
+#include "ethervox/error.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -174,5 +175,5 @@ int main() {
   printf("Note: Some subsystem failures are expected in CI environments\n");
   printf("without audio hardware or language models.\n");
 
-  return 0;
+  return ETHERVOX_SUCCESS;
 }

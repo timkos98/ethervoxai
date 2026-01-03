@@ -10,6 +10,7 @@
  */
 
 #include "ethervox/memory_tools.h"
+#include "ethervox/error.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -240,5 +241,5 @@ int main(void) {
     test_secret_mode_multiple_toggles();
     
     printf("\n✅ All secret mode tests passed!\n\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }

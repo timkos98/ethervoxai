@@ -2,6 +2,7 @@
 // Licensed under CC BY-NC-SA 4.0
 
 #include "ethervox/pronunciation_trainer.h"
+#include "ethervox/error.h"
 #include "ethervox/tts.h"
 #include "ethervox/stt.h"
 #include "ethervox/audio_recording.h"
@@ -67,7 +68,7 @@ static int read_wav_audio(const char* path, float** audio_data, int* n_samples) 
     FILE* f = fopen(path, "rb");
     if (!f) {
         ETHERVOX_LOG_DEBUG("[read_wav_audio] ERROR: Failed to open audio file: %s\n", path);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
 
     // Read WAV header (44 bytes)
@@ -75,7 +76,7 @@ static int read_wav_audio(const char* path, float** audio_data, int* n_samples) 
     if (fread(header, 1, 44, f) != 44) {
         ETHERVOX_LOG_DEBUG("[read_wav_audio] ERROR: Invalid WAV file (header too small): %s\n", path);
         fclose(f);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
 
     // Extract audio format info
@@ -91,7 +92,7 @@ static int read_wav_audio(const char* path, float** audio_data, int* n_samples) 
     if (audio_format != 1) { // PCM
         ETHERVOX_LOG_DEBUG("[read_wav_audio] ERROR: Unsupported audio format: %d\n", audio_format);
         fclose(f);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
 
     int samples = data_size / (bits_per_sample / 8) / num_channels;
@@ -102,7 +103,7 @@ static int read_wav_audio(const char* path, float** audio_data, int* n_samples) 
     if (!*audio_data) {
         ETHERVOX_LOG_DEBUG("[read_wav_audio] ERROR: Failed to allocate memory for %d samples\n", samples);
         fclose(f);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
 
     // Read and convert to float [-1, 1]
@@ -112,7 +113,7 @@ static int read_wav_audio(const char* path, float** audio_data, int* n_samples) 
             free(*audio_data);
             free(buffer);
             fclose(f);
-            return -1;
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
         }
 
         for (int i = 0; i < samples; i++) {
@@ -130,11 +131,11 @@ static int read_wav_audio(const char* path, float** audio_data, int* n_samples) 
         ETHERVOX_LOG_DEBUG("[read_wav_audio] ERROR: Unsupported bit depth: %d\n", bits_per_sample);
         free(*audio_data);
         fclose(f);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
 
     fclose(f);
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 // Helper: Compute mel filterbank
@@ -197,12 +198,12 @@ static void compute_fft_magnitude(const float* frame, int fft_size, float* magni
     }
 }
 
-int pronunciation_trainer_extract_mels(const char* audio_path, int n_mels, float** mel_data, int* n_frames) {
+ethervox_result_t pronunciation_trainer_extract_mels(const char* audio_path, int n_mels, float** mel_data, int* n_frames) {
     float* audio = NULL;
     int n_samples = 0;
     
     if (read_wav_audio(audio_path, &audio, &n_samples) != 0) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     int num_frames = (n_samples - FFT_SIZE) / HOP_LENGTH + 1;
@@ -212,7 +213,7 @@ int pronunciation_trainer_extract_mels(const char* audio_path, int n_mels, float
     *mel_data = (float*)calloc(n_mels * num_frames, sizeof(float));
     if (!*mel_data) {
         free(audio);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Create mel filterbank
@@ -279,10 +280,10 @@ int pronunciation_trainer_extract_mels(const char* audio_path, int n_mels, float
     free(filterbank);
     free(audio);
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
-int pronunciation_trainer_dtw_distance(
+ethervox_result_t pronunciation_trainer_dtw_distance(
     const float* mels1, int n_frames1,
     const float* mels2, int n_frames2,
     int n_mels, float* distance
@@ -337,10 +338,10 @@ int pronunciation_trainer_dtw_distance(
     }
     free(cost);
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
-int pronunciation_trainer_compare_audio(const char* audio_path1, const char* audio_path2, float* similarity) {
+ethervox_result_t pronunciation_trainer_compare_audio(const char* audio_path1, const char* audio_path2, float* similarity) {
     float* mels1 = NULL;
     float* mels2 = NULL;
     int n_frames1 = 0, n_frames2 = 0;
@@ -349,7 +350,7 @@ int pronunciation_trainer_compare_audio(const char* audio_path1, const char* aud
     fprintf(stderr, "  Audio 1: %s\n", audio_path1);
     if (pronunciation_trainer_extract_mels(audio_path1, MEL_BANDS, &mels1, &n_frames1) != 0) {
         fprintf(stderr, "  ERROR: Failed to extract mels from audio 1\n");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     fprintf(stderr, "  Audio 1: %d frames extracted\n", n_frames1);
     
@@ -357,7 +358,7 @@ int pronunciation_trainer_compare_audio(const char* audio_path1, const char* aud
     if (pronunciation_trainer_extract_mels(audio_path2, MEL_BANDS, &mels2, &n_frames2) != 0) {
         fprintf(stderr, "  ERROR: Failed to extract mels from audio 2\n");
         free(mels1);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     fprintf(stderr, "  Audio 2: %d frames extracted\n", n_frames2);
     
@@ -367,7 +368,7 @@ int pronunciation_trainer_compare_audio(const char* audio_path1, const char* aud
         fprintf(stderr, "  ERROR: DTW distance computation failed\n");
         free(mels1);
         free(mels2);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     fprintf(stderr, "  DTW distance: %.6f\n", distance);
     
@@ -378,10 +379,10 @@ int pronunciation_trainer_compare_audio(const char* audio_path1, const char* aud
     
     free(mels1);
     free(mels2);
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
-int pronunciation_trainer_generate_variants(
+ethervox_result_t pronunciation_trainer_generate_variants(
     const char* word,
     const char* base_phonemes,
     phonemizer_context_t* phonemizer,
@@ -390,11 +391,11 @@ int pronunciation_trainer_generate_variants(
     int* variant_count
 ) {
     if (!word || !base_phonemes || !variants || !variant_count) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     *variants = (char**)malloc(MAX_VARIANTS * sizeof(char*));
-    if (!*variants) return -1;
+    if (!*variants) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     *variant_count = 0;
     
@@ -465,10 +466,10 @@ int pronunciation_trainer_generate_variants(
         *variant_count = max_variants;
     }
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
-int pronunciation_trainer_train(
+ethervox_result_t pronunciation_trainer_train(
     const char* word,
     const char* user_audio_path,
     phonemizer_context_t* phonemizer,
@@ -478,7 +479,7 @@ int pronunciation_trainer_train(
     pronunciation_training_result_t* result
 ) {
     if (!word || !user_audio_path || !phonemizer || !tts || !result) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Use default config if not provided
@@ -496,7 +497,7 @@ int pronunciation_trainer_train(
     char base_phonemes[512];
     if (phonemizer_text_to_ipa(phonemizer, word, base_phonemes, sizeof(base_phonemes)) != 0) {
         result->error_message = strdup("Failed to phonemize word");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     if (config->verbose) {
@@ -509,7 +510,7 @@ int pronunciation_trainer_train(
             ETHERVOX_LOG_ERROR("Phonemizer returned empty string for word '%s'\n", word);
         }
         result->error_message = strdup("Phonemizer returned empty result");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Generate variants
@@ -518,7 +519,7 @@ int pronunciation_trainer_train(
     if (pronunciation_trainer_generate_variants(word, base_phonemes, phonemizer, 
                                                 config->max_variants, &variants, &variant_count) != 0) {
         result->error_message = strdup("Failed to generate phoneme variants");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     if (config->verbose) {
@@ -601,10 +602,10 @@ int pronunciation_trainer_train(
         if (best_variant) free(best_variant);
         result->success = false;
         result->error_message = strdup("No variant met minimum similarity threshold");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 void pronunciation_training_result_free(pronunciation_training_result_t* result) {

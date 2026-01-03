@@ -13,6 +13,7 @@
 #include "ethervox/governor.h"
 #include "ethervox/chat_template.h"
 #include "ethervox/config.h"
+#include "ethervox/error.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -178,7 +179,7 @@ static int load_tokens_to_kv_cache(
     const char* log_prefix
 ) {
     if (!governor || !tokens || n_tokens <= 0) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     int chunk_size = 512;
@@ -202,7 +203,7 @@ static int load_tokens_to_kv_cache(
             GOV_ERROR("%s: Failed to decode chunk %d/%d (error %d, tokens %d-%d/%d)", 
                       log_prefix, i / chunk_size + 1, (n_tokens + chunk_size - 1) / chunk_size,
                       decode_result, i, i + chunk_len - 1, n_tokens);
-            return -1;
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
         }
     }
     
@@ -222,7 +223,7 @@ static int load_conversation_summary(
     const char* log_prefix
 ) {
     if (!governor || !tag_filter_json || !context_prefix || !log_prefix) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Find memory_search tool
@@ -236,7 +237,7 @@ static int load_conversation_summary(
     
     if (!memory_search_tool) {
         GOV_LOG("%s: memory_search tool not available", log_prefix);
-        return 0;  // Not an error, just unavailable
+        return ETHERVOX_SUCCESS;  // Not an error, just unavailable
     }
     
     // Build search args
@@ -256,7 +257,7 @@ static int load_conversation_summary(
         GOV_LOG("%s: No previous conversation summary found", log_prefix);
         free(search_result);
         free(search_error);
-        return 0;  // Not an error
+        return ETHERVOX_SUCCESS;  // Not an error
     }
     
     // Parse JSON to extract text
@@ -265,7 +266,7 @@ static int load_conversation_summary(
         GOV_LOG("%s: No valid summary found in memory (empty or malformed)", log_prefix);
         free(search_result);
         free(search_error);
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     free(search_result);
@@ -290,7 +291,7 @@ static int load_conversation_summary(
     size_t summary_len = strlen(actual_summary);
     if (summary_len < 10) {
         GOV_ERROR("%s: Summary too short (%zu chars), likely corrupt", log_prefix, summary_len);
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     if (summary_len > 3500) {
         GOV_LOG("%s: Warning - summary unusually long (%zu chars)", log_prefix, summary_len);
@@ -312,7 +313,7 @@ static int load_conversation_summary(
     llama_token* restore_tokens = (llama_token*)malloc(2048 * sizeof(llama_token));
     if (!restore_tokens) {
         GOV_ERROR("%s: Failed to allocate token buffer", log_prefix);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     const struct llama_vocab* vocab = llama_model_get_vocab(governor->llm_model);
@@ -329,20 +330,20 @@ static int load_conversation_summary(
     if (n_restore <= 0) {
         GOV_ERROR("%s: Failed to tokenize summary (returned %d)", log_prefix, n_restore);
         free(restore_tokens);
-        return 0;  // Not a fatal error
+        return ETHERVOX_SUCCESS;  // Not a fatal error
     }
     
     if (n_restore >= 2048) {
         GOV_ERROR("%s: Summary tokenized to maximum buffer size (%d), likely truncated", log_prefix, n_restore);
         free(restore_tokens);
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     // Sanity check: reasonable token count for a summary
     if (n_restore < 5) {
         GOV_ERROR("%s: Summary produced too few tokens (%d), likely corrupt", log_prefix, n_restore);
         free(restore_tokens);
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     GOV_LOG("%s: Tokenized summary into %d tokens", log_prefix, n_restore);
@@ -372,7 +373,7 @@ static int load_conversation_summary(
  * Returns: Number of tool calls found, fills tool_calls array
  */
 static int extract_tool_calls(const char* response, char** tool_calls, int max_calls) {
-    if (!response || !tool_calls) return 0;
+    if (!response || !tool_calls) return ETHERVOX_SUCCESS;
     
     int count = 0;
     const char* pos = response;
@@ -409,7 +410,7 @@ static int extract_tool_calls(const char* response, char** tool_calls, int max_c
  * Returns: Number of tool calls found, fills tool_calls array with JSON strings
  */
 static int extract_tool_calls_json(const char* response, char** tool_calls, int max_calls) {
-    if (!response || !tool_calls) return 0;
+    if (!response || !tool_calls) return ETHERVOX_SUCCESS;
     
     int count = 0;
     const char* pos = response;
@@ -481,11 +482,11 @@ static context_health_t check_context_health(ethervox_governor_t* gov) {
  */
 static int init_conversation_history(conversation_history_t* history, uint32_t initial_capacity) {
     history->turns = malloc(initial_capacity * sizeof(conversation_turn_t));
-    if (!history->turns) return -1;
+    if (!history->turns) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     history->turn_count = 0;
     history->capacity = initial_capacity;
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -497,14 +498,14 @@ static int append_turn(conversation_history_t* history, const conversation_turn_
         uint32_t new_capacity = history->capacity * 2;
         conversation_turn_t* new_turns = realloc(history->turns, 
                                                  new_capacity * sizeof(conversation_turn_t));
-        if (!new_turns) return -1;
+        if (!new_turns) return ETHERVOX_ERROR_INVALID_ARGUMENT;
         
         history->turns = new_turns;
         history->capacity = new_capacity;
     }
     
     history->turns[history->turn_count++] = *turn;
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -561,21 +562,21 @@ static int execute_tool_call_json(
 ) {
     if (!tool_call_json || !registry || !result || !error) {
         if (error) *error = strdup("Invalid parameters passed to execute_tool_call_json");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Simple JSON parsing - find "name" field
     const char* name_start = strstr(tool_call_json, "\"name\"");
     if (!name_start) {
         *error = strdup("Missing 'name' field in JSON tool call");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Find the value after "name":
     const char* name_value_start = strchr(name_start, ':');
     if (!name_value_start) {
         *error = strdup("Malformed 'name' field in JSON tool call");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     name_value_start++;
     
@@ -589,7 +590,7 @@ static int execute_tool_call_json(
     const char* name_value_end = strchr(name_value_start, '"');
     if (!name_value_end) {
         *error = strdup("Malformed 'name' value in JSON tool call");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Extract tool name
@@ -597,7 +598,7 @@ static int execute_tool_call_json(
     char* tool_name = malloc(name_len + 1);
     if (!tool_name) {
         *error = strdup("Memory allocation failed for tool name");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     strncpy(tool_name, name_value_start, name_len);
     tool_name[name_len] = '\0';
@@ -615,7 +616,7 @@ static int execute_tool_call_json(
         snprintf(err_msg, sizeof(err_msg), "Unknown tool: %s", tool_name);
         *error = strdup(err_msg);
         free(tool_name);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Find "arguments" field
@@ -669,12 +670,12 @@ static int execute_tool_call_json(
     // Safety checks before execution
     if (!tool->execute) {
         *error = strdup("Tool has NULL execute pointer");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     if (!result || !error) {
         GOV_ERROR("Invalid result or error pointers passed to execute_tool_call_json");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Resource checks for audio tools (speak/listen)
@@ -692,7 +693,7 @@ static int execute_tool_call_json(
             *error = strdup("Tool execution failed (no error message provided)");
         }
         GOV_ERROR("Tool '%s' failed: %s", tool->name, *error);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     if (!*result) {
@@ -700,7 +701,7 @@ static int execute_tool_call_json(
     }
     
     GOV_LOG("Tool '%s' succeeded: %s", tool->name, *result);
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -717,7 +718,7 @@ static int execute_tool_call(
     char* tool_name = parse_attribute(tool_call_xml, "name");
     if (!tool_name) {
         *error = strdup("Missing 'name' attribute in tool call");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Find tool in registry
@@ -727,7 +728,7 @@ static int execute_tool_call(
         snprintf(err_msg, sizeof(err_msg), "Unknown tool: %s", tool_name);
         *error = strdup(err_msg);
         free(tool_name);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Build JSON input from XML attributes
@@ -829,12 +830,12 @@ static int execute_tool_call(
     // Safety checks before execution
     if (!tool->execute) {
         *error = strdup("Tool has NULL execute pointer");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     if (!result || !error) {
         GOV_ERROR("Invalid result or error pointers passed to execute_tool_call");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Resource checks for audio tools (speak/listen)
@@ -856,12 +857,12 @@ static int execute_tool_call(
     return ret;
 }
 
-int ethervox_governor_load_model(ethervox_governor_t* governor, const char* model_path) {
-    if (!governor || !model_path) return -1;
+ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor, const char* model_path) {
+    if (!governor || !model_path) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
 #if !defined(ETHERVOX_WITH_LLAMA) || !LLAMA_HEADER_AVAILABLE
     GOV_ERROR("llama.cpp not available - cannot load model");
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
 #else
     
     // If a model is already loaded, unload it first
@@ -927,7 +928,7 @@ int ethervox_governor_load_model(ethervox_governor_t* governor, const char* mode
         
         if (backend_count == 0) {
             GOV_ERROR("[Governor] FATAL: No backends loaded! Cannot load models.");
-            return -1;
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
         }
         
         g_llama_backend_initialized = true;
@@ -949,7 +950,7 @@ int ethervox_governor_load_model(ethervox_governor_t* governor, const char* mode
     FILE* test_file = fopen(model_path, "rb");
     if (!test_file) {
         GOV_ERROR("Cannot open model file: %s (errno: %d - %s)", model_path, errno, strerror(errno));
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Get file size
@@ -974,7 +975,7 @@ int ethervox_governor_load_model(ethervox_governor_t* governor, const char* mode
     FILE* f_test = fopen(model_path, "rb");
     if (!f_test) {
         GOV_ERROR("[Governor] CRITICAL: Cannot open file just before llama load: %s", strerror(errno));
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     fclose(f_test);
     GOV_LOG("[Governor] File test just before load: SUCCESS");
@@ -985,7 +986,7 @@ int ethervox_governor_load_model(ethervox_governor_t* governor, const char* mode
     
     if (backend_count_preload == 0) {
         GOV_ERROR("[Governor] FATAL: Backends disappeared before load!");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     GOV_LOG("[Governor] About to call llama_model_load_from_file...");
@@ -1019,7 +1020,7 @@ int ethervox_governor_load_model(ethervox_governor_t* governor, const char* mode
             GOV_ERROR("[Governor] Model corruption detected - returning error code -2");
             return -2;
         }
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     GOV_LOG("[Governor] Model loaded successfully");
@@ -1045,7 +1046,7 @@ int ethervox_governor_load_model(ethervox_governor_t* governor, const char* mode
         GOV_ERROR("Failed to create llama context");
         llama_model_free(governor->llm_model);
         governor->llm_model = NULL;
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     GOV_LOG("Context created successfully");
@@ -1093,7 +1094,7 @@ int ethervox_governor_load_model(ethervox_governor_t* governor, const char* mode
             llama_model_free(governor->llm_model);
             governor->llm_ctx = NULL;
             governor->llm_model = NULL;
-            return -1;
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
         }
         
         GOV_LOG("Full system prompt built (%zu chars)", strlen(system_prompt));
@@ -1114,7 +1115,7 @@ int ethervox_governor_load_model(ethervox_governor_t* governor, const char* mode
         llama_model_free(governor->llm_model);
         governor->llm_ctx = NULL;
         governor->llm_model = NULL;
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     llama_token* tokens = malloc(n_tokens * sizeof(llama_token));
@@ -1124,7 +1125,7 @@ int ethervox_governor_load_model(ethervox_governor_t* governor, const char* mode
         llama_model_free(governor->llm_model);
         governor->llm_ctx = NULL;
         governor->llm_model = NULL;
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     llama_tokenize(vocab, system_prompt, strlen(system_prompt), tokens, n_tokens, true, false);
@@ -1176,7 +1177,7 @@ int ethervox_governor_load_model(ethervox_governor_t* governor, const char* mode
             llama_model_free(governor->llm_model);
             governor->llm_ctx = NULL;
             governor->llm_model = NULL;
-            return -1;
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
         }
         
         llama_batch_free(batch);
@@ -1229,24 +1230,24 @@ int ethervox_governor_load_model(ethervox_governor_t* governor, const char* mode
     
     GOV_LOG("[Governor] Model loaded and ready");;
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 #endif
 }
 
 /**
  * Unload the Governor model to free memory
  */
-int ethervox_governor_unload_model(ethervox_governor_t* governor) {
-    if (!governor) return -1;
+ethervox_result_t ethervox_governor_unload_model(ethervox_governor_t* governor) {
+    if (!governor) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     if (!governor->llm_loaded) {
         GOV_LOG("[Governor] Model already unloaded");
-        return 0; // Already unloaded, success
+        return ETHERVOX_SUCCESS; // Already unloaded, success
     }
     
 #if !defined(ETHERVOX_WITH_LLAMA) || !LLAMA_HEADER_AVAILABLE
     GOV_ERROR("llama.cpp not available");
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
 #else
     GOV_LOG("[Governor] Unloading model to free memory (keeping model path for reload)");
     
@@ -1284,24 +1285,24 @@ int ethervox_governor_unload_model(ethervox_governor_t* governor) {
     
     GOV_LOG("[Governor] Model unloaded successfully (path preserved for reload)");
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 #endif
 }
 
 /**
  * Reload the Governor model using the previously saved model path
  */
-int ethervox_governor_reload_model(ethervox_governor_t* governor) {
-    if (!governor) return -1;
+ethervox_result_t ethervox_governor_reload_model(ethervox_governor_t* governor) {
+    if (!governor) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     if (governor->llm_loaded) {
         GOV_LOG("[Governor] Model already loaded");
-        return 0; // Already loaded, success
+        return ETHERVOX_SUCCESS; // Already loaded, success
     }
     
     if (!governor->model_path) {
         GOV_ERROR("[Governor] Cannot reload - no previous model path saved");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     GOV_LOG("[Governor] Reloading model from: %s", governor->model_path);
@@ -1313,10 +1314,10 @@ int ethervox_governor_reload_model(ethervox_governor_t* governor) {
 /**
  * Update Governor runtime configuration
  */
-int ethervox_governor_update_config(ethervox_governor_t* governor, const ethervox_governor_config_t* config) {
+ethervox_result_t ethervox_governor_update_config(ethervox_governor_t* governor, const ethervox_governor_config_t* config) {
     if (!governor || !config) {
         GOV_ERROR("Invalid governor or config");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Update configuration
@@ -1324,7 +1325,7 @@ int ethervox_governor_update_config(ethervox_governor_t* governor, const ethervo
     GOV_LOG("Governor config updated: gpu_layers=%u, context=%u, threads=%d",
             config->gpu_layers, config->context_size, config->n_threads);
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -1338,15 +1339,15 @@ bool ethervox_governor_is_loaded(ethervox_governor_t* governor) {
 /**
  * Initialize Governor with configuration
  */
-int ethervox_governor_init(
+ethervox_result_t ethervox_governor_init(
     ethervox_governor_t** governor,
     const ethervox_governor_config_t* config,
     ethervox_tool_registry_t* tool_registry
 ) {
-    if (!governor || !tool_registry) return -1;
+    if (!governor || !tool_registry) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     ethervox_governor_t* gov = calloc(1, sizeof(ethervox_governor_t));
-    if (!gov) return -1;
+    if (!gov) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     // Copy config or use defaults from config.h
     if (config) {
@@ -1377,11 +1378,11 @@ int ethervox_governor_init(
     // Initialize conversation history with capacity for 100 turns
     if (init_conversation_history(&gov->conversation_history, 100) != 0) {
         free(gov);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     *governor = gov;
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -2739,23 +2740,23 @@ void ethervox_governor_cleanup(ethervox_governor_t* governor) {
     free(governor);
 }
 
-int ethervox_governor_reset_conversation(ethervox_governor_t* governor) {
+ethervox_result_t ethervox_governor_reset_conversation(ethervox_governor_t* governor) {
     if (!governor) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
 #if !defined(ETHERVOX_WITH_LLAMA) || !LLAMA_HEADER_AVAILABLE
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
 #else
     // Clear KV cache back to system prompt
     if (!governor->llm_ctx || governor->system_prompt_token_count == 0) {
         GOV_LOG("Cannot reset: model not loaded");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     if (!governor->system_prompt_tokens || governor->system_prompt_tokens_len == 0) {
         GOV_ERROR("Cannot reset: no saved system prompt tokens for RELIGHT");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     llama_memory_t mem = llama_get_memory(governor->llm_ctx);
@@ -2764,7 +2765,7 @@ int ethervox_governor_reset_conversation(ethervox_governor_t* governor) {
     if (max_pos <= governor->system_prompt_token_count) {
         GOV_LOG("Conversation already clean (at position %d, system prompt is %d tokens)",
                 max_pos, governor->system_prompt_token_count);
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     int n_ctx = llama_n_ctx(governor->llm_ctx);
@@ -2825,7 +2826,7 @@ int ethervox_governor_reset_conversation(ethervox_governor_t* governor) {
         GOV_ERROR("Conversation reset failed: could not restore system prompt");
         governor->current_kv_pos = 0;
         governor->system_prompt_lost = true;
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // System prompt successfully restored!
@@ -2850,7 +2851,7 @@ int ethervox_governor_reset_conversation(ethervox_governor_t* governor) {
     
     GOV_LOG("Conversation reset complete: clean slate with system prompt only");
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 #endif
 }
 
@@ -2876,17 +2877,17 @@ void ethervox_governor_set_tool_execution(ethervox_governor_t* governor, bool en
     }
 }
 
-int ethervox_governor_summarize_and_clear_cache(ethervox_governor_t* governor, bool force_clear) {
+ethervox_result_t ethervox_governor_summarize_and_clear_cache(ethervox_governor_t* governor, bool force_clear) {
     if (!governor) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
 #if !defined(ETHERVOX_WITH_LLAMA) || !LLAMA_HEADER_AVAILABLE
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
 #else
     if (!governor->llm_ctx || governor->system_prompt_token_count == 0) {
         GOV_LOG("Cannot summarize: model not loaded");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     llama_memory_t mem = llama_get_memory(governor->llm_ctx);
@@ -2897,13 +2898,13 @@ int ethervox_governor_summarize_and_clear_cache(ethervox_governor_t* governor, b
     if (!force_clear && max_pos <= governor->system_prompt_token_count) {
         GOV_LOG("Cache already clean (at position %d, system prompt is %d tokens)",
                 max_pos, governor->system_prompt_token_count);
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     if (!force_clear && max_pos <= (n_ctx / 2)) {
         GOV_LOG("Cache only at %d%% capacity - not clearing (use force_clear=true to override)",
                 (max_pos * 100 / n_ctx));
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     GOV_LOG("Manual cache summarization: max_pos=%d, system_prompt=%d (%d%% full)",
@@ -2944,7 +2945,7 @@ int ethervox_governor_summarize_and_clear_cache(ethervox_governor_t* governor, b
     llama_token* summary_tokens = (llama_token*)malloc(1024 * sizeof(llama_token));
     if (!summary_tokens) {
         GOV_ERROR("Failed to allocate summary tokens");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     const struct llama_vocab* vocab = llama_model_get_vocab(governor->llm_model);
@@ -2961,7 +2962,7 @@ int ethervox_governor_summarize_and_clear_cache(ethervox_governor_t* governor, b
     if (n_summary_tokens < 0) {
         GOV_ERROR("Failed to tokenize summary prompt");
         free(summary_tokens);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     GOV_LOG("Processing summary prompt (%d tokens)...", n_summary_tokens);
@@ -2990,7 +2991,7 @@ int ethervox_governor_summarize_and_clear_cache(ethervox_governor_t* governor, b
             GOV_ERROR("Failed to process summary prompt chunk at token %d", i);
             llama_batch_free(batch);
             free(summary_tokens);
-            return -1;
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
         }
         
         llama_batch_free(batch);
@@ -3110,6 +3111,6 @@ int ethervox_governor_summarize_and_clear_cache(ethervox_governor_t* governor, b
     GOV_LOG("Cache cleared: now at position %d (%d%% full)",
             governor->current_kv_pos, (governor->current_kv_pos * 100 / n_ctx));
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 #endif
 }

@@ -7,6 +7,7 @@
  */
 
 #include <stdio.h>
+#include "ethervox/error.h"
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
@@ -61,7 +62,7 @@ static int test_wake_word_init(void) {
     assert(runtime.is_initialized == false);
     
     printf("PASS\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -100,7 +101,7 @@ static int test_wake_word_silence(void) {
     ethervox_wake_cleanup(&runtime);
     
     printf("PASS\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -136,7 +137,7 @@ static int test_wake_word_noise(void) {
     ethervox_wake_cleanup(&runtime);
     
     printf("PASS\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -155,7 +156,7 @@ static int test_wake_word_config(void) {
     // assert(config.use_template == false); // No template by default
     
     printf("PASS\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -199,7 +200,7 @@ static int test_wake_word_errors(void) {
     ethervox_wake_cleanup(&runtime);
     
     printf("PASS\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -232,7 +233,7 @@ static int test_wake_word_template(void) {
     ethervox_wake_cleanup(&runtime);
     
     printf("PASS\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -253,9 +254,9 @@ int main(void) {
     printf("\n");
     if (failed == 0) {
         printf("✓ All wake word tests passed!\n\n");
-        return 0;
+        return ETHERVOX_SUCCESS;
     } else {
         printf("✗ %d test(s) failed\n\n", failed);
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
 }

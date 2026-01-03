@@ -202,7 +202,7 @@ const char* ethervox_detect_and_switch_voice(const char* text,
     
     // Load settings to check and update voice
     ethervox_persistent_settings_t settings;
-    if (ethervox_settings_load(&settings, NULL) != 0) {
+    if (ethervox_is_error(ethervox_settings_load(&settings, NULL))) {
         ETHERVOX_LOG_ERROR("[Language Detection] Failed to load settings");
         return detected_language;
     }
@@ -210,8 +210,11 @@ const char* ethervox_detect_and_switch_voice(const char* text,
     // Get target voice for detected language
     const char* target_voice = ethervox_get_voice_for_language(detected_language, &settings);
     if (!target_voice) {
+        ETHERVOX_LOG_ERROR("[Language Detection] No voice configured for language: %s", detected_language);
         return detected_language;
     }
+    
+    ETHERVOX_LOG_DEBUG("[Language Detection] Target voice for %s: %s", detected_language, target_voice);
     
     // Determine what voice is currently loaded by checking piper_model_path
     // Extract voice ID from path like "/path/to/en_US-libritts-high.onnx"
@@ -220,8 +223,13 @@ const char* ethervox_detect_and_switch_voice(const char* text,
     if (!last_slash) last_slash = current_model;
     else last_slash++; // Skip the '/'
     
+    ETHERVOX_LOG_DEBUG("[Language Detection] Current model filename: %s", last_slash);
+    
     // Check if target voice is in the current model path
     bool voice_needs_change = (strstr(last_slash, target_voice) == NULL);
+    
+    ETHERVOX_LOG_DEBUG("[Language Detection] Voice needs change? %s (checking if '%s' contains '%s')",
+                       voice_needs_change ? "YES" : "NO", last_slash, target_voice);
     
     if (voice_needs_change) {
         ETHERVOX_LOG_INFO("[Language Switch] Changing TTS voice: %s → %s (language: %s)",

@@ -1,4 +1,5 @@
 /**
+#include "ethervox/error.h"
  * @file startup_prompt_registry.c
  * @brief Tool registry for startup prompt management
  *
@@ -21,21 +22,21 @@
 static int tool_startup_prompt_update(const char* args_json, char** result, char** error) {
     if (!args_json || !result || !error) {
         *error = strdup("Invalid arguments");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Parse JSON to extract prompt text
     const char* text_start = strstr(args_json, "\"prompt_text\"");
     if (!text_start) {
         *error = strdup("Missing 'prompt_text' parameter");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Skip past "prompt_text": to find the value
     text_start = strchr(text_start + 13, ':'); // +13 to skip "prompt_text"
     if (!text_start) {
         *error = strdup("Invalid JSON format - missing colon");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     text_start++; // Skip colon
     
@@ -47,7 +48,7 @@ static int tool_startup_prompt_update(const char* args_json, char** result, char
     // Now find the opening quote of the value
     if (*text_start != '"') {
         *error = strdup("Invalid JSON format - value must be a string");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     text_start++; // Skip opening quote
     
@@ -61,7 +62,7 @@ static int tool_startup_prompt_update(const char* args_json, char** result, char
     
     if (!*text_end) {
         *error = strdup("Unterminated string in JSON");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Allocate and unescape the prompt text
@@ -69,7 +70,7 @@ static int tool_startup_prompt_update(const char* args_json, char** result, char
     char* prompt = malloc(len + 1);
     if (!prompt) {
         *error = strdup("Memory allocation failed");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Unescape JSON string
@@ -129,7 +130,7 @@ static int tool_startup_prompt_update(const char* args_json, char** result, char
     if (!fp) {
         *error = strdup("Failed to open startup prompt file for writing");
         free(prompt);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     fprintf(fp, "%s", prompt);
@@ -145,7 +146,7 @@ static int tool_startup_prompt_update(const char* args_json, char** result, char
     *result = strdup(result_buf);
     
     free(prompt);
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 static int tool_startup_prompt_read(const char* args_json, char** result, char** error) {
@@ -153,7 +154,7 @@ static int tool_startup_prompt_read(const char* args_json, char** result, char**
     
     if (!result || !error) {
         *error = strdup("Invalid arguments");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Determine file path - platform-specific
@@ -183,7 +184,7 @@ static int tool_startup_prompt_read(const char* args_json, char** result, char**
     if (!fp) {
         // No custom prompt, return indication
         *result = strdup("{\"status\":\"default\",\"has_custom\":false}");
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     // Read the file
@@ -194,14 +195,14 @@ static int tool_startup_prompt_read(const char* args_json, char** result, char**
     if (size <= 0 || size > 10000) {
         fclose(fp);
         *error = strdup("Invalid startup prompt file size");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     char* content = malloc(size + 1);
     if (!content) {
         fclose(fp);
         *error = strdup("Memory allocation failed");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     size_t read = fread(content, 1, size, fp);
@@ -213,7 +214,7 @@ static int tool_startup_prompt_read(const char* args_json, char** result, char**
     if (!result_buf) {
         free(content);
         *error = strdup("Memory allocation failed");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     sprintf(result_buf, "{\"status\":\"custom\",\"has_custom\":true,\"prompt\":\"");
@@ -235,13 +236,13 @@ static int tool_startup_prompt_read(const char* args_json, char** result, char**
     *result = result_buf;
     free(content);
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
-int ethervox_startup_prompt_tools_register(void* registry_ptr) {
+ethervox_result_t ethervox_startup_prompt_tools_register(void* registry_ptr) {
     ethervox_tool_registry_t* registry = (ethervox_tool_registry_t*)registry_ptr;
     if (!registry) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Register startup_prompt_update tool
@@ -258,7 +259,7 @@ int ethervox_startup_prompt_tools_register(void* registry_ptr) {
     
     if (ethervox_tool_registry_add(registry, &update_tool) != 0) {
         STARTUP_ERROR("Failed to register startup_prompt_update tool");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Register startup_prompt_read tool
@@ -272,10 +273,10 @@ int ethervox_startup_prompt_tools_register(void* registry_ptr) {
     
     if (ethervox_tool_registry_add(registry, &read_tool) != 0) {
         STARTUP_ERROR("Failed to register startup_prompt_read tool");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     STARTUP_LOG("Registered 2 startup prompt tools");
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }

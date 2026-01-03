@@ -15,6 +15,7 @@
 #include "ethervox/chat_template.h"
 #include "ethervox/config.h"
 #include "ethervox/logging.h"
+#include "ethervox/error.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -175,7 +176,7 @@ static int parse_existing_optimizations(
     if (!fp) {
         *entries_out = NULL;
         *count_out = 0;
-        return -1;  // File doesn't exist yet
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;  // File doesn't exist yet
     }
     
     // Read entire file
@@ -187,13 +188,13 @@ static int parse_existing_optimizations(
         fclose(fp);
         *entries_out = NULL;
         *count_out = 0;
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     char* content = malloc(file_size + 1);
     if (!content) {
         fclose(fp);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     fread(content, 1, file_size, fp);
@@ -212,14 +213,14 @@ static int parse_existing_optimizations(
         free(content);
         *entries_out = NULL;
         *count_out = 0;
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     // Allocate entries
     optimized_tool_entry_t* entries = calloc(tool_count, sizeof(optimized_tool_entry_t));
     if (!entries) {
         free(content);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Parse each tool entry
@@ -273,7 +274,7 @@ static int parse_existing_optimizations(
     free(content);
     *entries_out = entries;
     *count_out = idx;
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 // Check if a tool is already optimized
@@ -297,7 +298,7 @@ static int create_optimized_dir(void) {
     const char* android_files_dir = ethervox_android_get_files_dir();
     if (!android_files_dir || android_files_dir[0] == '\0') {
         ETHERVOX_LOGE("Android files directory not set");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     char dir1[512], dir2[512];
@@ -311,7 +312,7 @@ static int create_optimized_dir(void) {
     const char* home = getenv("HOME");
     if (!home) {
         ETHERVOX_LOGE("HOME environment variable not set");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     char dir1[512], dir2[512], dir3[512];
@@ -324,27 +325,27 @@ static int create_optimized_dir(void) {
     ensure_directory(dir3);
 #endif
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
  * Optimize tool prompts and write to JSON cache
  */
-int ethervox_optimize_tool_prompts_v2(
+ethervox_result_t ethervox_optimize_tool_prompts_v2(
     ethervox_governor_t* governor,
     const char* model_path,
     tool_manifest_registry_t* manifest_registry,
     bool optimize_new_only
 ) {
     if (!governor || !model_path || !manifest_registry) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Check tool count instead of tools_available flag
     // (tools_available may be false when optimization file doesn't exist yet)
     if (manifest_registry->header.tool_count == 0) {
         ETHERVOX_LOGE("No tools in manifest (count: 0)");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Set up signal handler for Ctrl+C
@@ -504,7 +505,7 @@ int ethervox_optimize_tool_prompts_v2(
             fprintf(g_report_file, "\nAll tools already optimized - nothing to do\n");
             fclose(g_report_file);
         }
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     // Open output file
@@ -512,7 +513,7 @@ int ethervox_optimize_tool_prompts_v2(
     if (!fp) {
         ETHERVOX_LOGE("Failed to open output file: %s", output_path);
         if (existing_entries) free(existing_entries);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Write JSON header
@@ -854,5 +855,5 @@ int ethervox_optimize_tool_prompts_v2(
         free(existing_entries);
     }
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }

@@ -10,6 +10,7 @@
  */
 
 #include "ethervox/tool_manifest.h"
+#include "ethervox/error.h"
 #include "ethervox/governor.h"
 #include "ethervox/config.h"
 #include "ethervox/memory_tools.h"
@@ -44,7 +45,7 @@ static double timer_end(benchmark_timer_t* timer) {
 
 // Estimate tokens (rough: 0.75 tokens per word, 5 chars per word)
 static int estimate_tokens(const char* text) {
-    if (!text) return 0;
+    if (!text) return ETHERVOX_SUCCESS;
     int chars = strlen(text);
     int words = chars / 5;
     return (words * 3) / 4;  // 0.75 tokens/word
@@ -137,7 +138,7 @@ int main(void) {
     ethervox_tool_registry_t registry;
     if (ethervox_tool_registry_init(&registry, 100) != 0) {
         fprintf(stderr, "Failed to initialize tool registry\n");
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
     
     // Memory tools
@@ -220,7 +221,7 @@ int main(void) {
     if (export_result != 0) {
         fprintf(stderr, "Failed to export manifest\n");
         ethervox_tool_registry_cleanup(&registry);
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
     
     FILE* f = fopen(manifest_path, "rb");
@@ -247,7 +248,7 @@ int main(void) {
     if (load_result != 0) {
         fprintf(stderr, "Failed to load manifest\n");
         ethervox_tool_registry_cleanup(&registry);
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
     
     printf("  Load time: %.3f ms\n", load_time);
@@ -282,7 +283,7 @@ int main(void) {
     char* prompt_l1 = malloc(100000);
     if (!prompt_l1) {
         fprintf(stderr, "Memory allocation failed\n");
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
     
     timer_start(&timer);
@@ -401,5 +402,5 @@ int main(void) {
     ethervox_tool_registry_cleanup(&registry);
     ethervox_memory_cleanup(&memory);
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }

@@ -12,6 +12,7 @@
 #include <math.h>
 
 #include "ethervox/stt.h"
+#include "ethervox/error.h"
 #include "ethervox/logging.h"
 #include "ethervox/config.h"
 
@@ -222,13 +223,15 @@ static void whisper_log_suppress(enum ggml_log_level level, const char* text, vo
 /**
  * Initialize Whisper backend - MINIMAL VERSION
  */
-int ethervox_stt_whisper_init(ethervox_stt_runtime_t* runtime) {
-  if (!runtime) return -1;
+ethervox_result_t ethervox_stt_whisper_init(ethervox_stt_runtime_t* runtime) {
+  ETHERVOX_CHECK_PTR(runtime);
   
   whisper_log_set(whisper_log_suppress, NULL);
   
   whisper_backend_context_t* ctx = (whisper_backend_context_t*)calloc(1, sizeof(whisper_backend_context_t));
-  if (!ctx) return -1;
+  if (!ctx) {
+    return ETHERVOX_ERROR_OUT_OF_MEMORY;
+  }
   
   // Load model
   LOG_INFO("Loading Whisper model from: %s", runtime->config.model_path);
@@ -237,7 +240,7 @@ int ethervox_stt_whisper_init(ethervox_stt_runtime_t* runtime) {
   if (!ctx->ctx) {
     LOG_ERROR("Failed to load Whisper model (possibly OOM): %s", runtime->config.model_path);
     free(ctx);
-    return -1;
+    return ETHERVOX_ERROR_STT_INIT;
   }
   
   LOG_INFO("✅ Successfully loaded Whisper model: %s", runtime->config.model_path);
@@ -360,7 +363,7 @@ int ethervox_stt_whisper_init(ethervox_stt_runtime_t* runtime) {
   if (!ctx->audio_buffer) {
     whisper_free(ctx->ctx);
     free(ctx);
-    return -1;
+    return ETHERVOX_ERROR_OUT_OF_MEMORY;
   }
   
   // Allocate overlap buffer (200ms @ 16kHz for context between chunks)
@@ -370,7 +373,7 @@ int ethervox_stt_whisper_init(ethervox_stt_runtime_t* runtime) {
     free(ctx->audio_buffer);
     whisper_free(ctx->ctx);
     free(ctx);
-    return -1;
+    return ETHERVOX_ERROR_OUT_OF_MEMORY;
   }
   ctx->overlap_size = 0;
   
@@ -392,14 +395,17 @@ int ethervox_stt_whisper_init(ethervox_stt_runtime_t* runtime) {
   
   runtime->backend_context = ctx;
   LOG_INFO("Whisper backend initialized with multi-language, timestamps, and acoustic speaker detection");
-  return 0;
+  return ETHERVOX_SUCCESS;
 }
 
 /**
  * Start session - MINIMAL
  */
-int ethervox_stt_whisper_start(ethervox_stt_runtime_t* runtime) {
-  if (!runtime || !runtime->backend_context) return -1;
+ethervox_result_t ethervox_stt_whisper_start(ethervox_stt_runtime_t* runtime) {
+  ETHERVOX_CHECK_PTR(runtime);
+  if (!runtime->backend_context) {
+    return ETHERVOX_ERROR_NOT_INITIALIZED;
+  }
   
   whisper_backend_context_t* ctx = (whisper_backend_context_t*)runtime->backend_context;
   
@@ -428,7 +434,7 @@ int ethervox_stt_whisper_start(ethervox_stt_runtime_t* runtime) {
   ctx->duplicate_count = 0;
   
   LOG_INFO("Whisper session started with clean buffers");
-  return 0;
+  return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -438,10 +444,13 @@ int ethervox_stt_whisper_start(ethervox_stt_runtime_t* runtime) {
  * - Keep 200ms overlap for context continuity
  * - No experimental VAD, just time-based chunking
  */
-int ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
+ethervox_result_t ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
                                   const ethervox_audio_buffer_t* audio_buffer,
                                   ethervox_stt_result_t* result) {
-  if (!runtime || !runtime->backend_context || !audio_buffer || !result) return -1;
+  ETHERVOX_CHECK_PTR(runtime);
+  ETHERVOX_CHECK_PTR(runtime->backend_context);
+  ETHERVOX_CHECK_PTR(audio_buffer);
+  ETHERVOX_CHECK_PTR(result);
   
   whisper_backend_context_t* ctx = (whisper_backend_context_t*)runtime->backend_context;
   
@@ -449,7 +458,7 @@ int ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
   // This can happen if stop() was called while process() is still running
   if (!ctx->audio_buffer || !ctx->overlap_buffer || !ctx->ctx) {
     LOG_WARN("Whisper buffers not initialized, skipping audio processing");
-    return -1;
+    return ETHERVOX_ERROR_STT_PROCESSING;
   }
   
   memset(result, 0, sizeof(ethervox_stt_result_t));
@@ -481,7 +490,7 @@ int ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
   float* process_buffer = (float*)malloc(total_samples * sizeof(float));
   if (!process_buffer) {
     LOG_ERROR("Failed to allocate processing buffer");
-    return -1;
+    return ETHERVOX_ERROR_STT_PROCESSING;
   }
   
   // Copy overlap from previous chunk (provides context)
@@ -533,7 +542,7 @@ int ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
       LOG_ERROR("Language detection failed with code %d", ret_code);
       free(process_buffer);
       ctx->audio_buffer_size = 0;
-      return -1;
+      return ETHERVOX_ERROR_STT_PROCESSING;
     }
     
     // Get detected language
@@ -652,12 +661,12 @@ int ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
       LOG_ERROR("❌ All recovery strategies failed - giving up on this chunk");
       free(process_buffer);
       ctx->audio_buffer_size = 0;
-      return -1;
+      return ETHERVOX_ERROR_STT_PROCESSING;
     } else {
       // Non -4 error, not recoverable
       free(process_buffer);
       ctx->audio_buffer_size = 0;
-      return -1;
+      return ETHERVOX_ERROR_STT_PROCESSING;
     }
   }
   
@@ -689,7 +698,7 @@ transcription_success:
   if (!speaker_turns) {
     free(process_buffer);
     ctx->audio_buffer_size = 0;
-    return -1;
+    return ETHERVOX_ERROR_STT_PROCESSING;
   }
   
   // Calculate audio segment boundaries for each text segment
@@ -776,7 +785,7 @@ transcription_success:
     free(speaker_turns);
     free(process_buffer);
     ctx->audio_buffer_size = 0;
-    return -1;
+    return ETHERVOX_ERROR_STT_PROCESSING;
   }
   
   if (total_len > 0) {
@@ -914,8 +923,10 @@ save_overlap_no_cleanup:
 /**
  * Finalize - process remaining audio
  */
-int ethervox_stt_whisper_finalize(ethervox_stt_runtime_t* runtime, ethervox_stt_result_t* result) {
-  if (!runtime || !runtime->backend_context || !result) return -1;
+ethervox_result_t ethervox_stt_whisper_finalize(ethervox_stt_runtime_t* runtime, ethervox_stt_result_t* result) {
+  ETHERVOX_CHECK_PTR(runtime);
+  ETHERVOX_CHECK_PTR(runtime->backend_context);
+  ETHERVOX_CHECK_PTR(result);
   
   whisper_backend_context_t* ctx = (whisper_backend_context_t*)runtime->backend_context;
   
@@ -1046,8 +1057,11 @@ void ethervox_stt_whisper_stop(ethervox_stt_runtime_t* runtime) {
 /**
  * Set language for hot-switching
  */
-int ethervox_stt_whisper_set_language(ethervox_stt_runtime_t* runtime, const char* language) {
-  if (!runtime || !runtime->backend_context) return -1;
+ethervox_result_t ethervox_stt_whisper_set_language(ethervox_stt_runtime_t* runtime, const char* language) {
+  ETHERVOX_CHECK_PTR(runtime);
+  if (!runtime->backend_context) {
+    return ETHERVOX_ERROR_NOT_INITIALIZED;
+  }
   
   whisper_backend_context_t* ctx = (whisper_backend_context_t*)runtime->backend_context;
   
@@ -1090,26 +1104,26 @@ void ethervox_stt_whisper_cleanup(ethervox_stt_runtime_t* runtime) {
 
 #else // !WHISPER_CPP_AVAILABLE
 
-int ethervox_stt_whisper_init(ethervox_stt_runtime_t* runtime) {
+ethervox_result_t ethervox_stt_whisper_init(ethervox_stt_runtime_t* runtime) {
   (void)runtime;
-  return -1;
+  return ETHERVOX_ERROR_NOT_SUPPORTED;
 }
 
-int ethervox_stt_whisper_start(ethervox_stt_runtime_t* runtime) {
+ethervox_result_t ethervox_stt_whisper_start(ethervox_stt_runtime_t* runtime) {
   (void)runtime;
-  return -1;
+  return ETHERVOX_ERROR_NOT_SUPPORTED;
 }
 
-int ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
+ethervox_result_t ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
                                   const ethervox_audio_buffer_t* audio_buffer,
                                   ethervox_stt_result_t* result) {
   (void)runtime; (void)audio_buffer; (void)result;
-  return -1;
+  return ETHERVOX_ERROR_NOT_SUPPORTED;
 }
 
-int ethervox_stt_whisper_finalize(ethervox_stt_runtime_t* runtime, ethervox_stt_result_t* result) {
+ethervox_result_t ethervox_stt_whisper_finalize(ethervox_stt_runtime_t* runtime, ethervox_stt_result_t* result) {
   (void)runtime; (void)result;
-  return -1;
+  return ETHERVOX_ERROR_NOT_SUPPORTED;
 }
 
 void ethervox_stt_whisper_stop(ethervox_stt_runtime_t* runtime) {

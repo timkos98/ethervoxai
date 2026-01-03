@@ -1,4 +1,5 @@
 /**
+#include "ethervox/error.h"
  * @file memory_export.c
  * @brief Memory export/import in JSON and Markdown formats
  *
@@ -69,21 +70,21 @@ static void write_json_escaped(FILE* fp, const char* str) {
     fputc('"', fp);
 }
 
-int ethervox_memory_export(
+ethervox_result_t ethervox_memory_export(
     ethervox_memory_store_t* store,
     const char* filepath,
     const char* format,
     uint64_t* bytes_written
 ) {
     if (!store || !store->is_initialized || !filepath || !format) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     FILE* fp = fopen(filepath, "w");
     if (!fp) {
         ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__,
                     "Failed to open export file: %s", filepath);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     uint64_t bytes = 0;
@@ -201,7 +202,7 @@ int ethervox_memory_export(
         fclose(fp);
         ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__,
                     "Unknown export format: %s", format);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     bytes = ftell(fp);
@@ -217,7 +218,7 @@ int ethervox_memory_export(
                 "Exported %u entries to %s (%s format, %llu bytes)",
                 store->entry_count, filepath, format, (unsigned long long)bytes);
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 // Helper function to process a single JSON entry (used by both structured JSON and JSONL import)
@@ -401,20 +402,20 @@ static bool process_json_entry(ethervox_memory_store_t* store, const char* line)
                                      timestamp, &memory_id_out) == 0);
 }
 
-int ethervox_memory_import(
+ethervox_result_t ethervox_memory_import(
     ethervox_memory_store_t* store,
     const char* filepath,
     uint32_t* turns_loaded
 ) {
     if (!store || !store->is_initialized || !filepath) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     FILE* fp = fopen(filepath, "r");
     if (!fp) {
         ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__,
                     "Failed to open import file: %s", filepath);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Detect format: read first few lines to check for structured JSON vs JSONL
@@ -441,7 +442,7 @@ int ethervox_memory_import(
         char* json_data = malloc(file_size + 1);
         if (!json_data) {
             fclose(fp);
-            return -1;
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
         }
         
         fread(json_data, 1, file_size, fp);
@@ -513,7 +514,7 @@ int ethervox_memory_import(
         ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
                     "Imported %u entries from structured JSON: %s", loaded, filepath);
         
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     // JSONL format: one entry per line
@@ -681,15 +682,15 @@ int ethervox_memory_import(
     ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
                 "Imported %u entries from %s", loaded, filepath);
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
-int ethervox_memory_load_previous_session(
+ethervox_result_t ethervox_memory_load_previous_session(
     ethervox_memory_store_t* store,
     uint32_t* turns_loaded
 ) {
     if (!store || !store->is_initialized) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // If no storage directory is set, nothing to load
@@ -697,7 +698,7 @@ int ethervox_memory_load_previous_session(
         ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
                     "No storage directory set, skipping previous session load");
         if (turns_loaded) *turns_loaded = 0;
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     // Extract directory path from current storage filepath
@@ -709,7 +710,7 @@ int ethervox_memory_load_previous_session(
     if (!last_slash) {
         ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__,
                     "Invalid storage filepath: %s", store->storage_filepath);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     *last_slash = '\0';  // Truncate to get directory
     
@@ -722,7 +723,7 @@ int ethervox_memory_load_previous_session(
         ethervox_log(ETHERVOX_LOG_LEVEL_WARN, __FILE__, __LINE__, __func__,
                     "Failed to open storage directory: %s", storage_dir);
         if (turns_loaded) *turns_loaded = 0;
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
@@ -778,12 +779,12 @@ int ethervox_memory_load_previous_session(
             ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
                         "Loaded %u previous memories from %s", loaded, latest_session);
             if (turns_loaded) *turns_loaded = loaded;
-            return 0;
+            return ETHERVOX_SUCCESS;
         } else if (result != 0) {
             ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__,
                         "Failed to import previous session from %s", latest_session);
             if (turns_loaded) *turns_loaded = 0;
-            return -1;
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
         }
     }
     
@@ -791,5 +792,5 @@ int ethervox_memory_load_previous_session(
     ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
                 "No previous session file found");
     if (turns_loaded) *turns_loaded = 0;
-    return 0;
+    return ETHERVOX_SUCCESS;
 }

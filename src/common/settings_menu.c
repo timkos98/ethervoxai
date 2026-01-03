@@ -9,6 +9,7 @@
  */
 
 #include "ethervox/settings_menu.h"
+#include "ethervox/error.h"
 #include "ethervox/config.h"
 #include "ethervox/settings.h"
 #include "ethervox/logging.h"
@@ -74,7 +75,7 @@ static WINDOW* status_win = NULL;
 static int init_display(void) {
     main_win = initscr();
     if (!main_win) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     cbreak();              // Disable line buffering
@@ -91,7 +92,7 @@ static int init_display(void) {
         init_pair(COLOR_DISABLED, COLOR_BLACK, COLOR_BLACK);
     }
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 // Cleanup ncurses
@@ -235,7 +236,7 @@ static int action_export_config(void* data) {
     
     // Load current settings
     ethervox_persistent_settings_t settings = ethervox_settings_get_defaults();
-    if (ethervox_settings_load(&settings, NULL) != 0) {
+    if (ethervox_is_error(ethervox_settings_load(&settings, NULL))) {
         printf("Warning: Could not load current settings, using defaults\n\n");
     }
     
@@ -272,7 +273,7 @@ static int action_export_config(void* data) {
     getchar();
     
     init_display();
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 // Action: Import configuration
@@ -294,17 +295,19 @@ static int action_import_config(void* data) {
         if (import_path[0] != '\0') {
             // Load from specified path
             ethervox_persistent_settings_t settings;
-            if (ethervox_settings_load(&settings, import_path) == 0) {
+            ethervox_result_t load_result = ethervox_settings_load(&settings, import_path);
+            if (ethervox_is_success(load_result)) {
                 // Save to default location
-                if (ethervox_settings_save(&settings, NULL) == 0) {
+                ethervox_result_t save_result = ethervox_settings_save(&settings, NULL);
+                if (ethervox_is_success(save_result)) {
                     printf("\n✓ Configuration imported from: %s\n", import_path);
                     printf("✓ Saved to: %s\n", ethervox_settings_get_default_path());
                     printf("\nRestart the application for changes to take effect.\n");
                 } else {
-                    printf("\n✗ Failed to save imported configuration\n");
+                    printf("\n✗ Failed to save imported configuration: %s\n", ethervox_error_string(save_result));
                 }
             } else {
-                printf("\n✗ Failed to load configuration from: %s\n", import_path);
+                printf("\n✗ Failed to load configuration from: %s (%s)\n", import_path, ethervox_error_string(load_result));
             }
         } else {
             printf("\nImport cancelled.\n");
@@ -315,7 +318,7 @@ static int action_import_config(void* data) {
     getchar();
     
     init_display();
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 // Action: Run tool optimization
@@ -338,7 +341,7 @@ static int action_optimize_tools(void* data) {
     getchar();
     
     init_display();
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 // Action: Select TTS voice
@@ -709,10 +712,11 @@ static int action_select_tts_voice(void* data) {
                 printf("    Model path: %s\n", settings->tts.piper_model_path);
                 
                 // Save settings immediately to persist voice selection
-                if (ethervox_settings_save(settings, NULL) == 0) {
+                ethervox_result_t save_result = ethervox_settings_save(settings, NULL);
+                if (ethervox_is_success(save_result)) {
                     printf("💾 Settings saved successfully\n");
                 } else {
-                    printf("⚠️  Warning: Failed to save settings to disk\n");
+                    printf("⚠️  Warning: Failed to save settings to disk: %s\n", ethervox_error_string(save_result));
                 }
                 
                 // Try to reload TTS immediately if callback is available
@@ -760,10 +764,11 @@ static int action_select_tts_voice(void* data) {
                     printf("    Model path: %s\n", settings->tts.piper_model_path);
                     
                     // Save settings immediately
-                    if (ethervox_settings_save(settings, NULL) == 0) {
+                    ethervox_result_t save_result = ethervox_settings_save(settings, NULL);
+                    if (ethervox_is_success(save_result)) {
                         printf("💾 Settings saved successfully\n");
                     } else {
-                        printf("⚠️  Warning: Failed to save settings to disk\n");
+                        printf("⚠️  Warning: Failed to save settings to disk: %s\n", ethervox_error_string(save_result));
                     }
                     
                     // Try to reload TTS if callback is available
@@ -874,7 +879,7 @@ static int action_select_tts_voice(void* data) {
     }
     
     init_display();
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 // Action: View system info
@@ -908,7 +913,7 @@ static int action_view_info(void* data) {
     getchar();
     
     init_display();
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 // Action: Reset pronunciation overrides
@@ -943,18 +948,18 @@ static int action_reset_pronunciation(void* data) {
     getchar();
     
     init_display();
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 // Main settings menu
-int ethervox_settings_menu_show(ethervox_settings_t* settings, const char* model_path,
+ethervox_result_t ethervox_settings_menu_show(ethervox_settings_t* settings, const char* model_path,
                                  ethervox_model_reload_callback_t reload_callback, void* user_data,
                                  ethervox_tts_reload_callback_t tts_reload_callback, void* tts_user_data) {
-    if (!settings) return -1;
+    if (!settings) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     if (init_display() != 0) {
         fprintf(stderr, "Failed to initialize ncurses\n");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Load persistent settings
@@ -1508,10 +1513,13 @@ int ethervox_settings_menu_show(ethervox_settings_t* settings, const char* model
                 
             case 19: // Ctrl+S (save settings)
                 // Save settings immediately without exiting
-                if (ethervox_settings_save(&persistent, NULL) == 0) {
-                    show_status("✓ Settings saved successfully!");
-                } else {
-                    show_status("⚠ Failed to save settings");
+                {
+                    ethervox_result_t save_result = ethervox_settings_save(&persistent, NULL);
+                    if (ethervox_is_success(save_result)) {
+                        show_status("✓ Settings saved successfully!");
+                    } else {
+                        show_status("⚠ Failed to save settings");
+                    }
                 }
                 break;
                 
@@ -1532,10 +1540,11 @@ int ethervox_settings_menu_show(ethervox_settings_t* settings, const char* model
     reload_required |= (persistent.llm.n_threads != initial_llm_threads);
     
     // Save persistent settings to disk
-    if (ethervox_settings_save(&persistent, NULL) == 0) {
+    ethervox_result_t save_result = ethervox_settings_save(&persistent, NULL);
+    if (ethervox_is_success(save_result)) {
         printf("\n✓ Settings saved to %s\n\n", ethervox_settings_get_default_path());
     } else {
-        printf("\n⚠ Warning: Failed to save settings\n\n");
+        printf("\n⚠ Warning: Failed to save settings: %s\n\n", ethervox_error_string(save_result));
     }
     
     // Prompt for model reload if needed (only if model is loaded)
@@ -1582,7 +1591,7 @@ int ethervox_settings_menu_show(ethervox_settings_t* settings, const char* model
         }
     }
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 bool ethervox_settings_menu_available(void) {
@@ -1591,14 +1600,14 @@ bool ethervox_settings_menu_available(void) {
 
 #else // No ncurses available
 
-int ethervox_settings_menu_show(ethervox_settings_t* settings, const char* model_path,
+ethervox_result_t ethervox_settings_menu_show(ethervox_settings_t* settings, const char* model_path,
                                  ethervox_model_reload_callback_t reload_callback, void* user_data,
                                  ethervox_tts_reload_callback_t tts_reload_callback, void* tts_user_data) {
     (void)model_path;
     (void)reload_callback;
     (void)user_data;
     fprintf(stderr, "Settings menu not available on this platform (ncurses not found)\n");
-    return -1;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
 }
 
 bool ethervox_settings_menu_available(void) {

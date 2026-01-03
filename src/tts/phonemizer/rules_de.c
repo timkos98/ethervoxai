@@ -18,6 +18,7 @@
  */
 
 #include "rules_de.h"
+#include "ethervox/error.h"
 #include <string.h>
 #include <ctype.h>
 #include <stdint.h>
@@ -67,12 +68,17 @@ static int starts_with(const char* word, const char* pattern) {
     return 1;
 }
 
-int apply_german_g2p_rules(const char* word, char* ipa_out, size_t max_len) {
-    if (!word || !ipa_out || max_len == 0) return -1;
+ethervox_result_t apply_german_g2p_rules(const char* word, char* ipa_out, size_t max_len) {
+    ETHERVOX_CHECK_PTR(word);
+    ETHERVOX_CHECK_PTR(ipa_out);
+    
+    if (max_len == 0) {
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
     
     ipa_out[0] = '\0';
     size_t len = strlen(word);
-    if (len == 0) return -1;
+    if (len == 0) return ETHERVOX_ERROR_TTS_PHONEMIZATION_FAILED;
     
     const unsigned char* p = (const unsigned char*)word;
     const unsigned char* end = p + len;
@@ -88,21 +94,21 @@ int apply_german_g2p_rules(const char* word, char* ipa_out, size_t max_len) {
         
         // "sch" -> /ʃ/
         if (c == 's' && c_next == 'c' && c_next2 == 'h') {
-            if (append_ipa(ipa_out, max_len, "ʃ") < 0) return -1;
+            if (append_ipa(ipa_out, max_len, "ʃ") < 0) return ETHERVOX_ERROR_TTS_PHONEMIZATION_FAILED;
             p += 3;
             continue;
         }
         
         // "sp-" word-initially -> /ʃp/
         if (c == 's' && c_next == 'p' && (p == (unsigned char*)word || !isalpha(*(p-1)))) {
-            if (append_ipa(ipa_out, max_len, "ʃp") < 0) return -1;
+            if (append_ipa(ipa_out, max_len, "ʃp") < 0) return ETHERVOX_ERROR_TTS_PHONEMIZATION_FAILED;
             p += 2;
             continue;
         }
         
         // "st-" word-initially -> /ʃt/
         if (c == 's' && c_next == 't' && (p == (unsigned char*)word || !isalpha(*(p-1)))) {
-            if (append_ipa(ipa_out, max_len, "ʃt") < 0) return -1;
+            if (append_ipa(ipa_out, max_len, "ʃt") < 0) return ETHERVOX_ERROR_TTS_PHONEMIZATION_FAILED;
             p += 2;
             continue;
         }
@@ -111,9 +117,9 @@ int apply_german_g2p_rules(const char* word, char* ipa_out, size_t max_len) {
         if (c == 'c' && c_next == 'h') {
             // Check preceding character for front vs back vowel
             if (p > (unsigned char*)word && is_front_vowel_context(p, -1)) {
-                if (append_ipa(ipa_out, max_len, "ç") < 0) return -1;
+                if (append_ipa(ipa_out, max_len, "ç") < 0) return ETHERVOX_ERROR_TTS_PHONEMIZATION_FAILED;
             } else {
-                if (append_ipa(ipa_out, max_len, "x") < 0) return -1;
+                if (append_ipa(ipa_out, max_len, "x") < 0) return ETHERVOX_ERROR_TTS_PHONEMIZATION_FAILED;
             }
             p += 2;
             continue;
@@ -121,28 +127,28 @@ int apply_german_g2p_rules(const char* word, char* ipa_out, size_t max_len) {
         
         // "tsch" -> /tʃ/ (borrowed words)
         if (c == 't' && c_next == 's' && c_next2 == 'c' && next2 < end && tolower(*(next2+1)) == 'h') {
-            if (append_ipa(ipa_out, max_len, "tʃ") < 0) return -1;
+            if (append_ipa(ipa_out, max_len, "tʃ") < 0) return ETHERVOX_ERROR_TTS_PHONEMIZATION_FAILED;
             p += 4;
             continue;
         }
         
         // "ck" -> /k/
         if (c == 'c' && c_next == 'k') {
-            if (append_ipa(ipa_out, max_len, "k") < 0) return -1;
+            if (append_ipa(ipa_out, max_len, "k") < 0) return ETHERVOX_ERROR_TTS_PHONEMIZATION_FAILED;
             p += 2;
             continue;
         }
         
         // "tion" -> /tsi̯oːn/ (borrowed)
         if (c == 't' && starts_with((char*)p, "tion")) {
-            if (append_ipa(ipa_out, max_len, "tsi̯oːn") < 0) return -1;
+            if (append_ipa(ipa_out, max_len, "tsi̯oːn") < 0) return ETHERVOX_ERROR_TTS_PHONEMIZATION_FAILED;
             p += 4;
             continue;
         }
         
         // "-ig" word-finally -> /ɪç/
         if (c == 'i' && c_next == 'g' && (next + 1 >= end || !isalpha(c_next2))) {
-            if (append_ipa(ipa_out, max_len, "ɪç") < 0) return -1;
+            if (append_ipa(ipa_out, max_len, "ɪç") < 0) return ETHERVOX_ERROR_TTS_PHONEMIZATION_FAILED;
             p += 2;
             continue;
         }
@@ -151,42 +157,42 @@ int apply_german_g2p_rules(const char* word, char* ipa_out, size_t max_len) {
         
         // "ie" -> /iː/ (long i)
         if (c == 'i' && c_next == 'e') {
-            if (append_ipa(ipa_out, max_len, "iː") < 0) return -1;
+            if (append_ipa(ipa_out, max_len, "iː") < 0) return ETHERVOX_ERROR_TTS_PHONEMIZATION_FAILED;
             p += 2;
             continue;
         }
         
         // "ei" -> /aɪ/
         if (c == 'e' && c_next == 'i') {
-            if (append_ipa(ipa_out, max_len, "aɪ") < 0) return -1;
+            if (append_ipa(ipa_out, max_len, "aɪ") < 0) return ETHERVOX_ERROR_TTS_PHONEMIZATION_FAILED;
             p += 2;
             continue;
         }
         
         // "ai" -> /aɪ/
         if (c == 'a' && c_next == 'i') {
-            if (append_ipa(ipa_out, max_len, "aɪ") < 0) return -1;
+            if (append_ipa(ipa_out, max_len, "aɪ") < 0) return ETHERVOX_ERROR_TTS_PHONEMIZATION_FAILED;
             p += 2;
             continue;
         }
         
         // "au" -> /aʊ/
         if (c == 'a' && c_next == 'u') {
-            if (append_ipa(ipa_out, max_len, "aʊ") < 0) return -1;
+            if (append_ipa(ipa_out, max_len, "aʊ") < 0) return ETHERVOX_ERROR_TTS_PHONEMIZATION_FAILED;
             p += 2;
             continue;
         }
         
         // "eu" -> /ɔʏ/
         if (c == 'e' && c_next == 'u') {
-            if (append_ipa(ipa_out, max_len, "ɔʏ") < 0) return -1;
+            if (append_ipa(ipa_out, max_len, "ɔʏ") < 0) return ETHERVOX_ERROR_TTS_PHONEMIZATION_FAILED;
             p += 2;
             continue;
         }
         
         // "äu" -> /ɔʏ/
         if (*p == 0xC3 && *(p+1) == 0xA4 && c_next == 'u') {
-            if (append_ipa(ipa_out, max_len, "ɔʏ") < 0) return -1;
+            if (append_ipa(ipa_out, max_len, "ɔʏ") < 0) return ETHERVOX_ERROR_TTS_PHONEMIZATION_FAILED;
             p += 3; // UTF-8 ä + u
             continue;
         }
@@ -338,5 +344,5 @@ int apply_german_g2p_rules(const char* word, char* ipa_out, size_t max_len) {
         p++;
     }
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }

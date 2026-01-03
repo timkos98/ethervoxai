@@ -225,8 +225,14 @@ dict_chinese_t* dict_chinese_load(const char* path) {
     return dict;
 }
 
-int dict_chinese_lookup(dict_chinese_t* dict, const char* character, char* pinyin_out, size_t max_len) {
-    if (!dict || !character || !pinyin_out) return -1;
+ethervox_result_t dict_chinese_lookup(dict_chinese_t* dict, const char* character, char* pinyin_out, size_t max_len) {
+    ETHERVOX_CHECK_PTR(dict);
+    ETHERVOX_CHECK_PTR(character);
+    ETHERVOX_CHECK_PTR(pinyin_out);
+    
+    if (max_len == 0) {
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
     
     unsigned long hash = hash_fnv1a(character);
     size_t idx = hash % dict->size;
@@ -236,12 +242,12 @@ int dict_chinese_lookup(dict_chinese_t* dict, const char* character, char* pinyi
         if (strcmp(entry->character, character) == 0) {
             strncpy(pinyin_out, entry->pinyin, max_len - 1);
             pinyin_out[max_len - 1] = '\0';
-            return 0;
+            return ETHERVOX_SUCCESS;
         }
         entry = entry->next;
     }
     
-    return -1;  // Not found
+    return ETHERVOX_ERROR_NOT_FOUND;  // Not found
 }
 
 void dict_chinese_free(dict_chinese_t* dict) {

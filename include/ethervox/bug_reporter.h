@@ -11,6 +11,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include "ethervox/error.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -44,7 +45,7 @@ typedef struct {
  * @param result Output result structure
  * @return 0 on success, -1 on error
  */
-int ethervox_report_submit(
+ethervox_result_t ethervox_report_submit(
     ethervox_report_type_t type,
     const char* title,
     const char* description,
@@ -66,7 +67,7 @@ int ethervox_report_submit(
  * @param buffer_size Buffer size
  * @return Number of bytes written
  */
-int ethervox_report_get_system_info(char* buffer, size_t buffer_size);
+ethervox_result_t ethervox_report_get_system_info(char* buffer, size_t buffer_size);
 
 #ifdef __cplusplus
 }

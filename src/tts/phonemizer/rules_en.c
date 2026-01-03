@@ -7,6 +7,7 @@
  */
 
 #include "rules_en.h"
+#include "ethervox/error.h"
 #include <string.h>
 #include <ctype.h>
 #include <stdio.h>
@@ -35,12 +36,17 @@ static int append_phoneme(char* output, size_t max_len, const char* phoneme) {
     return 0;
 }
 
-int apply_english_g2p_rules(const char* word, char* arpabet_out, size_t max_len) {
-    if (!word || !arpabet_out || max_len == 0) return -1;
+ethervox_result_t apply_english_g2p_rules(const char* word, char* arpabet_out, size_t max_len) {
+    ETHERVOX_CHECK_PTR(word);
+    ETHERVOX_CHECK_PTR(arpabet_out);
+    
+    if (max_len == 0) {
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
     
     arpabet_out[0] = '\0';
     size_t len = strlen(word);
-    if (len == 0) return -1;
+    if (len == 0) return ETHERVOX_ERROR_TTS_PHONEMIZATION_FAILED;
     
     // Convert to lowercase working copy
     char lower[256];

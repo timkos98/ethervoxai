@@ -7,6 +7,7 @@
  */
 
 #include <stdio.h>
+#include "ethervox/error.h"
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
@@ -29,7 +30,7 @@ static int test_conversation_config(void) {
     assert(config.audio_buffer_size > 0);
     
     printf("PASS\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -51,7 +52,7 @@ static int test_conversation_init(void) {
     ethervox_conversation_cleanup(session);
     
     printf("PASS\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -93,7 +94,7 @@ static int test_conversation_states(void) {
     ethervox_conversation_cleanup(session);
     
     printf("PASS\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -137,7 +138,7 @@ static int test_conversation_errors(void) {
     assert(result != 0);
     
     printf("PASS\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -160,7 +161,7 @@ static int test_conversation_cleanup(void) {
     ethervox_conversation_cleanup(NULL);
     
     printf("PASS\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -196,7 +197,7 @@ static int test_multiple_sessions(void) {
     ethervox_conversation_cleanup(session2);
     
     printf("PASS\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -228,7 +229,7 @@ static int test_conversation_timeouts(void) {
     ethervox_conversation_cleanup(session);
     
     printf("PASS\n");
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -250,9 +251,9 @@ int main(void) {
     printf("\n");
     if (failed == 0) {
         printf("✓ All voice conversation tests passed!\n\n");
-        return 0;
+        return ETHERVOX_SUCCESS;
     } else {
         printf("✗ %d test(s) failed\n\n", failed);
-        return 1;
+        return ETHERVOX_SUCCESS;
     }
 }

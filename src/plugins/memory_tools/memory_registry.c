@@ -1,4 +1,5 @@
 /**
+#include "ethervox/error.h"
  * @file memory_registry.c
  * @brief Register memory tools with Governor tool registry
  *
@@ -27,7 +28,7 @@ static int parse_json_string(const char* json, const char* key, char* value, siz
     snprintf(search, sizeof(search), "\"%s\":", key);
     
     const char* start = strstr(json, search);
-    if (!start) return -1;
+    if (!start) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     start += strlen(search);
     
@@ -37,18 +38,18 @@ static int parse_json_string(const char* json, const char* key, char* value, siz
     }
     
     // Expect opening quote
-    if (*start != '"') return -1;
+    if (*start != '"') return ETHERVOX_ERROR_INVALID_ARGUMENT;
     start++;
     
     const char* end = strchr(start, '"');
-    if (!end) return -1;
+    if (!end) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     size_t len = end - start;
     if (len >= value_len) len = value_len - 1;
     
     strncpy(value, start, len);
     value[len] = '\0';
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 static int parse_json_float(const char* json, const char* key, float* value) {
@@ -56,11 +57,11 @@ static int parse_json_float(const char* json, const char* key, float* value) {
     snprintf(search, sizeof(search), "\"%s\":", key);
     
     const char* start = strstr(json, search);
-    if (!start) return -1;
+    if (!start) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     start += strlen(search);
     *value = strtof(start, NULL);
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 static int parse_json_uint(const char* json, const char* key, uint32_t* value) {
@@ -68,11 +69,11 @@ static int parse_json_uint(const char* json, const char* key, uint32_t* value) {
     snprintf(search, sizeof(search), "\"%s\":", key);
     
     const char* start = strstr(json, search);
-    if (!start) return -1;
+    if (!start) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     start += strlen(search);
     *value = strtoul(start, NULL, 10);
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 static int parse_json_bool(const char* json, const char* key, bool* value) {
@@ -80,13 +81,13 @@ static int parse_json_bool(const char* json, const char* key, bool* value) {
     snprintf(search, sizeof(search), "\"%s\":", key);
     
     const char* start = strstr(json, search);
-    if (!start) return -1;
+    if (!start) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     start += strlen(search);
     while (*start == ' ' || *start == '\t') start++;
     
     *value = (strncmp(start, "true", 4) == 0);
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 // Tool wrappers that bridge between Governor API and memory functions
@@ -98,7 +99,7 @@ static int parse_json_string_array(const char* json, const char* key, char tags[
     char search[128];
     snprintf(search, sizeof(search), "\"%s\":", key);
     const char* start = strstr(json, search);
-    if (!start) return -1;
+    if (!start) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     start += strlen(search);
     while (*start == ' ' || *start == '\t' || *start == '\n' || *start == '\r') start++;
     
@@ -108,19 +109,19 @@ static int parse_json_string_array(const char* json, const char* key, char tags[
     if (*start == '"') {
         start++;
         const char* end = strchr(start, '"');
-        if (!end) return -1;
+        if (!end) return ETHERVOX_ERROR_INVALID_ARGUMENT;
         size_t len = end - start;
         if (len > 0 && len < 32) {
             strncpy(tags[0], start, len);
             tags[0][len] = '\0';
             (*tag_count) = 1;
-            return 0;
+            return ETHERVOX_SUCCESS;
         }
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Handle array: "tags": ["reminder", "recurring"]
-    if (*start != '[') return -1;
+    if (*start != '[') return ETHERVOX_ERROR_INVALID_ARGUMENT;
     start++;
     while (*start && *start != ']') {
         while (*start == ' ' || *start == '\t' || *start == ',') start++;
@@ -152,7 +153,7 @@ static int tool_memory_store_wrapper(
         char* res = malloc(256);
         snprintf(res, 256, "{\"success\":true,\"memory_id\":0,\"note\":\"Secret mode - memory not saved\"}");
         *result = res;
-        return 0;  // Success, but no actual storage
+        return ETHERVOX_SUCCESS;  // Success, but no actual storage
     }
     
     ethervox_memory_store_t* store = g_memory_store;
@@ -169,7 +170,7 @@ static int tool_memory_store_wrapper(
             // Try 'value' as alternative parameter name
             if (parse_json_string(args_json, "value", text, sizeof(text)) != 0) {
                 *error = strdup("Missing 'key', 'text', or 'value' parameter");
-                return -1;
+                return ETHERVOX_ERROR_INVALID_ARGUMENT;
             }
         }
     }
@@ -191,12 +192,12 @@ static int tool_memory_store_wrapper(
     if (ethervox_memory_store_add(store, text, tag_ptrs, tag_count,
                                   importance, is_user, &memory_id) != 0) {
         *error = strdup("Failed to store memory");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     char* res = malloc(256);
     snprintf(res, 256, "{\"success\":true,\"memory_id\":%llu}", (unsigned long long)memory_id);
     *result = res;
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 // Tool: memory_reminder_list - returns all reminders (tagged 'reminder')
 static int tool_memory_reminder_list_wrapper(
@@ -211,7 +212,7 @@ static int tool_memory_reminder_list_wrapper(
     // Find up to 32 reminders
     if (ethervox_memory_search(store, NULL, tag_filter, 1, 32, &results, &result_count) != 0) {
         *error = strdup("Search failed");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     // Build JSON response
     size_t res_len = 4096;
@@ -232,7 +233,7 @@ static int tool_memory_reminder_list_wrapper(
     snprintf(res + pos, res_len - pos, "],\"count\":%u}", result_count);
     free(results);
     *result = res;
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 static int tool_memory_search_wrapper(
@@ -279,13 +280,13 @@ static int tool_memory_search_wrapper(
                 most_recent->importance);
         
         *result = res;
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     if (ethervox_memory_search(store, query, NULL, 0, limit,
                               &results, &result_count) != 0) {
         *error = strdup("Search failed");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Build JSON response, filtering by min_importance
@@ -313,7 +314,7 @@ static int tool_memory_search_wrapper(
     free(results);
     *result = res;
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 static int tool_memory_summarize_wrapper(
@@ -334,7 +335,7 @@ static int tool_memory_summarize_wrapper(
                                   focus[0] ? focus : NULL,
                                   &summary, NULL, NULL) != 0) {
         *error = strdup("Summarization failed");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Return as JSON
@@ -345,7 +346,7 @@ static int tool_memory_summarize_wrapper(
     free(summary);
     *result = res;
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 // Tool: memory_complete_reminder - marks a reminder as completed by adding a 'completed' tag
@@ -357,14 +358,14 @@ static int tool_memory_complete_reminder_wrapper(
     ethervox_memory_store_t* store = g_memory_store;
     if (!store) {
         *error = strdup("Memory store not initialized");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     uint64_t memory_id = 0;
     char id_str[32];
     if (parse_json_string(args_json, "memory_id", id_str, sizeof(id_str)) != 0) {
         *error = strdup("Missing 'memory_id' parameter");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     memory_id = strtoull(id_str, NULL, 10);
     
@@ -379,7 +380,7 @@ static int tool_memory_complete_reminder_wrapper(
     
     if (!entry) {
         *error = strdup("Reminder not found");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Check if already completed
@@ -413,7 +414,7 @@ static int tool_memory_complete_reminder_wrapper(
     char* res = malloc(64);
     snprintf(res, 64, "{\"success\":true,\"memory_id\":%llu}", (unsigned long long)memory_id);
     *result = res;
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 // Tool: memory_export_wrapper - export conversation to file
@@ -425,7 +426,7 @@ static int tool_memory_export_wrapper(
     ethervox_memory_store_t* store = g_memory_store;
     if (!store) {
         *error = strdup("Memory store not initialized");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     char filepath[512] = {0};
@@ -433,7 +434,7 @@ static int tool_memory_export_wrapper(
     
     if (parse_json_string(args_json, "filepath", filepath, sizeof(filepath)) != 0) {
         *error = strdup("Missing 'filepath' parameter");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     parse_json_string(args_json, "format", format, sizeof(format));
@@ -441,14 +442,14 @@ static int tool_memory_export_wrapper(
     uint64_t bytes_written = 0;
     if (ethervox_memory_export(store, filepath, format, &bytes_written) != 0) {
         *error = strdup("Export failed");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     char* res = malloc(256);
     snprintf(res, 256, "{\"success\":true,\"bytes_written\":%llu}", (unsigned long long)bytes_written);
     *result = res;
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 // Forward declaration for delegation
@@ -476,14 +477,14 @@ static int tool_memory_forget_wrapper(
     uint32_t pruned = 0;
     if (ethervox_memory_forget(store, older_than, importance_threshold, &pruned) != 0) {
         *error = strdup("Forget operation failed");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     char* res = malloc(256);
     snprintf(res, 256, "{\"success\":true,\"items_pruned\":%u}", pruned);
     *result = res;
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 // Tool: memory_delete - delete specific memories by ID
@@ -495,7 +496,7 @@ static int tool_memory_delete_wrapper(
     ethervox_memory_store_t* store = g_memory_store;
     if (!store) {
         *error = strdup("Memory store not initialized");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Parse memory_ids - can be either:
@@ -555,35 +556,35 @@ static int tool_memory_delete_wrapper(
                 uint32_t deleted = 0;
                 if (ethervox_memory_delete_by_ids(store, &single_id, 1, &deleted) != 0) {
                     *error = strdup("Delete operation failed");
-                    return -1;
+                    return ETHERVOX_ERROR_INVALID_ARGUMENT;
                 }
                 char* res = malloc(256);
                 snprintf(res, 256, "{\"success\":true,\"items_deleted\":%u}", deleted);
                 *result = res;
-                return 0;
+                return ETHERVOX_SUCCESS;
             }
             
             *error = strdup("Missing 'memory_ids' or 'memory_id' parameter");
-            return -1;
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
         }
     }
     
     if (id_count == 0) {
         *error = strdup("No valid memory IDs provided");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     uint32_t deleted = 0;
     if (ethervox_memory_delete_by_ids(store, ids, id_count, &deleted) != 0) {
         *error = strdup("Delete operation failed");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     char* res = malloc(256);
     snprintf(res, 256, "{\"success\":true,\"items_deleted\":%u}", deleted);
     *result = res;
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 // Tool: memory_update_reminder - update reminder text by ID
@@ -598,7 +599,7 @@ static int tool_memory_update_reminder_wrapper(
     char id_str[32];
     if (parse_json_string(args_json, "memory_id", id_str, sizeof(id_str)) != 0) {
         *error = strdup("Missing 'memory_id' parameter");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     uint64_t memory_id = strtoull(id_str, NULL, 10);
@@ -607,13 +608,13 @@ static int tool_memory_update_reminder_wrapper(
     char new_text[ETHERVOX_MEMORY_MAX_TEXT_LEN];
     if (parse_json_string(args_json, "new_text", new_text, sizeof(new_text)) != 0) {
         *error = strdup("Missing 'new_text' parameter");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Update the reminder text
     if (ethervox_memory_update_text(store, memory_id, new_text) != 0) {
         *error = strdup("Failed to update reminder - memory_id not found");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     char* res = malloc(512);
@@ -621,7 +622,7 @@ static int tool_memory_update_reminder_wrapper(
              (unsigned long long)memory_id, new_text);
     *result = res;
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 // Tool: memory_store_correction - store user correction as high-priority learning
@@ -633,7 +634,7 @@ static int tool_memory_store_correction_wrapper(
     ethervox_memory_store_t* store = g_memory_store;
     if (!store) {
         *error = strdup("Memory store not initialized");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     char correction_text[ETHERVOX_MEMORY_MAX_TEXT_LEN];
@@ -641,7 +642,7 @@ static int tool_memory_store_correction_wrapper(
     
     if (parse_json_string(args_json, "correction", correction_text, sizeof(correction_text)) != 0) {
         *error = strdup("Missing 'correction' parameter");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Context is optional
@@ -652,7 +653,7 @@ static int tool_memory_store_correction_wrapper(
                                          context[0] ? context : NULL, 
                                          &memory_id) != 0) {
         *error = strdup("Failed to store correction");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     char* res = malloc(256);
@@ -661,7 +662,7 @@ static int tool_memory_store_correction_wrapper(
              (unsigned long long)memory_id);
     *result = res;
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 // Tool: memory_store_pattern - store successful interaction pattern
@@ -673,20 +674,20 @@ static int tool_memory_store_pattern_wrapper(
     ethervox_memory_store_t* store = g_memory_store;
     if (!store) {
         *error = strdup("Memory store not initialized");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     char pattern_description[ETHERVOX_MEMORY_MAX_TEXT_LEN];
     
     if (parse_json_string(args_json, "pattern", pattern_description, sizeof(pattern_description)) != 0) {
         *error = strdup("Missing 'pattern' parameter");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     uint64_t memory_id;
     if (ethervox_memory_store_pattern(store, pattern_description, &memory_id) != 0) {
         *error = strdup("Failed to store pattern");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     char* res = malloc(256);
@@ -695,10 +696,10 @@ static int tool_memory_store_pattern_wrapper(
              (unsigned long long)memory_id);
     *result = res;
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
-int ethervox_memory_tools_register(
+ethervox_result_t ethervox_memory_tools_register(
     void* registry_ptr,
     ethervox_memory_store_t* store
 ) {
@@ -706,7 +707,7 @@ int ethervox_memory_tools_register(
 
     ethervox_tool_registry_t* registry = (ethervox_tool_registry_t*)registry_ptr;
     if (!registry || !store) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     // Set global memory store for tool wrappers to access
     g_memory_store = store;

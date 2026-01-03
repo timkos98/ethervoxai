@@ -1,4 +1,5 @@
 /**
+#include "ethervox/error.h"
  * @file calculator_plugin.c
  * @brief Calculator compute tool implementation
  *
@@ -249,14 +250,14 @@ static int extract_json_int(const char* json, const char* key, int default_value
 
 static int calculator_execute(const char* args_json, char** result, char** error) {
     if (!args_json || !result || !error) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Extract expression from JSON
     char* expression = extract_json_string(args_json, "expression");
     if (!expression) {
         *error = strdup("Missing 'expression' parameter in JSON");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Extract optional decimal_places (default: 2)
@@ -271,14 +272,14 @@ static int calculator_execute(const char* args_json, char** result, char** error
     if (eval_error) {
         *error = eval_error;
         free(expression);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Return result as JSON with tool name
     char* result_json = malloc(256);
     if (!result_json) {
         free(expression);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     snprintf(result_json, 256, "{\"result\": %.*f, \"tool\": \"calculator_compute\", \"expression\": \"%s\"}", 
@@ -286,7 +287,7 @@ static int calculator_execute(const char* args_json, char** result, char** error
     *result = result_json;
     
     free(expression);
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 static ethervox_tool_t calculator_tool = {

@@ -9,6 +9,7 @@
  */
 
 #include "ethervox/bug_reporter.h"
+#include "ethervox/error.h"
 #include "ethervox/logging.h"
 #include "ethervox/config.h"
 #include "ethervox/governor.h"
@@ -41,7 +42,7 @@ static size_t write_callback(void* contents, size_t size, size_t nmemb, void* us
     char* ptr = realloc(mem->data, mem->size + realsize + 1);
     if (!ptr) {
         ETHERVOX_LOG_ERROR("Out of memory in write_callback");
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     mem->data = ptr;
@@ -54,7 +55,7 @@ static size_t write_callback(void* contents, size_t size, size_t nmemb, void* us
 
 static int get_configuration_info(char* buffer, size_t buffer_size) {
     if (!buffer || buffer_size == 0) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     int written = 0;
@@ -66,105 +67,105 @@ static int get_configuration_info(char* buffer, size_t buffer_size) {
     
     // Header
     ret = snprintf(buffer + written, buffer_size - written, "### Configuration\n\n");
-    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     written += ret;
     
     // Whisper STT section
     ret = snprintf(buffer + written, buffer_size - written, "**Whisper STT:**\n");
-    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     written += ret;
     
     ret = snprintf(buffer + written, buffer_size - written, "- Model: %s\n", settings.whisper.model_name);
-    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     written += ret;
     
     ret = snprintf(buffer + written, buffer_size - written, "- Language: %s\n", settings.whisper.language);
-    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     written += ret;
     
     ret = snprintf(buffer + written, buffer_size - written, "- Temperature: %.2f\n", settings.whisper.temperature);
-    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     written += ret;
     
     ret = snprintf(buffer + written, buffer_size - written, "- Beam Size: %d\n", settings.whisper.beam_size);
-    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     written += ret;
     
     ret = snprintf(buffer + written, buffer_size - written, "- Translate to English: %s\n", 
                    settings.whisper.translate_to_english ? "Yes" : "No");
-    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     written += ret;
     
     ret = snprintf(buffer + written, buffer_size - written, "- GPU Enabled: %s\n", 
                    settings.whisper.use_gpu ? "Yes" : "No");
-    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     written += ret;
     
     ret = snprintf(buffer + written, buffer_size - written, "- Threads: %d\n\n", settings.whisper.n_threads);
-    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     written += ret;
     
     // Conversation section
     ret = snprintf(buffer + written, buffer_size - written, "**Conversation:**\n");
-    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     written += ret;
     
     ret = snprintf(buffer + written, buffer_size - written, "- Listen Timeout: %u ms\n", 
                    settings.conversation.listen_timeout_ms);
-    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     written += ret;
     
     ret = snprintf(buffer + written, buffer_size - written, "- Silence Timeout: %u ms\n", 
                    settings.conversation.silence_timeout_ms);
-    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     written += ret;
     
     ret = snprintf(buffer + written, buffer_size - written, "- Audio Energy Threshold: %.2f\n", 
                    settings.conversation.audio_energy_threshold);
-    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     written += ret;
     
     ret = snprintf(buffer + written, buffer_size - written, "- Filter Hallucinations: %s\n\n", 
                    settings.conversation.filter_hallucinations ? "Yes" : "No");
-    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     written += ret;
     
     // Wake Word section
     ret = snprintf(buffer + written, buffer_size - written, "**Wake Word:**\n");
-    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     written += ret;
     
     ret = snprintf(buffer + written, buffer_size - written, "- Wake Phrase: %s\n", 
                    settings.wake_word.wake_phrase);
-    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     written += ret;
     
     ret = snprintf(buffer + written, buffer_size - written, "- Detection Threshold: %.2f\n", 
                    settings.wake_word.detection_threshold);
-    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     written += ret;
     
     ret = snprintf(buffer + written, buffer_size - written, "- Expected Syllables: %d\n", 
                    settings.wake_word.expected_syllables);
-    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     written += ret;
     
     ret = snprintf(buffer + written, buffer_size - written, "- VAD Energy Threshold: %.2f\n", 
                    settings.wake_word.vad_energy_threshold);
-    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     written += ret;
     
     ret = snprintf(buffer + written, buffer_size - written, "- Cooldown: %u ms\n\n", 
                    settings.wake_word.cooldown_ms);
-    if (ret < 0 || (size_t)ret >= buffer_size - written) return -1;
+    if (ret < 0 || (size_t)ret >= buffer_size - written) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     written += ret;
     
     return written;
 }
 
-int ethervox_report_get_system_info(char* buffer, size_t buffer_size) {
+ethervox_result_t ethervox_report_get_system_info(char* buffer, size_t buffer_size) {
     if (!buffer || buffer_size == 0) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     struct utsname sys_info;
@@ -249,7 +250,7 @@ static char* json_escape(const char* str) {
     return escaped;
 }
 
-int ethervox_report_submit(
+ethervox_result_t ethervox_report_submit(
     ethervox_report_type_t type,
     const char* title,
     const char* description,
@@ -258,7 +259,7 @@ int ethervox_report_submit(
 ) {
     if (!title || !description || !result) {
         ETHERVOX_LOG_ERROR("Invalid arguments to bug reporter");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Initialize result
@@ -274,7 +275,7 @@ int ethervox_report_submit(
         snprintf(result->error_message, sizeof(result->error_message),
                  "Bug reporting not configured. Set ETHERVOX_GITHUB_TOKEN at build time.");
         ETHERVOX_LOG_WARN("Bug reporting disabled: ETHERVOX_GITHUB_TOKEN was not set during build");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Initialize curl
@@ -282,7 +283,7 @@ int ethervox_report_submit(
     if (!curl) {
         snprintf(result->error_message, sizeof(result->error_message),
                  "Failed to initialize HTTP client");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Build issue body
@@ -322,7 +323,7 @@ int ethervox_report_submit(
         free(escaped_title);
         free(escaped_body);
         curl_easy_cleanup(curl);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Build JSON payload

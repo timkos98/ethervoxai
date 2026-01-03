@@ -191,21 +191,20 @@ void ethervox_aec_set_reference(ethervox_aec_t* aec, const float* reference, siz
     memcpy(aec->reference_frame, reference, count * sizeof(float));
 }
 
-int ethervox_aec_process(ethervox_aec_t* aec, 
+ethervox_result_t ethervox_aec_process(ethervox_aec_t* aec, 
                         float* mic_input, 
                         size_t count) {
-    if (!aec || !mic_input) {
-        return -1;
-    }
+    ETHERVOX_CHECK_PTR(aec);
+    ETHERVOX_CHECK_PTR(mic_input);
     
     if (count != (size_t)aec->config.frame_size) {
-        ETHERVOX_LOG_ERROR("Frame size mismatch: expected %d, got %zu", aec->config.frame_size, count);
-        return -1;
+        ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_INVALID_ARGUMENT,
+            "Frame size mismatch: expected %d, got %zu", aec->config.frame_size, count);
     }
     
     // Passthrough mode or inactive - no modification needed
     if (!aec->active || aec->config.backend == ETHERVOX_AEC_NONE) {
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     // Convert float to int16 for Speex
@@ -243,7 +242,7 @@ int ethervox_aec_process(ethervox_aec_t* aec,
     // Convert back to float (in-place)
     int16_to_float(aec->output_i16, mic_input, count);
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 bool ethervox_aec_is_active(const ethervox_aec_t* aec) {
@@ -311,9 +310,9 @@ void ethervox_aec_set_reference(ethervox_aec_t* aec, const float* reference, siz
     // No-op
 }
 
-int ethervox_aec_process(ethervox_aec_t* aec, float* mic_input, size_t count) {
+ethervox_result_t ethervox_aec_process(ethervox_aec_t* aec, float* mic_input, size_t count) {
     // Passthrough - no processing
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 void ethervox_aec_reset(ethervox_aec_t* aec) {

@@ -4,6 +4,7 @@
  */
 
 #include "chinese_segmenter.h"
+#include "ethervox/error.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -56,11 +57,11 @@ static int extract_utf8_chars(const char* src, size_t n_chars, char* dest, size_
     return bytes;
 }
 
-int segment_chinese_text(dict_chinese_t* dict,
+ethervox_result_t segment_chinese_text(dict_chinese_t* dict,
                         const char* text,
                         char** words,
                         size_t max_words) {
-    if (!dict || !text || !words) return -1;
+    if (!dict || !text || !words) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     size_t word_count = 0;
     const char* p = text;

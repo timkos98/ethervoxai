@@ -12,6 +12,7 @@
 #include <stdint.h>
 
 #include "ethervox/stt.h"
+#include "ethervox/error.h"
 #include "ethervox/logging.h"
 
 #define LOG_ERROR(...) ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__, __VA_ARGS__)
@@ -47,24 +48,23 @@ typedef struct {
  * @param runtime STT runtime (must be initialized)
  * @param wav_file Path to 16kHz mono WAV file
  * @param result Output transcription result
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code otherwise
  */
-int ethervox_whisper_test_wav(
+ethervox_result_t ethervox_whisper_test_wav(
     ethervox_stt_runtime_t* runtime,
     const char* wav_file,
     ethervox_stt_result_t* result
 ) {
-    if (!runtime || !wav_file || !result) {
-        LOG_ERROR("Invalid arguments");
-        return -1;
-    }
+    ETHERVOX_CHECK_PTR(runtime);
+    ETHERVOX_CHECK_PTR(wav_file);
+    ETHERVOX_CHECK_PTR(result);
     
     // Open WAV file
     FILE* fp = fopen(wav_file, "rb");
     if (!fp) {
         printf("❌ Failed to open WAV file: %s\n", wav_file);
         LOG_ERROR("Failed to open WAV file: %s", wav_file);
-        return -1;
+        return ETHERVOX_ERROR_STT_PROCESSING;
     }
     
     printf("📁 Opened WAV file successfully\n");
@@ -74,13 +74,13 @@ int ethervox_whisper_test_wav(
     if (fread(&riff_header, sizeof(riff_header), 1, fp) != 1) {
         printf("❌ Failed to read RIFF header\n");
         fclose(fp);
-        return -1;
+        return ETHERVOX_ERROR_STT_PROCESSING;
     }
     
     if (memcmp(riff_header.riff, "RIFF", 4) != 0 || memcmp(riff_header.wave, "WAVE", 4) != 0) {
         printf("❌ Invalid WAV file format\n");
         fclose(fp);
-        return -1;
+        return ETHERVOX_ERROR_STT_PROCESSING;
     }
     
     printf("📊 Valid RIFF/WAVE header\n");
@@ -99,7 +99,7 @@ int ethervox_whisper_test_wav(
             if (fread(&fmt_data, sizeof(fmt_data), 1, fp) != 1) {
                 printf("❌ Failed to read fmt chunk\n");
                 fclose(fp);
-                return -1;
+                return ETHERVOX_ERROR_STT_PROCESSING;
             }
             sample_rate = fmt_data.sample_rate;
             num_channels = fmt_data.num_channels;
@@ -126,7 +126,7 @@ int ethervox_whisper_test_wav(
     if (!found_fmt || !found_data) {
         printf("❌ Missing required WAV chunks (fmt: %d, data: %d)\n", found_fmt, found_data);
         fclose(fp);
-        return -1;
+        return ETHERVOX_ERROR_STT_PROCESSING;
     }
     
     printf("WAV file info:\n");
@@ -142,21 +142,21 @@ int ethervox_whisper_test_wav(
         printf("   Convert with: ffmpeg -i input.wav -ar 16000 -ac 1 -sample_fmt s16 output.wav\n");
         LOG_ERROR("Sample rate must be 16000 Hz (got %u Hz)", sample_rate);
         fclose(fp);
-        return -1;
+        return ETHERVOX_ERROR_STT_PROCESSING;
     }
     
     if (num_channels != 1) {
         printf("❌ Must be mono audio (got %u channels)\n", num_channels);
         LOG_ERROR("Must be mono audio (got %u channels)", num_channels);
         fclose(fp);
-        return -1;
+        return ETHERVOX_ERROR_STT_PROCESSING;
     }
     
     if (bits_per_sample != 16) {
         printf("❌ Must be 16-bit audio (got %u bits)\n", bits_per_sample);
         LOG_ERROR("Must be 16-bit audio (got %u bits)", bits_per_sample);
         fclose(fp);
-        return -1;
+        return ETHERVOX_ERROR_STT_PROCESSING;
     }
     
     // Allocate buffer for audio data
@@ -166,7 +166,7 @@ int ethervox_whisper_test_wav(
         printf("❌ Failed to allocate audio buffer\n");
         LOG_ERROR("Failed to allocate audio buffer");
         fclose(fp);
-        return -1;
+        return ETHERVOX_ERROR_STT_PROCESSING;
     }
     
     // Read audio data
@@ -177,7 +177,7 @@ int ethervox_whisper_test_wav(
         printf("❌ Failed to read audio data (got %zu, expected %u)\n", read, data_size);
         LOG_ERROR("Failed to read audio data (got %zu, expected %u)", read, data_size);
         free(samples_i16);
-        return -1;
+        return ETHERVOX_ERROR_STT_PROCESSING;
     }
     
     printf("✅ Loaded %.2f seconds of audio\n", (float)sample_count / 16000.0f);
@@ -188,7 +188,7 @@ int ethervox_whisper_test_wav(
         printf("❌ Failed to start STT session\n");
         LOG_ERROR("Failed to start STT session");
         free(samples_i16);
-        return -1;
+        return ETHERVOX_ERROR_STT_PROCESSING;
     }
     
     // Convert to float and process in chunks (simulate streaming)
@@ -201,7 +201,7 @@ int ethervox_whisper_test_wav(
     if (!audio_buf.data) {
         LOG_ERROR("Failed to allocate conversion buffer");
         free(samples_i16);
-        return -1;
+        return ETHERVOX_ERROR_STT_PROCESSING;
     }
     
     memset(result, 0, sizeof(ethervox_stt_result_t));
@@ -269,19 +269,20 @@ int ethervox_whisper_test_wav(
         result->is_final = true;
         result->language = "en";
         LOG_INFO("Complete transcript: %s", full_transcript);
-        return 0;
+        return ETHERVOX_SUCCESS;
     } else {
         printf("❌ No transcription produced from any chunk\n");
         LOG_ERROR("No transcription produced");
         if (full_transcript) free(full_transcript);
-        return -1;
+        return ETHERVOX_ERROR_STT_PROCESSING;
     }
 }
 
 /**
  * Quick test using the JFK sample
  */
-int ethervox_whisper_test_jfk(ethervox_stt_runtime_t* runtime) {
+ethervox_result_t ethervox_whisper_test_jfk(ethervox_stt_runtime_t* runtime) {
+    ETHERVOX_CHECK_PTR(runtime);
     const char* test_paths[] = {
         "external/whisper.cpp/samples/jfk.wav",
         "../external/whisper.cpp/samples/jfk.wav",

@@ -33,6 +33,13 @@ Be concise. Prefer minimal, testable changes and cite the files below when refer
   - Prefer to add unit tests for new behavior in `tests/` when feasible. Use `npm run test` and `npm run lint` locally.
   - When touching multi-language implementations, only change the language-specific folders if the change is language-specific; otherwise, update shared `specs/` first.
   - Do not add heavyweight dependencies (e.g., React) without documenting why and updating `README.md` installation steps.
+  - **Error handling (C/C++ code)**: All functions must use `ethervox_result_t` return type. See `.github/error-handling-reference.md` for:
+    - Quick reference of all 80+ error codes
+    - Usage of `ETHERVOX_CHECK_PTR()`, `ETHERVOX_RETURN_ERROR()`, `ETHERVOX_CHECK()` macros
+    - Migration patterns from `int` to `ethervox_result_t`
+    - Common error handling patterns
+    - **Always include**: `#include "ethervox/error.h"`
+    - **Migration status**: Track in `MIGRATION_CHECKLIST.md` (~7/150 files complete)
   - **License compliance**: EthervoxAI is a commercial product licensed under CC BY-NC-SA 4.0. When adding new dependencies:
     - Check license compatibility (MIT, Apache 2.0, BSD are typically fine)
     - Avoid GPL/AGPL licenses that require derivative works to be open-source

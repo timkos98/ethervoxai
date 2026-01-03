@@ -1,4 +1,5 @@
 /**
+#include "ethervox/error.h"
  * @file compute_tools_registry.c
  * @brief Registration helper for all compute tools
  *
@@ -9,9 +10,9 @@
 #include "ethervox/compute_tools.h"
 #include <stdlib.h>
 
-int ethervox_compute_tools_register_all(ethervox_tool_registry_t* registry) {
+ethervox_result_t ethervox_compute_tools_register_all(ethervox_tool_registry_t* registry) {
     if (!registry) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     int count = 0;

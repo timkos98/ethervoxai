@@ -1,4 +1,5 @@
 /**
+#include "ethervox/error.h"
  * @file memory_core.c
  * @brief Core memory store implementation with efficient storage and indexing
  *
@@ -31,19 +32,19 @@ static int ensure_directory(const char* path) {
     struct stat st = {0};
     if (stat(path, &st) == -1) {
         if (mkdir(path, 0755) != 0) {
-            return -1;
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
         }
     }
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
-int ethervox_memory_init(
+ethervox_result_t ethervox_memory_init(
     ethervox_memory_store_t* store,
     const char* session_id,
     const char* storage_dir
 ) {
     if (!store) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     memset(store, 0, sizeof(ethervox_memory_store_t));
@@ -62,7 +63,7 @@ int ethervox_memory_init(
     store->entry_capacity = 256;  // Start with room for 256 entries
     store->entries = calloc(store->entry_capacity, sizeof(ethervox_memory_entry_t));
     if (!store->entries) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     store->entry_count = 0;
     
@@ -71,7 +72,7 @@ int ethervox_memory_init(
     store->tag_index = calloc(store->tag_index_capacity, sizeof(ethervox_memory_tag_index_t));
     if (!store->tag_index) {
         free(store->entries);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     store->tag_index_count = 0;
     
@@ -111,7 +112,7 @@ int ethervox_memory_init(
                 "Initialized memory store: session=%s, storage=%s",
                 store->session_id, store->storage_filepath);
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 void ethervox_memory_cleanup(ethervox_memory_store_t* store) {
@@ -180,7 +181,7 @@ static ethervox_memory_tag_index_t* get_tag_index(
 }
 
 // Internal function for adding memories with explicit IDs (used by import)
-int memory_store_add_internal(
+ethervox_result_t memory_store_add_internal(
     ethervox_memory_store_t* store,
     const char* text,
     const char* tags[],
@@ -193,7 +194,7 @@ int memory_store_add_internal(
     uint64_t* memory_id_out
 ) {
     if (!store || !store->is_initialized || !text) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Validate inputs
@@ -216,7 +217,7 @@ int memory_store_add_internal(
             new_capacity * sizeof(ethervox_memory_entry_t)
         );
         if (!new_entries) {
-            return -1;
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
         }
         store->entries = new_entries;
         store->entry_capacity = new_capacity;
@@ -287,10 +288,10 @@ int memory_store_add_internal(
         store->current_turn_id = entry->turn_id + 1;
     }
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
-int ethervox_memory_store_add(
+ethervox_result_t ethervox_memory_store_add(
     ethervox_memory_store_t* store,
     const char* text,
     const char* tags[],
@@ -299,7 +300,7 @@ int ethervox_memory_store_add(
     bool is_user_message,
     uint64_t* memory_id_out
 ) {
-    if (!store) return -1;
+    if (!store) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     // Generate new ID and timestamp
     uint64_t memory_id = store->total_memories_stored;
@@ -312,7 +313,7 @@ int ethervox_memory_store_add(
 }
 
 // Internal update_tags function with optional persistence (non-static for use in memory_export.c)
-int memory_update_tags_internal(
+ethervox_result_t memory_update_tags_internal(
     ethervox_memory_store_t* store,
     uint64_t memory_id,
     const char* tags[],
@@ -320,7 +321,7 @@ int memory_update_tags_internal(
     bool persist_to_log
 ) {
     if (!store || !store->is_initialized || !tags || tag_count == 0 || tag_count > ETHERVOX_MEMORY_MAX_TAGS) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Find the entry
@@ -333,7 +334,7 @@ int memory_update_tags_internal(
     }
     
     if (!entry) {
-        return -1;  // Not found
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;  // Not found
     }
     
     // Update tags in memory
@@ -355,10 +356,10 @@ int memory_update_tags_internal(
         fflush(store->append_log);
     }
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
-int ethervox_memory_update_tags(
+ethervox_result_t ethervox_memory_update_tags(
     ethervox_memory_store_t* store,
     uint64_t memory_id,
     const char* tags[],
@@ -367,13 +368,13 @@ int ethervox_memory_update_tags(
     return memory_update_tags_internal(store, memory_id, tags, tag_count, true);
 }
 
-int ethervox_memory_update_text(
+ethervox_result_t ethervox_memory_update_text(
     ethervox_memory_store_t* store,
     uint64_t memory_id,
     const char* new_text
 ) {
     if (!store || !store->is_initialized || !new_text) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Find the entry
@@ -386,7 +387,7 @@ int ethervox_memory_update_text(
     }
     
     if (!entry) {
-        return -1;  // Not found
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;  // Not found
     }
     
     // Update the text
@@ -421,37 +422,37 @@ int ethervox_memory_update_text(
     ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
                 "Updated text for memory %llu", (unsigned long long)memory_id);
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
-int ethervox_memory_get_by_id(
+ethervox_result_t ethervox_memory_get_by_id(
     ethervox_memory_store_t* store,
     uint64_t memory_id,
     const ethervox_memory_entry_t** entry_out
 ) {
     if (!store || !store->is_initialized || !entry_out) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Linear search (could optimize with hash map)
     for (uint32_t i = 0; i < store->entry_count; i++) {
         if (store->entries[i].memory_id == memory_id) {
             *entry_out = &store->entries[i];
-            return 0;
+            return ETHERVOX_SUCCESS;
         }
     }
     
-    return -1;  // Not found
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;  // Not found
 }
 
-int ethervox_memory_store_correction(
+ethervox_result_t ethervox_memory_store_correction(
     ethervox_memory_store_t* store,
     const char* correction_text,
     const char* context,
     uint64_t* memory_id_out
 ) {
     if (!store || !correction_text) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Build complete text with context
@@ -481,13 +482,13 @@ int ethervox_memory_store_correction(
     );
 }
 
-int ethervox_memory_store_pattern(
+ethervox_result_t ethervox_memory_store_pattern(
     ethervox_memory_store_t* store,
     const char* pattern_description,
     uint64_t* memory_id_out
 ) {
     if (!store || !pattern_description) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Build pattern text
@@ -512,14 +513,14 @@ int ethervox_memory_store_pattern(
     );
 }
 
-int ethervox_memory_get_corrections(
+ethervox_result_t ethervox_memory_get_corrections(
     ethervox_memory_store_t* store,
     ethervox_memory_search_result_t** results,
     uint32_t* result_count,
     uint32_t limit
 ) {
     if (!store || !results || !result_count) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Search for correction tag
@@ -535,14 +536,14 @@ int ethervox_memory_get_corrections(
     );
 }
 
-int ethervox_memory_get_patterns(
+ethervox_result_t ethervox_memory_get_patterns(
     ethervox_memory_store_t* store,
     ethervox_memory_search_result_t** results,
     uint32_t* result_count,
     uint32_t limit
 ) {
     if (!store || !results || !result_count) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Search for pattern tag

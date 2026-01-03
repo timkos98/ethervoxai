@@ -9,6 +9,7 @@
 #ifndef ETHERVOX_TTS_H
 #define ETHERVOX_TTS_H
 
+#include "ethervox/error.h"
 #include <stddef.h>
 #include <stdbool.h>
 
@@ -79,9 +80,9 @@ ethervox_tts_context_t* ethervox_tts_create(const ethervox_tts_config_t* config)
  * @param ctx TTS context
  * @param text Input text to synthesize
  * @param output Audio buffer (caller must free output->samples)
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code otherwise
  */
-int ethervox_tts_synthesize_text(ethervox_tts_context_t* ctx, 
+ethervox_result_t ethervox_tts_synthesize_text(ethervox_tts_context_t* ctx, 
                                  const char* text,
                                  ethervox_tts_audio_t* output);
 
@@ -92,9 +93,9 @@ int ethervox_tts_synthesize_text(ethervox_tts_context_t* ctx,
  * @param ctx TTS context
  * @param ipa_phonemes IPA phoneme string (e.g., "ð i", "ˈɹ ɪ ð ə m")
  * @param output Audio buffer (caller must free output->samples)
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code otherwise
  */
-int ethervox_tts_synthesize_ipa(ethervox_tts_context_t* ctx,
+ethervox_result_t ethervox_tts_synthesize_ipa(ethervox_tts_context_t* ctx,
                                 const char* ipa_phonemes,
                                 ethervox_tts_audio_t* output);
 

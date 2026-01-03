@@ -1,4 +1,5 @@
 /**
+#include "ethervox/error.h"
  * @file context_manage.c
  * @brief Context management tool registration and wrapper
  *
@@ -91,7 +92,7 @@ static int context_manage_execute(
     char** result,
     char** error
 ) {
-    if (!args_json || !result || !error) return -1;
+    if (!args_json || !result || !error) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     CTX_LOG("[Context] context_manage called with args: %s", args_json);
     
@@ -99,7 +100,7 @@ static int context_manage_execute(
     char* action_str = extract_json_string(args_json, "action");
     if (!action_str) {
         *error = strdup("Missing required parameter: action");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     int keep_last_n = extract_json_int(args_json, "keep_last_n_turns", 10);
@@ -120,7 +121,7 @@ static int context_manage_execute(
         *error = strdup(err_msg);
         free(action_str);
         if (detail) free(detail);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Execute action
@@ -160,25 +161,25 @@ static int context_manage_execute(
                  (unsigned long long)ctx_result.summary_memory_id);
         
         *result = strdup(result_json);
-        return 0;
+        return ETHERVOX_SUCCESS;
     } else {
         char err_msg[512];
         snprintf(err_msg, sizeof(err_msg),
                  "Context management failed: %s",
                  ctx_result.error_msg[0] ? ctx_result.error_msg : "unknown error");
         *error = strdup(err_msg);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
 }
 
 /**
  * Register context_manage tool with governor
  */
-int register_context_manage_tool(
+ethervox_result_t register_context_manage_tool(
     ethervox_tool_registry_t* registry,
     ethervox_memory_store_t* memory_store
 ) {
-    if (!registry) return -1;
+    if (!registry) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     // Store global references (needed for tool execution)
     g_memory_store = memory_store;
