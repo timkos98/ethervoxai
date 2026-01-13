@@ -29,11 +29,13 @@ extern "C" {
  * @param memory_store Active memory store instance
  * @param model_path Path to the loaded model (for lifecycle test)
  * @param verbose Enable verbose debug output in test report
+ * @param test_filter Optional test name filter (case-insensitive, NULL = run all)
  */
 void run_llm_tool_tests(ethervox_governor_t* governor, 
                        ethervox_memory_store_t* memory_store,
                        const char* model_path,
-                       bool verbose);
+                       bool verbose,
+                       const char* test_filter);
 
 #ifdef __cplusplus
 }

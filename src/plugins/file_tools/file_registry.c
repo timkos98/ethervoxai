@@ -1,4 +1,5 @@
 /**
+#include "ethervox/error.h"
  * @file file_registry.c
  * @brief Register file tools with Governor tool registry
  *
@@ -28,19 +29,19 @@ static int parse_json_string(const char* json, const char* key, char* value, siz
         // Try with space after colon: "key": "value"
         snprintf(search, sizeof(search), "\"%s\": \"", key);
         start = strstr(json, search);
-        if (!start) return -1;
+        if (!start) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     start += strlen(search);
     const char* end = strchr(start, '"');
-    if (!end) return -1;
+    if (!end) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     size_t len = end - start;
     if (len >= value_len) len = value_len - 1;
     
     strncpy(value, start, len);
     value[len] = '\0';
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 static int parse_json_bool(const char* json, const char* key, bool* value) {
@@ -48,13 +49,13 @@ static int parse_json_bool(const char* json, const char* key, bool* value) {
     snprintf(search, sizeof(search), "\"%s\":", key);
     
     const char* start = strstr(json, search);
-    if (!start) return -1;
+    if (!start) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     start += strlen(search);
     while (*start == ' ' || *start == '\t') start++;
     
     *value = (strncmp(start, "true", 4) == 0);
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 // Tool wrapper: file_list
@@ -68,9 +69,13 @@ static int tool_file_list_wrapper(
     char directory[ETHERVOX_FILE_MAX_PATH];
     bool recursive = false;
     
+    // Try both "directory" and "path" for compatibility with LLM optimized calls
     if (parse_json_string(args_json, "directory", directory, sizeof(directory)) != 0) {
-        *error = strdup("Missing 'directory' parameter");
-        return -1;
+        // Fall back to "path" parameter
+        if (parse_json_string(args_json, "path", directory, sizeof(directory)) != 0) {
+            *error = strdup("Missing 'directory' or 'path' parameter");
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
+        }
     }
     
     parse_json_bool(args_json, "recursive", &recursive);
@@ -80,7 +85,7 @@ static int tool_file_list_wrapper(
     
     if (ethervox_file_list(config, directory, recursive, &entries, &entry_count) != 0) {
         *error = strdup("Failed to list directory");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Build JSON response
@@ -103,7 +108,7 @@ static int tool_file_list_wrapper(
     free(entries);
     *result = res;
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 // Tool wrapper: file_read
 static int tool_file_read_wrapper(
@@ -120,7 +125,7 @@ static int tool_file_read_wrapper(
         // Fall back to "path" parameter
         if (parse_json_string(args_json, "path", file_path, sizeof(file_path)) != 0) {
             *error = strdup("Missing 'file_path' or 'path' parameter");
-            return -1;
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
         }
     }
     
@@ -163,7 +168,7 @@ static int tool_file_read_wrapper(
                     line_count
                 );
                 *result = err_msg;  // Return as result, not error (LLM can parse JSON)
-                return 0;  // Success - we provided useful info
+                return ETHERVOX_SUCCESS;  // Success - we provided useful info
             }
         }
     }
@@ -178,10 +183,10 @@ static int tool_file_read_wrapper(
         *result = strdup("{\"error\":\"binary_file\","
                         "\"message\":\"File contains binary data (non-text). Cannot read binary files.\","
                         "\"suggestion\":\"Ensure file is a text file (.txt, .md, .c, etc.)\"}");
-        return 0;  // Return as result for LLM to understand
+        return ETHERVOX_SUCCESS;  // Return as result for LLM to understand
     } else if (read_result != 0) {
         *error = strdup("Failed to read file (permission denied or file not found)");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Build JSON response (escape content)
@@ -191,7 +196,7 @@ static int tool_file_read_wrapper(
     if (!res) {
         free(content);
         *error = strdup("Failed to allocate response buffer");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     int pos = snprintf(res, res_len, "{\"content\":\"");
@@ -220,7 +225,7 @@ static int tool_file_read_wrapper(
     free(content);
     *result = res;
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 // Tool wrapper: file_search
@@ -236,12 +241,12 @@ static int tool_file_search_wrapper(
     
     if (parse_json_string(args_json, "directory", directory, sizeof(directory)) != 0) {
         *error = strdup("Missing 'directory' parameter");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     if (parse_json_string(args_json, "pattern", pattern, sizeof(pattern)) != 0) {
         *error = strdup("Missing 'pattern' parameter");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     char** matches = NULL;
@@ -249,7 +254,7 @@ static int tool_file_search_wrapper(
     
     if (ethervox_file_search(config, directory, pattern, &matches, &match_count) != 0) {
         *error = strdup("Search failed");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Build JSON response
@@ -270,7 +275,7 @@ static int tool_file_search_wrapper(
     free(matches);
     *result = res;
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 // Tool wrapper: file_write
@@ -285,12 +290,12 @@ static int tool_file_write_wrapper(
     
     if (!config) {
         *error = strdup("File tools not initialized");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     if (parse_json_string(args_json, "file_path", file_path, sizeof(file_path)) != 0) {
         *error = strdup("Missing 'file_path' parameter");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Extract content - need custom parsing for large content (can't use fixed-size buffer)
@@ -303,7 +308,7 @@ static int tool_file_write_wrapper(
         content_start = strstr(args_json, content_key);
         if (!content_start) {
             *error = strdup("Missing 'content' parameter");
-            return -1;
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
         }
     }
     
@@ -326,7 +331,7 @@ static int tool_file_write_wrapper(
     
     if (*content_end != '"' || content_end <= content_start) {
         *error = strdup("Invalid content format - missing closing quote");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Allocate buffer for content (heap, not stack)
@@ -334,7 +339,7 @@ static int tool_file_write_wrapper(
     char* content = malloc(content_len + 1);
     if (!content) {
         *error = strdup("Memory allocation failed for content");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     strncpy(content, content_start, content_len);
@@ -345,7 +350,7 @@ static int tool_file_write_wrapper(
     if (!unescaped) {
         free(content);
         *error = strdup("Memory allocation failed for unescaped content");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     size_t out_pos = 0;
@@ -385,7 +390,7 @@ static int tool_file_write_wrapper(
         free(content);
         free(unescaped);
         *error = strdup("Write failed (check permissions and access mode)");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     free(content);
@@ -395,7 +400,7 @@ static int tool_file_write_wrapper(
     snprintf(res, 64, "{\"success\":true}");
     *result = res;
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 // Tool wrapper: file_append
@@ -410,14 +415,14 @@ static int tool_file_append_wrapper(
     
     if (!config) {
         *error = strdup("File tools not initialized");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Try both "file_path" and "path" for compatibility
     if (parse_json_string(args_json, "file_path", file_path, sizeof(file_path)) != 0) {
         if (parse_json_string(args_json, "path", file_path, sizeof(file_path)) != 0) {
             *error = strdup("Missing 'file_path' or 'path' parameter");
-            return -1;
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
         }
     }
     
@@ -429,7 +434,7 @@ static int tool_file_append_wrapper(
         content_start = strstr(args_json, content_key);
         if (!content_start) {
             *error = strdup("Missing 'content' parameter");
-            return -1;
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
         }
     }
     
@@ -450,14 +455,14 @@ static int tool_file_append_wrapper(
     
     if (*content_end != '"' || content_end <= content_start) {
         *error = strdup("Invalid content format - missing closing quote");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     size_t content_len = content_end - content_start;
     char* content = malloc(content_len + 1);
     if (!content) {
         *error = strdup("Memory allocation failed for content");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     strncpy(content, content_start, content_len);
@@ -468,7 +473,7 @@ static int tool_file_append_wrapper(
     if (!unescaped) {
         free(content);
         *error = strdup("Memory allocation failed for unescaped content");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     size_t out_pos = 0;
@@ -510,7 +515,7 @@ static int tool_file_append_wrapper(
         free(content);
         free(unescaped);
         *error = strdup("Failed to open file for appending (check permissions)");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     fprintf(f, "%s", unescaped);
@@ -523,7 +528,7 @@ static int tool_file_append_wrapper(
     snprintf(res, 64, "{\"success\":true}");
     *result = res;
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 // Tool wrapper: path_list
@@ -537,15 +542,16 @@ static int tool_path_list_wrapper(
     ethervox_path_config_t* config = g_path_config;
     if (!config) {
         *error = strdup("Path configuration not initialized");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     ethervox_user_path_t* paths = NULL;
     uint32_t count = 0;
     
-    if (ethervox_path_config_list(config, &paths, &count) != 0) {
-        *error = strdup("Failed to list paths");
-        return -1;
+    ethervox_result_t list_result = ethervox_path_config_list(config, &paths, &count);
+    if (ethervox_is_error(list_result)) {
+        *error = strdup(ethervox_error_string(list_result));
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Build JSON response
@@ -567,7 +573,7 @@ static int tool_path_list_wrapper(
     
     free(paths);
     *result = res;
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 // Tool wrapper: path_get
@@ -579,33 +585,30 @@ static int tool_path_get_wrapper(
     ethervox_path_config_t* config = g_path_config;
     if (!config) {
         *error = strdup("Path configuration not initialized");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     char label[64];
     if (parse_json_string(args_json, "label", label, sizeof(label)) != 0) {
         *error = strdup("Missing 'label' parameter");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     char path[ETHERVOX_FILE_MAX_PATH];
-    int ret = ethervox_path_config_get(config, label, path, sizeof(path));
+    ethervox_result_t ret = ethervox_path_config_get(config, label, path, sizeof(path));
     
-    if (ret == 0) {
+    if (ethervox_is_success(ret)) {
         size_t res_len = strlen(path) + 128;
         char* res = malloc(res_len);
         snprintf(res, res_len, "{\"label\":\"%s\",\"path\":\"%s\",\"status\":\"verified\"}", label, path);
         *result = res;
-        return 0;
-    } else if (ret == -2) {
-        *error = strdup("Path exists in configuration but is not verified (directory may not exist)");
-        return -1;
+        return ETHERVOX_SUCCESS;
     } else {
-        size_t err_len = strlen(label) + 64;
+        size_t err_len = strlen(label) + 128;
         char* err = malloc(err_len);
-        snprintf(err, err_len, "Path label '%s' not found. Use path_list to see available paths.", label);
+        snprintf(err, err_len, "Path label '%s' not found or not accessible: %s", label, ethervox_error_string(ret));
         *error = err;
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
 }
 
@@ -618,7 +621,7 @@ static int tool_path_set_wrapper(
     ethervox_path_config_t* config = g_path_config;
     if (!config) {
         *error = strdup("Path configuration not initialized");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     char label[64];
@@ -627,41 +630,35 @@ static int tool_path_set_wrapper(
     
     if (parse_json_string(args_json, "label", label, sizeof(label)) != 0) {
         *error = strdup("Missing 'label' parameter");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     if (parse_json_string(args_json, "path", path, sizeof(path)) != 0) {
         *error = strdup("Missing 'path' parameter");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Description is optional
     parse_json_string(args_json, "description", description, sizeof(description));
     
-    int ret = ethervox_path_config_set(config, label, path,
+    ethervox_result_t ret = ethervox_path_config_set(config, label, path,
                                         description[0] ? description : NULL);
     
-    if (ret == 0) {
+    if (ethervox_is_success(ret)) {
         size_t res_len = strlen(label) + strlen(path) + 128;
         char* res = malloc(res_len);
         snprintf(res, res_len,
                 "{\"label\":\"%s\",\"path\":\"%s\",\"status\":\"configured\",\"message\":\"Path successfully configured and will be remembered across sessions\"}",
                 label, path);
         *result = res;
-        return 0;
-    } else if (ret == -2) {
-        size_t err_len = strlen(path) + 256;
+        return ETHERVOX_SUCCESS;
+    } else {
+        size_t err_len = strlen(path) + strlen(ethervox_error_string(ret)) + 128;
         char* err = malloc(err_len);
         snprintf(err, err_len,
-                "Path does not exist or is not accessible: %s. Please create the directory first or check the path.", path);
+                "Failed to set path: %s", ethervox_error_string(ret));
         *error = err;
-        return -1;
-    } else if (ret == -3) {
-        *error = strdup("Maximum number of paths reached. Cannot add more paths.");
-        return -1;
-    } else {
-        *error = strdup("Failed to configure path");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
 }
 
@@ -676,20 +673,21 @@ static int tool_path_check_unverified_wrapper(
     ethervox_path_config_t* config = g_path_config;
     if (!config) {
         *error = strdup("Path configuration not initialized");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     ethervox_user_path_t* paths = NULL;
     uint32_t count = 0;
     
-    if (ethervox_path_config_get_unverified(config, &paths, &count) != 0) {
-        *error = strdup("Failed to check unverified paths");
-        return -1;
+    ethervox_result_t unver_result = ethervox_path_config_get_unverified(config, &paths, &count);
+    if (ethervox_is_error(unver_result)) {
+        *error = strdup(ethervox_error_string(unver_result));
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     if (count == 0) {
         *result = strdup("{\"unverified\":[],\"count\":0,\"message\":\"All configured paths are verified and accessible\"}");
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     // Build JSON response with suggestions
@@ -713,7 +711,7 @@ static int tool_path_check_unverified_wrapper(
     
     free(paths);
     *result = res;
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 // Tool wrapper: file_set_safe_mode
@@ -725,13 +723,13 @@ static int tool_file_set_safe_mode_wrapper(
     ethervox_file_tools_config_t* config = g_file_config;
     if (!config) {
         *error = strdup("File tools not configured");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     bool enable = false;
     if (parse_json_bool(args_json, "enable", &enable) != 0) {
         *error = strdup("Missing 'enable' parameter");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Set access mode
@@ -754,16 +752,16 @@ static int tool_file_set_safe_mode_wrapper(
                      "I can now write and modify files when needed.");
     
     *result = strdup(res);
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
-int ethervox_file_tools_register(
+ethervox_result_t ethervox_file_tools_register(
     void* registry_ptr,
     ethervox_file_tools_config_t* config
 ) {
     ethervox_tool_registry_t* registry = (ethervox_tool_registry_t*)registry_ptr;
     if (!registry || !config) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Set global config for tool wrappers
@@ -778,8 +776,9 @@ int ethervox_file_tools_register(
         .parameters_json_schema =
             "{\"type\":\"object\",\"properties\":{"
             "\"directory\":{\"type\":\"string\",\"description\":\"Directory path to list (use '.' for current directory)\"},"
+            "\"path\":{\"type\":\"string\",\"description\":\"Directory path to list (alternative to 'directory')\"},"
             "\"recursive\":{\"type\":\"boolean\",\"description\":\"Recurse into subdirectories\"}"
-            "},\"required\":[\"directory\"]}",
+            "}}",
         .execute = tool_file_list_wrapper,
         .is_deterministic = true,
         .requires_confirmation = false,
@@ -873,13 +872,13 @@ int ethervox_file_tools_register(
     return ret;
 }
 
-int ethervox_path_config_register(
+ethervox_result_t ethervox_path_config_register(
     void* registry_ptr,
     ethervox_path_config_t* config
 ) {
     ethervox_tool_registry_t* registry = (ethervox_tool_registry_t*)registry_ptr;
     if (!registry || !config) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Set global config for tool wrappers

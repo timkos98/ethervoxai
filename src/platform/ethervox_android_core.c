@@ -12,17 +12,22 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#include <pthread.h>
+#include <unistd.h>
+#include <sys/stat.h>
 #include <android/log.h>
 
 #include "ethervox/audio.h"
 #include "ethervox/wake_word.h"
 #include "ethervox/stt.h"
 #include "ethervox/llm.h"
-#include "ethervox/dialogue.h"
+// NOTE: dialogue.h removed - using direct governor/registry architecture
 #include "ethervox/governor.h"
+#include "ethervox/tool_manifest.h"
 #include "ethervox/timer_tools.h"
 #include "ethervox/memory_tools.h"
 #include "ethervox/voice_tools.h"
+#include "ethervox/compute_tools.h"
 #include "ethervox/platform.h"
 #include "ethervox/config.h"
 #include "ethervox/tool_prompt_optimizer.h"
@@ -35,6 +40,7 @@
 
 #define LOGI(...) ETHERVOX_LOGI(__VA_ARGS__)
 #define LOGE(...) ETHERVOX_LOGE(__VA_ARGS__)
+#define LOGW(...) ETHERVOX_LOGE(__VA_ARGS__)
 
 // Global debug mode flag (defined in logging.c, referenced here)
 extern int g_ethervox_debug_enabled;
@@ -79,21 +85,130 @@ static ethervox_audio_runtime_t* g_audio_runtime = NULL;
 static ethervox_wake_runtime_t* g_wake_runtime = NULL;
 static ethervox_stt_runtime_t* g_stt_runtime = NULL;
 static ethervox_platform_t* g_platform = NULL;
-static ethervox_dialogue_engine_t* g_dialogue_engine = NULL;
+
+// Direct Governor and Registry (mirrors desktop main.c architecture)
+// REFACTORED 2025-12-09: Removed dialogue_engine wrapper to align with desktop
+// Android now uses same initialization path: governor + tool_registry directly
+static ethervox_governor_t* g_governor = NULL;
+static ethervox_tool_registry_t* g_registry = NULL;
+static tool_manifest_registry_t* g_manifest_registry = NULL;
 static ethervox_memory_store_t* g_memory_store = NULL;
 
 // Android-specific files directory
 static char g_android_files_dir[512] = {0};
 
+// Getter function for Android files directory (used by manifest system)
+const char* ethervox_android_get_files_dir(void) {
+    return g_android_files_dir;
+}
+
 // ===========================================================================
 // Utility Functions
 // ===========================================================================
+
+// Default startup prompt (defined here for JNI access, same as main.c)
+static const char* DEFAULT_STARTUP_PROMPT = 
+    "Greet the user with a short creative greeting.";
+
+// Validate and truncate UTF-8 string at incomplete multi-byte sequences
+// This is needed because llama.cpp token streaming can split emoji bytes
+static bool validate_and_fix_utf8(const char* str, size_t* out_valid_len) {
+    if (!str) {
+        *out_valid_len = 0;
+        return true;
+    }
+    
+    size_t len = strlen(str);
+    *out_valid_len = 0;
+    bool is_valid = true;
+    
+    for (size_t i = 0; i < len; ) {
+        unsigned char c = (unsigned char)str[i];
+        int expected_bytes = 0;
+        
+        if (c <= 0x7F) {
+            // ASCII - 1 byte
+            expected_bytes = 1;
+        } else if ((c & 0xE0) == 0xC0) {
+            // 2-byte sequence: 110xxxxx
+            expected_bytes = 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            // 3-byte sequence: 1110xxxx
+            expected_bytes = 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            // 4-byte sequence: 11110xxx (emojis!)
+            expected_bytes = 4;
+        } else {
+            // Invalid start byte
+            is_valid = false;
+            break;
+        }
+        
+        // Check if we have all the bytes for this character
+        if (i + expected_bytes > len) {
+            // Incomplete sequence at end - truncate here
+            __android_log_print(ANDROID_LOG_DEBUG, "EthervoxJNI", 
+                "Incomplete UTF-8 sequence at end: need %d bytes, have %zu", 
+                expected_bytes, len - i);
+            is_valid = false;
+            break;
+        }
+        
+        // Verify continuation bytes (should be 10xxxxxx)
+        for (int j = 1; j < expected_bytes; j++) {
+            if ((str[i + j] & 0xC0) != 0x80) {
+                __android_log_print(ANDROID_LOG_WARN, "EthervoxJNI", 
+                    "Invalid continuation byte at position %zu", i + j);
+                is_valid = false;
+                break;
+            }
+        }
+        
+        if (!is_valid) break;
+        
+        i += expected_bytes;
+        *out_valid_len = i;
+    }
+    
+    return is_valid;
+}
 
 static jstring create_jstring(JNIEnv* env, const char* str) {
     if (!str) {
         return (*env)->NewStringUTF(env, "");
     }
-    return (*env)->NewStringUTF(env, str);
+    
+    size_t valid_len = 0;
+    bool is_valid = validate_and_fix_utf8(str, &valid_len);
+    
+    if (is_valid) {
+        // String is completely valid UTF-8
+        return (*env)->NewStringUTF(env, str);
+    } else {
+        // String has invalid or incomplete UTF-8
+        // Create truncated string with only valid portion
+        if (valid_len == 0) {
+            __android_log_print(ANDROID_LOG_WARN, "EthervoxJNI", 
+                "Completely invalid UTF-8 string, returning empty");
+            return (*env)->NewStringUTF(env, "");
+        }
+        
+        char* valid_str = malloc(valid_len + 1);
+        if (!valid_str) {
+            return (*env)->NewStringUTF(env, "");
+        }
+        
+        memcpy(valid_str, str, valid_len);
+        valid_str[valid_len] = '\0';
+        
+        __android_log_print(ANDROID_LOG_DEBUG, "EthervoxJNI", 
+            "Truncated UTF-8 string from %zu to %zu bytes (incomplete sequence at end)", 
+            strlen(str), valid_len);
+        
+        jstring result = (*env)->NewStringUTF(env, valid_str);
+        free(valid_str);
+        return result;
+    }
 }
 
 // ===========================================================================
@@ -108,8 +223,8 @@ Java_com_droid_ethervox_1core_NativeLib_loadGovernorModel(
     JNIEnv* env, jobject thiz, jstring modelPath) {
     (void)thiz;
     
-    if (!g_dialogue_engine || !g_dialogue_engine->governor) {
-        LOGE("Cannot load Governor model - dialogue engine or governor not initialized");
+    if (!g_governor) {
+        LOGE("Cannot load Governor model - governor not initialized");
         g_last_governor_load_error = -1;
         return JNI_FALSE;
     }
@@ -118,8 +233,7 @@ Java_com_droid_ethervox_1core_NativeLib_loadGovernorModel(
     
     LOGI("[JNI] Loading Governor model from: %s", path);
     
-    ethervox_governor_t* governor = (ethervox_governor_t*)g_dialogue_engine->governor;
-    int result = ethervox_governor_load_model(governor, path);
+    int result = ethervox_governor_load_model(g_governor, path);
     
     (*env)->ReleaseStringUTFChars(env, modelPath, path);
     
@@ -128,6 +242,29 @@ Java_com_droid_ethervox_1core_NativeLib_loadGovernorModel(
     
     if (result == 0) {
         LOGI("[JNI] Governor model loaded successfully");
+        
+        // Initialize Tool Manifest System (after Governor model is loaded)
+        // This is optional - graceful fallback if it fails
+        if (!g_manifest_registry) {
+            LOGI("[JNI] Initializing manifest registry after model load");
+            
+            // Get the model path from JNI parameter (we need to get it again since we released it)
+            const char* model_path_for_manifest = (*env)->GetStringUTFChars(env, modelPath, NULL);
+            
+            // Use the centralized manifest setup helper
+            tool_manifest_registry_t* manifest = NULL;
+            int manifest_result = ethervox_governor_setup_manifest(g_governor, model_path_for_manifest, &manifest);
+            
+            if (manifest_result == 0 && manifest) {
+                g_manifest_registry = manifest;
+                LOGI("[JNI] Manifest initialized successfully");
+            } else {
+                LOGE("Manifest initialization failed - using runtime registry only");
+            }
+            
+            (*env)->ReleaseStringUTFChars(env, modelPath, model_path_for_manifest);
+        }
+        
         return JNI_TRUE;
     } else {
         if (result == -2) {
@@ -155,15 +292,14 @@ Java_com_droid_ethervox_1core_NativeLib_unloadGovernorModel(
     (void)env;
     (void)thiz;
     
-    if (!g_dialogue_engine || !g_dialogue_engine->governor) {
-        LOGE("Cannot unload Governor model - dialogue engine or governor not initialized");
+    if (!g_governor) {
+        LOGE("Cannot unload Governor model - Governor not initialized");
         return JNI_FALSE;
     }
     
     LOGI("[JNI] Unloading Governor model to free memory");
     
-    ethervox_governor_t* governor = (ethervox_governor_t*)g_dialogue_engine->governor;
-    int result = ethervox_governor_unload_model(governor);
+    int result = ethervox_governor_unload_model(g_governor);
     
     if (result == 0) {
         LOGI("[JNI] Governor model unloaded successfully");
@@ -180,15 +316,14 @@ Java_com_droid_ethervox_1core_NativeLib_reloadGovernorModel(
     (void)env;
     (void)thiz;
     
-    if (!g_dialogue_engine || !g_dialogue_engine->governor) {
-        LOGE("Cannot reload Governor model - dialogue engine or governor not initialized");
+    if (!g_governor) {
+        LOGE("Cannot reload Governor model - Governor not initialized");
         return JNI_FALSE;
     }
     
     LOGI("[JNI] Reloading Governor model");
     
-    ethervox_governor_t* governor = (ethervox_governor_t*)g_dialogue_engine->governor;
-    int result = ethervox_governor_reload_model(governor);
+    int result = ethervox_governor_reload_model(g_governor);
     
     if (result == 0) {
         LOGI("[JNI] Governor model reloaded successfully");
@@ -205,26 +340,24 @@ Java_com_droid_ethervox_1core_NativeLib_isGovernorLoaded(
     (void)env;
     (void)thiz;
     
-    if (!g_dialogue_engine || !g_dialogue_engine->governor) {
+    if (!g_governor) {
         return JNI_FALSE;
     }
     
-    ethervox_governor_t* governor = (ethervox_governor_t*)g_dialogue_engine->governor;
-    return ethervox_governor_is_loaded(governor) ? JNI_TRUE : JNI_FALSE;
+    return ethervox_governor_is_loaded(g_governor) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jobjectArray JNICALL
 Java_com_droid_ethervox_1core_NativeLib_getRegisteredPlugins(
     JNIEnv* env, jobject thiz) {
     
-    if (!g_dialogue_engine || !g_dialogue_engine->governor_tool_registry) {
+    if (!g_registry) {
         // Return empty array if not initialized
         jclass stringClass = (*env)->FindClass(env, "java/lang/String");
         return (*env)->NewObjectArray(env, 0, stringClass, NULL);
     }
     
-    ethervox_tool_registry_t* registry = (ethervox_tool_registry_t*)g_dialogue_engine->governor_tool_registry;
-    int tool_count = registry->tool_count;
+    int tool_count = g_registry->tool_count;
     
     // Create Java string array
     jclass stringClass = (*env)->FindClass(env, "java/lang/String");
@@ -232,7 +365,7 @@ Java_com_droid_ethervox_1core_NativeLib_getRegisteredPlugins(
     
     // Populate array with tool names
     for (int i = 0; i < tool_count; i++) {
-        jstring toolName = (*env)->NewStringUTF(env, registry->tools[i].name);
+        jstring toolName = (*env)->NewStringUTF(env, g_registry->tools[i].name);
         (*env)->SetObjectArrayElement(env, result, i, toolName);
         (*env)->DeleteLocalRef(env, toolName);
     }
@@ -240,26 +373,126 @@ Java_com_droid_ethervox_1core_NativeLib_getRegisteredPlugins(
     return result;
 }
 
+// Thread data for optimization (to avoid blocking UI)
+typedef struct {
+    ethervox_governor_t* governor;
+    tool_manifest_registry_t* manifest_registry;
+    char model_path[512];
+    bool optimize_new_only;
+    int result;
+    bool completed;
+    pthread_mutex_t mutex;
+} optimization_thread_data_t;
+
+// Optimization thread function
+static void* optimization_thread_func(void* arg) {
+    optimization_thread_data_t* data = (optimization_thread_data_t*)arg;
+    
+    LOGI("Optimization thread started for model: %s", data->model_path);
+    
+    // Run V2 optimizer (this can take 30-60 seconds)
+    int result = ethervox_optimize_tool_prompts_v2(
+        data->governor,
+        data->model_path,
+        data->manifest_registry,
+        data->optimize_new_only
+    );
+    
+    // Update result atomically
+    pthread_mutex_lock(&data->mutex);
+    data->result = result;
+    data->completed = true;
+    pthread_mutex_unlock(&data->mutex);
+    
+    if (result == 0) {
+        LOGI("Optimization thread completed successfully");
+    } else {
+        LOGE("Optimization thread failed with code: %d", result);
+    }
+    
+    return NULL;
+}
+
 JNIEXPORT jint JNICALL
 Java_com_droid_ethervox_1core_NativeLib_optimizeToolPrompts(
     JNIEnv* env, jobject thiz, jstring modelPath) {
     (void)thiz;
     
-    if (!g_dialogue_engine || !g_dialogue_engine->governor) {
+    if (!g_governor) {
         LOGE("Governor not loaded - cannot optimize tool prompts");
         return -1;
+    }
+    
+    if (!g_manifest_registry) {
+        LOGE("Manifest registry not initialized - ensure model is loaded first");
+        return -2;
     }
     
     const char* model_path = (*env)->GetStringUTFChars(env, modelPath, NULL);
     if (!model_path) {
         LOGE("Failed to get model path string");
-        return -1;
+        return -3;
     }
     
-    ethervox_governor_t* governor = (ethervox_governor_t*)g_dialogue_engine->governor;
-    int result = ethervox_optimize_tool_prompts(governor, model_path);
+    LOGI("Starting tool prompt optimization (V2) for model: %s", model_path);
+    LOGI("This may take 30-60 seconds and is memory-intensive");
+    
+    // Allocate thread data
+    optimization_thread_data_t* thread_data = malloc(sizeof(optimization_thread_data_t));
+    if (!thread_data) {
+        LOGE("Failed to allocate optimization thread data");
+        (*env)->ReleaseStringUTFChars(env, modelPath, model_path);
+        return -4;
+    }
+    
+    // Initialize thread data
+    thread_data->governor = g_governor;
+    thread_data->manifest_registry = g_manifest_registry;
+    snprintf(thread_data->model_path, sizeof(thread_data->model_path), "%s", model_path);
+    thread_data->optimize_new_only = false;  // Always optimize all tools
+    thread_data->result = -999;  // Sentinel for "not completed"
+    thread_data->completed = false;
+    pthread_mutex_init(&thread_data->mutex, NULL);
+    
+    LOGI("Thread data initialized: optimize_new_only=%s", thread_data->optimize_new_only ? "true" : "false");
     
     (*env)->ReleaseStringUTFChars(env, modelPath, model_path);
+    
+    // Create optimization thread (to avoid blocking UI)
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, optimization_thread_func, thread_data) != 0) {
+        LOGE("Failed to create optimization thread");
+        pthread_mutex_destroy(&thread_data->mutex);
+        free(thread_data);
+        return -5;
+    }
+    
+    // Detach thread and wait for completion
+    pthread_detach(thread);
+    
+    // Wait for completion with periodic logging
+    while (!thread_data->completed) {
+        sleep(5);  // Check every 5 seconds
+        
+        pthread_mutex_lock(&thread_data->mutex);
+        bool is_completed = thread_data->completed;
+        pthread_mutex_unlock(&thread_data->mutex);
+        
+        if (!is_completed) {
+            static int wait_seconds = 0;
+            wait_seconds += 5;
+            LOGI("Optimization in progress... (%d seconds elapsed)", wait_seconds);
+        }
+    }
+    
+    // Get final result
+    pthread_mutex_lock(&thread_data->mutex);
+    int result = thread_data->result;
+    pthread_mutex_unlock(&thread_data->mutex);
+    
+    // Cleanup
+    pthread_mutex_destroy(&thread_data->mutex);
+    free(thread_data);
     
     if (result == 0) {
         LOGI("Tool prompt optimization completed successfully");
@@ -307,7 +540,7 @@ Java_com_droid_ethervox_1core_NativeLib_loadOptimizedPrompts(
         return NULL;
     }
     
-    jmethodID constructor = (*env)->GetMethodID(env, optimizedPromptsClass, "<init>", 
+    jmethodID constructor = (*env)->GetMethodID(env, optimizedPromptsClass, "<init>",
                                                 "(Ljava/lang/String;Ljava/lang/String;)V");
     if (!constructor) {
         LOGE("Failed to find OptimizedPrompts constructor");
@@ -328,6 +561,133 @@ Java_com_droid_ethervox_1core_NativeLib_loadOptimizedPrompts(
 }
 
 /**
+ * Get manifest registry information
+ * Returns JSON string with current manifest state
+ */
+JNIEXPORT jstring JNICALL
+Java_com_droid_ethervox_1core_NativeLib_getManifestInfo(
+    JNIEnv* env,
+    jobject thiz) {
+    (void)thiz;
+    
+    if (!g_manifest_registry) {
+        // No manifest available - return minimal JSON
+        return (*env)->NewStringUTF(env, 
+            "{\"available\":false,\"tool_count\":0,\"fallback_level\":3,\"optimized_loaded\":false,\"tools_detected\":false,\"tools_loaded_count\":0}");
+    }
+    
+    ETHERVOX_LOGI("DEBUG getManifestInfo: reading tools_loaded_count=%u", g_manifest_registry->tools_loaded_count);
+    
+    // Build JSON response with guard status
+    char json[512];
+    snprintf(json, sizeof(json),
+        "{\"available\":%s,\"tool_count\":%u,\"fallback_level\":%u,\"optimized_loaded\":%s,\"tools_detected\":%s,\"tools_loaded_count\":%u}",
+        g_manifest_registry->tools_available ? "true" : "false",
+        g_manifest_registry->header.tool_count,
+        g_manifest_registry->fallback_level,
+        g_manifest_registry->optimization_loaded ? "true" : "false",
+        g_manifest_registry->tools_detected ? "true" : "false",
+        g_manifest_registry->tools_loaded_count
+    );
+    
+    return (*env)->NewStringUTF(env, json);
+}
+
+/**
+ * Get the optimized tool prompts directory path
+ * Returns the absolute path where optimized JSON files are stored/expected
+ */
+JNIEXPORT jstring JNICALL
+Java_com_droid_ethervox_1core_NativeLib_getOptimizedDir(
+    JNIEnv* env,
+    jobject thiz) {
+    (void)thiz;
+    
+    char optimized_dir[512];
+    
+    if (g_android_files_dir[0] != '\0') {
+        // Android: Use app files directory
+        snprintf(optimized_dir, sizeof(optimized_dir),
+                 "%s/tools/optimized", g_android_files_dir);
+    } else {
+        // Fallback (should not happen on Android)
+        const char* home = getenv("HOME");
+        snprintf(optimized_dir, sizeof(optimized_dir),
+                 "%s/.ethervox/tools/optimized", 
+                 home ? home : ".");
+    }
+    
+    return (*env)->NewStringUTF(env, optimized_dir);
+}
+
+/**
+ * Check if optimization file exists for a given model
+ * Returns true if the optimized JSON file exists on disk
+ */
+JNIEXPORT jboolean JNICALL
+Java_com_droid_ethervox_1core_NativeLib_optimizationFileExists(
+    JNIEnv* env,
+    jobject thiz,
+    jstring modelPath) {
+    (void)thiz;
+    
+    if (!modelPath) {
+        return JNI_FALSE;
+    }
+    
+    const char* model_path_str = (*env)->GetStringUTFChars(env, modelPath, NULL);
+    if (!model_path_str) {
+        return JNI_FALSE;
+    }
+    
+    // Extract model name from path (e.g., /path/to/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf -> Qwen2.5-0.5B-Instruct-Q4_K_M)
+    const char* filename = strrchr(model_path_str, '/');
+    if (!filename) {
+        filename = model_path_str;
+    } else {
+        filename++; // Skip the '/'
+    }
+    
+    // Remove .gguf extension
+    char model_name[256];
+    size_t i = 0;
+    while (filename[i] && filename[i] != '.' && i < sizeof(model_name) - 1) {
+        model_name[i] = filename[i];
+        i++;
+    }
+    model_name[i] = '\0';
+    
+    // Remove trailing dash if present
+    if (i > 0 && model_name[i-1] == '-') {
+        model_name[i-1] = '\0';
+    }
+    
+    (*env)->ReleaseStringUTFChars(env, modelPath, model_path_str);
+    
+    // Build path to optimization file
+    char optimized_path[512];
+    if (g_android_files_dir[0] != '\0') {
+        snprintf(optimized_path, sizeof(optimized_path),
+                 "%s/tools/optimized/%s.json", 
+                 g_android_files_dir, model_name);
+    } else {
+        const char* home = getenv("HOME");
+        snprintf(optimized_path, sizeof(optimized_path),
+                 "%s/.ethervox/tools/optimized/%s.json", 
+                 home ? home : ".", model_name);
+    }
+    
+    // Check if file exists
+    struct stat st;
+    jboolean exists = (stat(optimized_path, &st) == 0) ? JNI_TRUE : JNI_FALSE;
+    
+    ETHERVOX_LOGI("Checking optimization file: %s -> %s", 
+                  optimized_path, exists ? "EXISTS" : "NOT FOUND");
+    
+    return exists;
+}
+
+/**
  * Run comprehensive integration tests
  */
 JNIEXPORT void JNICALL
@@ -338,7 +698,7 @@ Java_com_droid_ethervox_1core_NativeLib_runIntegrationTests(
     (void)thiz;
     
     LOGI("Running integration tests...");
-    run_integration_tests();
+    run_integration_tests(g_governor);
     
     // Log completion with test reports path
     if (g_android_files_dir[0] != '\0') {
@@ -359,7 +719,7 @@ Java_com_droid_ethervox_1core_NativeLib_runLlmToolTests(
         jboolean verbose) {
     (void)thiz;
     
-    if (!g_dialogue_engine || !g_dialogue_engine->governor) {
+    if (!g_governor) {
         LOGE("Governor not loaded - cannot run LLM tool tests");
         return;
     }
@@ -375,10 +735,8 @@ Java_com_droid_ethervox_1core_NativeLib_runLlmToolTests(
         return;
     }
     
-    ethervox_governor_t* governor = (ethervox_governor_t*)g_dialogue_engine->governor;
-    
     LOGI("Running LLM tool tests (verbose=%d)...", verbose);
-    run_llm_tool_tests(governor, g_memory_store, model_path_str, (bool)verbose);
+    run_llm_tool_tests(g_governor, g_memory_store, model_path_str, (bool)verbose, NULL);
     
     // Log completion with test reports path
     if (g_android_files_dir[0] != '\0') {
@@ -407,48 +765,39 @@ Java_com_droid_ethervox_1core_NativeLib_platformInit(
         return -1;
     }
     
-    int result = ethervox_platform_init(g_platform);
-    if (result != 0) {
+    ethervox_result_t result = ethervox_platform_init(g_platform);
+    if (ethervox_is_error(result)) {
         LOGE("Failed to initialize platform");
         free(g_platform);
         g_platform = NULL;
         return -1;
     }
     
-    // Initialize dialogue engine with default config
-    g_dialogue_engine = (ethervox_dialogue_engine_t*)calloc(1, sizeof(ethervox_dialogue_engine_t));
-    if (!g_dialogue_engine) {
-        LOGE("Failed to allocate dialogue engine");
-        ethervox_platform_cleanup(g_platform);
-        free(g_platform);
-        g_platform = NULL;
-        return -1;
-    }
+    // === DIRECT GOVERNOR INITIALIZATION (matches desktop main.c) ===
+    // REFACTORED 2025-12-09: Removed dialogue_engine wrapper
+    // Android now mirrors desktop architecture for consistency
     
-    // Initialize memory store BEFORE dialogue engine so tools can register
+    // Initialize memory store BEFORE tools so they can register with it
     g_memory_store = (ethervox_memory_store_t*)calloc(1, sizeof(ethervox_memory_store_t));
     if (g_memory_store) {
-        // Initialize with NULL session_id (will be auto-generated)
-        // and NULL storage_dir for now (will be set via setMemoryStorageDir)
+        // Initialize with NULL session_id (auto-generated) and NULL storage_dir (set later via JNI)
         if (ethervox_memory_init(g_memory_store, NULL, NULL) != 0) {
             LOGE("Failed to initialize memory store");
             free(g_memory_store);
             g_memory_store = NULL;
         } else {
             LOGI("Memory store initialized (in-memory mode until storage dir set)");
-            // Set memory store in dialogue engine BEFORE dialogue_init
-            ethervox_dialogue_set_memory_store(g_memory_store);
         }
     } else {
         LOGE("Failed to allocate memory store");
     }
     
-    ethervox_llm_config_t llm_config = ethervox_dialogue_get_default_llm_config();
-    result = ethervox_dialogue_init(g_dialogue_engine, &llm_config);
-    if (result != 0) {
-        LOGE("Dialogue engine initialization failed");
-        free(g_dialogue_engine);
-        g_dialogue_engine = NULL;
+    // Create and initialize tool registry
+    g_registry = (ethervox_tool_registry_t*)malloc(sizeof(ethervox_tool_registry_t));
+    if (!g_registry || ethervox_tool_registry_init(g_registry, 16) != 0) {
+        LOGE("Failed to initialize tool registry");
+        if (g_registry) free(g_registry);
+        g_registry = NULL;
         if (g_memory_store) {
             ethervox_memory_cleanup(g_memory_store);
             free(g_memory_store);
@@ -460,7 +809,72 @@ Java_com_droid_ethervox_1core_NativeLib_platformInit(
         return -1;
     }
     
-    LOGI("Platform, memory store, and dialogue engine initialized successfully");
+    // Register compute tools (math, logic, etc.)
+    int tool_count = ethervox_compute_tools_register_all(g_registry);
+    LOGI("Registered %d compute tools", tool_count);
+    
+    // Register timer/alarm tools
+    ethervox_tool_registry_add(g_registry, ethervox_tool_timer_create());
+    ethervox_tool_registry_add(g_registry, ethervox_tool_timer_cancel());
+    ethervox_tool_registry_add(g_registry, ethervox_tool_timer_list());
+    ethervox_tool_registry_add(g_registry, ethervox_tool_alarm_create());
+    tool_count += 4;
+    
+    // Register memory tools if memory store is available
+    if (g_memory_store) {
+        if (ethervox_memory_tools_register(g_registry, g_memory_store) == 0) {
+            tool_count += 6;  // 6 memory tools
+            LOGI("Registered memory tools");
+        } else {
+            LOGE("Failed to register memory tools");
+        }
+    }
+    
+    LOGI("Total tools registered: %d", tool_count);
+    
+    // NOTE: Governor initialization moved to platformInitGovernor()
+    // This allows user to choose minimal vs full mode before governor init
+    
+    LOGI("Platform, memory store, and tool registry initialized successfully (Governor pending user choice)");
+    
+    return 0;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_droid_ethervox_1core_NativeLib_platformInitGovernor(
+        JNIEnv* env,
+        jobject thiz,
+        jboolean minimal_mode) {
+    (void)env;
+    (void)thiz;
+    
+    if (g_governor) {
+        LOGI("Governor already initialized");
+        return 0;
+    }
+    
+    if (!g_platform || !g_registry) {
+        LOGE("Platform not initialized - call platformInit() first");
+        return -1;
+    }
+    
+    // Initialize Governor with chosen config (minimal or full)
+    ethervox_governor_config_t gov_config = ethervox_governor_default_config();
+    
+    if (minimal_mode) {
+        gov_config.system_prompt_mode = ETHERVOX_GOVERNOR_MODE_MINIMAL;
+        LOGI("Initializing Governor in MINIMAL MODE (fast loading, tools disabled)");
+    } else {
+        gov_config.system_prompt_mode = ETHERVOX_GOVERNOR_MODE_FULL;
+        LOGI("Initializing Governor in FULL MODE (all tools available)");
+    }
+    
+    if (ethervox_governor_init(&g_governor, &gov_config, g_registry) != 0) {
+        LOGE("Failed to initialize Governor");
+        return -1;
+    }
+    
+    LOGI("Governor initialized successfully (mode: %s)", minimal_mode ? "MINIMAL" : "FULL");
     
     return 0;
 }
@@ -472,18 +886,34 @@ Java_com_droid_ethervox_1core_NativeLib_platformCleanup(
     (void)env;
     (void)thiz;
     
+    // Cleanup in reverse order of initialization
+    
+    if (g_manifest_registry) {
+        // Manifest registry cleanup (if needed)
+        free(g_manifest_registry);
+        g_manifest_registry = NULL;
+        LOGI("Manifest registry cleaned up");
+    }
+    
+    if (g_governor) {
+        ethervox_governor_cleanup(g_governor);
+        free(g_governor);
+        g_governor = NULL;
+        LOGI("Governor cleaned up");
+    }
+    
+    if (g_registry) {
+        ethervox_tool_registry_cleanup(g_registry);
+        free(g_registry);
+        g_registry = NULL;
+        LOGI("Tool registry cleaned up");
+    }
+    
     if (g_memory_store) {
         ethervox_memory_cleanup(g_memory_store);
         free(g_memory_store);
         g_memory_store = NULL;
         LOGI("Memory store cleaned up");
-    }
-    
-    if (g_dialogue_engine) {
-        ethervox_dialogue_cleanup(g_dialogue_engine);
-        free(g_dialogue_engine);
-        g_dialogue_engine = NULL;
-        LOGI("Dialogue engine cleaned up");
     }
     
     if (g_platform) {
@@ -494,6 +924,9 @@ Java_com_droid_ethervox_1core_NativeLib_platformCleanup(
     }
 }
 
+// DEPRECATED: This function is no longer used. 
+// Initialization now happens in platformInit() using direct governor/registry globals.
+// Kept for binary compatibility with old Java code, but returns success immediately.
 JNIEXPORT jboolean JNICALL
 Java_com_droid_ethervox_1core_NativeLib_initializeWithModel(
         JNIEnv* env,
@@ -503,72 +936,27 @@ Java_com_droid_ethervox_1core_NativeLib_initializeWithModel(
         jint max_tokens,
         jfloat top_p,
         jint context_length) {
+    (void)env;
     (void)thiz;
+    (void)model_path;
+    (void)temperature;
+    (void)max_tokens;
+    (void)top_p;
+    (void)context_length;
     
-    if (!model_path) {
-        LOGE("Model path is null");
-        return JNI_FALSE;
+    LOGI("initializeWithModel() called but deprecated - use platformInit() instead");
+    
+    // Return success if already initialized via platformInit
+    if (g_governor) {
+        return JNI_TRUE;
     }
     
-    const char* path = (*env)->GetStringUTFChars(env, model_path, NULL);
-    if (!path) {
-        LOGE("Failed to get model path string");
-        return JNI_FALSE;
-    }
-    
-    LOGI("Initializing dialogue engine with model: %s (temp=%.2f, max_tokens=%d, top_p=%.2f, ctx=%d)",
-         path, temperature, max_tokens, top_p, context_length);
-    
-    // Clean up existing dialogue engine if any
-    if (g_dialogue_engine) {
-        ethervox_dialogue_cleanup(g_dialogue_engine);
-        free(g_dialogue_engine);
-        g_dialogue_engine = NULL;
-    }
-    
-    // Allocate new dialogue engine
-    g_dialogue_engine = (ethervox_dialogue_engine_t*)calloc(1, sizeof(ethervox_dialogue_engine_t));
-    if (!g_dialogue_engine) {
-        LOGE("Failed to allocate dialogue engine");
-        (*env)->ReleaseStringUTFChars(env, model_path, path);
-        return JNI_FALSE;
-    }
-    
-    // Create LLM config with user settings - ENABLE GPU ACCELERATION
-    ethervox_llm_config_t llm_config = ethervox_dialogue_get_default_llm_config();
-    llm_config.model_path = strdup(path);
-    llm_config.model_name = strdup("TinyLlama-1.1B");
-    llm_config.temperature = temperature;
-    llm_config.max_tokens = (uint32_t)max_tokens;
-    llm_config.top_p = top_p;
-    llm_config.context_length = (uint32_t)context_length;
-    llm_config.use_gpu = true;  // Force GPU acceleration ON
-    llm_config.gpu_layers = 99;  // Offload entire model to GPU
-    
-    // Initialize dialogue engine with LLM
-    int result = ethervox_dialogue_init(g_dialogue_engine, &llm_config);
-    
-    // Free temporary config strings
-    free(llm_config.model_path);
-    free(llm_config.model_name);
-    (*env)->ReleaseStringUTFChars(env, model_path, path);
-    
-    if (result != 0) {
-        LOGE("Failed to initialize dialogue engine with model");
-        free(g_dialogue_engine);
-        g_dialogue_engine = NULL;
-        return JNI_FALSE;
-    }
-    
-    // Check if LLM was actually loaded
-    if (g_dialogue_engine->llm_backend && g_dialogue_engine->use_llm_for_unknown) {
-        LOGI("Dialogue engine initialized with LLM support enabled");
-    } else {
-        LOGI("Dialogue engine initialized (LLM not available, using pattern-based responses)");
-    }
-    return JNI_TRUE;
+    LOGE("Governor not initialized - call platformInit() first");
+    return JNI_FALSE;
 }
 
+// DEPRECATED: Old dialogue engine API - runtime param updates not supported by governor
+// Governor uses config set at initialization time only
 JNIEXPORT jboolean JNICALL
 Java_com_droid_ethervox_1core_NativeLib_updateLLMParams(
         JNIEnv* env,
@@ -578,44 +966,13 @@ Java_com_droid_ethervox_1core_NativeLib_updateLLMParams(
         jfloat top_p) {
     (void)env;
     (void)thiz;
+    (void)temperature;
+    (void)max_tokens;
+    (void)top_p;
     
-    if (!g_dialogue_engine || !g_dialogue_engine->llm_backend) {
-        LOGE("LLM backend not initialized");
-        return JNI_FALSE;
-    }
-    
-    LOGI("Updating LLM params: temp=%.2f, max_tokens=%d, top_p=%.2f", 
-         temperature, max_tokens, top_p);
-    
-    // Create config with new parameters
-    ethervox_llm_config_t config = {0};
-    config.temperature = temperature;
-    config.max_tokens = (uint32_t)max_tokens;
-    config.top_p = top_p;
-    
-    // Use the backend's update_config function if available
-    ethervox_llm_backend_t* backend = g_dialogue_engine->llm_backend;
-    if (!backend) {
-        LOGE("Backend is null");
-        return JNI_FALSE;
-    }
-    
-    if (backend->update_config) {
-        int result = backend->update_config(backend, &config);
-        if (result == 0) {
-            LOGI("LLM params updated successfully via backend function");
-            return JNI_TRUE;
-        } else {
-            LOGE("Failed to update LLM params via backend function");
-            return JNI_FALSE;
-        }
-    } else {
-        LOGE("Backend does not support runtime config updates");
-        return JNI_FALSE;
-    }
-    
-    LOGI("LLM params updated successfully");
-    return JNI_TRUE;
+    LOGW("updateLLMParams() deprecated - governor does not support runtime param updates");
+    LOGW("LLM parameters are set at initialization time only");
+    return JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL
@@ -625,19 +982,12 @@ Java_com_droid_ethervox_1core_NativeLib_isLlmLoaded(
     (void)env;
     (void)thiz;
     
-    if (!g_dialogue_engine) {
+    if (!g_governor) {
         return JNI_FALSE;
     }
     
-    // Check if LLM backend is loaded and available
-    ethervox_llm_backend_t* backend = (ethervox_llm_backend_t*)g_dialogue_engine->llm_backend;
-    if (backend && 
-        g_dialogue_engine->use_llm_for_unknown &&
-        backend->is_loaded) {
-        return JNI_TRUE;
-    }
-    
-    return JNI_FALSE;
+    // Use governor API to check if model is loaded
+    return ethervox_governor_is_loaded(g_governor) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jstring JNICALL
@@ -892,6 +1242,8 @@ Java_com_droid_ethervox_1core_NativeLib_sttCleanup(
 // LLM / Dialogue Management
 // ===========================================================================
 
+// DEPRECATED: Legacy dialogue processing - use processGovernorQuery instead
+// This function is kept for backwards compatibility but now delegates to governor
 JNIEXPORT jstring JNICALL
 Java_com_droid_ethervox_1core_NativeLib_processDialogue(
         JNIEnv* env,
@@ -899,71 +1251,42 @@ Java_com_droid_ethervox_1core_NativeLib_processDialogue(
         jstring user_text,
         jstring language) {
     (void)thiz;
+    (void)language;  // Language detection now handled by governor
     
-    if (!g_dialogue_engine) {
-        LOGE("Dialogue engine not initialized");
-        return create_jstring(env, "[ERROR] Dialogue engine not initialized");
+    if (!g_governor) {
+        LOGE("Governor not initialized");
+        return create_jstring(env, "[ERROR] Governor not initialized");
     }
     
     const char* text = (*env)->GetStringUTFChars(env, user_text, NULL);
-    const char* lang = (*env)->GetStringUTFChars(env, language, NULL);
     
-    LOGI("Processing dialogue: '%s' (language: %s)", text, lang);
+    LOGI("Processing dialogue (legacy): '%s'", text);
     
-    // Parse intent from user input
-    ethervox_intent_t intent;
-    memset(&intent, 0, sizeof(ethervox_intent_t));
+    // Process with governor execute API
+    char* response = NULL;
+    char* error = NULL;
+    ethervox_governor_status_t status = ethervox_governor_execute(
+        g_governor, text, &response, &error, NULL, NULL, NULL, NULL);
     
-    ethervox_dialogue_intent_request_t intent_req = {
-        .text = text,
-        .language_code = lang
-    };
-    
-    int result = ethervox_dialogue_parse_intent(g_dialogue_engine, &intent_req, &intent);
-    if (result != 0) {
-        LOGE("Failed to parse intent");
-        (*env)->ReleaseStringUTFChars(env, user_text, text);
-        (*env)->ReleaseStringUTFChars(env, language, lang);
-        return create_jstring(env, "[ERROR] Failed to parse intent");
-    }
-    
-    LOGI("Intent detected: %s (confidence: %.2f)", 
-         ethervox_intent_type_to_string(intent.type), intent.confidence);
-    
-    // Process with LLM/dialogue engine
-    ethervox_llm_response_t response;
-    memset(&response, 0, sizeof(ethervox_llm_response_t));
-    
-    result = ethervox_dialogue_process_llm(g_dialogue_engine, &intent, NULL, &response);
-    if (result != 0) {
-        LOGE("Failed to process LLM");
-        ethervox_intent_free(&intent);
-        (*env)->ReleaseStringUTFChars(env, user_text, text);
-        (*env)->ReleaseStringUTFChars(env, language, lang);
-        return create_jstring(env, "[ERROR] Failed to generate response");
-    }
-    
-    LOGI("Response generated: %s (confidence: %.0f%%, conversation_ended: %s)", 
-         response.text ? response.text : "(null)", response.confidence * 100.0f,
-         response.conversation_ended ? "true" : "false");
-    
-    // Format response with confidence and conversation_ended flag appended
-    char formatted_response[1024];
-    snprintf(formatted_response, sizeof(formatted_response), "%s|%.0f|%s", 
-             response.text ? response.text : "No response", 
-             response.confidence * 100.0f,
-             response.conversation_ended ? "true" : "false");
-    
-    // Create Java string from formatted response
-    jstring result_str = create_jstring(env, formatted_response);
-    
-    // Cleanup
-    ethervox_intent_free(&intent);
-    ethervox_llm_response_free(&response);
     (*env)->ReleaseStringUTFChars(env, user_text, text);
-    (*env)->ReleaseStringUTFChars(env, language, lang);
     
-    return result_str;
+    if (status != ETHERVOX_GOVERNOR_SUCCESS || !response) {
+        LOGE("Failed to process query: %s", error ? error : "Unknown error");
+        jstring result = create_jstring(env, "[ERROR] Failed to generate response");
+        if (response) free(response);
+        if (error) free(error);
+        return result;
+    }
+    
+    // Format response with confidence placeholder for backwards compatibility
+    char formatted_response[4096];
+    snprintf(formatted_response, sizeof(formatted_response), "%s|100|false", response);
+    
+    jstring result = create_jstring(env, formatted_response);
+    free(response);
+    if (error) free(error);
+    
+    return result;
 }
 
 // Global callback context for streaming
@@ -975,6 +1298,8 @@ typedef struct {
     jmethodID on_error_method;
     jmethodID on_governor_progress_method;  // New: Governor progress callback
     bool conversation_ended;
+    char utf8_buffer[4];  // Buffer for incomplete UTF-8 sequences (max 4 bytes)
+    int utf8_buffer_len;  // Number of bytes currently in buffer
 } jni_stream_context_t;
 
 // Native callback function that will be called from C
@@ -992,9 +1317,55 @@ static void native_token_callback(const char* token, void* user_data) {
     // Log each token for debugging streaming issues
     __android_log_print(ANDROID_LOG_DEBUG, "EthervoxJNI", "Streaming token: '%s'", token);
     
-    jstring j_token = create_jstring(ctx->env, token);
-    (*ctx->env)->CallVoidMethod(ctx->env, ctx->callback_obj, ctx->on_token_method, j_token);
-    (*ctx->env)->DeleteLocalRef(ctx->env, j_token);
+    // Combine buffered incomplete UTF-8 bytes with new token
+    size_t token_len = strlen(token);
+    size_t combined_len = ctx->utf8_buffer_len + token_len;
+    char* combined = malloc(combined_len + 1);
+    if (!combined) {
+        __android_log_print(ANDROID_LOG_ERROR, "EthervoxJNI", "Failed to allocate buffer");
+        return;
+    }
+    
+    // Copy buffered bytes + new token
+    if (ctx->utf8_buffer_len > 0) {
+        memcpy(combined, ctx->utf8_buffer, ctx->utf8_buffer_len);
+        __android_log_print(ANDROID_LOG_DEBUG, "EthervoxJNI", 
+            "Prepending %d buffered bytes to token", ctx->utf8_buffer_len);
+    }
+    memcpy(combined + ctx->utf8_buffer_len, token, token_len);
+    combined[combined_len] = '\0';
+    
+    // Validate and find how much is valid UTF-8
+    size_t valid_len = 0;
+    bool is_valid = validate_and_fix_utf8(combined, &valid_len);
+    
+    if (!is_valid && valid_len < combined_len) {
+        // There are incomplete bytes at the end - buffer them for next token
+        ctx->utf8_buffer_len = combined_len - valid_len;
+        memcpy(ctx->utf8_buffer, combined + valid_len, ctx->utf8_buffer_len);
+        __android_log_print(ANDROID_LOG_DEBUG, "EthervoxJNI", 
+            "Buffering %d incomplete UTF-8 bytes for next token", ctx->utf8_buffer_len);
+    } else {
+        // Everything is valid or we used all bytes
+        ctx->utf8_buffer_len = 0;
+    }
+    
+    // Send only the valid portion to Java
+    if (valid_len > 0) {
+        char* valid_str = malloc(valid_len + 1);
+        if (valid_str) {
+            memcpy(valid_str, combined, valid_len);
+            valid_str[valid_len] = '\0';
+            
+            jstring j_token = (*ctx->env)->NewStringUTF(ctx->env, valid_str);
+            (*ctx->env)->CallVoidMethod(ctx->env, ctx->callback_obj, ctx->on_token_method, j_token);
+            (*ctx->env)->DeleteLocalRef(ctx->env, j_token);
+            
+            free(valid_str);
+        }
+    }
+    
+    free(combined);
 }
 
 // Governor progress callback function
@@ -1028,11 +1399,36 @@ static void native_governor_progress_callback(
         case ETHERVOX_GOVERNOR_EVENT_TOOL_RESULT:
             event_str = "TOOL_RESULT";
             break;
+        case ETHERVOX_GOVERNOR_EVENT_TOOL_ERROR:
+            event_str = "TOOL_ERROR";
+            break;
         case ETHERVOX_GOVERNOR_EVENT_CONFIDENCE_UPDATE:
             event_str = "CONFIDENCE_UPDATE";
             break;
+        case ETHERVOX_GOVERNOR_EVENT_CONTEXT_SUMMARIZING:
+            event_str = "CONTEXT_SUMMARIZING";
+            break;
+        case ETHERVOX_GOVERNOR_EVENT_CONTEXT_CLEARED:
+            event_str = "CONTEXT_CLEARED";
+            break;
+        case ETHERVOX_GOVERNOR_EVENT_MANIFEST_LOADING:
+            event_str = "MANIFEST_LOADING";
+            break;
+        case ETHERVOX_GOVERNOR_EVENT_MANIFEST_READY:
+            event_str = "MANIFEST_READY";
+            break;
+        case ETHERVOX_GOVERNOR_EVENT_MANIFEST_FALLBACK_LEVEL_1:
+            event_str = "MANIFEST_FALLBACK_LEVEL_1";
+            break;
+        case ETHERVOX_GOVERNOR_EVENT_MANIFEST_FALLBACK_LEVEL_2:
+            event_str = "MANIFEST_FALLBACK_LEVEL_2";
+            break;
         case ETHERVOX_GOVERNOR_EVENT_COMPLETE:
             event_str = "COMPLETE";
+            // Also call onComplete callback when governor finishes
+            if (ctx->on_complete_method) {
+                (*ctx->env)->CallVoidMethod(ctx->env, ctx->callback_obj, ctx->on_complete_method, (jboolean)ctx->conversation_ended);
+            }
             break;
         default:
             event_str = "UNKNOWN";
@@ -1047,6 +1443,7 @@ static void native_governor_progress_callback(
     (*ctx->env)->DeleteLocalRef(ctx->env, j_message);
 }
 
+// Governor streaming dialogue - uses token_callback for real-time token streaming
 JNIEXPORT void JNICALL
 Java_com_droid_ethervox_1core_NativeLib_processDialogueStreamingNative(
         JNIEnv* env,
@@ -1055,14 +1452,15 @@ Java_com_droid_ethervox_1core_NativeLib_processDialogueStreamingNative(
         jstring language,
         jobject callback) {
     (void)thiz;
+    (void)language;
     
-    if (!g_dialogue_engine) {
-        LOGE("Dialogue engine not initialized");
+    if (!g_governor) {
+        LOGE("Governor not initialized");
         // Call error callback
         jclass callback_class = (*env)->GetObjectClass(env, callback);
         jmethodID on_error = (*env)->GetMethodID(env, callback_class, "onError", "(Ljava/lang/String;)V");
         if (on_error) {
-            jstring error_msg = create_jstring(env, "Dialogue engine not initialized");
+            jstring error_msg = create_jstring(env, "Governor not initialized");
             (*env)->CallVoidMethod(env, callback, on_error, error_msg);
             (*env)->DeleteLocalRef(env, error_msg);
         }
@@ -1070,93 +1468,68 @@ Java_com_droid_ethervox_1core_NativeLib_processDialogueStreamingNative(
     }
     
     const char* text = (*env)->GetStringUTFChars(env, user_text, NULL);
-    const char* lang = (*env)->GetStringUTFChars(env, language, NULL);
     
-    LOGI("Processing dialogue (streaming): '%s' (language: %s)", text, lang);
+    LOGI("Processing dialogue (streaming): '%s'", text);
     
     // Get callback methods
     jclass callback_class = (*env)->GetObjectClass(env, callback);
     jmethodID on_token = (*env)->GetMethodID(env, callback_class, "onToken", "(Ljava/lang/String;)V");
     jmethodID on_complete = (*env)->GetMethodID(env, callback_class, "onComplete", "(Z)V");
     jmethodID on_error = (*env)->GetMethodID(env, callback_class, "onError", "(Ljava/lang/String;)V");
-    jmethodID on_governor_progress = (*env)->GetMethodID(env, callback_class, "onGovernorProgress", "(Ljava/lang/String;Ljava/lang/String;)V");
+    jmethodID on_governor_progress = (*env)->GetMethodID(env, callback_class, "onGovernorProgress", 
+                                                         "(Ljava/lang/String;Ljava/lang/String;)V");
     
-    if (!on_token || !on_complete || !on_error) {
-        LOGE("Failed to get callback methods");
-        (*env)->ReleaseStringUTFChars(env, user_text, text);
-        (*env)->ReleaseStringUTFChars(env, language, lang);
-        return;
-    }
-    
-    // Setup stream context
+    // Setup streaming context
     jni_stream_context_t stream_ctx = {
         .env = env,
         .callback_obj = callback,
         .on_token_method = on_token,
         .on_complete_method = on_complete,
         .on_error_method = on_error,
-        .on_governor_progress_method = on_governor_progress,  // May be NULL if not implemented
-        .conversation_ended = false
+        .on_governor_progress_method = on_governor_progress,
+        .conversation_ended = false,
+        .utf8_buffer_len = 0
     };
     
-    // Parse intent
-    ethervox_intent_t intent;
-    memset(&intent, 0, sizeof(ethervox_intent_t));
+    // Execute with streaming token callback
+    char* response = NULL;
+    char* error = NULL;
+    ethervox_governor_status_t status = ethervox_governor_execute(
+        g_governor, 
+        text, 
+        &response, 
+        &error, 
+        NULL,  // metrics (optional)
+        native_governor_progress_callback,  // progress callback
+        native_token_callback,  // token callback for streaming
+        &stream_ctx  // user data
+    );
     
-    ethervox_dialogue_intent_request_t intent_req = {
-        .text = text,
-        .language_code = lang
-    };
-    
-    int result = ethervox_dialogue_parse_intent(g_dialogue_engine, &intent_req, &intent);
-    if (result != 0) {
-        LOGE("Failed to parse intent");
-        jstring error_msg = create_jstring(env, "Failed to parse intent");
-        (*env)->CallVoidMethod(env, callback, on_error, error_msg);
-        (*env)->DeleteLocalRef(env, error_msg);
-        (*env)->ReleaseStringUTFChars(env, user_text, text);
-        (*env)->ReleaseStringUTFChars(env, language, lang);
-        return;
-    }
-    
-    LOGI("Intent detected: %s (confidence: %.2f)", 
-         ethervox_intent_type_to_string(intent.type), intent.confidence);
-    
-    // Call onPunctuatedPrompt if the text was modified by smart punctuation
-    if (on_governor_progress && intent.raw_text && strcmp(text, intent.raw_text) != 0) {
-        jstring punctuated_text = create_jstring(env, intent.raw_text);
-        if (punctuated_text) {
-            // Get the onPunctuatedPrompt method
-            jmethodID on_punctuated = (*env)->GetMethodID(env, callback_class, "onPunctuatedPrompt", "(Ljava/lang/String;)V");
-            if (on_punctuated) {
-                (*env)->CallVoidMethod(env, callback, on_punctuated, punctuated_text);
-            }
-            (*env)->DeleteLocalRef(env, punctuated_text);
-        }
-    }
-    
-    // Process with LLM using streaming
-    result = ethervox_dialogue_process_llm_stream(g_dialogue_engine, &intent, NULL, 
-                                                   native_token_callback, &stream_ctx,
-                                                   &stream_ctx.conversation_ended,
-                                                   native_governor_progress_callback);
-    
-    if (result != 0) {
-        LOGE("Failed to process LLM stream");
-        jstring error_msg = create_jstring(env, "Failed to generate response");
-        (*env)->CallVoidMethod(env, callback, on_error, error_msg);
-        (*env)->DeleteLocalRef(env, error_msg);
-    } else {
-        // Call complete callback with conversation_ended flag
-        (*env)->CallVoidMethod(env, callback, on_complete, (jboolean)stream_ctx.conversation_ended);
-    }
-    
-    // Cleanup
-    ethervox_intent_free(&intent);
     (*env)->ReleaseStringUTFChars(env, user_text, text);
-    (*env)->ReleaseStringUTFChars(env, language, lang);
+    
+    if (status != ETHERVOX_GOVERNOR_SUCCESS || !response) {
+        LOGE("Failed to process query: %s", error ? error : "Unknown error");
+        if (on_error) {
+            jstring error_msg = create_jstring(env, error ? error : "Failed to generate response");
+            (*env)->CallVoidMethod(env, callback, on_error, error_msg);
+            (*env)->DeleteLocalRef(env, error_msg);
+        }
+        if (response) free(response);
+        if (error) free(error);
+    } else {
+        // NOTE: onComplete is already called via native_governor_progress_callback
+        // from inside ethervox_governor_execute when it sends ETHERVOX_GOVERNOR_EVENT_COMPLETE.
+        // DO NOT call it again here, as that causes a double-invocation and crashes.
+        // Just clean up the response memory.
+        free(response);
+        if (error) free(error);
+    }
+    
+    LOGI("Streaming dialogue complete");
 }
 
+// DEPRECATED: Old dialogue engine API - cancellation not yet implemented for governor
+// TODO: Add governor cancellation support using llama_cancel flag
 JNIEXPORT void JNICALL
 Java_com_droid_ethervox_1core_NativeLib_cancelProcessing(
         JNIEnv* env,
@@ -1164,75 +1537,34 @@ Java_com_droid_ethervox_1core_NativeLib_cancelProcessing(
     (void)env;
     (void)thiz;
     
-    if (!g_dialogue_engine) {
-        LOGE("Dialogue engine not initialized");
-        return;
-    }
-    
-    // Get the LLM backend handle
-    ethervox_llm_backend_t* backend = (ethervox_llm_backend_t*)g_dialogue_engine->llm_backend;
-    if (backend && backend->handle) {
-        // Access llama context and set cancel flag
-        typedef struct {
-            void* model;
-            void* ctx;
-            uint32_t n_ctx;
-            uint32_t n_predict;
-            float temperature;
-            float top_p;
-            uint32_t n_gpu_layers;
-            uint32_t n_threads;
-            uint32_t seed;
-            char* loaded_model_path;
-            bool use_mlock;
-            bool use_mmap;
-            volatile bool cancel_requested;
-        } llama_ctx_t;
-        
-        llama_ctx_t* llama_ctx = (llama_ctx_t*)backend->handle;
-        llama_ctx->cancel_requested = true;
-        LOGI("LLM processing cancellation requested");
-    }
+    LOGW("cancelProcessing() deprecated - governor cancellation not yet implemented");
+    LOGW("TODO: Add governor-level cancellation support");
 }
 
+// DEPRECATED: Language handling is now done by the governor's language detection
 JNIEXPORT jint JNICALL
 Java_com_droid_ethervox_1core_NativeLib_setDialogueLanguage(
         JNIEnv* env,
         jobject thiz,
         jstring language) {
     (void)thiz;
-    
-    if (!g_dialogue_engine) {
-        LOGE("Dialogue engine not initialized");
-        return -1;
-    }
+    (void)language;
     
     const char* lang = (*env)->GetStringUTFChars(env, language, NULL);
-    
-    int result = ethervox_dialogue_set_language(g_dialogue_engine, lang);
-    if (result == 0) {
-        LOGI("Dialogue language set to: %s", lang);
-    } else {
-        LOGE("Failed to set dialogue language to: %s", lang);
-    }
-    
+    LOGW("setDialogueLanguage(%s) deprecated - language detection automatic", lang);
     (*env)->ReleaseStringUTFChars(env, language, lang);
-    return result;
+    return 0;  // Success for compatibility
 }
 
+// DEPRECATED: Returns default language for compatibility
 JNIEXPORT jstring JNICALL
 Java_com_droid_ethervox_1core_NativeLib_getDialogueLanguage(
         JNIEnv* env,
         jobject thiz) {
     (void)thiz;
     
-    if (!g_dialogue_engine) {
-        LOGE("Dialogue engine not initialized");
-        return create_jstring(env, "en");
-    }
-    
-    const char* lang = ethervox_dialogue_get_language(g_dialogue_engine);
-    return create_jstring(env, lang ? lang : "en");
+    LOGW("getDialogueLanguage() deprecated - returning default 'en'");
+    return create_jstring(env, "en");
 }
 
 // ===========================================================================
@@ -1289,8 +1621,13 @@ Java_com_droid_ethervox_1core_NativeLib_getDefaultLlmConfig(
         jobject thiz) {
     (void)thiz;
     
-    // Get default config from C
-    ethervox_llm_config_t config = ethervox_dialogue_get_default_llm_config();
+    // Return default LLM config values directly
+    ethervox_llm_config_t config = {
+        .temperature = 0.7f,
+        .max_tokens = 512,
+        .top_p = 0.9f,
+        .context_length = 2048
+    };
 
     // Find the LlmConfig class
     jclass llmConfigClass = (*env)->FindClass(env, "com/droid/ethervox_core/LlmConfig");
@@ -1316,14 +1653,22 @@ Java_com_droid_ethervox_1core_NativeLib_getDefaultLlmConfig(
     return llmConfigObj;
 }
 
+JNIEXPORT jstring JNICALL
+Java_com_droid_ethervox_1core_NativeLib_getDefaultStartupPrompt(
+        JNIEnv* env,
+        jobject thiz) {
+    (void)thiz;
+    return (*env)->NewStringUTF(env, DEFAULT_STARTUP_PROMPT);
+}
+
 JNIEXPORT jobjectArray JNICALL
 Java_com_droid_ethervox_1core_NativeLib_getSupportedLanguages(
         JNIEnv* env,
         jobject thiz) {
     (void)thiz;
     
-    // Get supported languages from dialogue core
-    const char** languages = ethervox_dialogue_get_supported_languages();
+    // Return supported languages directly
+    static const char* languages[] = {"en", "es", "fr", "de", "it", "pt", "zh", "ja", "ko", NULL};
     
     // Count languages
     int count = 0;
@@ -1477,8 +1822,8 @@ Java_com_droid_ethervox_1core_NativeLib_getLlamaPerformanceMetrics(
     (void)thiz;
     
 #if ETHERVOX_WITH_LLAMA && LLAMA_CPP_AVAILABLE
-    // Get Governor from dialogue engine
-    if (!g_dialogue_engine || !g_dialogue_engine->governor) {
+    // Get Governor
+    if (!g_governor) {
         return NULL;
     }
     
@@ -1493,7 +1838,7 @@ Java_com_droid_ethervox_1core_NativeLib_getLlamaPerformanceMetrics(
         // ... other fields we don't need
     };
     
-    struct ethervox_governor* governor = (struct ethervox_governor*)g_dialogue_engine->governor;
+    struct ethervox_governor* governor = (struct ethervox_governor*)g_governor;
     
     if (!governor->llm_ctx) {
         return NULL;
@@ -1608,7 +1953,7 @@ Java_com_droid_ethervox_1core_NativeLib_startVoiceTranscription(
             LOGE("[Voice] ERROR: Failed to allocate voice session memory");
             return -1;
         }
-        LOGI("[Voice] ✓ Voice session memory allocated");
+        LOGI("[Voice] [OK] Voice session memory allocated");
         
         // Initialize voice tools (requires memory store)
         if (!g_memory_store) {
@@ -1617,20 +1962,20 @@ Java_com_droid_ethervox_1core_NativeLib_startVoiceTranscription(
             g_voice_session = NULL;
             return -1;
         }
-        LOGI("[Voice] ✓ Memory store exists");
+        LOGI("[Voice] [OK] Memory store exists");
         
         LOGI("[Voice] Calling ethervox_voice_tools_init...");
         int ret = ethervox_voice_tools_init(g_voice_session, g_memory_store);
         if (ret != 0) {
-            LOGE("[Voice] ✗ ERROR: Failed to initialize voice tools: %d", ret);
+            LOGE("[Voice] [FAIL] ERROR: Failed to initialize voice tools: %d", ret);
             LOGE("[Voice] This usually means Whisper model not found!");
             LOGE("[Voice] Check Settings → Whisper Model section to download");
             free(g_voice_session);
             g_voice_session = NULL;
             return ret;
         }
-        LOGI("[Voice] ✓ Voice tools initialized successfully!");
-        LOGI("[Voice] ✓ Whisper model loaded and ready");
+        LOGI("[Voice] [OK] Voice tools initialized successfully!");
+        LOGI("[Voice] [OK] Whisper model loaded and ready");
     } else {
         LOGI("[Voice] Voice session already initialized (is_initialized=%d)",
              g_voice_session->is_initialized);
@@ -1642,17 +1987,17 @@ Java_com_droid_ethervox_1core_NativeLib_startVoiceTranscription(
         LOGE("[Voice] This shouldn't happen - initialization must have failed silently");
         return -1;
     }
-    LOGI("[Voice] ✓ Session verification passed");
+    LOGI("[Voice] [OK] Session verification passed");
     
     // Start listening (recording + VAD)
     LOGI("[Voice] Starting voice recording...");
     int ret = ethervox_voice_tools_start_listen(g_voice_session);
     if (ret != 0) {
-        LOGE("[Voice] ✗ ERROR: Failed to start voice recording: %d", ret);
+        LOGE("[Voice] [FAIL] ERROR: Failed to start voice recording: %d", ret);
         return ret;
     }
     
-    LOGI("[Voice] ✓ Voice transcription started successfully!");
+    LOGI("[Voice] [OK] Voice transcription started successfully!");
     LOGI("[Voice] ========================================");
     return 0;
 }
@@ -1728,4 +2073,66 @@ Java_com_droid_ethervox_1core_NativeLib_isVoiceTranscribing(
     }
     
     return g_voice_session->is_recording ? JNI_TRUE : JNI_FALSE;
+}
+
+// ===========================================================================
+// Mobile Optimization Features (Minimal Mode, Secret Mode)
+// ===========================================================================
+
+JNIEXPORT void JNICALL
+Java_com_droid_ethervox_1core_NativeLib_setPrivacyMode(
+    JNIEnv* env, jobject thiz, jboolean enabled) {
+    (void)env;
+    (void)thiz;
+    
+    ethervox_memory_set_privacy_mode(enabled ? true : false);
+    
+    if (enabled) {
+        LOGI("[JNI] SECRET MODE enabled - memory logging disabled");
+    } else {
+        LOGI("[JNI] Normal mode - memory logging enabled");
+    }
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_droid_ethervox_1core_NativeLib_getPrivacyMode(
+    JNIEnv* env, jobject thiz) {
+    (void)env;
+    (void)thiz;
+    
+    return ethervox_memory_get_privacy_mode() ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_droid_ethervox_1core_NativeLib_loadGovernorModelMinimal(
+    JNIEnv* env, jobject thiz, jstring modelPath) {
+    (void)thiz;
+    
+    if (!g_governor) {
+        LOGE("Cannot load Governor model - governor not initialized");
+        return JNI_FALSE;
+    }
+    
+    const char* path = (*env)->GetStringUTFChars(env, modelPath, NULL);
+    
+    LOGI("[JNI] Loading Governor model in MINIMAL MODE (fast mobile loading)");
+    LOGI("[JNI] Model path: %s", path);
+    
+    // NOTE: Minimal mode must be set during platformInit() via governor config
+    // Cannot change config after governor is initialized
+    // This function is now equivalent to loadGovernorModel
+    // TODO: Add proper API to change governor mode at runtime
+    
+    int result = ethervox_governor_load_model(g_governor, path);
+    
+    (*env)->ReleaseStringUTFChars(env, modelPath, path);
+    
+    if (result == 0) {
+        LOGI("[JNI] Governor model loaded successfully");
+        LOGW("[JNI] MINIMAL MODE must be set via config in platformInit - cannot change at load time");
+        return JNI_TRUE;
+    } else {
+        LOGE("Failed to load Governor model");
+        return JNI_FALSE;
+    }
 }

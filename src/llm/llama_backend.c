@@ -26,6 +26,10 @@
 #include <string.h>
 #include <time.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #ifdef ETHERVOX_PLATFORM_ANDROID
 #include <android/log.h>
 #define LLAMA_LOG(...) __android_log_print(ANDROID_LOG_INFO, "EthervoxLlama", __VA_ARGS__)
@@ -53,6 +57,10 @@
 #define LLAMA_DEFAULT_BATCH_SIZE 2048  // Massive batch for maximum throughput
 #define LLAMA_PROMPT_BATCH_SIZE 2048  // Maximum batch size for prompt processing
 #define LLAMA_MAX_RESPONSE_LENGTH 4096
+
+// Global backend state guard to prevent multiple initialization
+static bool g_llama_backend_initialized = false;
+static int g_llama_backend_refcount = 0;
 
 // Llama backend context
 typedef struct {
@@ -161,6 +169,21 @@ static int llama_backend_update_config(ethervox_llm_backend_t* backend,
   return ETHERVOX_SUCCESS;
 }
 
+/**
+ * @brief Force reset llama backend global state (use after crashes/segfaults)
+ */
+void ethervox_llama_backend_force_reset(void) {
+#if defined(ETHERVOX_WITH_LLAMA) && LLAMA_HEADER_AVAILABLE
+  ETHERVOX_LOG_WARN("Force resetting llama backend state (refcount=%d)", g_llama_backend_refcount);
+  if (g_llama_backend_initialized) {
+    llama_backend_free();
+    g_llama_backend_initialized = false;
+  }
+  g_llama_backend_refcount = 0;
+  ETHERVOX_LOG_INFO("Llama backend state reset complete");
+#endif
+}
+
 // Create Llama backend instance
 ethervox_llm_backend_t* ethervox_llm_create_llama_backend(void) {
   ethervox_llm_backend_t* backend = (ethervox_llm_backend_t*)calloc(1, sizeof(ethervox_llm_backend_t));
@@ -208,9 +231,11 @@ static int ethervox_llama_backend_init(ethervox_llm_backend_t* backend, const et
     ctx->n_predict = config->max_tokens > 0 ? config->max_tokens : LLAMA_DEFAULT_MAX_TOKENS;
     ctx->temperature = config->temperature > 0.0f ? config->temperature : LLAMA_DEFAULT_TEMPERATURE;
     ctx->top_p = config->top_p > 0.0f ? config->top_p : LLAMA_DEFAULT_TOP_P;
-    ctx->n_gpu_layers = config->use_gpu ? config->gpu_layers : LLAMA_DEFAULT_GPU_LAYERS;
+    // GPU layers: if use_gpu is false, use 0 layers (CPU only), otherwise use specified or default
+    ctx->n_gpu_layers = config->use_gpu ? (config->gpu_layers > 0 ? config->gpu_layers : LLAMA_DEFAULT_GPU_LAYERS) : 0;
     ctx->seed = config->seed > 0 ? config->seed : (uint32_t)time(NULL);
   } else {
+    // No config provided - use defaults with GPU enabled
     ctx->n_ctx = LLAMA_DEFAULT_CONTEXT_LENGTH;
     ctx->n_predict = LLAMA_DEFAULT_MAX_TOKENS;
     ctx->temperature = LLAMA_DEFAULT_TEMPERATURE;
@@ -220,12 +245,36 @@ static int ethervox_llama_backend_init(ethervox_llm_backend_t* backend, const et
   }
   
   ctx->n_threads = LLAMA_DEFAULT_THREADS;
-  ctx->use_mlock = true;   // Lock model in RAM for maximum speed
-  ctx->use_mmap = false;   // Disable mmap - preload entire model for speed
+  
+  // Platform-specific memory settings for optimal performance
+#if defined(ETHERVOX_PLATFORM_MACOS) || defined(ETHERVOX_PLATFORM_LINUX) || defined(ETHERVOX_PLATFORM_WINDOWS)
+  // Desktop: Use mmap for fast startup, optional mlock if lots of RAM
+  ctx->use_mmap = true;    // Memory-map file for fast lazy loading
+  ctx->use_mlock = false;  // Don't lock (prevents swapping but needs lots of RAM)
+#elif defined(ETHERVOX_PLATFORM_IOS)
+  // iOS: mmap not supported, must preload model
+  ctx->use_mmap = false;   // iOS doesn't support mmap for model files
+  ctx->use_mlock = false;
+#elif defined(ETHERVOX_PLATFORM_ANDROID)
+  // Android: Use mmap for battery efficiency
+  ctx->use_mmap = true;
+  ctx->use_mlock = false;
+#else
+  // Embedded: Preload if enough RAM, otherwise use mmap
+  ctx->use_mmap = true;
+  ctx->use_mlock = false;
+#endif
+  
   ctx->cancel_requested = false;
   
-  // Initialize llama backend (global initialization)
-  llama_backend_init();
+  // Initialize llama backend (global initialization) - only once
+  if (!g_llama_backend_initialized) {
+    ETHERVOX_LOG_INFO("Initializing llama.cpp backend (first time)");
+    llama_backend_init();
+    g_llama_backend_initialized = true;
+  }
+  g_llama_backend_refcount++;
+  ETHERVOX_LOG_DEBUG("Llama backend refcount: %d", g_llama_backend_refcount);
   
   backend->handle = ctx;
   backend->is_initialized = true;
@@ -259,8 +308,15 @@ static void llama_backend_cleanup(ethervox_llm_backend_t* backend) {
     ctx->loaded_model_path = NULL;
   }
   
-  // Cleanup llama backend
-  llama_backend_free();
+  // Cleanup llama backend - only free when last reference is gone
+  g_llama_backend_refcount--;
+  ETHERVOX_LOG_DEBUG("Llama backend refcount: %d", g_llama_backend_refcount);
+  if (g_llama_backend_refcount <= 0) {
+    ETHERVOX_LOG_INFO("Freeing llama.cpp backend (last reference)");
+    llama_backend_free();
+    g_llama_backend_initialized = false;
+    g_llama_backend_refcount = 0;
+  }
   
   free(ctx);
   backend->handle = NULL;
@@ -298,12 +354,38 @@ static int llama_backend_load_model(ethervox_llm_backend_t* backend, const char*
   ctx->model_params.use_mlock = ctx->use_mlock;
   ctx->model_params.use_mmap = ctx->use_mmap;
   
+  ETHERVOX_LOG_INFO("Loading model with %d GPU layers requested (mmap=%s, mlock=%s)", 
+                    ctx->n_gpu_layers, 
+                    ctx->use_mmap ? "true" : "false",
+                    ctx->use_mlock ? "true" : "false");
+  
   // Load model
   ctx->model = llama_model_load_from_file(model_path, ctx->model_params);
   if (!ctx->model) {
     ETHERVOX_LOG_ERROR("Failed to load model from: %s", model_path);
     return ETHERVOX_ERROR_FAILED;
   }
+  
+  // Check if GPU layers exceeds actual model layers and reload if necessary
+  int32_t n_layer = llama_model_n_layer(ctx->model);
+  ETHERVOX_LOG_INFO("Model reports %d layers total", n_layer);
+  if (ctx->n_gpu_layers > n_layer) {
+    ETHERVOX_LOG_WARN("GPU layers setting (%d) exceeds model layers (%d), reloading with corrected value %d", 
+                      ctx->n_gpu_layers, n_layer, n_layer);
+    
+    // Free the model and reload with correct GPU layers
+    llama_model_free(ctx->model);
+    ctx->n_gpu_layers = n_layer;
+    ctx->model_params.n_gpu_layers = n_layer;
+    
+    ctx->model = llama_model_load_from_file(model_path, ctx->model_params);
+    if (!ctx->model) {
+      ETHERVOX_LOG_ERROR("Failed to reload model from: %s", model_path);
+      return ETHERVOX_ERROR_FAILED;
+    }
+  }
+  
+  ETHERVOX_LOG_INFO("Model has %d layers, using %d GPU layers", n_layer, ctx->n_gpu_layers);
   
   // Initialize context parameters
   ctx->ctx_params = llama_context_default_params();

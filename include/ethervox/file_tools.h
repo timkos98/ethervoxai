@@ -16,6 +16,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <time.h>
+#include "ethervox/error.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -247,9 +248,10 @@ int ethervox_path_config_init(
  * @param label Human-friendly name (e.g., "Notes", "Projects")
  * @param path Absolute directory path
  * @param description Optional purpose description
- * @return 0 on success, -2 if path doesn't exist, -3 if max paths reached
+ * @return ETHERVOX_SUCCESS on success, ETHERVOX_ERROR_PATH_INVALID if path doesn't exist, 
+ *         ETHERVOX_ERROR_BUFFER_TOO_SMALL if max paths reached
  */
-int ethervox_path_config_set(
+ethervox_result_t ethervox_path_config_set(
     ethervox_path_config_t* config,
     const char* label,
     const char* path,
@@ -265,9 +267,9 @@ int ethervox_path_config_set(
  * @param label Path label to find
  * @param path_out Output buffer for path
  * @param path_size Size of output buffer
- * @return 0 on success, -2 if unverified, -3 if not found
+ * @return ETHERVOX_SUCCESS on success, ETHERVOX_ERROR_NOT_FOUND if not found
  */
-int ethervox_path_config_get(
+ethervox_result_t ethervox_path_config_get(
     ethervox_path_config_t* config,
     const char* label,
     char* path_out,
@@ -282,9 +284,9 @@ int ethervox_path_config_get(
  * @param config Path configuration
  * @param paths_out Output: array of paths (caller must free)
  * @param count_out Output: number of paths
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_path_config_list(
+ethervox_result_t ethervox_path_config_list(
     ethervox_path_config_t* config,
     ethervox_user_path_t** paths_out,
     uint32_t* count_out
@@ -299,9 +301,9 @@ int ethervox_path_config_list(
  * @param config Path configuration
  * @param paths_out Output: array of unverified paths (caller must free)
  * @param count_out Output: number of unverified paths
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_path_config_get_unverified(
+ethervox_result_t ethervox_path_config_get_unverified(
     ethervox_path_config_t* config,
     ethervox_user_path_t** paths_out,
     uint32_t* count_out

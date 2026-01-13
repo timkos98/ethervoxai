@@ -13,11 +13,16 @@
  */
 
 #include "ethervox/file_tools.h"
+#include "ethervox/error.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+
+#ifdef _WIN32
+#include <direct.h>
+#endif
 #include <unistd.h>
 
 // Test data directory
@@ -25,7 +30,11 @@
 
 // Helper: Create test directory
 static void setup_test_dir(void) {
+#ifdef _WIN32
+    _mkdir(TEST_DIR);
+#else
     mkdir(TEST_DIR, 0755);
+#endif
 }
 
 // Helper: Clean up test directory
@@ -89,7 +98,7 @@ void test_binary_detection_null_bytes(void) {
     create_binary_file("binary_null.bin", binary_data, sizeof(binary_data));
     
     // Initialize file tools
-    ethervox_file_tools_config_t config;
+    ethervox_file_tools_config_t config = {0};
     const char* base_paths[] = {TEST_DIR, NULL};
     assert(ethervox_file_tools_init(&config, base_paths, ETHERVOX_FILE_ACCESS_READ_ONLY) == 0);
     
@@ -128,7 +137,7 @@ void test_binary_detection_control_chars(void) {
     }
     create_binary_file("control_heavy.dat", control_data, sizeof(control_data));
     
-    ethervox_file_tools_config_t config;
+    ethervox_file_tools_config_t config = {0};
     const char* base_paths[] = {TEST_DIR, NULL};
     assert(ethervox_file_tools_init(&config, base_paths, ETHERVOX_FILE_ACCESS_READ_ONLY) == 0);
     ethervox_file_tools_add_filter(&config, ".dat");
@@ -163,7 +172,7 @@ void test_text_file_not_binary(void) {
     
     create_text_file("normal.txt", text_content);
     
-    ethervox_file_tools_config_t config;
+    ethervox_file_tools_config_t config = {0};
     const char* base_paths[] = {TEST_DIR, NULL};
     assert(ethervox_file_tools_init(&config, base_paths, ETHERVOX_FILE_ACCESS_READ_ONLY) == 0);
     ethervox_file_tools_add_filter(&config, ".txt");
@@ -197,12 +206,12 @@ void test_code_file_not_binary(void) {
         "int main() {\n"
         "    printf(\"Hello, world!\\n\");\n"
         "    char* str = \"test\\ttabs\\nand\\rescapes\";\n"
-        "    return 0;\n"
+        "    return ETHERVOX_SUCCESS;\n"
         "}\n";
     
     create_text_file("code.c", code_content);
     
-    ethervox_file_tools_config_t config;
+    ethervox_file_tools_config_t config = {0};
     const char* base_paths[] = {TEST_DIR, NULL};
     assert(ethervox_file_tools_init(&config, base_paths, ETHERVOX_FILE_ACCESS_READ_ONLY) == 0);
     ethervox_file_tools_add_filter(&config, ".c");
@@ -233,7 +242,7 @@ void test_large_file_rejected(void) {
     // Create 11MB file (exceeds default 10MB limit)
     create_large_text_file("huge.txt", 11 * 1024);
     
-    ethervox_file_tools_config_t config;
+    ethervox_file_tools_config_t config = {0};
     const char* base_paths[] = {TEST_DIR, NULL};
     assert(ethervox_file_tools_init(&config, base_paths, ETHERVOX_FILE_ACCESS_READ_ONLY) == 0);
     ethervox_file_tools_add_filter(&config, ".txt");
@@ -264,7 +273,7 @@ void test_medium_file_reads(void) {
     // Create 6KB file (below 10MB limit)
     create_large_text_file("medium.txt", 6);
     
-    ethervox_file_tools_config_t config;
+    ethervox_file_tools_config_t config = {0};
     const char* base_paths[] = {TEST_DIR, NULL};
     assert(ethervox_file_tools_init(&config, base_paths, ETHERVOX_FILE_ACCESS_READ_ONLY) == 0);
     ethervox_file_tools_add_filter(&config, ".txt");
@@ -296,7 +305,7 @@ void test_empty_file(void) {
     
     create_text_file("empty.txt", "");
     
-    ethervox_file_tools_config_t config;
+    ethervox_file_tools_config_t config = {0};
     const char* base_paths[] = {TEST_DIR, NULL};
     assert(ethervox_file_tools_init(&config, base_paths, ETHERVOX_FILE_ACCESS_READ_ONLY) == 0);
     ethervox_file_tools_add_filter(&config, ".txt");
@@ -338,7 +347,7 @@ void test_utf8_file(void) {
     
     create_text_file("utf8.txt", utf8_content);
     
-    ethervox_file_tools_config_t config;
+    ethervox_file_tools_config_t config = {0};
     const char* base_paths[] = {TEST_DIR, NULL};
     assert(ethervox_file_tools_init(&config, base_paths, ETHERVOX_FILE_ACCESS_READ_ONLY) == 0);
     ethervox_file_tools_add_filter(&config, ".txt");
@@ -372,7 +381,7 @@ void test_extension_filtering(void) {
     create_text_file("allowed.txt", "Allowed content");
     create_text_file("not_allowed.xyz", "Should not be readable");
     
-    ethervox_file_tools_config_t config;
+    ethervox_file_tools_config_t config = {0};
     const char* base_paths[] = {TEST_DIR, NULL};
     assert(ethervox_file_tools_init(&config, base_paths, ETHERVOX_FILE_ACCESS_READ_ONLY) == 0);
     
@@ -413,7 +422,7 @@ void test_path_validation(void) {
         fclose(f);
     }
     
-    ethervox_file_tools_config_t config;
+    ethervox_file_tools_config_t config = {0};
     const char* base_paths[] = {TEST_DIR, NULL};  // Only allow TEST_DIR
     assert(ethervox_file_tools_init(&config, base_paths, ETHERVOX_FILE_ACCESS_READ_ONLY) == 0);
     ethervox_file_tools_add_filter(&config, ".txt");
@@ -457,5 +466,5 @@ int main(void) {
     
     printf("\n=== All tests passed! ✓ ===\n\n");
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }

@@ -21,11 +21,15 @@
 #include <stdint.h>
 
 #include "ethervox/config.h"
+#include "ethervox/error.h"
 #include "ethervox/governor.h"  // For ethervox_governor_progress_callback type
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+// Forward declarations
+typedef struct ethervox_tts_context ethervox_tts_context_t;
 
 // Intent types
 typedef enum {
@@ -138,6 +142,7 @@ typedef struct {
   // Governor integration (tool-aware LLM orchestration)
   void* governor;  // ethervox_governor_t*
   void* governor_tool_registry;  // ethervox_tool_registry_t*
+  void* manifest_registry;  // tool_manifest_registry_t* (binary manifest + optimized prompts cache)
   bool use_governor;  // Enable Governor for complex queries
 
   // Intent parsing patterns
@@ -163,21 +168,21 @@ typedef struct {
 } ethervox_dialogue_context_request_t;
 
 // Public API functions
-int ethervox_dialogue_init(ethervox_dialogue_engine_t* engine, const ethervox_llm_config_t* config);
+ethervox_result_t ethervox_dialogue_init(ethervox_dialogue_engine_t* engine, const ethervox_llm_config_t* config);
 void ethervox_dialogue_cleanup(ethervox_dialogue_engine_t* engine);
 
 // Intent processing
-int ethervox_dialogue_parse_intent(ethervox_dialogue_engine_t* engine,
+ethervox_result_t ethervox_dialogue_parse_intent(ethervox_dialogue_engine_t* engine,
                                    const ethervox_dialogue_intent_request_t* request,
                                    ethervox_intent_t* intent);
 
 // LLM processing
-int ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
+ethervox_result_t ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engine,
                                   const ethervox_intent_t* intent, const char* context_id,
                                   ethervox_llm_response_t* response);
 
 // LLM processing with streaming
-int ethervox_dialogue_process_llm_stream(ethervox_dialogue_engine_t* engine,
+ethervox_result_t ethervox_dialogue_process_llm_stream(ethervox_dialogue_engine_t* engine,
                                          const ethervox_intent_t* intent,
                                          const ethervox_dialogue_context_t* context,
                                          void (*token_callback)(const char* token, void* user_data),
@@ -186,14 +191,14 @@ int ethervox_dialogue_process_llm_stream(ethervox_dialogue_engine_t* engine,
                                          ethervox_governor_progress_callback governor_progress_callback);
 
 // Context management
-int ethervox_dialogue_create_context(ethervox_dialogue_engine_t* engine,
+ethervox_result_t ethervox_dialogue_create_context(ethervox_dialogue_engine_t* engine,
                                      const ethervox_dialogue_context_request_t* request,
                                      char** context_id);
-int ethervox_dialogue_get_context(ethervox_dialogue_engine_t* engine, const char* context_id,
+ethervox_result_t ethervox_dialogue_get_context(ethervox_dialogue_engine_t* engine, const char* context_id,
                                   ethervox_dialogue_context_t** context);
 void ethervox_dialogue_destroy_context(ethervox_dialogue_engine_t* engine, const char* context_id);
 
-int ethervox_dialogue_set_language(ethervox_dialogue_engine_t* engine, const char* language_code);
+ethervox_result_t ethervox_dialogue_set_language(ethervox_dialogue_engine_t* engine, const char* language_code);
 const char* ethervox_dialogue_get_language(const ethervox_dialogue_engine_t* engine);
 
 // External LLM integration
@@ -205,6 +210,10 @@ void ethervox_dialogue_set_external_llm_callback(ethervox_dialogue_engine_t* eng
 struct ethervox_memory_store_t;
 void ethervox_dialogue_set_memory_store(struct ethervox_memory_store_t* store);
 
+// Tool manifest integration (forward declaration)
+struct tool_manifest_registry;
+ethervox_result_t ethervox_dialogue_reload_manifest(ethervox_dialogue_engine_t* engine, const char* model_path);
+
 // Utility functions
 ethervox_llm_config_t ethervox_dialogue_get_default_llm_config(void);
 const char* ethervox_dialogue_detect_system_language(void);
@@ -215,10 +224,25 @@ const char* ethervox_entity_type_to_string(ethervox_entity_type_t type);
 
 // Language support
 bool ethervox_dialogue_is_language_supported(const char* language_code);
-int ethervox_dialogue_add_language_support(ethervox_dialogue_engine_t* engine,
+ethervox_result_t ethervox_dialogue_add_language_support(ethervox_dialogue_engine_t* engine,
                                            const char* language_code);
 const char** ethervox_dialogue_get_supported_languages(void);
+/**
+ * Get the global TTS instance (used by speak tool and conversation)
+ * @return Global TTS context (may be NULL if not initialized)
+ */
+ethervox_tts_context_t* ethervox_get_global_tts(void);
 
+/**
+ * Reload the global TTS instance with new settings
+ * @param tts_settings New TTS settings to apply
+ * @param chunk_callback Optional audio chunk callback for streaming (NULL to disable)
+ * @param callback_user_data User data to pass to callback
+ * @return 0 on success, -1 on failure
+ */
+ethervox_result_t ethervox_reload_global_tts(const void* tts_settings,
+                               void (*chunk_callback)(const float*, size_t, void*),
+                               void* callback_user_data);
 #ifdef __cplusplus
 }
 #endif

@@ -20,6 +20,8 @@
 #include "ethervox/logging.h"
 #include "ethervox/chat_template.h"
 #include "ethervox/platform.h"
+#include "ethervox/platform_utils.h"
+#include "ethervox/unit_conversion.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -27,6 +29,12 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <errno.h>
+#include <math.h>
+
+// Include llama.cpp headers for cache inspection
+#if defined(ETHERVOX_WITH_LLAMA) && LLAMA_HEADER_AVAILABLE
+#include "llama.h"
+#endif
 
 // Android logging support
 #ifdef __ANDROID__
@@ -46,8 +54,8 @@
 #define COLOR_CYAN    "\033[36m"
 #define COLOR_BOLD    "\033[1m"
 
-#define TEST_PASS(msg, ...) printf(COLOR_GREEN "  ✓ " COLOR_RESET msg "\n", ##__VA_ARGS__)
-#define TEST_FAIL(msg, ...) printf(COLOR_RED "  ✗ " COLOR_RESET msg "\n", ##__VA_ARGS__)
+#define TEST_PASS(msg, ...) printf(COLOR_GREEN "  [OK] " COLOR_RESET msg "\n", ##__VA_ARGS__)
+#define TEST_FAIL(msg, ...) printf(COLOR_RED "  [FAIL] " COLOR_RESET msg "\n", ##__VA_ARGS__)
 #define TEST_INFO(msg, ...) printf(COLOR_CYAN "  ℹ " COLOR_RESET msg "\n", ##__VA_ARGS__)
 #define TEST_HEADER(msg, ...) printf("\n" COLOR_BOLD COLOR_BLUE "=== " msg " ===" COLOR_RESET "\n", ##__VA_ARGS__)
 #define TEST_SUBHEADER(msg, ...) printf("\n" COLOR_YELLOW "→ " msg COLOR_RESET "\n", ##__VA_ARGS__)
@@ -229,7 +237,7 @@ static void test_adaptive_memory(void) {
         const ethervox_memory_entry_t* entry;
         if (ethervox_memory_get_by_id(&store, corr_id1, &entry) == 0) {
             if (entry->importance == 0.99f) {
-                TEST_PASS("Correction has importance=0.99 ✓");
+                TEST_PASS("Correction has importance=0.99 [OK]");
                 g_tests_passed++;
             } else {
                 TEST_FAIL("Correction importance is %.2f, expected 0.99", entry->importance);
@@ -545,9 +553,20 @@ static void test_memory_archive(void) {
     
     // Create a temporary test directory
     const char* test_dir = "/tmp/ethervox_archive_test";
+    
+    // Remove old test directory if it exists (ignore errors)
+#ifdef _WIN32
     char cmd[512];
-    snprintf(cmd, sizeof(cmd), "rm -rf %s && mkdir -p %s", test_dir, test_dir);
+    snprintf(cmd, sizeof(cmd), "rmdir /s /q \"%s\" 2>nul", test_dir);
     system(cmd);
+#else
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s", test_dir);
+    system(cmd);
+#endif
+    
+    // Create test directory
+    platform_mkdir_recursive(test_dir);
     
     // Create some fake old session files
     char filepath[512];
@@ -688,8 +707,285 @@ static void test_file_append_tool(void) {
     unlink(test_file);
 }
 
+// Test 9: Unit Conversion Tool
+static void test_unit_conversion_tool(void) {
+    TEST_HEADER("Test 9: Unit Conversion Tool");
+    
+    double result;
+    char* error = NULL;
+    int ret;
+    
+    // Temperature conversion
+    ret = ethervox_unit_convert(100.0, "celsius", "fahrenheit", &result, &error);
+    if (ret != 0) {
+        TEST_FAIL("Temperature conversion failed: %s", error ? error : "unknown");
+        free(error);
+        g_tests_failed++;
+        return;
+    }
+    if (fabs(result - 212.0) > 0.001) {
+        TEST_FAIL("Temperature conversion incorrect: expected 212.0, got %.3f", result);
+        g_tests_failed++;
+        return;
+    }
+    TEST_PASS("Temperature: 100°C = 212°F");
+    
+    // Length conversion
+    ret = ethervox_unit_convert(5.0, "mile", "kilometer", &result, &error);
+    if (ret != 0 || fabs(result - 8.04672) > 0.001) {
+        TEST_FAIL("Length conversion failed");
+        free(error);
+        g_tests_failed++;
+        return;
+    }
+    TEST_PASS("Length: 5 miles ≈ 8.047 km");
+    
+    // Mass conversion
+    ret = ethervox_unit_convert(1.0, "kilogram", "pound", &result, &error);
+    if (ret != 0 || fabs(result - 2.20462) > 0.001) {
+        TEST_FAIL("Mass conversion failed");
+        free(error);
+        g_tests_failed++;
+        return;
+    }
+    TEST_PASS("Mass: 1 kg ≈ 2.205 lb");
+    
+    // Volume conversion
+    ret = ethervox_unit_convert(1.0, "gallon", "liter", &result, &error);
+    if (ret != 0 || fabs(result - 4.54609) > 0.001) {
+        TEST_FAIL("Volume conversion failed");
+        free(error);
+        g_tests_failed++;
+        return;
+    }
+    TEST_PASS("Volume: 1 imperial gallon ≈ 4.546 L");
+    
+    // Speed conversion
+    ret = ethervox_unit_convert(60.0, "mph", "km/h", &result, &error);
+    if (ret != 0 || fabs(result - 96.56) > 0.1) {
+        TEST_FAIL("Speed conversion failed");
+        free(error);
+        g_tests_failed++;
+        return;
+    }
+    TEST_PASS("Speed: 60 mph ≈ 96.56 km/h");
+    
+    // Pressure conversion
+    ret = ethervox_unit_convert(1.0, "atmosphere", "psi", &result, &error);
+    if (ret != 0 || fabs(result - 14.696) > 0.001) {
+        TEST_FAIL("Pressure conversion failed");
+        free(error);
+        g_tests_failed++;
+        return;
+    }
+    TEST_PASS("Pressure: 1 atm ≈ 14.696 psi");
+    
+    // Energy conversion
+    ret = ethervox_unit_convert(1.0, "kilowatt hour", "joule", &result, &error);
+    if (ret != 0 || fabs(result - 3.6e6) > 1.0) {
+        TEST_FAIL("Energy conversion failed");
+        free(error);
+        g_tests_failed++;
+        return;
+    }
+    TEST_PASS("Energy: 1 kWh = 3.6 MJ");
+    
+    // Data conversion
+    ret = ethervox_unit_convert(1024.0, "byte", "kibibyte", &result, &error);
+    if (ret != 0 || fabs(result - 1.0) > 0.001) {
+        TEST_FAIL("Data conversion failed");
+        free(error);
+        g_tests_failed++;
+        return;
+    }
+    TEST_PASS("Data: 1024 bytes = 1 KiB");
+    
+    // Error handling: incompatible units
+    ret = ethervox_unit_convert(10.0, "meter", "kilogram", &result, &error);
+    if (ret == 0) {
+        TEST_FAIL("Should reject incompatible units");
+        g_tests_failed++;
+        return;
+    }
+    free(error);
+    error = NULL;
+    TEST_PASS("Error handling: rejects incompatible units");
+    
+    // Error handling: unknown unit
+    ret = ethervox_unit_convert(10.0, "foobar", "meter", &result, &error);
+    if (ret == 0) {
+        TEST_FAIL("Should reject unknown units");
+        g_tests_failed++;
+        return;
+    }
+    free(error);
+    TEST_PASS("Error handling: rejects unknown units");
+    
+    g_tests_passed++;
+    TEST_PASS("Unit conversion integration test completed");
+}
+
+// Test 10: Cache Summarization with Real LLM
+static void test_cache_summarization_live(ethervox_governor_t* governor) {
+    TEST_HEADER("Test 10: Cache Summarization with Live LLM");
+    
+#if !defined(ETHERVOX_WITH_LLAMA) || !LLAMA_HEADER_AVAILABLE
+    TEST_INFO("Skipping - llama.cpp not available");
+    return;
+#else
+    
+    if (!governor) {
+        TEST_FAIL("Governor not provided - skipping live test");
+        g_tests_failed++;
+        record_test_result("Cache Summarization (Live)", false);
+        return;
+    }
+    
+    // Check if model is loaded
+    if (!governor->llm_ctx || governor->system_prompt_token_count == 0) {
+        TEST_INFO("No model loaded - this test requires a loaded LLM model");
+        TEST_INFO("Skipping live cache summarization test");
+        return;
+    }
+    
+    TEST_INFO("Model loaded with %d system prompt tokens", governor->system_prompt_token_count);
+    
+    // Simulate a conversation by adding some turns to the history
+    TEST_SUBHEADER("Simulating conversation history");
+    
+    if (!governor->conversation_history.turns) {
+        TEST_FAIL("Conversation history not initialized");
+        g_tests_failed++;
+        record_test_result("Cache Summarization (Live)", false);
+        return;
+    }
+    
+    // Add test conversation turns
+    const char* user_messages[] = {
+        "What's the weather like today?",
+        "Can you help me convert 10 miles to kilometers?",
+        "Tell me about quantum computing",
+        "What are the best practices for memory management in C?",
+        "How does the KV cache work in LLM inference?"
+    };
+    
+    const char* assistant_responses[] = {
+        "I'd need to know your location to provide accurate weather information.",
+        "10 miles is approximately 16.09 kilometers.",
+        "Quantum computing uses quantum bits (qubits) that can exist in superposition states.",
+        "Always free allocated memory, avoid memory leaks, use valgrind for debugging.",
+        "The KV cache stores key-value attention states to avoid recomputing past tokens."
+    };
+    
+    for (int i = 0; i < 5; i++) {
+        if (governor->conversation_history.turn_count >= governor->conversation_history.capacity) {
+            TEST_INFO("Conversation history full, skipping remaining turns");
+            break;
+        }
+        
+        conversation_turn_t* turn = &governor->conversation_history.turns[governor->conversation_history.turn_count];
+        turn->is_user = true;
+        strncpy(turn->preview, user_messages[i], sizeof(turn->preview) - 1);
+        turn->preview[sizeof(turn->preview) - 1] = '\0';
+        turn->token_count = strlen(user_messages[i]) / 4; // Rough estimate
+        governor->conversation_history.turn_count++;
+        
+        if (governor->conversation_history.turn_count >= governor->conversation_history.capacity) {
+            break;
+        }
+        
+        turn = &governor->conversation_history.turns[governor->conversation_history.turn_count];
+        turn->is_user = false;
+        strncpy(turn->preview, assistant_responses[i], sizeof(turn->preview) - 1);
+        turn->preview[sizeof(turn->preview) - 1] = '\0';
+        turn->token_count = strlen(assistant_responses[i]) / 4;
+        governor->conversation_history.turn_count++;
+    }
+    
+    TEST_PASS("Added %u conversation turns", governor->conversation_history.turn_count);
+    
+    // Test summarization
+    TEST_SUBHEADER("Testing manual cache summarization");
+    
+    llama_memory_t mem = llama_get_memory(governor->llm_ctx);
+    int32_t pos_before = llama_memory_seq_pos_max(mem, 0);
+    TEST_INFO("KV cache position before: %d tokens", pos_before);
+    
+    // Force summarization even if cache isn't full
+    int ret = ethervox_governor_summarize_and_clear_cache(governor, true);
+    
+    if (ret != 0) {
+        TEST_FAIL("Summarization failed with error code %d", ret);
+        g_tests_failed++;
+        record_test_result("Cache Summarization (Live)", false);
+        return;
+    }
+    
+    TEST_PASS("Summarization completed successfully");
+    
+    int32_t pos_after = llama_memory_seq_pos_max(mem, 0);
+    TEST_INFO("KV cache position after: %d tokens", pos_after);
+    
+    // Verify cache was cleared back to system prompt
+    if (pos_after <= governor->system_prompt_token_count + 100) {  // Allow some buffer for summary
+        TEST_PASS("Cache cleared correctly (pos=%d, system_prompt=%d)", 
+                 pos_after, governor->system_prompt_token_count);
+    } else {
+        TEST_FAIL("Cache not cleared properly (pos=%d, expected ~%d)", 
+                 pos_after, governor->system_prompt_token_count);
+        g_tests_failed++;
+        record_test_result("Cache Summarization (Live)", false);
+        return;
+    }
+    
+    // Verify summary was stored in memory
+    TEST_SUBHEADER("Verifying summary storage");
+    
+    ethervox_tool_t* memory_search_tool = NULL;
+    for (uint32_t i = 0; i < governor->tool_registry->tool_count; i++) {
+        if (strcmp(governor->tool_registry->tools[i].name, "memory_search") == 0) {
+            memory_search_tool = &governor->tool_registry->tools[i];
+            break;
+        }
+    }
+    
+    if (!memory_search_tool) {
+        TEST_INFO("memory_search tool not available - skipping summary verification");
+    } else {
+        char search_args[512];
+        snprintf(search_args, sizeof(search_args),
+            "{\"query\":null,"
+            "\"tag_filter\":[\"context_summary\",\"manual_clear\"],"
+            "\"limit\":1}");
+        
+        char* search_result = NULL;
+        char* search_error = NULL;
+        
+        int search_status = memory_search_tool->execute(search_args, &search_result, &search_error);
+        if (search_status == 0 && search_result) {
+            TEST_PASS("Summary found in memory: %.100s...", search_result);
+        } else {
+            TEST_FAIL("Summary not found in memory");
+            g_tests_failed++;
+            record_test_result("Cache Summarization (Live)", false);
+            free(search_result);
+            free(search_error);
+            return;
+        }
+        
+        free(search_result);
+        free(search_error);
+    }
+    
+    g_tests_passed++;
+    record_test_result("Cache Summarization (Live)", true);
+    TEST_PASS("Cache summarization integration test completed");
+    
+#endif // ETHERVOX_WITH_LLAMA
+}
+
 // Main test runner
-void run_integration_tests(void) {
+void run_integration_tests(ethervox_governor_t* governor) {
     // Create test report file
     time_t report_time = time(NULL);
     char report_dir[512];
@@ -713,7 +1009,12 @@ void run_integration_tests(void) {
 #endif
     
     // Create directory if it doesn't exist
+#ifdef _WIN32
+#include <direct.h>  // for _mkdir on Windows
+    int mkdir_result = _mkdir(report_dir);
+#else
     int mkdir_result = mkdir(report_dir, 0755);
+#endif
     if (mkdir_result != 0 && errno != EEXIST) {
         INTEGRATION_LOG("Warning: mkdir(%s) failed with errno %d: %s", 
                        report_dir, errno, strerror(errno));
@@ -860,6 +1161,21 @@ void run_integration_tests(void) {
     if (g_tests_failed > failed_before) record_test_result("File Append Tool", false);
     else if (g_tests_passed > passed_before) record_test_result("File Append Tool", true);
     
+    passed_before = g_tests_passed; failed_before = g_tests_failed;
+    test_unit_conversion_tool();
+    if (g_tests_failed > failed_before) record_test_result("Unit Conversion Tool", false);
+    else if (g_tests_passed > passed_before) record_test_result("Unit Conversion Tool", true);
+    
+    // Test 10: Cache summarization with live LLM (requires loaded model)
+    if (governor) {
+        passed_before = g_tests_passed; failed_before = g_tests_failed;
+        test_cache_summarization_live(governor);
+        if (g_tests_failed > failed_before) record_test_result("Cache Summarization (Live)", false);
+        else if (g_tests_passed > passed_before) record_test_result("Cache Summarization (Live)", true);
+    } else {
+        TEST_INFO("Skipping cache summarization test - no governor available");
+    }
+    
     time_t end_time = time(NULL);
     double duration = difftime(end_time, start_time);
     
@@ -905,9 +1221,9 @@ void run_integration_tests(void) {
     if (g_passed_count > 0) {
         printf(COLOR_GREEN "  Passed Tests:\n" COLOR_RESET);
         for (int i = 0; i < g_passed_count; i++) {
-            printf(COLOR_GREEN "    ✓ %s\n" COLOR_RESET, g_passed_tests[i]);
+            printf(COLOR_GREEN "    [OK] %s\n" COLOR_RESET, g_passed_tests[i]);
 #ifdef __ANDROID__
-            INTEGRATION_LOG("  ✓ %s", g_passed_tests[i]);
+            INTEGRATION_LOG("  [OK] %s", g_passed_tests[i]);
 #endif
             free(g_passed_tests[i]);
         }
@@ -918,9 +1234,9 @@ void run_integration_tests(void) {
     if (g_failed_count > 0) {
         printf(COLOR_RED "  Failed Tests:\n" COLOR_RESET);
         for (int i = 0; i < g_failed_count; i++) {
-            printf(COLOR_RED "    ✗ %s\n" COLOR_RESET, g_failed_tests[i]);
+            printf(COLOR_RED "    [FAIL] %s\n" COLOR_RESET, g_failed_tests[i]);
 #ifdef __ANDROID__
-            INTEGRATION_LOG("  ✗ %s", g_failed_tests[i]);
+            INTEGRATION_LOG("  [FAIL] %s", g_failed_tests[i]);
 #endif
             free(g_failed_tests[i]);
         }
@@ -929,10 +1245,10 @@ void run_integration_tests(void) {
     
     if (g_tests_failed == 0) {
         printf(COLOR_BOLD COLOR_GREEN);
-        printf("  ✓✓✓ ALL TESTS PASSED! ✓✓✓\n");
+        printf("  [OK][OK][OK] ALL TESTS PASSED! [OK][OK][OK]\n");
         printf(COLOR_RESET);
 #ifdef __ANDROID__
-        INTEGRATION_LOG("✓✓✓ ALL TESTS PASSED! ✓✓✓");
+        INTEGRATION_LOG("[OK][OK][OK] ALL TESTS PASSED! [OK][OK][OK]");
 #endif
     } else {
         printf(COLOR_BOLD COLOR_YELLOW);
@@ -962,7 +1278,7 @@ void run_integration_tests(void) {
         if (g_passed_count > 0) {
             fprintf(g_report_file, "Passed Tests:\n");
             for (int i = 0; i < g_passed_count; i++) {
-                fprintf(g_report_file, "  ✓ %s\n", g_passed_tests[i]);
+                fprintf(g_report_file, "  [OK] %s\n", g_passed_tests[i]);
             }
             fprintf(g_report_file, "\n");
         }
@@ -970,13 +1286,13 @@ void run_integration_tests(void) {
         if (g_failed_count > 0) {
             fprintf(g_report_file, "Failed Tests:\n");
             for (int i = 0; i < g_failed_count; i++) {
-                fprintf(g_report_file, "  ✗ %s\n", g_failed_tests[i]);
+                fprintf(g_report_file, "  [FAIL] %s\n", g_failed_tests[i]);
             }
             fprintf(g_report_file, "\n");
         }
         
         if (g_tests_failed == 0) {
-            fprintf(g_report_file, "✓✓✓ ALL TESTS PASSED! ✓✓✓\n");
+            fprintf(g_report_file, "[OK][OK][OK] ALL TESTS PASSED! [OK][OK][OK]\n");
         } else {
             fprintf(g_report_file, "⚠ Some tests failed - %d passed, %d failed\n", 
                    g_tests_passed, g_tests_failed);

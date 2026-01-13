@@ -12,6 +12,7 @@
 #include <math.h>
 
 #include "ethervox/stt.h"
+#include "ethervox/error.h"
 #include "ethervox/logging.h"
 #include "ethervox/config.h"
 
@@ -222,13 +223,15 @@ static void whisper_log_suppress(enum ggml_log_level level, const char* text, vo
 /**
  * Initialize Whisper backend - MINIMAL VERSION
  */
-int ethervox_stt_whisper_init(ethervox_stt_runtime_t* runtime) {
-  if (!runtime) return -1;
+ethervox_result_t ethervox_stt_whisper_init(ethervox_stt_runtime_t* runtime) {
+  ETHERVOX_CHECK_PTR(runtime);
   
   whisper_log_set(whisper_log_suppress, NULL);
   
   whisper_backend_context_t* ctx = (whisper_backend_context_t*)calloc(1, sizeof(whisper_backend_context_t));
-  if (!ctx) return -1;
+  if (!ctx) {
+    return ETHERVOX_ERROR_OUT_OF_MEMORY;
+  }
   
   // Load model
   LOG_INFO("Loading Whisper model from: %s", runtime->config.model_path);
@@ -237,7 +240,7 @@ int ethervox_stt_whisper_init(ethervox_stt_runtime_t* runtime) {
   if (!ctx->ctx) {
     LOG_ERROR("Failed to load Whisper model (possibly OOM): %s", runtime->config.model_path);
     free(ctx);
-    return -1;
+    return ETHERVOX_ERROR_STT_INIT;
   }
   
   LOG_INFO("✅ Successfully loaded Whisper model: %s", runtime->config.model_path);
@@ -253,9 +256,13 @@ int ethervox_stt_whisper_init(ethervox_stt_runtime_t* runtime) {
     // Pass 2: detect_language=false with detected language to transcribe
     ctx->auto_detect_language = true;
     ctx->language_detected = false;
-    ctx->params.language = "auto";
+    // CRITICAL: Initialize to English as fallback (will be overwritten after detection)
+    // DO NOT set to "auto" - whisper.cpp expects a valid 2-letter code
+    strncpy(ctx->detected_language, "en", 2);
+    ctx->detected_language[2] = '\0';
+    ctx->params.language = ctx->detected_language;
     ctx->params.detect_language = true;  // First pass: detect only
-    LOG_INFO("Multi-language auto-detection enabled (two-pass mode)");
+    LOG_INFO("Multi-language auto-detection enabled (two-pass mode, fallback=en)");
   } else if (lang && strlen(lang) >= 2) {
     // Extract language code (e.g., "en" from "en-US")
     static char lang_code[3];
@@ -323,8 +330,22 @@ int ethervox_stt_whisper_init(ethervox_stt_runtime_t* runtime) {
   // Beam search parameters (in nested struct)
   ctx->params.beam_search.beam_size = ETHERVOX_WHISPER_BEAM_SIZE;
   ctx->params.greedy.best_of = 1;         // Not used in beam search mode
-  LOG_INFO("Using beam search (size=%d) to improve accuracy and avoid loops",
+  LOG_INFO("Using beam search (size=%d) for improved word-level accuracy",
            ctx->params.beam_search.beam_size);
+  
+  // Initial prompt to guide transcription style and improve accuracy
+  // Based on whisper.cpp best practices for conversational speech
+  // This helps Whisper understand context and improves word detection
+  ctx->params.initial_prompt = 
+    "This is conversational speech with natural pronunciation. "
+    "Transcribe exactly what is said, including all words clearly. "
+    "Avoid hallucinations and stay accurate to the audio.";
+  LOG_INFO("Using context-aware initial prompt for better word detection");
+  
+  // Advanced tuning for word-level accuracy
+  ctx->params.split_on_word = true;     // Split segments on word boundaries (cleaner output)
+  ctx->params.max_len = 0;              // No max length constraint (let speech flow naturally)
+  ctx->params.audio_ctx = 0;            // Use model default audio context (1500 for most models)
   
   // Streaming optimization (based on stream.cpp example)
   ctx->params.no_context = true;        // Reset context each chunk to avoid loops
@@ -342,7 +363,7 @@ int ethervox_stt_whisper_init(ethervox_stt_runtime_t* runtime) {
   if (!ctx->audio_buffer) {
     whisper_free(ctx->ctx);
     free(ctx);
-    return -1;
+    return ETHERVOX_ERROR_OUT_OF_MEMORY;
   }
   
   // Allocate overlap buffer (200ms @ 16kHz for context between chunks)
@@ -352,7 +373,7 @@ int ethervox_stt_whisper_init(ethervox_stt_runtime_t* runtime) {
     free(ctx->audio_buffer);
     whisper_free(ctx->ctx);
     free(ctx);
-    return -1;
+    return ETHERVOX_ERROR_OUT_OF_MEMORY;
   }
   ctx->overlap_size = 0;
   
@@ -374,14 +395,17 @@ int ethervox_stt_whisper_init(ethervox_stt_runtime_t* runtime) {
   
   runtime->backend_context = ctx;
   LOG_INFO("Whisper backend initialized with multi-language, timestamps, and acoustic speaker detection");
-  return 0;
+  return ETHERVOX_SUCCESS;
 }
 
 /**
  * Start session - MINIMAL
  */
-int ethervox_stt_whisper_start(ethervox_stt_runtime_t* runtime) {
-  if (!runtime || !runtime->backend_context) return -1;
+ethervox_result_t ethervox_stt_whisper_start(ethervox_stt_runtime_t* runtime) {
+  ETHERVOX_CHECK_PTR(runtime);
+  if (!runtime->backend_context) {
+    return ETHERVOX_ERROR_NOT_INITIALIZED;
+  }
   
   whisper_backend_context_t* ctx = (whisper_backend_context_t*)runtime->backend_context;
   
@@ -410,7 +434,7 @@ int ethervox_stt_whisper_start(ethervox_stt_runtime_t* runtime) {
   ctx->duplicate_count = 0;
   
   LOG_INFO("Whisper session started with clean buffers");
-  return 0;
+  return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -420,10 +444,13 @@ int ethervox_stt_whisper_start(ethervox_stt_runtime_t* runtime) {
  * - Keep 200ms overlap for context continuity
  * - No experimental VAD, just time-based chunking
  */
-int ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
+ethervox_result_t ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
                                   const ethervox_audio_buffer_t* audio_buffer,
                                   ethervox_stt_result_t* result) {
-  if (!runtime || !runtime->backend_context || !audio_buffer || !result) return -1;
+  ETHERVOX_CHECK_PTR(runtime);
+  ETHERVOX_CHECK_PTR(runtime->backend_context);
+  ETHERVOX_CHECK_PTR(audio_buffer);
+  ETHERVOX_CHECK_PTR(result);
   
   whisper_backend_context_t* ctx = (whisper_backend_context_t*)runtime->backend_context;
   
@@ -431,7 +458,7 @@ int ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
   // This can happen if stop() was called while process() is still running
   if (!ctx->audio_buffer || !ctx->overlap_buffer || !ctx->ctx) {
     LOG_WARN("Whisper buffers not initialized, skipping audio processing");
-    return -1;
+    return ETHERVOX_ERROR_STT_PROCESSING;
   }
   
   memset(result, 0, sizeof(ethervox_stt_result_t));
@@ -463,7 +490,7 @@ int ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
   float* process_buffer = (float*)malloc(total_samples * sizeof(float));
   if (!process_buffer) {
     LOG_ERROR("Failed to allocate processing buffer");
-    return -1;
+    return ETHERVOX_ERROR_STT_PROCESSING;
   }
   
   // Copy overlap from previous chunk (provides context)
@@ -502,39 +529,61 @@ int ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
       LOG_INFO("Pass 1: Detecting language with %zu samples...", total_samples);
     }
     
-    // Temporarily enable language detection for this pass
-    bool saved_detect = ctx->params.detect_language;
+    // Enable language detection for this pass only
     ctx->params.detect_language = true;
     
     int ret_code = whisper_full(ctx->ctx, ctx->params, process_buffer, total_samples);
     
-    // Restore detection setting
-    ctx->params.detect_language = saved_detect;
+    // CRITICAL: Always disable detection after pass 1 to prevent error -4
+    // The detection flag MUST be false for the transcription pass
+    ctx->params.detect_language = false;
     
     if (ret_code != 0) {
       LOG_ERROR("Language detection failed with code %d", ret_code);
       free(process_buffer);
       ctx->audio_buffer_size = 0;
-      return -1;
+      return ETHERVOX_ERROR_STT_PROCESSING;
     }
     
     // Get detected language
     int lang_id = whisper_full_lang_id(ctx->ctx);
     const char* detected_lang = whisper_lang_str(lang_id);
+    
+    // Validate detected language against Whisper's supported languages
+    // Common issue: "nn" (Norwegian Nynorsk) is not well-supported
+    // Whisper officially supports: en, zh, de, es, ru, ko, fr, ja, pt, tr, pl, ca, nl, ar, sv, it, id, hi, fi, vi, he, uk, el, ms, cs, ro, da, hu, ta, no, th, ur, hr, bg, lt, lv, bn, fa, sr, az, sl, kn, et, mk, br, eu, is, hy, ne, mn, bs, kk, sq, sw, gl, mr, pa, si, km, sn, yo, so, af, oc, ka, be, tg, sd, gu, am, yi, lo, uz, fo, ht, ps, tk, nn, mt, sa, lb, my, bo, tl, mg, as, tt, haw, ln, ha, ba, jw, su
+    // But multilingual models may not handle all variants well
+    
+    const char* safe_lang = NULL;
     if (detected_lang && strlen(detected_lang) >= 2) {
-      // Check if language changed
-      bool lang_changed = false;
-      if (ctx->language_detected && strncmp(ctx->detected_language, detected_lang, 2) != 0) {
-        lang_changed = true;
-        LOG_INFO("🔄 Language changed: %s → %s", ctx->detected_language, detected_lang);
+      // Map problematic language codes to safe alternatives
+      if (strcmp(detected_lang, "nn") == 0 || strcmp(detected_lang, "no") == 0) {
+        // Norwegian variants → use English (common issue with quiet audio)
+        safe_lang = "en";
+        LOG_WARN("⚠️  Detected Norwegian ('%s'), but switching to English (more reliable for quiet audio)", detected_lang);
+      } else if (strcmp(detected_lang, "mt") == 0 || strcmp(detected_lang, "sa") == 0 || 
+                 strcmp(detected_lang, "bo") == 0 || strcmp(detected_lang, "haw") == 0) {
+        // Rare languages that Whisper struggles with → fallback to English
+        safe_lang = "en";
+        LOG_WARN("⚠️  Detected rare language '%s', but switching to English (better model support)", detected_lang);
+      } else {
+        // Use detected language
+        safe_lang = detected_lang;
       }
       
-      strncpy(ctx->detected_language, detected_lang, 2);
+      // Check if language changed
+      bool lang_changed = false;
+      if (ctx->language_detected && strncmp(ctx->detected_language, safe_lang, 2) != 0) {
+        lang_changed = true;
+        LOG_INFO("🔄 Language changed: %s → %s", ctx->detected_language, safe_lang);
+      }
+      
+      strncpy(ctx->detected_language, safe_lang, 2);
       ctx->detected_language[2] = '\0';
       ctx->language_detected = true;
       
       if (!lang_changed) {
-        LOG_INFO("✓ Detected language: %s (will use for next %d segments)", 
+        LOG_INFO("[OK] Detected language: %s (will use for next %d segments)", 
                  ctx->detected_language, ctx->redetect_interval);
       }
       
@@ -556,14 +605,73 @@ int ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
   
   // PASS 2 (or single pass if language already known): Transcribe
   LOG_INFO("Transcribing %zu samples in language: %s...", total_samples, ctx->params.language);
+  LOG_DEBUG("whisper params: detect_language=%d, translate=%d, token_timestamps=%d",
+            ctx->params.detect_language, ctx->params.translate, ctx->params.token_timestamps);
+  
   int ret_code = whisper_full(ctx->ctx, ctx->params, process_buffer, total_samples);
   
   if (ret_code != 0) {
     LOG_ERROR("whisper_full() failed with code %d", ret_code);
-    free(process_buffer);
-    ctx->audio_buffer_size = 0;
-    return -1;
+    
+    // Error code -4 typically means parameter mismatch or invalid config
+    // Try multiple recovery strategies
+    if (ret_code == -4) {
+      LOG_WARN("⚠️  Error -4 detected - attempting recovery strategies...");
+      
+      // Strategy 1: Disable language detection (it might be left on from pass 1)
+      if (ctx->params.detect_language) {
+        LOG_INFO("Recovery attempt 1: Disabling detect_language flag...");
+        ctx->params.detect_language = false;
+        ret_code = whisper_full(ctx->ctx, ctx->params, process_buffer, total_samples);
+        if (ret_code == 0) {
+          LOG_INFO("[OK] Recovery successful - detect_language flag was the issue");
+          goto transcription_success;
+        }
+        LOG_WARN("Recovery attempt 1 failed (code: %d)", ret_code);
+      }
+      
+      // Strategy 2: Force English language
+      if (strcmp(ctx->params.language, "en") != 0) {
+        LOG_INFO("Recovery attempt 2: Forcing English language...");
+        strncpy(ctx->detected_language, "en", 2);
+        ctx->detected_language[2] = '\0';
+        ctx->params.language = ctx->detected_language;
+        ctx->params.detect_language = false;
+        ret_code = whisper_full(ctx->ctx, ctx->params, process_buffer, total_samples);
+        if (ret_code == 0) {
+          LOG_INFO("[OK] Recovery successful - English language works");
+          goto transcription_success;
+        }
+        LOG_WARN("Recovery attempt 2 failed (code: %d)", ret_code);
+      }
+      
+      // Strategy 3: Disable translation (might conflict with language settings)
+      if (ctx->params.translate) {
+        LOG_INFO("Recovery attempt 3: Disabling translation...");
+        ctx->params.translate = false;
+        ret_code = whisper_full(ctx->ctx, ctx->params, process_buffer, total_samples);
+        if (ret_code == 0) {
+          LOG_INFO("[OK] Recovery successful - translation was conflicting");
+          goto transcription_success;
+        }
+        LOG_WARN("Recovery attempt 3 failed (code: %d)", ret_code);
+      }
+      
+      // All recovery attempts failed
+      LOG_ERROR("❌ All recovery strategies failed - giving up on this chunk");
+      free(process_buffer);
+      ctx->audio_buffer_size = 0;
+      return ETHERVOX_ERROR_STT_PROCESSING;
+    } else {
+      // Non -4 error, not recoverable
+      free(process_buffer);
+      ctx->audio_buffer_size = 0;
+      return ETHERVOX_ERROR_STT_PROCESSING;
+    }
   }
+  
+transcription_success:
+  ; // Empty statement to satisfy C standard (labels must be followed by a statement)
   
   // Get segments
   const int n_segments = whisper_full_n_segments(ctx->ctx);
@@ -571,7 +679,8 @@ int ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
   
   if (n_segments == 0) {
     LOG_DEBUG("No segments detected - continuing to accumulate");
-    goto save_overlap;
+    // Skip directly to overlap saving (no speaker_turns allocated yet)
+    goto save_overlap_no_cleanup;
   }
   
   // Build transcript from all segments with speaker detection
@@ -589,7 +698,7 @@ int ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
   if (!speaker_turns) {
     free(process_buffer);
     ctx->audio_buffer_size = 0;
-    return -1;
+    return ETHERVOX_ERROR_STT_PROCESSING;
   }
   
   // Calculate audio segment boundaries for each text segment
@@ -676,7 +785,7 @@ int ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
     free(speaker_turns);
     free(process_buffer);
     ctx->audio_buffer_size = 0;
-    return -1;
+    return ETHERVOX_ERROR_STT_PROCESSING;
   }
   
   if (total_len > 0) {
@@ -790,6 +899,9 @@ int ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
 save_overlap:
   free(speaker_turns);  // Clean up speaker turn flags array
   
+save_overlap_no_cleanup:
+  ; // Empty statement for label
+  
   // Save last 200ms of audio as overlap for next chunk (context continuity)
   ctx->overlap_size = (ctx->audio_buffer_size > ctx->overlap_capacity) 
                       ? ctx->overlap_capacity 
@@ -811,8 +923,10 @@ save_overlap:
 /**
  * Finalize - process remaining audio
  */
-int ethervox_stt_whisper_finalize(ethervox_stt_runtime_t* runtime, ethervox_stt_result_t* result) {
-  if (!runtime || !runtime->backend_context || !result) return -1;
+ethervox_result_t ethervox_stt_whisper_finalize(ethervox_stt_runtime_t* runtime, ethervox_stt_result_t* result) {
+  ETHERVOX_CHECK_PTR(runtime);
+  ETHERVOX_CHECK_PTR(runtime->backend_context);
+  ETHERVOX_CHECK_PTR(result);
   
   whisper_backend_context_t* ctx = (whisper_backend_context_t*)runtime->backend_context;
   
@@ -943,8 +1057,11 @@ void ethervox_stt_whisper_stop(ethervox_stt_runtime_t* runtime) {
 /**
  * Set language for hot-switching
  */
-int ethervox_stt_whisper_set_language(ethervox_stt_runtime_t* runtime, const char* language) {
-  if (!runtime || !runtime->backend_context) return -1;
+ethervox_result_t ethervox_stt_whisper_set_language(ethervox_stt_runtime_t* runtime, const char* language) {
+  ETHERVOX_CHECK_PTR(runtime);
+  if (!runtime->backend_context) {
+    return ETHERVOX_ERROR_NOT_INITIALIZED;
+  }
   
   whisper_backend_context_t* ctx = (whisper_backend_context_t*)runtime->backend_context;
   
@@ -987,26 +1104,26 @@ void ethervox_stt_whisper_cleanup(ethervox_stt_runtime_t* runtime) {
 
 #else // !WHISPER_CPP_AVAILABLE
 
-int ethervox_stt_whisper_init(ethervox_stt_runtime_t* runtime) {
+ethervox_result_t ethervox_stt_whisper_init(ethervox_stt_runtime_t* runtime) {
   (void)runtime;
-  return -1;
+  return ETHERVOX_ERROR_NOT_SUPPORTED;
 }
 
-int ethervox_stt_whisper_start(ethervox_stt_runtime_t* runtime) {
+ethervox_result_t ethervox_stt_whisper_start(ethervox_stt_runtime_t* runtime) {
   (void)runtime;
-  return -1;
+  return ETHERVOX_ERROR_NOT_SUPPORTED;
 }
 
-int ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
+ethervox_result_t ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
                                   const ethervox_audio_buffer_t* audio_buffer,
                                   ethervox_stt_result_t* result) {
   (void)runtime; (void)audio_buffer; (void)result;
-  return -1;
+  return ETHERVOX_ERROR_NOT_SUPPORTED;
 }
 
-int ethervox_stt_whisper_finalize(ethervox_stt_runtime_t* runtime, ethervox_stt_result_t* result) {
+ethervox_result_t ethervox_stt_whisper_finalize(ethervox_stt_runtime_t* runtime, ethervox_stt_result_t* result) {
   (void)runtime; (void)result;
-  return -1;
+  return ETHERVOX_ERROR_NOT_SUPPORTED;
 }
 
 void ethervox_stt_whisper_stop(ethervox_stt_runtime_t* runtime) {

@@ -23,10 +23,12 @@ extern "C" {
  * - Hash table indexing
  * - System prompt generation
  * - Memory export/import
+ * - Cache summarization (with live LLM if available)
  * 
  * Can be invoked via /test command in the main program
+ * @param governor Governor instance for live LLM tests (optional, can be NULL)
  */
-void run_integration_tests(void);
+void run_integration_tests(struct ethervox_governor* governor);
 
 #ifdef __cplusplus
 }

@@ -67,6 +67,57 @@ add_definitions(-DETHERVOX_BACKEND_VERSION="${ETHERVOX_BACKEND_VERSION}")
 add_definitions(-DETHERVOX_GIT_BRANCH="${GIT_BRANCH}")
 add_definitions(-DETHERVOX_GIT_COMMIT="${GIT_COMMIT_HASH}")
 
+# =============================================================================
+# GitHub Token Configuration (REQUIRED for bug reporter)
+# =============================================================================
+# Read GitHub token from environment variable at build time and validate it
+# Priority: ETHERVOX_GITHUB_TOKEN_DESKTOP → ETHERVOX_GITHUB_TOKEN
+# 
+# The token MUST be set for builds to succeed. The validation script will:
+# 1. Check if token exists
+# 2. Verify token is valid via GitHub API
+# 3. Check token has not expired
+# 4. Verify access to timkos98/ethervoxai repository
+#
+# To create a token: https://github.com/settings/tokens
+# Required permission: issues:write for timkos98/ethervoxai
+#
+# To disable validation (e.g., for development):
+#   cmake -DSKIP_GITHUB_TOKEN_VALIDATION=ON
+#   OR set environment variable: export SKIP_GITHUB_TOKEN_VALIDATION=1
+
+# Check environment variable first, then CMake option
+if(DEFINED ENV{SKIP_GITHUB_TOKEN_VALIDATION} AND NOT "$ENV{SKIP_GITHUB_TOKEN_VALIDATION}" STREQUAL "")
+    set(SKIP_GITHUB_TOKEN_VALIDATION ON)
+endif()
+
+option(SKIP_GITHUB_TOKEN_VALIDATION "Skip GitHub token validation (disables bug reporter)" OFF)
+
+if(DEFINED ENV{ETHERVOX_GITHUB_TOKEN_DESKTOP} AND NOT "$ENV{ETHERVOX_GITHUB_TOKEN_DESKTOP}" STREQUAL "")
+    set(ETHERVOX_GITHUB_TOKEN "$ENV{ETHERVOX_GITHUB_TOKEN_DESKTOP}")
+    message(STATUS "GitHub token: Using ETHERVOX_GITHUB_TOKEN_DESKTOP")
+elseif(DEFINED ENV{ETHERVOX_GITHUB_TOKEN} AND NOT "$ENV{ETHERVOX_GITHUB_TOKEN}" STREQUAL "")
+    set(ETHERVOX_GITHUB_TOKEN "$ENV{ETHERVOX_GITHUB_TOKEN}")
+    message(STATUS "GitHub token: Using ETHERVOX_GITHUB_TOKEN")
+else()
+    set(ETHERVOX_GITHUB_TOKEN "")
+endif()
+
+# Validate the GitHub token using our validation script
+# This will cause CMake configuration to FAIL if:
+# - Token is not set
+# - Token is invalid or expired
+# - Token doesn't have required permissions
+if(NOT SKIP_GITHUB_TOKEN_VALIDATION)
+    set(GITHUB_TOKEN "${ETHERVOX_GITHUB_TOKEN}")
+    include(cmake/validate_github_token.cmake)
+else()
+    message(WARNING "GitHub token validation SKIPPED - bug reporter will be disabled")
+    set(ETHERVOX_GITHUB_TOKEN "")
+endif()
+
+add_definitions(-DETHERVOX_GITHUB_TOKEN="${ETHERVOX_GITHUB_TOKEN}")
+
 # Parse version components (MAJOR.MINOR.PATCH) only if we have a proper tag
 if(GIT_TAG_RESULT EQUAL 0 AND GIT_VERSION_TAG AND ETHERVOX_BACKEND_VERSION MATCHES "^([0-9]+)\\.([0-9]+)\\.([0-9]+)")
     set(VERSION_MAJOR ${CMAKE_MATCH_1})
@@ -223,6 +274,52 @@ option(ENABLE_DEBUG "Enable debug logging" OFF)
 option(WITH_LLAMA "Enable Llama.cpp backend support" ON)
 option(WITH_TINYLLAMA "Enable TinyLlama backend support" ON)
 
+# Fetch cJSON for settings persistence
+include(FetchContent)
+FetchContent_Declare(
+    cJSON
+    GIT_REPOSITORY https://github.com/DaveGamble/cJSON.git
+    GIT_TAG v1.7.18
+    PATCH_COMMAND ${CMAKE_COMMAND} -E echo_append ""
+)
+# Set minimum CMake version for cJSON subdirectory before including it
+set(CMAKE_POLICY_DEFAULT_CMP0000 NEW CACHE STRING "" FORCE)
+set(ENABLE_CJSON_TEST OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_AND_STATIC_LIBS OFF CACHE BOOL "" FORCE)
+set(CJSON_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(ENABLE_CUSTOM_COMPILER_FLAGS OFF CACHE BOOL "" FORCE)
+FetchContent_GetProperties(cJSON)
+if(NOT cjson_POPULATED)
+    FetchContent_Populate(cJSON)
+    # Patch the CMakeLists.txt to require CMake 3.16
+    file(READ "${cjson_SOURCE_DIR}/CMakeLists.txt" CJSON_CMAKE_CONTENT)
+    string(REPLACE "cmake_minimum_required(VERSION 3.0)" 
+                   "cmake_minimum_required(VERSION 3.16)" 
+                   CJSON_CMAKE_CONTENT "${CJSON_CMAKE_CONTENT}")
+    file(WRITE "${cjson_SOURCE_DIR}/CMakeLists.txt" "${CJSON_CMAKE_CONTENT}")
+    add_subdirectory(${cjson_SOURCE_DIR} ${cjson_BINARY_DIR})
+    # Remove -Werror from cjson compilation flags
+    if(TARGET cjson)
+        get_target_property(CJSON_FLAGS cjson COMPILE_OPTIONS)
+        if(CJSON_FLAGS)
+            list(REMOVE_ITEM CJSON_FLAGS "-Werror")
+            set_target_properties(cjson PROPERTIES COMPILE_OPTIONS "${CJSON_FLAGS}")
+        endif()
+    endif()
+endif()
+
+# Find libcurl for bug reporter (not needed on Android - uses Kotlin BugReporter instead)
+if(NOT TARGET_PLATFORM STREQUAL "ANDROID")
+    find_package(CURL REQUIRED)
+    if(CURL_FOUND)
+        message(STATUS "Found CURL: ${CURL_LIBRARIES}")
+    else()
+        message(FATAL_ERROR "CURL not found - required for bug reporter")
+    endif()
+else()
+    message(STATUS "Skipping CURL (Android uses Kotlin BugReporter)")
+endif()
+
 if(ENABLE_DEBUG)
     add_definitions(-DDEBUG_ENABLED=1)
 endif()
@@ -238,17 +335,38 @@ if(WITH_TINYLLAMA)
     message(STATUS "TinyLlama backend enabled")
 endif()
 
-# llama.cpp integration
-message(STATUS "Checking llama.cpp: WITH_LLAMA=${WITH_LLAMA}, CMAKE_CURRENT_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}")
-message(STATUS "Checking path: ${CMAKE_CURRENT_SOURCE_DIR}/external/llama.cpp")
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/llama.cpp")
-    message(STATUS "llama.cpp directory EXISTS")
-else()
-    message(WARNING "llama.cpp directory DOES NOT EXIST at ${CMAKE_CURRENT_SOURCE_DIR}/external/llama.cpp")
+# ============================================================================
+# Dependency Management - llama.cpp and whisper.cpp
+# ============================================================================
+# Automatically fetches dependencies if not present as git submodules
+# Users can:
+#   1. Use git submodules: git submodule update --init --recursive
+#   2. Let CMake auto-download (default, one-time)
+#   3. Provide custom paths: -DLLAMA_CPP_CUSTOM_DIR=/path/to/llama.cpp
+#   4. Disable auto-fetch: -DETHERVOX_AUTO_FETCH_DEPS=OFF
+
+include(cmake/FetchDependencies.cmake)
+
+# Fetch llama.cpp
+if(WITH_LLAMA)
+    fetch_llama_cpp()
 endif()
 
-if(WITH_LLAMA AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/llama.cpp")
-    message(STATUS "Adding llama.cpp from external/llama.cpp")
+# Fetch whisper.cpp  
+option(WITH_WHISPER "Enable whisper.cpp for speech-to-text" ON)
+if(WITH_WHISPER)
+    fetch_whisper_cpp()
+endif()
+
+# Print summary
+print_dependency_status()
+
+# ============================================================================
+# llama.cpp Integration
+# ============================================================================
+
+if(WITH_LLAMA AND LLAMA_CPP_SOURCE_DIR)
+    message(STATUS "Configuring llama.cpp from: ${LLAMA_CPP_SOURCE_DIR}")
     
     # llama.cpp build options
     set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -285,22 +403,24 @@ if(WITH_LLAMA AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/llama.cpp")
     endif()
     
     # Add llama.cpp as subdirectory
-    add_subdirectory(external/llama.cpp)
+    add_subdirectory(${LLAMA_CPP_SOURCE_DIR})
     
     add_definitions(-DLLAMA_CPP_AVAILABLE=1)
-    message(STATUS "llama.cpp successfully configured")
+    message(STATUS "✓ llama.cpp successfully configured")
 elseif(WITH_LLAMA)
-    message(WARNING "llama.cpp not found in external/llama.cpp - LLM features will be limited")
+    message(WARNING "llama.cpp not available - LLM features will be limited")
+    message(WARNING "To enable: git submodule update --init or set ETHERVOX_AUTO_FETCH_DEPS=ON")
     add_definitions(-DLLAMA_CPP_AVAILABLE=0)
 else()
     add_definitions(-DLLAMA_CPP_AVAILABLE=0)
 endif()
 
-# whisper.cpp integration for speech-to-text
-option(WITH_WHISPER "Enable whisper.cpp for speech-to-text" ON)
+# ============================================================================
+# whisper.cpp Integration
+# ============================================================================
 
-if(WITH_WHISPER AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/whisper.cpp")
-    message(STATUS "Adding whisper.cpp from external/whisper.cpp")
+if(WITH_WHISPER AND WHISPER_CPP_SOURCE_DIR)
+    message(STATUS "Configuring whisper.cpp from: ${WHISPER_CPP_SOURCE_DIR}")
     
     # whisper.cpp build options
     set(WHISPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -331,12 +451,13 @@ if(WITH_WHISPER AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/whisper.cpp")
     endif()
     
     # Add whisper.cpp as subdirectory
-    add_subdirectory(external/whisper.cpp)
+    add_subdirectory(${WHISPER_CPP_SOURCE_DIR})
     
     add_definitions(-DWHISPER_CPP_AVAILABLE=1)
-    message(STATUS "whisper.cpp successfully configured")
+    message(STATUS "✓ whisper.cpp successfully configured")
 elseif(WITH_WHISPER)
-    message(WARNING "whisper.cpp not found in external/whisper.cpp - Voice features will be disabled")
+    message(WARNING "whisper.cpp not available - Voice features will be disabled")
+    message(WARNING "To enable: git submodule update --init or set ETHERVOX_AUTO_FETCH_DEPS=ON")
     add_definitions(-DWHISPER_CPP_AVAILABLE=0)
 else()
     add_definitions(-DWHISPER_CPP_AVAILABLE=0)
@@ -350,7 +471,112 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 set(COMMON_SOURCES
     src/common/error.c
     src/common/logging.c
+    src/common/settings_menu.c
+    src/common/language_detector.c
+    src/common/model_downloader.c
+    src/config/settings.c
 )
+
+# Platform-specific utility implementations
+if(ETHERVOX_PLATFORM_WINDOWS)
+    list(APPEND COMMON_SOURCES src/common/platform_utils_windows.c)
+elseif(ETHERVOX_PLATFORM_LINUX OR ETHERVOX_PLATFORM_MACOS OR ETHERVOX_PLATFORM_RPI)
+    list(APPEND COMMON_SOURCES src/common/platform_utils_unix.c)
+endif()
+
+# Continue adding common sources
+list(APPEND COMMON_SOURCES
+    src/audio/reference_buffer.c
+    src/audio/aec_speex.c
+    src/audio/audio_stream_player.c
+    src/tts/tts.c
+    src/tts/text_normalizer.c
+    src/tts/piper_backend.c
+    src/tts/phonemizer/phonemizer.c
+    src/tts/phonemizer/dictionary.c
+    src/tts/phonemizer/espeak_dict.c
+    src/tts/phonemizer/rules_en.c
+    src/tts/phonemizer/rules_de.c
+    src/tts/phonemizer/dict_chinese.c
+    src/tts/phonemizer/chinese_segmenter.c
+    src/tts/phonemizer/pronunciation_overrides.c
+    src/tts/phonemizer/pronunciation_trainer.c
+    src/tts/phonemizer/stress_reduction.c
+)
+
+# Espeak-trained dictionary embeddings (VARIANT-SPECIFIC DICTIONARIES REQUIRED)
+# Each Piper model is trained with a SPECIFIC espeak language variant (e.g., en-us vs en-gb-x-rp).
+# Using the wrong variant causes poor quality because espeak phonemes differ by variant:
+#   en-us:     həlˈoʊ  (US English: /oʊ/ diphthong)
+#   en-gb-x-rp: həlˈəʊ (British RP: /əʊ/ diphthong)
+# 
+# The dictionaries must match the model's phonemes.language field from its .onnx.json config.
+# Generated dictionaries are variant-specific:
+#   - espeak_dict_en_us.h      → for models with language: "en-us"
+#   - espeak_dict_en_gb_rp.h   → for models with language: "en-gb-x-rp"
+#   - espeak_dict_de.h         → for models with language: "de"
+#   - espeak_dict_cmn.h        → for models with language: "cmn"
+#   - espeak_dict_es_419.h     → for models with language: "es-419"
+# 
+# Generate all variants with: ./tools/train_phonemizer.sh (takes ~30 min per variant)
+option(ENABLE_ESPEAK_DICT "Enable embedded espeak-trained dictionaries (variant-specific)" OFF)
+
+set(ESPEAK_DICT_ENABLED FALSE)
+if(ENABLE_ESPEAK_DICT)
+    # Check for generated dictionary headers
+    set(ESPEAK_DICT_DIR "${CMAKE_SOURCE_DIR}/src/tts/phonemizer/data")
+    
+    if(EXISTS "${ESPEAK_DICT_DIR}/espeak_dict_en_us.h")
+        message(STATUS "✅ Espeak dictionary (en-us) found - enabling")
+        add_definitions(-DESPEAK_DICT_EN_US_ENABLED)
+        set(ESPEAK_DICT_ENABLED TRUE)
+    else()
+        message(STATUS "⚠️  Espeak dictionary (en-us) not found. Run: tools/train_phonemizer.sh")
+    endif()
+    
+    if(EXISTS "${ESPEAK_DICT_DIR}/espeak_dict_en_gb_rp.h")
+        message(STATUS "✅ Espeak dictionary (en-gb-rp) found - enabling")
+        add_definitions(-DESPEAK_DICT_EN_GB_RP_ENABLED)
+        set(ESPEAK_DICT_ENABLED TRUE)
+    else()
+        message(STATUS "⚠️  Espeak dictionary (en-gb-rp) not found. Run: tools/train_phonemizer.sh")
+    endif()
+    
+    if(EXISTS "${ESPEAK_DICT_DIR}/espeak_dict_de.h")
+        message(STATUS "✅ Espeak dictionary (de) found - enabling")
+        add_definitions(-DESPEAK_DICT_DE_ENABLED)
+        set(ESPEAK_DICT_ENABLED TRUE)
+    else()
+        message(STATUS "⚠️  Espeak dictionary (de) not found. Run: tools/train_phonemizer.sh")
+    endif()
+    
+    if(EXISTS "${ESPEAK_DICT_DIR}/espeak_dict_cmn.h")
+        message(STATUS "✅ Espeak dictionary (cmn) found - enabling")
+        add_definitions(-DESPEAK_DICT_CMN_ENABLED)
+        set(ESPEAK_DICT_ENABLED TRUE)
+    else()
+        message(STATUS "⚠️  Espeak dictionary (cmn) not found. Run: tools/train_phonemizer.sh")
+    endif()
+    
+    if(EXISTS "${ESPEAK_DICT_DIR}/espeak_dict_es_419.h")
+        message(STATUS "✅ Espeak dictionary (es-419) found - enabling")
+        add_definitions(-DESPEAK_DICT_ES_419_ENABLED)
+        set(ESPEAK_DICT_ENABLED TRUE)
+    else()
+        message(STATUS "⚠️  Espeak dictionary (es-419) not found. Run: tools/train_phonemizer.sh")
+    endif()
+    
+    # Add the data file if any dictionaries are enabled
+    if(ESPEAK_DICT_ENABLED)
+        list(APPEND COMMON_SOURCES src/tts/phonemizer/espeak_dict_data.c)
+        message(STATUS "✅ Espeak dictionary data file included in build")
+    endif()
+endif()
+
+# Add bug_reporter.c only for non-Android platforms (Android uses Kotlin BugReporter)
+if(NOT TARGET_PLATFORM STREQUAL "ANDROID")
+    list(APPEND COMMON_SOURCES src/common/bug_reporter.c)
+endif()
 
 # Collect core source files (non-platform specific)
 file(GLOB ETHERVOXAI_CORE_SOURCES 
@@ -362,6 +588,8 @@ file(GLOB ETHERVOXAI_CORE_SOURCES
     "src/plugins/compute_tools/*.c"
     "src/plugins/timer_tools/*.c"
 )
+
+# Note: src/dialogue/voice_conversation.c is included via GLOB above
 
 # Exclude test files from the main library
 list(FILTER ETHERVOXAI_CORE_SOURCES EXCLUDE REGEX ".*test_.*\\.c$")
@@ -389,6 +617,11 @@ file(GLOB FILE_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/file_tools
 list(APPEND ETHERVOXAI_CORE_SOURCES ${FILE_TOOLS_SOURCES})
 message(STATUS "File tools plugin sources included")
 
+# Add unit conversion plugin sources
+file(GLOB UNIT_CONVERSION_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/unit_conversion/*.c")
+list(APPEND ETHERVOXAI_CORE_SOURCES ${UNIT_CONVERSION_SOURCES})
+message(STATUS "Unit conversion plugin sources included")
+
 # Add startup prompt tools plugin sources
 file(GLOB STARTUP_PROMPT_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/startup_prompt_tools/*.c")
 list(APPEND ETHERVOXAI_CORE_SOURCES ${STARTUP_PROMPT_TOOLS_SOURCES})
@@ -403,10 +636,20 @@ file(GLOB CONTEXT_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/context
 list(APPEND ETHERVOXAI_CORE_SOURCES ${CONTEXT_TOOLS_SOURCES})
 message(STATUS "Context tools plugin sources included")
 
+# Add conversation tools plugin sources (speak, listen for LLM-controlled interaction)
+file(GLOB CONVERSATION_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/conversation_tools/*.c")
+list(APPEND ETHERVOXAI_CORE_SOURCES ${CONVERSATION_TOOLS_SOURCES})
+message(STATUS "Conversation tools plugin sources included")
+
 # Add voice tools plugin sources
 file(GLOB VOICE_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/voice_tools/*.c")
 list(APPEND ETHERVOXAI_CORE_SOURCES ${VOICE_TOOLS_SOURCES})
 message(STATUS "Voice tools plugin sources included")
+
+# Add meta tools plugin sources (get_tool_info for dynamic schema loading)
+file(GLOB META_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/meta_tools/*.c")
+list(APPEND ETHERVOXAI_CORE_SOURCES ${META_TOOLS_SOURCES})
+message(STATUS "Meta tools plugin sources included")
 
 # Add dialogue sources (including integration tests)
 file(GLOB DIALOGUE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/dialogue/*.c")
@@ -416,6 +659,7 @@ message(STATUS "Dialogue sources included: ${DIALOGUE_SOURCES}")
 
 # Shared audio core implementation (excluding platform-specific files)
 list(APPEND ETHERVOXAI_CORE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/audio/audio_core.c")
+list(APPEND ETHERVOXAI_CORE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/audio/audio_recording.c")
 
 # Platform-specific source files
 # Check multiple conditions for RPI detection
@@ -468,7 +712,10 @@ set(ETHERVOXAI_SOURCES ${COMMON_SOURCES} ${ETHERVOXAI_CORE_SOURCES} ${PLATFORM_S
 
 # Add JNI wrapper for Android
 if(ANDROID)
-    list(APPEND ETHERVOXAI_SOURCES src/platform/ethervox_android_core.c)
+    list(APPEND ETHERVOXAI_SOURCES 
+        src/platform/ethervox_android_core.c
+        src/platform/model_management_jni.c
+    )
 endif()
 
 # Debug: Print sources being compiled
@@ -506,6 +753,7 @@ if(WITH_LLAMA)
         target_include_directories(ethervoxai PRIVATE 
             ${CMAKE_CURRENT_SOURCE_DIR}/external/llama.cpp/include
             ${CMAKE_CURRENT_SOURCE_DIR}/external/llama.cpp/src
+            ${CMAKE_CURRENT_SOURCE_DIR}/external/llama.cpp/vendor
         )
         target_link_libraries(ethervoxai PUBLIC llama)
         message(STATUS "Linked llama.cpp library to ethervoxai")
@@ -537,6 +785,113 @@ if(WITH_WHISPER)
         message(WARNING "whisper target not found - Voice features will be limited")
     endif()
 endif()
+
+# Link cJSON for settings persistence
+if(TARGET cjson)
+    target_link_libraries(ethervoxai PUBLIC cjson)
+    target_include_directories(ethervoxai PRIVATE ${cjson_SOURCE_DIR})
+    message(STATUS "Linked cJSON library to ethervoxai")
+else()
+    message(WARNING "cJSON target not found - settings persistence will fail")
+endif()
+
+# Link Speex DSP for AEC (echo cancellation) and resampling
+find_package(PkgConfig)
+if(PkgConfig_FOUND)
+    pkg_check_modules(SPEEX speexdsp)
+    if(SPEEX_FOUND)
+        target_link_libraries(ethervoxai PUBLIC ${SPEEX_LINK_LIBRARIES})
+        target_include_directories(ethervoxai PRIVATE ${SPEEX_INCLUDE_DIRS})
+        target_link_directories(ethervoxai PRIVATE ${SPEEX_LIBRARY_DIRS})
+        message(STATUS "Linked Speex DSP library: ${SPEEX_VERSION}")
+        message(STATUS "Speex lib dirs: ${SPEEX_LIBRARY_DIRS}")
+        message(STATUS "Speex link libs: ${SPEEX_LINK_LIBRARIES}")
+    else()
+        message(WARNING "Speex DSP not found - AEC will use passthrough mode. Install with: brew install speexdsp")
+    endif()
+    
+    # Link ONNX Runtime for Piper TTS
+    pkg_check_modules(ONNXRUNTIME onnxruntime)
+    if(ONNXRUNTIME_FOUND)
+        target_link_libraries(ethervoxai PUBLIC ${ONNXRUNTIME_LINK_LIBRARIES})
+        target_include_directories(ethervoxai PRIVATE ${ONNXRUNTIME_INCLUDE_DIRS})
+        target_link_directories(ethervoxai PRIVATE ${ONNXRUNTIME_LIBRARY_DIRS})
+        target_compile_definitions(ethervoxai PUBLIC HAVE_PIPER_TTS=1)
+        message(STATUS "Linked ONNX Runtime library: ${ONNXRUNTIME_VERSION}")
+        message(STATUS "✅ Piper TTS backend ENABLED")
+    else()
+        # Try manual detection (Homebrew on macOS)
+        find_path(ONNXRUNTIME_INCLUDE_DIR 
+            NAMES onnxruntime_c_api.h
+            PATHS /opt/homebrew/Cellar/onnxruntime/*/include/onnxruntime
+                  /usr/local/Cellar/onnxruntime/*/include/onnxruntime
+                  /opt/homebrew/include/onnxruntime
+                  /usr/local/include/onnxruntime
+        )
+        find_library(ONNXRUNTIME_LIBRARY
+            NAMES onnxruntime
+            PATHS /opt/homebrew/Cellar/onnxruntime/*/lib
+                  /usr/local/Cellar/onnxruntime/*/lib
+                  /opt/homebrew/lib
+                  /usr/local/lib
+        )
+        
+        if(ONNXRUNTIME_INCLUDE_DIR AND ONNXRUNTIME_LIBRARY)
+            # Include parent directory so we can use #include <onnxruntime/...>
+            get_filename_component(ONNXRUNTIME_INCLUDE_PARENT "${ONNXRUNTIME_INCLUDE_DIR}" DIRECTORY)
+            target_include_directories(ethervoxai PRIVATE ${ONNXRUNTIME_INCLUDE_PARENT})
+            target_link_libraries(ethervoxai PUBLIC ${ONNXRUNTIME_LIBRARY})
+            target_compile_definitions(ethervoxai PUBLIC HAVE_PIPER_TTS=1)
+            message(STATUS "Found ONNX Runtime manually:")
+            message(STATUS "  Include: ${ONNXRUNTIME_INCLUDE_PARENT}")
+            message(STATUS "  Library: ${ONNXRUNTIME_LIBRARY}")
+            message(STATUS "✅ Piper TTS backend ENABLED")
+        else()
+            message(WARNING "ONNX Runtime not found - Piper TTS will be unavailable. Install with: brew install onnxruntime")
+        endif()
+    endif()
+    
+    # espeak-ng REMOVED - replaced with custom phonemizer (MIT-licensed)
+    # See src/tts/phonemizer.c for dictionary-based G2P implementation
+    message(STATUS "Using custom phonemizer (espeak-ng dependency removed for licensing)")
+    
+    # Link libcurl for HTTP downloads (model downloader)
+    pkg_check_modules(CURL libcurl)
+    if(CURL_FOUND)
+        target_link_libraries(ethervoxai PUBLIC ${CURL_LINK_LIBRARIES})
+        target_include_directories(ethervoxai PRIVATE ${CURL_INCLUDE_DIRS})
+        target_link_directories(ethervoxai PRIVATE ${CURL_LIBRARY_DIRS})
+        target_compile_definitions(ethervoxai PUBLIC HAVE_LIBCURL=1)
+        message(STATUS "✓ Linked libcurl: ${CURL_VERSION}")
+    else()
+        # Try find_package fallback for Windows
+        find_package(CURL)
+        if(CURL_FOUND)
+            target_link_libraries(ethervoxai PUBLIC CURL::libcurl)
+            target_compile_definitions(ethervoxai PUBLIC HAVE_LIBCURL=1)
+            message(STATUS "✓ Linked libcurl via find_package")
+        else()
+            message(WARNING "libcurl not found - model downloads will require manual installation")
+            target_compile_definitions(ethervoxai PUBLIC HAVE_LIBCURL=0)
+        endif()
+    endif()
+else()
+    message(WARNING "PkgConfig not found - trying direct libcurl detection")
+    
+    # Try to find libcurl without pkg-config (Windows MinGW)
+    find_package(CURL)
+    if(CURL_FOUND)
+        target_link_libraries(ethervoxai PUBLIC CURL::libcurl)
+        target_compile_definitions(ethervoxai PUBLIC HAVE_LIBCURL=1)
+        message(STATUS "✓ Linked libcurl via find_package")
+    else()
+        message(WARNING "libcurl not found - model downloads will require manual installation")
+        target_compile_definitions(ethervoxai PUBLIC HAVE_LIBCURL=0)
+    endif()
+endif()
+
+# Add platform HTTP utilities (uses libcurl)
+target_sources(ethervoxai PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/common/platform_http.c)
 
 # Platform-specific linking for library consumers
 set(ETHERVOXAI_PLATFORM_LIBS "")
@@ -592,13 +947,14 @@ elseif(ANDROID)
     endif()
     
 elseif(UNIX AND NOT APPLE)
-    set(ETHERVOXAI_PLATFORM_LIBS asound pthread curl ssl crypto m)
+    set(ETHERVOXAI_PLATFORM_LIBS asound pthread ${CURL_LIBRARIES} ssl crypto m)
 elseif(APPLE)
-    set(ETHERVOXAI_PLATFORM_LIBS "-framework CoreAudio" "-framework AudioToolbox" "-framework AudioUnit" "-framework CoreFoundation" pthread curl)
+    set(ETHERVOXAI_PLATFORM_LIBS "-framework CoreAudio" "-framework AudioToolbox" "-framework AudioUnit" "-framework CoreFoundation" pthread ${CURL_LIBRARIES})
 endif()
 
 if(ETHERVOXAI_PLATFORM_LIBS)
     target_link_libraries(ethervoxai PUBLIC ${ETHERVOXAI_PLATFORM_LIBS})
+    target_include_directories(ethervoxai PRIVATE ${CURL_INCLUDE_DIRS})
 endif()
 
 set_property(GLOBAL PROPERTY ETHERVOXAI_PLATFORM_LIBS "${ETHERVOXAI_PLATFORM_LIBS}")
@@ -617,9 +973,38 @@ if(NOT ANDROID)
         else()
             message(WARNING "Readline library not found - command history will be disabled")
         endif()
+        
+        # Add ncurses for settings menu
+        find_library(NCURSES_LIBRARY ncurses)
+        if(NCURSES_LIBRARY)
+            target_link_libraries(ethervoxai_app PRIVATE ${NCURSES_LIBRARY})
+            message(STATUS "Ncurses library found: ${NCURSES_LIBRARY}")
+        else()
+            message(WARNING "Ncurses library not found - settings menu will be disabled")
+        endif()
     endif()
     
     set_target_properties(ethervoxai_app PROPERTIES OUTPUT_NAME ethervoxai)
+endif()
+
+# Voice quality tuner tool (Unix only - uses termios.h)
+if(NOT ANDROID AND NOT WIN32)
+    add_executable(voice_tuner tools/voice_tuner.c)
+    target_link_libraries(voice_tuner PRIVATE ethervoxai cjson)
+    target_include_directories(voice_tuner PRIVATE 
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${cjson_SOURCE_DIR})
+    set_target_properties(voice_tuner PROPERTIES OUTPUT_NAME ethervox-tune-voice)
+    install(TARGETS voice_tuner RUNTIME DESTINATION bin)
+    
+    # Emotion tester tool for multi-speaker models
+    add_executable(emotion_tester tools/emotion_tester.c)
+    target_link_libraries(emotion_tester PRIVATE ethervoxai cjson)
+    target_include_directories(emotion_tester PRIVATE 
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${cjson_SOURCE_DIR})
+    set_target_properties(emotion_tester PROPERTIES OUTPUT_NAME ethervox-test-emotions)
+    install(TARGETS emotion_tester RUNTIME DESTINATION bin)
 endif()
 
 # Optional: Examples and tests (if directories exist and not Android)

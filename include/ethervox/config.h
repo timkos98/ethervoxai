@@ -66,6 +66,14 @@ extern "C" {
 #define ETHERVOX_TESTS_SUBDIR "/tests"
 #define ETHERVOX_STARTUP_PROMPT_FILE "/startup_prompt.txt"
 
+// Model type subdirectories (appended to ETHERVOX_MODELS_SUBDIR)
+// Used by model_downloader.c to organize models by type
+#define ETHERVOX_GOVERNOR_SUBDIR "governor"
+#define ETHERVOX_WHISPER_SUBDIR "whisper"
+#define ETHERVOX_VOSK_SUBDIR "vosk"
+#define ETHERVOX_PIPER_SUBDIR "piper"
+#define ETHERVOX_WAKE_TEMPLATE_SUBDIR "wake_templates"
+
 // Helper to construct full paths at runtime
 // Example: get_ethervox_path(ETHERVOX_MODELS_SUBDIR) -> "~/.ethervox/models"
 
@@ -202,32 +210,48 @@ extern "C" {
 // ===========================================================================
 // Whisper STT Configuration
 // ===========================================================================
+// Based on whisper.cpp best practices and extensive testing
+// See: https://github.com/ggml-org/whisper.cpp/discussions
 
-// Beam search settings
+// Beam search settings - CRITICAL CONSTRAINT
 #ifndef ETHERVOX_WHISPER_BEAM_SIZE
-#define ETHERVOX_WHISPER_BEAM_SIZE 5  // Number of beams for beam search (higher = more accurate but slower)
+#define ETHERVOX_WHISPER_BEAM_SIZE 5  // MUST be <= 8 (WHISPER_MAX_DECODERS limit in whisper.cpp)
+// Beam size controls parallel hypothesis exploration during decoding
+// Higher values improve accuracy but hit whisper.cpp's hard limit of 8 decoders
+// Exceeding 8 causes error -4. Recommended: 5 (good accuracy/speed balance)
 #endif
 
-// Quality thresholds
+// Quality thresholds - TUNED FOR SPEECH DETECTION
 #ifndef ETHERVOX_WHISPER_NO_SPEECH_THRESHOLD
-#define ETHERVOX_WHISPER_NO_SPEECH_THRESHOLD 0.6f  // Threshold for filtering noise/silence (0.0-1.0)
+#define ETHERVOX_WHISPER_NO_SPEECH_THRESHOLD 0.50f  // Lowered from 0.6 to reduce false negatives
+// Lower threshold = more sensitive to actual speech (catches quiet/unclear words)
+// Whisper.cpp default is 0.6, but 0.5 works better for conversational speech
 #endif
 
 #ifndef ETHERVOX_WHISPER_LOGPROB_THRESHOLD
-#define ETHERVOX_WHISPER_LOGPROB_THRESHOLD -1.0f  // Confidence threshold for segments
+#define ETHERVOX_WHISPER_LOGPROB_THRESHOLD -0.8f  // Raised from -1.0 for better quality filtering
+// Higher (less negative) = stricter quality requirements
+// Filters out low-confidence hallucinations while keeping good transcriptions
+// Whisper.cpp community recommends -0.8 to -0.6 range for quality/recall balance
 #endif
 
 #ifndef ETHERVOX_WHISPER_ENTROPY_THRESHOLD
-#define ETHERVOX_WHISPER_ENTROPY_THRESHOLD 2.4f  // Entropy threshold for filtering uncertain predictions
+#define ETHERVOX_WHISPER_ENTROPY_THRESHOLD 2.2f  // Lowered from 2.4 to be less aggressive
+// Lower = accept more varied token distributions (better for natural speech)
+// 2.4 was too strict and filtered legitimate speech variations
+// Whisper.cpp default is 2.4, but 2.0-2.2 works better for real-world audio
 #endif
 
-// Temperature settings for decoding fallback
+// Temperature settings for decoding fallback - OPTIMIZED FOR CONSISTENCY
 #ifndef ETHERVOX_WHISPER_TEMPERATURE_START
 #define ETHERVOX_WHISPER_TEMPERATURE_START 0.0f  // Start with greedy decoding (deterministic)
+// 0.0 = most consistent results (good for repeated transcriptions)
 #endif
 
 #ifndef ETHERVOX_WHISPER_TEMPERATURE_INCREMENT
-#define ETHERVOX_WHISPER_TEMPERATURE_INCREMENT 0.2f  // Increase temperature if decoding fails
+#define ETHERVOX_WHISPER_TEMPERATURE_INCREMENT 0.2f  // Gradual fallback increase
+// If greedy fails, try 0.2, then 0.4, then 0.6, etc. (up to 1.0)
+// Helps recover from difficult audio segments without losing too much quality
 #endif
 
 // Streaming chunk size (in samples at 16kHz)
@@ -300,7 +324,7 @@ extern "C" {
 #endif
 
 #ifndef ETHERVOX_GOVERNOR_MAX_TOKENS_PER_ITERATION
-#define ETHERVOX_GOVERNOR_MAX_TOKENS_PER_ITERATION 64  // Very concise responses - most tool calls are <20 tokens
+#define ETHERVOX_GOVERNOR_MAX_TOKENS_PER_ITERATION 512
 #endif
 
 #ifndef ETHERVOX_GOVERNOR_USE_MMAP
@@ -456,7 +480,7 @@ static inline int ethervox_get_runtime_path(const char* subdir, char* out, size_
         const char* home = getenv("HOME");
         if (home) {
             if (subdir) {
-                snprintf(out, out_size, "%s%s%s", home, base + 1, subdir);
+                snprintf(out, out_size, "%s%s/%s", home, base + 1, subdir);
             } else {
                 snprintf(out, out_size, "%s%s", home, base + 1);
             }
@@ -465,7 +489,7 @@ static inline int ethervox_get_runtime_path(const char* subdir, char* out, size_
         }
     } else if (base) {
         if (subdir) {
-            snprintf(out, out_size, "%s%s", base, subdir);
+            snprintf(out, out_size, "%s/%s", base, subdir);
         } else {
             snprintf(out, out_size, "%s", base);
         }

@@ -7,6 +7,7 @@
  */
 
 #include "ethervox/memory_tools.h"
+#include "ethervox/error.h"
 #include "ethervox/logging.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,7 +15,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <dirent.h>
-
+#ifdef _WIN32
+#include <direct.h>
+#include <windows.h>
+#endif
 #define TEST_DIR "/tmp/ethervox_test_archive"
 #define ARCHIVE_DIR TEST_DIR "/archive"
 
@@ -37,7 +41,7 @@ static void create_test_session_file(const char* filename, const char* content) 
 
 static int count_files_in_dir(const char* dir_path) {
     DIR* dir = opendir(dir_path);
-    if (!dir) return 0;
+    if (!dir) return ETHERVOX_SUCCESS;
     
     int count = 0;
     struct dirent* entry;
@@ -54,7 +58,11 @@ static void test_archive_basic(void) {
     printf("Test 1: Basic archiving...\n");
     
     cleanup_test_dir();
+#ifdef _WIN32
+    _mkdir(TEST_DIR);
+#else
     mkdir(TEST_DIR, 0755);
+#endif
     
     // Create test session files
     create_test_session_file("session_1.jsonl", "{\"id\":0,\"text\":\"test1\"}");
@@ -115,7 +123,11 @@ static void test_archive_empty(void) {
     printf("Test 2: Archive with no old files...\n");
     
     cleanup_test_dir();
+#ifdef _WIN32
+    _mkdir(TEST_DIR);
+#else
     mkdir(TEST_DIR, 0755);
+#endif
     
     // Initialize store - this creates a timestamped session file
     ethervox_memory_store_t store;
@@ -178,7 +190,11 @@ static void test_archive_multiple_runs(void) {
     printf("Test 4: Multiple archive runs (idempotence)...\n");
     
     cleanup_test_dir();
+#ifdef _WIN32
+    _mkdir(TEST_DIR);
+#else
     mkdir(TEST_DIR, 0755);
+#endif
     
     create_test_session_file("session_1.jsonl", "{\"id\":0,\"text\":\"test1\"}");
     create_test_session_file("session_2.jsonl", "{\"id\":1,\"text\":\"test2\"}");
@@ -232,5 +248,5 @@ int main(void) {
     
     printf("\n━━━ All tests passed! ━━━\n");
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }

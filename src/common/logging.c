@@ -4,6 +4,10 @@
 #include <string.h>
 #include <stdio.h>
 
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
+
 // Global debug flag (referenced by config.h macros) - default enabled
 int g_ethervox_debug_enabled = 1;
 
@@ -82,6 +86,42 @@ void ethervox_log(ethervox_log_level_t level, const char* file, int line,
     // Get color for this level
     const char* color = log_level_color(level);
     
+#ifdef __ANDROID__
+    // On Android, use Android logging system
+    android_LogPriority priority;
+    switch (level) {
+        case ETHERVOX_LOG_LEVEL_TRACE:
+        case ETHERVOX_LOG_LEVEL_DEBUG:
+            priority = ANDROID_LOG_DEBUG;
+            break;
+        case ETHERVOX_LOG_LEVEL_INFO:
+            priority = ANDROID_LOG_INFO;
+            break;
+        case ETHERVOX_LOG_LEVEL_WARN:
+            priority = ANDROID_LOG_WARN;
+            break;
+        case ETHERVOX_LOG_LEVEL_ERROR:
+            priority = ANDROID_LOG_ERROR;
+            break;
+        case ETHERVOX_LOG_LEVEL_FATAL:
+            priority = ANDROID_LOG_FATAL;
+            break;
+        default:
+            priority = ANDROID_LOG_INFO;
+    }
+    
+    // Format the message
+    char buffer[1024];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buffer, sizeof(buffer), fmt, args);
+    va_end(args);
+    
+    // Log with Android logger, including file and function info
+    __android_log_print(priority, "EthervoxCore", "[%s:%d %s] %s",
+                       extract_filename(file), line, func, buffer);
+#else
+    // On desktop platforms, use colored stderr output
     // Print log prefix with color
     fprintf(stderr, "%s[%s] [%s] [%s:%d %s] ", 
             color,
@@ -100,6 +140,7 @@ void ethervox_log(ethervox_log_level_t level, const char* file, int line,
     // Reset color at end of line
     fprintf(stderr, "%s\n", COLOR_RESET);
     fflush(stderr);
+#endif
 }
 
 void ethervox_log_error_context(const ethervox_error_context_t* ctx) {
@@ -107,6 +148,20 @@ void ethervox_log_error_context(const ethervox_error_context_t* ctx) {
         return;
     }
     
+#ifdef __ANDROID__
+    // On Android, log error context via Android logger
+    __android_log_print(ANDROID_LOG_ERROR, "EthervoxCore", "[ERROR CONTEXT]");
+    __android_log_print(ANDROID_LOG_ERROR, "EthervoxCore", "  Code: %d (%s)", 
+                       ctx->code, ethervox_error_string(ctx->code));
+    if (ctx->message) {
+        __android_log_print(ANDROID_LOG_ERROR, "EthervoxCore", "  Message: %s", ctx->message);
+    }
+    __android_log_print(ANDROID_LOG_ERROR, "EthervoxCore", "  Location: %s:%d in %s()",
+                       extract_filename(ctx->file), ctx->line, ctx->function);
+    __android_log_print(ANDROID_LOG_ERROR, "EthervoxCore", "  Timestamp: %llu ms",
+                       (unsigned long long)ctx->timestamp_ms);
+#else
+    // On desktop, use colored stderr output
     fprintf(stderr, "%s[ERROR CONTEXT]\n", COLOR_ERROR);
     fprintf(stderr, "  Code: %d (%s)\n", ctx->code, ethervox_error_string(ctx->code));
     if (ctx->message) {
@@ -116,4 +171,5 @@ void ethervox_log_error_context(const ethervox_error_context_t* ctx) {
             extract_filename(ctx->file), ctx->line, ctx->function);
     fprintf(stderr, "  Timestamp: %llu ms%s\n", (unsigned long long)ctx->timestamp_ms, COLOR_RESET);
     fflush(stderr);
+#endif
 }

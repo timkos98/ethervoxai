@@ -7,6 +7,7 @@
  */
 
 #include "ethervox/chat_template.h"
+#include "ethervox/error.h"
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
@@ -34,28 +35,29 @@ static const chat_template_t qwen_template = {
         "im_start",
         NULL
     },
-    .stop_sequence_count = 4
+    .stop_sequence_count = 4,
+    .tool_format = TOOL_FORMAT_XML_ATTR  // Uses XML with attributes
 };
 
-// IBM Granite template
+// IBM Granite 4.0 template
 static const chat_template_t granite_template = {
     .type = CHAT_TEMPLATE_GRANITE,
-    .system_start = "<|system|>\n",
-    .system_end = "<|end|>\n",
-    .user_start = "<|user|>\n",
-    .user_end = "<|end|>\n",
-    .assistant_start = "<|assistant|>\n",
-    .assistant_end = "<|end|>\n",
-    .tool_result_start = "<|user|>\n<tool_result>",
-    .tool_result_end = "</tool_result><|end|>\n<|assistant|>\n",
+    .system_start = "<|start_of_role|>system<|end_of_role|>",
+    .system_end = "<|end_of_text|>\n",
+    .user_start = "<|start_of_role|>user<|end_of_role|>",
+    .user_end = "<|end_of_text|>\n",
+    .assistant_start = "<|start_of_role|>assistant<|end_of_role|>",
+    .assistant_end = "<|end_of_text|>\n",
+    .tool_result_start = "<|start_of_role|>user<|end_of_role|><tool_result>",
+    .tool_result_end = "</tool_result><|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>",
     .stop_sequences = {
-        "<|end|>",
-        "<|system|>",
-        "<|user|>",
-        "<|assistant|>",
+        "<|end_of_text|>",
+        "<|start_of_role|>",
+        "<|end_of_role|>",
         NULL
     },
-    .stop_sequence_count = 4
+    .stop_sequence_count = 3,
+    .tool_format = TOOL_FORMAT_JSON_IN_XML  // Granite 4.0 uses JSON inside <tool_call> tags
 };
 
 // Microsoft Phi template
@@ -76,7 +78,8 @@ static const chat_template_t phi_template = {
         "<|assistant|>",
         NULL
     },
-    .stop_sequence_count = 4
+    .stop_sequence_count = 4,
+    .tool_format = TOOL_FORMAT_XML_ATTR  // Uses XML with attributes
 };
 
 // Meta Llama 3 template
@@ -95,7 +98,8 @@ static const chat_template_t llama3_template = {
         "<|end_header_id|>",
         NULL
     },
-    .stop_sequence_count = 2
+    .stop_sequence_count = 2,
+    .tool_format = TOOL_FORMAT_XML_ATTR  // Uses XML with attributes
 };
 
 // ============================================================================
@@ -166,13 +170,13 @@ const chat_template_t* chat_template_get(chat_template_type_t type, const char* 
     }
 }
 
-int chat_template_format_system(
+ethervox_result_t chat_template_format_system(
     const chat_template_t* template,
     const char* content,
     char* output,
     size_t output_size
 ) {
-    if (!template || !content || !output || output_size == 0) return -1;
+    if (!template || !content || !output || output_size == 0) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     return snprintf(output, output_size, "%s%s%s",
                    template->system_start,
@@ -180,13 +184,13 @@ int chat_template_format_system(
                    template->system_end);
 }
 
-int chat_template_format_user(
+ethervox_result_t chat_template_format_user(
     const chat_template_t* template,
     const char* content,
     char* output,
     size_t output_size
 ) {
-    if (!template || !content || !output || output_size == 0) return -1;
+    if (!template || !content || !output || output_size == 0) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     return snprintf(output, output_size, "%s%s%s",
                    template->user_start,
@@ -194,23 +198,23 @@ int chat_template_format_user(
                    template->user_end);
 }
 
-int chat_template_format_assistant_start(
+ethervox_result_t chat_template_format_assistant_start(
     const chat_template_t* template,
     char* output,
     size_t output_size
 ) {
-    if (!template || !output || output_size == 0) return -1;
+    if (!template || !output || output_size == 0) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     return snprintf(output, output_size, "%s", template->assistant_start);
 }
 
-int chat_template_format_tool_result(
+ethervox_result_t chat_template_format_tool_result(
     const chat_template_t* template,
     const char* result,
     char* output,
     size_t output_size
 ) {
-    if (!template || !result || !output || output_size == 0) return -1;
+    if (!template || !result || !output || output_size == 0) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     return snprintf(output, output_size, "%s%s%s",
                    template->tool_result_start,
@@ -231,4 +235,13 @@ bool chat_template_has_stop_sequence(
     }
     
     return false;
+}
+
+tool_format_type_t chat_template_get_tool_format(
+    const chat_template_t* template
+) {
+    if (!template) {
+        return TOOL_FORMAT_XML_ATTR;  // Default fallback
+    }
+    return template->tool_format;
 }

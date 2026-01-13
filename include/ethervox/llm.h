@@ -22,6 +22,7 @@
 
 #include "ethervox/config.h"
 #include "ethervox/dialogue.h"
+#include "ethervox/error.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -90,16 +91,16 @@ ethervox_llm_backend_t* ethervox_llm_create_tinyllama_backend(void);
 ethervox_llm_backend_t* ethervox_llm_create_external_backend(void);
 
 // Backend management
-int ethervox_llm_backend_init(ethervox_llm_backend_t* backend, const ethervox_llm_config_t* config);
+ethervox_result_t ethervox_llm_backend_init(ethervox_llm_backend_t* backend, const ethervox_llm_config_t* config);
 void ethervox_llm_backend_cleanup(ethervox_llm_backend_t* backend);
 void ethervox_llm_backend_free(ethervox_llm_backend_t* backend);
 
 // Model operations
-int ethervox_llm_backend_load_model(ethervox_llm_backend_t* backend, const char* model_path);
+ethervox_result_t ethervox_llm_backend_load_model(ethervox_llm_backend_t* backend, const char* model_path);
 void ethervox_llm_backend_unload_model(ethervox_llm_backend_t* backend);
 
 // Generation
-int ethervox_llm_backend_generate(ethervox_llm_backend_t* backend,
+ethervox_result_t ethervox_llm_backend_generate(ethervox_llm_backend_t* backend,
                                  const char* prompt,
                                  const char* language_code,
                                  ethervox_llm_response_t* response);

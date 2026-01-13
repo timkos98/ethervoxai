@@ -1,4 +1,5 @@
 /**
+#include "ethervox/error.h"
  * @file percentage_plugin.c
  * @brief Percentage calculator compute tool
  *
@@ -67,7 +68,7 @@ static char* extract_json_string_value(const char* json, const char* key) {
 
 static int percentage_execute(const char* args_json, char** result, char** error) {
     if (!args_json || !result || !error) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     double value = extract_json_number(args_json, "value");
@@ -77,7 +78,7 @@ static int percentage_execute(const char* args_json, char** result, char** error
     
     if (!operation) {
         *error = strdup("Missing 'operation' parameter");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     if (decimal_places < 0) decimal_places = 0;
@@ -101,21 +102,21 @@ static int percentage_execute(const char* args_json, char** result, char** error
         } else {
             free(operation);
             *error = strdup("Division by zero: percentage cannot be zero for is_what_percent operation");
-            return -1;
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
         }
     } else {
         free(operation);
         char* err_msg = malloc(256);
         snprintf(err_msg, 256, "Unknown operation: %s. Valid operations: of, increase, decrease, is_what_percent", operation);
         *error = err_msg;
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Return result as JSON with tool name and operation
     char* result_json = malloc(256);
     if (!result_json) {
         free(operation);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     snprintf(result_json, 256, "{\"result\": %.*f, \"tool\": \"percentage_calculate\", \"operation\": \"%s\"}", 
@@ -123,7 +124,7 @@ static int percentage_execute(const char* args_json, char** result, char** error
     *result = result_json;
     
     free(operation);
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 static ethervox_tool_t percentage_tool = {

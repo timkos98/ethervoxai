@@ -12,6 +12,7 @@
 #include "ethervox/file_tools.h"
 #include "ethervox/memory_tools.h"
 #include "ethervox/logging.h"
+#include "ethervox/error.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -106,15 +107,11 @@ static bool validate_path(const char* path) {
 /**
  * Initialize path configuration system
  */
-int ethervox_path_config_init(
+ethervox_result_t ethervox_path_config_init(
     ethervox_path_config_t* config,
     void* memory
 ) {
-    if (!config) {
-        ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__,
-                    "Path config is NULL");
-        return -1;
-    }
+    ETHERVOX_CHECK_PTR(config);
     
     memset(config, 0, sizeof(ethervox_path_config_t));
     config->memory = memory;
@@ -197,35 +194,30 @@ int ethervox_path_config_init(
     }
     
     config->is_initialized = true;
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
  * Set or update a user path
  */
-int ethervox_path_config_set(
+ethervox_result_t ethervox_path_config_set(
     ethervox_path_config_t* config,
     const char* label,
     const char* path,
     const char* description
 ) {
     if (!config || !config->is_initialized) {
-        ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__,
-                    "Path config not initialized");
-        return -1;
+        ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_INITIALIZED, "Path config not initialized");
     }
     
-    if (!label || !path) {
-        ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__,
-                    "Label and path are required");
-        return -1;
-    }
+    ETHERVOX_CHECK_PTR(label);
+    ETHERVOX_CHECK_PTR(path);
     
     // Validate path exists
     if (!validate_path(path)) {
         ethervox_log(ETHERVOX_LOG_LEVEL_WARN, __FILE__, __LINE__, __func__,
                     "Path does not exist or is not accessible: %s", path);
-        return -2;  // Path doesn't exist
+        ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_PATH_INVALID, "Path does not exist or is not accessible");
     }
     
     // Check if label already exists
@@ -263,7 +255,7 @@ int ethervox_path_config_set(
         if (config->path_count >= ETHERVOX_MAX_USER_PATHS) {
             ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__,
                         "Maximum user paths reached (%d)", ETHERVOX_MAX_USER_PATHS);
-            return -3;
+            ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_BUFFER_TOO_SMALL, "Maximum user paths reached");
         }
         
         strncpy(config->paths[config->path_count].label, label, 63);
@@ -299,62 +291,70 @@ int ethervox_path_config_set(
         }
     }
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
  * Get a user path by label
  */
-int ethervox_path_config_get(
+ethervox_result_t ethervox_path_config_get(
     ethervox_path_config_t* config,
     const char* label,
     char* path_out,
     size_t path_size
 ) {
-    if (!config || !config->is_initialized || !label || !path_out) {
-        return -1;
+    if (!config || !config->is_initialized) {
+        ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_INITIALIZED, "Path config not initialized");
     }
+    ETHERVOX_CHECK_PTR(label);
+    ETHERVOX_CHECK_PTR(path_out);
     
     for (uint32_t i = 0; i < config->path_count; i++) {
         if (strcmp(config->paths[i].label, label) == 0) {
             if (config->paths[i].verified) {
                 strncpy(path_out, config->paths[i].path, path_size - 1);
                 path_out[path_size - 1] = '\0';
-                return 0;
+                return ETHERVOX_SUCCESS;
             } else {
                 // Path exists in config but not verified
-                return -2;
+                ethervox_log(ETHERVOX_LOG_LEVEL_WARN, __FILE__, __LINE__, __func__,
+                            "Path exists but is not verified: %s", config->paths[i].path);
+                ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_PATH_INVALID, "Path exists but is not verified");
             }
         }
     }
     
-    return -3;  // Not found
+    ethervox_log(ETHERVOX_LOG_LEVEL_WARN, __FILE__, __LINE__, __func__,
+                "Path label not found: %s", label);
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_FOUND, "Path label not found");
 }
 
 /**
  * List all configured paths
  */
-int ethervox_path_config_list(
+ethervox_result_t ethervox_path_config_list(
     ethervox_path_config_t* config,
     ethervox_user_path_t** paths_out,
     uint32_t* count_out
 ) {
-    if (!config || !config->is_initialized || !paths_out || !count_out) {
-        return -1;
+    if (!config || !config->is_initialized) {
+        ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_INITIALIZED, "Path config not initialized");
     }
+    ETHERVOX_CHECK_PTR(paths_out);
+    ETHERVOX_CHECK_PTR(count_out);
     
     if (config->path_count == 0) {
         *paths_out = NULL;
         *count_out = 0;
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     // Allocate array copy
     ethervox_user_path_t* paths = malloc(sizeof(ethervox_user_path_t) * config->path_count);
     if (!paths) {
         ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__,
-                    "Failed to allocate paths array");
-        return -1;
+                    "Failed to allocate paths array (%u paths)", config->path_count);
+        ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_OUT_OF_MEMORY, "Failed to allocate paths array");
     }
     
     memcpy(paths, config->paths, sizeof(ethervox_user_path_t) * config->path_count);
@@ -362,20 +362,22 @@ int ethervox_path_config_list(
     *paths_out = paths;
     *count_out = config->path_count;
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
  * Check if any unverified paths exist and return suggestions
  */
-int ethervox_path_config_get_unverified(
+ethervox_result_t ethervox_path_config_get_unverified(
     ethervox_path_config_t* config,
     ethervox_user_path_t** paths_out,
     uint32_t* count_out
 ) {
-    if (!config || !config->is_initialized || !paths_out || !count_out) {
-        return -1;
+    if (!config || !config->is_initialized) {
+        ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_INITIALIZED, "Path config not initialized");
     }
+    ETHERVOX_CHECK_PTR(paths_out);
+    ETHERVOX_CHECK_PTR(count_out);
     
     // Count unverified
     uint32_t unverified_count = 0;
@@ -388,13 +390,15 @@ int ethervox_path_config_get_unverified(
     if (unverified_count == 0) {
         *paths_out = NULL;
         *count_out = 0;
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     // Allocate and copy unverified paths
     ethervox_user_path_t* paths = malloc(sizeof(ethervox_user_path_t) * unverified_count);
     if (!paths) {
-        return -1;
+        ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__,
+                    "Failed to allocate unverified paths array (%u paths)", unverified_count);
+        ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_OUT_OF_MEMORY, "Failed to allocate unverified paths array");
     }
     
     uint32_t idx = 0;
@@ -407,7 +411,7 @@ int ethervox_path_config_get_unverified(
     *paths_out = paths;
     *count_out = unverified_count;
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**

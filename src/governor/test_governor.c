@@ -9,6 +9,7 @@
  * SPDX-License-Identifier: CC-BY-NC-SA-4.0
  */
 
+#include "ethervox/error.h"
 #include "ethervox/governor.h"
 #include "ethervox/compute_tools.h"
 #include <stdio.h>
@@ -43,7 +44,7 @@ static void test_governor_basic(void) {
     // Setup registry
     ethervox_tool_registry_t registry;
     if (ethervox_tool_registry_init(&registry, 8) != 0) {
-        printf("✗ Failed to initialize registry\n");
+        printf("[FAIL] Failed to initialize registry\n");
         return;
     }
     
@@ -60,12 +61,12 @@ static void test_governor_basic(void) {
     };
     
     if (ethervox_governor_init(&governor, &config, &registry) != 0) {
-        printf("✗ Failed to initialize Governor\n");
+        printf("[FAIL] Failed to initialize Governor\n");
         ethervox_tool_registry_cleanup(&registry);
         return;
     }
     
-    printf("✓ Governor initialized\n");
+    printf("[OK] Governor initialized\n");
     
     // Test queries
     struct {
@@ -120,7 +121,7 @@ static void test_governor_basic(void) {
     // Cleanup
     ethervox_governor_cleanup(governor);
     ethervox_tool_registry_cleanup(&registry);
-    printf("\n✓ Governor test complete\n");
+    printf("\n[OK] Governor test complete\n");
 }
 
 static void test_xml_parsing(void) {
@@ -129,7 +130,7 @@ static void test_xml_parsing(void) {
     // This tests the internal parsing logic indirectly through execution
     ethervox_tool_registry_t registry;
     if (ethervox_tool_registry_init(&registry, 8) != 0) {
-        printf("✗ Failed to initialize registry\n");
+        printf("[FAIL] Failed to initialize registry\n");
         return;
     }
     
@@ -148,7 +149,7 @@ static void test_xml_parsing(void) {
     // Direct testing would require exposing internal functions
     
     ethervox_tool_registry_cleanup(&registry);
-    printf("✓ XML parsing test complete\n");
+    printf("[OK] XML parsing test complete\n");
 }
 
 int main(void) {

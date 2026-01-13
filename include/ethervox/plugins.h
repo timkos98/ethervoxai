@@ -24,6 +24,7 @@
 
 #include "ethervox/config.h"
 #include "ethervox/dialogue.h"
+#include "ethervox/error.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -58,7 +59,7 @@ typedef struct {
   char name[64];
   char version[16];
   char author[64];
-  char description[256];
+  char description[512];  // Increased from 256 to fit longer descriptions
   ethervox_plugin_type_t type;
 } ethervox_plugin_metadata_t;
 
@@ -89,7 +90,7 @@ typedef struct {
 typedef struct ethervox_plugin {
   char name[64];
   char version[16];
-  char description[256];
+  char description[512];  // Increased from 256 to fit longer descriptions
   ethervox_plugin_type_t type;
   ethervox_plugin_status_t status;
   void* handle;  // Dynamic library handle
@@ -126,26 +127,26 @@ typedef struct ethervox_plugin_manager {
 } ethervox_plugin_manager_t;
 
 // Public API functions
-int ethervox_plugin_manager_init(ethervox_plugin_manager_t* manager, const char* plugin_dir);
+ethervox_result_t ethervox_plugin_manager_init(ethervox_plugin_manager_t* manager, const char* plugin_dir);
 void ethervox_plugin_manager_cleanup(ethervox_plugin_manager_t* manager);
 
 // Plugin management
-int ethervox_plugin_load(ethervox_plugin_manager_t* manager, const char* plugin_name);
-int ethervox_plugin_unload(ethervox_plugin_manager_t* manager, const char* plugin_name);
-int ethervox_plugin_reload(ethervox_plugin_manager_t* manager, const char* plugin_name);
+ethervox_result_t ethervox_plugin_load(ethervox_plugin_manager_t* manager, const char* plugin_name);
+ethervox_result_t ethervox_plugin_unload(ethervox_plugin_manager_t* manager, const char* plugin_name);
+ethervox_result_t ethervox_plugin_reload(ethervox_plugin_manager_t* manager, const char* plugin_name);
 ethervox_plugin_t* ethervox_plugin_find(ethervox_plugin_manager_t* manager,
                                         const char* plugin_name);
 
 // Plugin discovery
-int ethervox_plugin_scan_directory(ethervox_plugin_manager_t* manager);
-int ethervox_plugin_list_available(ethervox_plugin_manager_t* manager, char*** plugin_names,
+ethervox_result_t ethervox_plugin_scan_directory(ethervox_plugin_manager_t* manager);
+ethervox_result_t ethervox_plugin_list_available(ethervox_plugin_manager_t* manager, char*** plugin_names,
                                    uint32_t* count);
-int ethervox_plugin_list_loaded(ethervox_plugin_manager_t* manager, char*** plugin_names,
+ethervox_result_t ethervox_plugin_list_loaded(ethervox_plugin_manager_t* manager, char*** plugin_names,
                                 uint32_t* count);
 
 // Plugin execution
-int ethervox_plugin_execute(ethervox_plugin_t* plugin, const void* input, void* output);
-int ethervox_plugin_configure(ethervox_plugin_t* plugin, const char* config_json);
+ethervox_result_t ethervox_plugin_execute(ethervox_plugin_t* plugin, const void* input, void* output);
+ethervox_result_t ethervox_plugin_configure(ethervox_plugin_t* plugin, const char* config_json);
 
 // External LLM integrations
 int ethervox_llm_plugin_openai(const ethervox_llm_request_t* request,
@@ -159,10 +160,10 @@ int ethervox_llm_plugin_local_rag(const ethervox_llm_request_t* request,
 
 // Built-in plugins
 #define ETHERVOX_BUILTIN_PLUGIN_COUNT 3
-int ethervox_plugin_register_builtin_openai(ethervox_plugin_manager_t* manager);
-int ethervox_plugin_register_builtin_huggingface(
+ethervox_result_t ethervox_plugin_register_builtin_openai(ethervox_plugin_manager_t* manager);
+ethervox_result_t ethervox_plugin_register_builtin_huggingface(
     ethervox_plugin_manager_t* manager);  // Just declaration, no implementation
-int ethervox_plugin_register_builtin_local_rag(ethervox_plugin_manager_t* manager);
+ethervox_result_t ethervox_plugin_register_builtin_local_rag(ethervox_plugin_manager_t* manager);
 
 // Utility functions
 const char* ethervox_plugin_type_to_string(ethervox_plugin_type_t type);

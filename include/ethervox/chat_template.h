@@ -20,6 +20,17 @@ extern "C" {
 #endif
 
 /**
+ * Tool calling format types
+ * Defines how models expect tools to be defined and called
+ */
+typedef enum {
+    TOOL_FORMAT_XML_ATTR,       // XML with attributes: <tool_call name="calc" expr="5+5" />
+    TOOL_FORMAT_JSON_IN_XML,    // JSON inside XML: <tool_call>{"name":"calc","arguments":{"expr":"5+5"}}</tool_call>
+    TOOL_FORMAT_JSON_ONLY,      // Pure JSON: {"name":"calc","arguments":{"expr":"5+5"}}
+    TOOL_FORMAT_AUTO            // Auto-detect from template type
+} tool_format_type_t;
+
+/**
  * Supported chat template formats
  */
 typedef enum {
@@ -57,7 +68,8 @@ typedef struct {
     const char* stop_sequences[8];
     int stop_sequence_count;
     
-    // Tool-calling instructions (model-specific)
+    // Tool-calling format and instructions (model-specific)
+    tool_format_type_t tool_format;         // How this model expects tool definitions and calls
     const char* tool_system_instructions;   // Instructions for tool usage (goes before tool list)
     const char* tool_usage_examples;        // Model-specific examples showing tool call patterns
     bool requires_explicit_directives;      // If true, use MUST/ALWAYS/NEVER language
@@ -154,6 +166,16 @@ int chat_template_format_tool_result(
 bool chat_template_has_stop_sequence(
     const chat_template_t* template,
     const char* text
+);
+
+/**
+ * Get the tool calling format for a chat template
+ * 
+ * @param template Chat template to query
+ * @return Tool format type (TOOL_FORMAT_XML_ATTR, TOOL_FORMAT_JSON_IN_XML, etc.)
+ */
+tool_format_type_t chat_template_get_tool_format(
+    const chat_template_t* template
 );
 
 #ifdef __cplusplus

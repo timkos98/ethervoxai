@@ -1,4 +1,5 @@
 /**
+#include "ethervox/error.h"
  * @file memory_archive.c
  * @brief Memory session archiving functionality
  * 
@@ -49,11 +50,11 @@ static int ensure_archive_directory(
     struct stat st;
     if (stat(archive_dir_out, &st) == 0) {
         if (S_ISDIR(st.st_mode)) {
-            return 0;  // Already exists
+            return ETHERVOX_SUCCESS;  // Already exists
         } else {
             ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__,
                         "Archive path exists but is not a directory: %s", archive_dir_out);
-            return -1;
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
         }
     }
     
@@ -68,13 +69,13 @@ static int ensure_archive_directory(
         ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__,
                     "Failed to create archive directory: %s (errno=%d)", 
                     archive_dir_out, errno);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
                 "Created archive directory: %s", archive_dir_out);
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -97,7 +98,7 @@ static int move_to_archive(
     if (rename(source_path, dest_path) == 0) {
         ethervox_log(ETHERVOX_LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__,
                     "Moved %s to archive", filename);
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     // If rename fails (e.g., cross-filesystem), try copy+delete
@@ -108,7 +109,7 @@ static int move_to_archive(
     if (!src) {
         ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__,
                     "Failed to open source file: %s", source_path);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     FILE* dst = fopen(dest_path, "wb");
@@ -116,7 +117,7 @@ static int move_to_archive(
         fclose(src);
         ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__,
                     "Failed to create destination file: %s", dest_path);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Copy file contents
@@ -129,7 +130,7 @@ static int move_to_archive(
             remove(dest_path);  // Clean up partial copy
             ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__,
                         "Write failed during copy of %s", filename);
-            return -1;
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
         }
     }
     
@@ -146,15 +147,15 @@ static int move_to_archive(
     ethervox_log(ETHERVOX_LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__,
                 "Copied %s to archive and removed original", filename);
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
-int ethervox_memory_archive_sessions(
+ethervox_result_t ethervox_memory_archive_sessions(
     ethervox_memory_store_t* store,
     uint32_t* files_archived
 ) {
     if (!store || !store->is_initialized) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     if (files_archived) {
@@ -165,7 +166,7 @@ int ethervox_memory_archive_sessions(
     if (!store->storage_filepath[0]) {
         ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
                     "No storage directory set, nothing to archive");
-        return 0;
+        return ETHERVOX_SUCCESS;
     }
     
     // Extract directory path from current storage filepath
@@ -177,7 +178,7 @@ int ethervox_memory_archive_sessions(
     if (!last_slash) {
         ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__,
                     "Invalid storage filepath: %s", store->storage_filepath);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     *last_slash = '\0';  // Truncate to get directory
     
@@ -187,7 +188,7 @@ int ethervox_memory_archive_sessions(
     // Ensure archive directory exists
     char archive_dir[512];
     if (ensure_archive_directory(storage_dir, archive_dir, sizeof(archive_dir)) != 0) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Open storage directory
@@ -195,7 +196,7 @@ int ethervox_memory_archive_sessions(
     if (!dir) {
         ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__,
                     "Failed to open storage directory: %s", storage_dir);
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Iterate through files and move old sessions to archive
@@ -239,5 +240,5 @@ int ethervox_memory_archive_sessions(
     ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
                 "Archived %u session file(s) to %s", archived_count, archive_dir);
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }

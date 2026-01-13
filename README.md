@@ -73,16 +73,35 @@ EtherVoxAI is an open-source voice AI platform designed for privacy-conscious us
 ### Clone and Setup
 
 ```bash
-
 # Clone the repository
-
 git clone https://github.com/ethervox-ai/ethervoxai.git
 cd ethervoxai
 
-# Install dependencies (optional - auto-installs on first build)
+# Option A: Automatic dependency download (recommended for first-time users)
+# llama.cpp and whisper.cpp will be downloaded automatically during cmake configure
+mkdir build && cd build
+cmake ..  # Downloads dependencies on first run (~2-5 minutes one-time)
+make -j$(nproc)
 
+# Option B: Manual submodule initialization (advanced users/offline development)
+git submodule update --init --recursive  # Downloads ~80MB
+mkdir build && cd build
+cmake ..
+make -j$(nproc)
+
+# Download phonemizer dictionaries (required for TTS)
+./scripts/download_phonemizer_data.sh
+
+# Install system dependencies (optional - auto-installs on first build)
 make install-deps
-```text
+```
+
+**Note**: After the first build, dependencies are cached in `external/` and never re-downloaded, even for clean rebuilds.
+
+**Advanced Options:**
+- Disable auto-download: `cmake -B build -DETHERVOX_AUTO_FETCH_DEPS=OFF`
+- Use custom dependency paths: `cmake -B build -DLLAMA_CPP_CUSTOM_DIR=/path/to/llama.cpp`
+- See [Dependency Management Guide](docs/DEPENDENCY_MANAGEMENT.md) for details
 
 ## Platform-Specific Builds
 
@@ -255,7 +274,12 @@ npm run build
 
 # Or build just the core
 npm run build:core
+
+# Skip GitHub token validation during development
+SKIP_GITHUB_TOKEN_VALIDATION=1 make
 ```
+
+**Note:** GitHub token validation can be skipped by setting `SKIP_GITHUB_TOKEN_VALIDATION=1` environment variable. This disables the bug reporter but allows development without configuring GitHub access.
 
 ### Running the Governor CLI
 
@@ -293,6 +317,84 @@ Once running, the Governor CLI supports the following commands:
 - `/load <model_path>` - Load or switch LLM model
 - `/help` - Show available commands
 - `/quit` or `/exit` - Exit the application
+
+**Model Management:**
+- `/models` - List all available models with status and disk usage
+- `/modelstatus <type>` - Check status of models (governor/whisper/vosk/piper)
+- `/modeldownload <type> <name>` - Download a specific model
+- `/modeldelete <type> <name>` - Delete a model to free disk space
+
+### Model Management
+
+EthervoxAI includes a comprehensive model management system for all AI components:
+
+**Check Available Models:**
+```bash
+> /models
+Total disk usage: 1847.23 MB
+
+━━━ Governor LLM ━━━
+✅ granite-3.0-2b-instruct-Q4_K_M.gguf [DEFAULT]
+   Status: Found, Size: 1464.84 MB
+
+━━━ Whisper STT ━━━
+❌ ggml-base.en.bin [DEFAULT]
+   Status: Not Found, Expected: 70.57 MB
+```
+
+**Download Models:**
+```bash
+# Download recommended Whisper model
+> /modeldownload whisper ggml-base.en.bin
+
+# Download Vosk for real-time conversation
+> /modeldownload vosk vosk-model-small-en-us-0.15
+
+# Download Piper TTS voice
+> /modeldownload piper en_US-lessac-medium.onnx
+```
+
+**Supported Model Types:**
+- **Governor LLM**: Language models for conversation and tool orchestration
+  - granite-3.0-2b-instruct (1.5GB, recommended)
+  - granite-3.0-8b-instruct (5GB, higher quality)
+- **Whisper STT**: Speech-to-text for transcription
+  - ggml-base.en.bin (74MB, fast and accurate)
+  - ggml-small.en.bin (244MB, better accuracy)
+- **Vosk STT**: Real-time speech recognition for conversations
+  - vosk-model-small-en-us-0.15 (40MB, 10x faster than Whisper)
+  - vosk-model-en-us-0.22 (1.8GB, best accuracy)
+- **Piper TTS**: Text-to-speech for natural voice output
+  - en_US-lessac-medium.onnx (17MB, natural voice)
+
+**Phonemizer Note:**
+EthervoxAI uses a custom GPL-free phonemizer for Piper TTS. The phonemizer dictionaries (CMU Dict for English, CC-CEDICT for Chinese) are downloaded via `scripts/download_phonemizer_data.sh` and are not included in the repository.
+
+**Storage Location:**
+All models are stored in `~/.ethervox/models/` with subdirectories by type.
+
+**API Integration:**
+```c
+#include "ethervox/model_downloader.h"
+
+// Check if model exists
+ethervox_model_status_t status = ethervox_model_whisper_status("ggml-base.en.bin");
+if (status == ETHERVOX_MODEL_STATUS_NOT_FOUND) {
+    // Download the model
+    ethervox_model_download(ETHERVOX_MODEL_TYPE_WHISPER, "ggml-base.en.bin", NULL, NULL);
+}
+
+// List all available models
+ethervox_model_info_t* models = NULL;
+uint32_t count = 0;
+ethervox_model_list(ETHERVOX_MODEL_TYPE_GOVERNOR, &models, &count);
+for (uint32_t i = 0; i < count; i++) {
+    printf("%s - %s\n", models[i].name, models[i].description);
+}
+free(models);
+```
+
+See [docs/MODEL_MANAGEMENT.md](docs/MODEL_MANAGEMENT.md) for complete documentation.
 
 ### Available Tools
 
@@ -934,6 +1036,18 @@ This project is licensed under the **Creative Commons Attribution-NonCommercial-
 For commercial licensing options, please contact us at licensing@ethervox-ai.org
 
 See the [LICENSE](LICENSE) file for full terms.
+
+### Third-Party Licenses
+
+EthervoxAI uses several open-source libraries and data sources:
+- **ONNX Runtime** (MIT) - Neural network inference
+- **Speex DSP** (BSD-3-Clause) - Audio resampling
+- **CMU Pronouncing Dictionary** (Public Domain) - English phonemization
+- **CC-CEDICT** (CC BY-SA 4.0) - Chinese phonemization
+- **llama.cpp** (MIT) - LLM inference
+- **whisper.cpp** (MIT) - Speech recognition
+
+For complete licensing information and attribution requirements, see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
 
 ## Support
 

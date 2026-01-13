@@ -70,6 +70,57 @@ Voice tools will automatically attempt to download `base` (multilingual) if no m
 
 ---
 
+## download-piper-model.sh
+**Purpose:** Downloads Piper neural TTS models in ONNX format for high-quality text-to-speech.
+
+**Usage:**
+```bash
+./scripts/download-piper-model.sh [voice_name] [dest_dir]
+```
+
+**Parameters:**
+- `voice_name` (optional) - Voice identifier (default: `en_US-lessac-medium`)
+- `dest_dir` (optional) - Destination directory (default: `~/.ethervox/models/piper`)
+
+**Multilingual Support - 40+ Languages:**
+- English (US/UK): `en_US-lessac-medium` (recommended), `en_GB-alan-medium`
+- Spanish: `es_MX-ald-medium`, `es_ES-mls_10246-low`
+- French: `fr_FR-siwis-medium`, `fr_FR-tom-medium`
+- German: `de_DE-thorsten-medium`, `de_DE-eva_k-medium`
+- Italian: `it_IT-riccardo-medium`
+- Portuguese: `pt_BR-faber-medium`
+- Russian: `ru_RU-ruslan-medium`
+- Chinese (Mandarin): `zh_CN-huayan-medium`
+- Japanese: `ja_JP-natsuya_enu-medium`
+- Korean: `ko_KR-kss-medium`
+- Arabic: `ar_JO-kareem-medium`
+- Hindi: `hi_IN-wavylocal-medium`
+- Plus many more! Run `./scripts/download-piper-model.sh list` for full list
+
+**Features:**
+- Downloads ONNX model + JSON config from HuggingFace (rhasspy/piper-voices)
+- Validates both files are present
+- Shows download progress
+- Idempotent (skips if already downloaded)
+
+**Examples:**
+```bash
+# Download default voice (lessac medium)
+./scripts/download-piper-model.sh
+
+# Download specific voice
+./scripts/download-piper-model.sh en_US-amy-medium
+
+# Custom destination
+./scripts/download-piper-model.sh en_US-lessac-high ~/custom/path
+```
+
+**Dependencies:**
+- Requires ONNX Runtime: `brew install onnxruntime` (macOS)
+- Used with AEC for echo-cancelled voice conversations
+
+---
+
 ## build.sh
 **Purpose:** Cross-platform build orchestrator for EthervoxAI.
 

@@ -1,4 +1,5 @@
 /**
+#include "ethervox/error.h"
  * @file memory_search.c
  * @brief Memory search and retrieval with tag filtering and text similarity
  *
@@ -107,12 +108,12 @@ static int compare_results(const void* a, const void* b) {
     const ethervox_memory_search_result_t* r1 = a;
     const ethervox_memory_search_result_t* r2 = b;
     
-    if (r1->relevance > r2->relevance) return -1;
-    if (r1->relevance < r2->relevance) return 1;
-    return 0;
+    if (r1->relevance > r2->relevance) return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    if (r1->relevance < r2->relevance) return ETHERVOX_SUCCESS;
+    return ETHERVOX_SUCCESS;
 }
 
-int ethervox_memory_search(
+ethervox_result_t ethervox_memory_search(
     ethervox_memory_store_t* store,
     const char* query,
     const char* tag_filter[],
@@ -122,7 +123,7 @@ int ethervox_memory_search(
     uint32_t* result_count
 ) {
     if (!store || !store->is_initialized || !results || !result_count) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     store->total_searches++;
@@ -141,7 +142,7 @@ int ethervox_memory_search(
         store->entry_count * sizeof(ethervox_memory_search_result_t)
     );
     if (!temp_results) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     uint32_t found_count = 0;
@@ -219,10 +220,10 @@ int ethervox_memory_search(
                 "Search completed: query='%s', filters=%u, found=%u",
                 query ? query : "(none)", tag_filter_count, found_count);
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
-int ethervox_memory_summarize(
+ethervox_result_t ethervox_memory_summarize(
     ethervox_memory_store_t* store,
     uint32_t window_size,
     const char* focus_topic,
@@ -231,7 +232,7 @@ int ethervox_memory_summarize(
     uint32_t* key_points_count
 ) {
     if (!store || !store->is_initialized || !summary_out) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     if (window_size == 0) {
@@ -248,7 +249,7 @@ int ethervox_memory_summarize(
     size_t summary_len = 4096;
     char* summary = malloc(summary_len);
     if (!summary) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     int pos = snprintf(summary, summary_len,
@@ -317,17 +318,17 @@ int ethervox_memory_summarize(
         free(key_points);
     }
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
-int ethervox_memory_forget(
+ethervox_result_t ethervox_memory_forget(
     ethervox_memory_store_t* store,
     uint64_t older_than_seconds,
     float importance_threshold,
     uint32_t* items_pruned
 ) {
     if (!store || !store->is_initialized) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     time_t cutoff_time = 0;
@@ -384,11 +385,11 @@ int ethervox_memory_forget(
                 "Pruned %u memories (age>%llu s, importance<%.2f)",
                 pruned, (unsigned long long)older_than_seconds, importance_threshold);
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 // Internal delete function - doesn't write to JSONL (for use during import)
-int memory_delete_by_ids_internal(
+ethervox_result_t memory_delete_by_ids_internal(
     ethervox_memory_store_t* store,
     const uint64_t* memory_ids,
     uint32_t id_count,
@@ -396,7 +397,7 @@ int memory_delete_by_ids_internal(
     uint32_t* items_deleted
 ) {
     if (!store || !store->is_initialized || !memory_ids || id_count == 0) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     uint32_t deleted = 0;
@@ -443,10 +444,10 @@ int memory_delete_by_ids_internal(
     ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
                 "Deleted %u memories by ID", deleted);
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
-int ethervox_memory_delete_by_ids(
+ethervox_result_t ethervox_memory_delete_by_ids(
     ethervox_memory_store_t* store,
     const uint64_t* memory_ids,
     uint32_t id_count,

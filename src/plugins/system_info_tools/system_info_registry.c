@@ -24,7 +24,7 @@ static int tool_system_version(const char* args_json, char** result, char** erro
     
     if (!result || !error) {
         *error = strdup("Invalid arguments");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Build JSON response with version info
@@ -74,7 +74,7 @@ static int tool_system_version(const char* args_json, char** result, char** erro
                 ETHERVOX_BACKEND_VERSION
     );
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 // Tool: system_capabilities - Get system capabilities
@@ -83,7 +83,7 @@ static int tool_system_capabilities(const char* args_json, char** result, char**
     
     if (!result || !error) {
         *error = strdup("Invalid arguments");
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Build JSON response with capability info
@@ -126,13 +126,13 @@ static int tool_system_capabilities(const char* args_json, char** result, char**
     *result = strdup(response);
     SYSINFO_LOG("Retrieved system capabilities");
     
-    return 0;
+    return ETHERVOX_SUCCESS;
 }
 
 // Register system info tools with the tool registry
-int ethervox_system_info_tools_register(ethervox_tool_registry_t* registry) {
+ethervox_result_t ethervox_system_info_tools_register(ethervox_tool_registry_t* registry) {
     if (!registry) {
-        return -1;
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     int ret = 0;

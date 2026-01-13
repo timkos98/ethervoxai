@@ -501,7 +501,44 @@ set_tests_properties(FileAppend PROPERTIES
 )
 ```
 
-### Step 7: LLM Prompt Optimization
+### Step 7: Dialogue System Registration (IMPORTANT)
+
+**Example**: `src/dialogue/dialogue_core.c`
+
+For tools to be available in the dialogue system (Android app, interactive CLI), you **must** register them in `dialogue_core.c`:
+
+```c
+// At the top of the file, add include:
+#include "ethervox/unit_conversion.h" // Unit conversion tools
+
+// In the tool registry initialization section (around line 670-690):
+    // Register timer tools
+    ethervox_tool_registry_add(registry, ethervox_tool_timer_create());
+    ethervox_tool_registry_add(registry, ethervox_tool_timer_cancel());
+    ethervox_tool_registry_add(registry, ethervox_tool_timer_list());
+    ethervox_tool_registry_add(registry, ethervox_tool_alarm_create());
+    tool_count += 4;
+    
+    // Register unit conversion tool
+    if (ethervox_unit_conversion_register(registry) == 0) {
+      tool_count++;
+#ifdef ETHERVOX_PLATFORM_ANDROID
+      ETHERVOX_LOGI("Registered unit conversion tool with Governor");
+#else
+      printf("Registered unit conversion tool with Governor\\n");
+#endif
+    }
+    
+    // Register memory tools if memory store is available...
+```
+
+**Critical Points**:
+- Tools registered in `src/main.c` are only available in the CLI executable
+- Tools registered in `dialogue_core.c` are available in both CLI and Android
+- Always register platform-independent utility tools in `dialogue_core.c`
+- Use `#ifdef ETHERVOX_PLATFORM_ANDROID` for different logging on Android vs desktop
+
+### Step 8: LLM Prompt Optimization
 
 **Example**: Update LLM system prompt or tool usage examples
 
@@ -647,7 +684,10 @@ echo "Please append 'test' to notes.txt" | ./build/ethervoxai
 3. `tests/unit/test_file_append.c` (NEW - unit tests)
 4. `tests/CMakeLists.txt` (test executable)
 5. `src/dialogue/integration_tests.c` (integration test)
-6. `docs/ADDING_NEW_LLM_TOOL.md` (this documentation)
+6. `src/dialogue/dialogue_core.c` (register tool in dialogue system)
+7. `docs/ADDING_NEW_LLM_TOOL.md` (this documentation)
+
+**Note**: For tools that should be available in the dialogue system (Android, interactive CLI), you must also register them in `src/dialogue/dialogue_core.c` in the tool registry initialization section. See the unit_conversion tool registration as an example.
 
 ## Performance Considerations
 
