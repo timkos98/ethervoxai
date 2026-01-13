@@ -23,11 +23,22 @@
 #include <string.h>
 #include <time.h>
 #include <sys/stat.h>
+#ifndef _WIN32
 #include <signal.h>
+#endif
 #include <math.h>
 
+#ifdef _WIN32
+#include <direct.h>
+#include <signal.h>  // For signal() on Windows
+#endif
+
 // Signal handler for Ctrl+C
+#ifndef _WIN32
 static volatile sig_atomic_t g_training_interrupted = 0;
+#else
+static volatile int g_training_interrupted = 0;
+#endif
 
 static void training_signal_handler(int sig) {
     (void)sig;  // Unused
@@ -257,7 +268,7 @@ static int train_word_pronunciation(
     );
     
     if (ret == 0 && result.success) {
-        printf("  ✓ Learned pronunciation: %s → %s (similarity: %.2f)\n",
+        printf("  [OK] Learned pronunciation: %s → %s (similarity: %.2f)\n",
                word, result.best_phonemes, result.similarity_score);
         
         // Save to override store
@@ -300,7 +311,7 @@ static int train_word_pronunciation(
         pronunciation_training_result_free(&result);
         return ETHERVOX_SUCCESS;
     } else {
-        printf("  ✗ Training failed: %s\n",
+        printf("  [FAIL] Training failed: %s\n",
                result.error_message ? result.error_message : "unknown error");
         pronunciation_training_result_free(&result);
         return ETHERVOX_ERROR_INVALID_ARGUMENT;
@@ -332,30 +343,34 @@ ethervox_result_t ethervox_voice_training_run(
     
     // Install signal handler for Ctrl+C
     g_training_interrupted = 0;
+#ifndef _WIN32
     struct sigaction sa;
     sa.sa_handler = training_signal_handler;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
     struct sigaction old_sa;
     sigaction(SIGINT, &sa, &old_sa);
+#else
+    signal(SIGINT, training_signal_handler);
+#endif
     
     // Create training directory
     const char* home = getenv("HOME");
     if (home) {
         snprintf(session.training_dir, sizeof(session.training_dir),
                  "%s/.ethervox/voice_training", home);
-        #ifdef _WIN32
+#ifdef _WIN32
         _mkdir(session.training_dir);
-        #else
+#else
         mkdir(session.training_dir, 0755);
-        #endif
+#endif
     }
     
     // Print welcome message
     printf("\n");
-    printf("╭───────────────────────────────────────────────────────────────╮\n");
-    printf("│           🎙️  Voice Pronunciation Training Mode              │\n");
-    printf("╰───────────────────────────────────────────────────────────────╯\n");
+    printf("╭---------------------------------------------------------------╮\n");
+    printf("|           🎙️  Voice Pronunciation Training Mode              |\n");
+    printf("╰---------------------------------------------------------------╯\n");
     printf("\n");
     printf("This mode helps improve TTS pronunciation by learning from your voice.\n");
     printf("\n");
@@ -393,9 +408,9 @@ ethervox_result_t ethervox_voice_training_run(
     }
     
     while (running && !g_training_interrupted) {
-        printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+        printf("\n========================================================\n");
         printf("Training Session #%d\n", ++session.session_count);
-        printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
+        printf("========================================================\n\n");
         
         // Generate training phrase or prompt for word
         char* phrase = NULL;
@@ -462,7 +477,7 @@ ethervox_result_t ethervox_voice_training_run(
         
         if (strcmp(input, "word") == 0) {
             single_word_mode = true;
-            printf("\n✓ Switched to single-word training mode\n");
+            printf("\n[OK] Switched to single-word training mode\n");
             free(phrase);
             continue;
         }
@@ -500,7 +515,7 @@ ethervox_result_t ethervox_voice_training_run(
             bool word_recorded_successfully = false;
             
             while (!word_recorded_successfully && !g_training_interrupted) {
-                printf("──────────────────────────────────────────────────\n");
+                printf("--------------------------------------------------\n");
                 printf("📝 Word %d/%d: '%s'\n", i+1, words_in_phrase, words_list[i]);
                 if (i > 0) {
                     printf("🎤 Press Enter to record, or 'r' to repeat previous word: ");
@@ -595,7 +610,7 @@ ethervox_result_t ethervox_voice_training_run(
             running = false;
         } else if (strcmp(input, "word") == 0) {
             single_word_mode = true;
-            printf("\n✓ Switched to single-word training mode\n");
+            printf("\n[OK] Switched to single-word training mode\n");
         } else if (strcmp(input, "stats") == 0) {
             printf("\n📊 Training Statistics:\n");
             printf("   Sessions completed: %d\n", session.session_count);
@@ -606,9 +621,9 @@ ethervox_result_t ethervox_voice_training_run(
     
     // Final statistics
     printf("\n");
-    printf("╭───────────────────────────────────────────────────────────────╮\n");
-    printf("│                  Training Session Complete                    │\n");
-    printf("╰───────────────────────────────────────────────────────────────╯\n");
+    printf("╭---------------------------------------------------------------╮\n");
+    printf("|                  Training Session Complete                    |\n");
+    printf("╰---------------------------------------------------------------╯\n");
     printf("\n");
     printf("📊 Final Statistics:\n");
     printf("   Sessions completed: %d\n", session.session_count);
@@ -619,7 +634,9 @@ ethervox_result_t ethervox_voice_training_run(
     printf("\n");
     
     // Restore original signal handler
+#ifndef _WIN32
     sigaction(SIGINT, &old_sa, NULL);
+#endif
     
     if (g_training_interrupted) {
         printf("Training interrupted by user.\n");

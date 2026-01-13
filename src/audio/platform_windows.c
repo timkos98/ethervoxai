@@ -26,6 +26,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #pragma comment(lib, "winmm.lib")
 
 typedef struct {
@@ -152,6 +153,27 @@ ethervox_result_t ethervox_audio_register_platform_driver(ethervox_audio_runtime
   runtime->driver.cleanup = windows_audio_cleanup;
 
   return ETHERVOX_SUCCESS;
+}
+
+/**
+ * @brief Calculate RMS (Root Mean Square) energy of audio samples
+ * 
+ * @param samples Array of audio samples (float)
+ * @param count Number of samples
+ * @return RMS energy value (typically 0.0-1.0 range)
+ */
+float ethervox_audio_calculate_rms_energy(const float* samples, uint32_t count) {
+    if (!samples || count == 0) {
+        return 0.0f;
+    }
+    
+    double sum_sq = 0.0;
+    for (uint32_t i = 0; i < count; i++) {
+        double sample = (double)samples[i];
+        sum_sq += sample * sample;
+    }
+    
+    return (float)sqrt(sum_sq / (double)count);
 }
 
 #endif  // ETHERVOX_PLATFORM_WINDOWS

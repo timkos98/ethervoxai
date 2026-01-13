@@ -10,22 +10,24 @@
 #include "ethervox/config.h"
 #include "ethervox/logging.h"
 #include "ethervox/platform.h"
+#include "ethervox/platform_utils.h"
 #include "ethervox/error.h"
+#include "ethervox/platform_http.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <unistd.h>
-#include <dirent.h>
-#include <errno.h>
 
-#ifdef __APPLE__
-#include <sys/mount.h>
-#elif defined(__linux__)
-#include <sys/statvfs.h>
+#ifdef _WIN32
+#include <direct.h>  // for _mkdir
+#define mkdir(path, mode) _mkdir(path)
+#else
+#include <unistd.h>
 #endif
+
+#include <errno.h>
 
 // ============================================================================
 // Model Definitions
@@ -213,32 +215,7 @@ static uint64_t get_file_size(const char* path) {
 }
 
 static uint64_t get_dir_size(const char* path) {
-    DIR* dir = opendir(path);
-    if (!dir) return 0;
-    
-    uint64_t total_size = 0;
-    struct dirent* entry;
-    char subpath[1024];
-    
-    while ((entry = readdir(dir)) != NULL) {
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
-            continue;
-        }
-        
-        snprintf(subpath, sizeof(subpath), "%s/%s", path, entry->d_name);
-        
-        struct stat st;
-        if (stat(subpath, &st) == 0) {
-            if (S_ISDIR(st.st_mode)) {
-                total_size += get_dir_size(subpath);
-            } else {
-                total_size += st.st_size;
-            }
-        }
-    }
-    
-    closedir(dir);
-    return total_size;
+    return platform_get_directory_size(path);
 }
 
 // ============================================================================
@@ -265,27 +242,39 @@ ethervox_result_t ethervox_model_get_base_dir(char* buffer, size_t buffer_size) 
     }
     
     // Ensure directory exists
+#ifdef _WIN32
+    _mkdir(buffer);
+#else
     mkdir(buffer, 0755);
+#endif
     ETHERVOX_LOG_DEBUG("Android base directory: %s", buffer);
     
     return ETHERVOX_SUCCESS;
 #else
-    const char* home = getenv("HOME");
-    if (!home) {
-        ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_PLATFORM_INIT, "HOME environment variable not set");
+    // Use platform-specific local app data directory for models
+    // Windows: %LOCALAPPDATA%\EthervoxAI
+    // macOS: ~/Library/Application Support/EthervoxAI
+    // Linux: ~/.ethervox
+    char base_dir[512];
+    ethervox_result_t result = platform_get_local_app_data_dir(base_dir, sizeof(base_dir));
+    if (result != ETHERVOX_SUCCESS) {
+        ETHERVOX_LOG_ERROR("Failed to get local app data directory");
+        return result;
     }
     
-    int written = snprintf(buffer, buffer_size, "%s/.ethervox/models", home);
+    int written = snprintf(buffer, buffer_size, "%s/models", base_dir);
     if (written < 0 || (size_t)written >= buffer_size) {
         ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_BUFFER_TOO_SMALL, "Buffer too small for model path");
     }
     
-    // Ensure directory exists
-    char temp[512];
-    snprintf(temp, sizeof(temp), "%s/.ethervox", home);
-    mkdir(temp, 0755);
-    
+    // Ensure directory exists (base directory is created by platform_get_local_app_data_dir)
+#ifdef _WIN32
+    _mkdir(buffer);
+#else
     mkdir(buffer, 0755);
+#endif
+    
+    ETHERVOX_LOG_DEBUG("Model directory: %s", buffer);
     
     return ETHERVOX_SUCCESS;
 #endif
@@ -524,36 +513,49 @@ int ethervox_model_download(
     
     char model_dir[512];
     snprintf(model_dir, sizeof(model_dir), "%s/%s", base_dir, subdir);
+#ifdef _WIN32
+    _mkdir(model_dir);
+#else
     mkdir(model_dir, 0755);
+#endif
     
     char output_path[1024];
     snprintf(output_path, sizeof(output_path), "%s/%s", model_dir, def->name);
     
-    // Build curl command
-    char cmd[2048];
-    
+    // Check if this is a Vosk ZIP model (not yet supported)
     if (type == ETHERVOX_MODEL_TYPE_VOSK && strstr(def->url, ".zip")) {
-        // Vosk models need to be extracted
-        char zip_path[1024];
-        snprintf(zip_path, sizeof(zip_path), "%s/%s.zip", model_dir, def->name);
-        
-        snprintf(cmd, sizeof(cmd),
-            "curl -L -o \"%s\" \"%s\" && unzip -q \"%s\" -d \"%s\" && rm \"%s\"",
-            zip_path, def->url, zip_path, model_dir, zip_path);
-    } else {
-        snprintf(cmd, sizeof(cmd),
-            "curl -L -o \"%s\" \"%s\"",
-            output_path, def->url);
+        ETHERVOX_LOG_ERROR("Vosk models require manual extraction (ZIP support not yet implemented)");
+        ETHERVOX_LOG_INFO("Please download and extract manually:");
+        ETHERVOX_LOG_INFO("  1. Download: %s", def->url);
+        ETHERVOX_LOG_INFO("  2. Extract to: %s/", model_dir);
+        ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_IMPLEMENTED, "ZIP extraction not implemented - please extract manually");
     }
     
+#ifdef HAVE_LIBCURL
+    // Use native C HTTP download
     ETHERVOX_LOG_INFO("Downloading %s...", def->name);
-    ETHERVOX_LOG_DEBUG("Command: %s", cmd);
+    ETHERVOX_LOG_DEBUG("URL: %s", def->url);
+    ETHERVOX_LOG_DEBUG("Destination: %s", output_path);
     
-    int cmd_result = system(cmd);
-    if (cmd_result != 0) {
-        ETHERVOX_LOG_ERROR("Download failed with exit code: %d", cmd_result);
-        ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_DOWNLOAD_FAILED, "Download command failed");
+    ethervox_result_t download_result = platform_http_download(
+        def->url,
+        output_path,
+        NULL,  // No progress callback for now
+        NULL   // No user data
+    );
+    
+    if (ethervox_is_error(download_result)) {
+        ETHERVOX_LOG_ERROR("Download failed");
+        return download_result;
     }
+#else
+    // Fallback: Inform user to download manually
+    ETHERVOX_LOG_ERROR("libcurl not available - manual download required");
+    ETHERVOX_LOG_INFO("Please download manually:");
+    ETHERVOX_LOG_INFO("  URL: %s", def->url);
+    ETHERVOX_LOG_INFO("  Save to: %s", output_path);
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_IMPLEMENTED, "libcurl not available - please download manually");
+#endif
     
     ETHERVOX_LOG_INFO("Download complete: %s", def->name);
     return ETHERVOX_SUCCESS;
@@ -595,11 +597,9 @@ ethervox_result_t ethervox_model_delete(
     snprintf(model_path, sizeof(model_path), "%s/%s/%s", base_dir, subdir, model_name);
     
     if (type == ETHERVOX_MODEL_TYPE_VOSK) {
-        // Delete directory recursively
-        char cmd[1536];
-        snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", model_path);
-        int cmd_result = system(cmd);
-        if (cmd_result != 0) {
+        // Delete directory recursively using C function
+        ethervox_result_t result = platform_rmdir_recursive(model_path);
+        if (ethervox_is_error(result)) {
             ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_FILE_DELETE_FAILED, "Failed to delete model directory");
         }
         return ETHERVOX_SUCCESS;
@@ -738,22 +738,11 @@ bool ethervox_model_check_disk_space(
         return false;
     }
     
-#ifdef __APPLE__
-    struct statfs fs_stat;
-    if (statfs(base_dir, &fs_stat) != 0) {
+    // Use cross-platform utility
+    uint64_t available = 0;
+    if (ethervox_is_error(platform_get_disk_space(base_dir, &available))) {
         return false;
     }
-    uint64_t available = (uint64_t)fs_stat.f_bavail * fs_stat.f_bsize;
-#elif defined(__linux__)
-    struct statvfs fs_stat;
-    if (statvfs(base_dir, &fs_stat) != 0) {
-        return false;
-    }
-    uint64_t available = (uint64_t)fs_stat.f_bavail * fs_stat.f_bsize;
-#else
-    // Unknown platform, assume OK
-    return true;
-#endif
     
     // Require 20% extra space as safety margin
     uint64_t required = (uint64_t)(def->size_bytes * 1.2);

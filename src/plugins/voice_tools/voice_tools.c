@@ -16,12 +16,20 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
+
+#ifdef _WIN32
+#include <direct.h>
+#include <windows.h>  // For Sleep
+#else
 #include <unistd.h>
+#endif
 
 #include "ethervox/file_tools.h"
 #include "ethervox/governor.h"
 #include "ethervox/logging.h"
 #include "ethervox/config.h"
+#include "ethervox/platform_utils.h"
+#include "ethervox/platform_utils.h"
 
 // Forward declaration - implemented in JNI layer (Android) or returns NULL (other platforms)
 extern const char* ethervox_get_android_files_dir(void);
@@ -69,8 +77,11 @@ static int download_whisper_model(const char* model_name, const char* dest_dir) 
   }
 
   // Create destination directory
-  snprintf(command, sizeof(command), "mkdir -p \"%s\"", dest_dir);
-  system(command);
+  ethervox_result_t mkdir_result = platform_mkdir_recursive(dest_dir);
+  if (ethervox_is_error(mkdir_result)) {
+    LOG_ERROR("Failed to create directory: %s", dest_dir);
+    return mkdir_result;
+  }
 
   // Run download script
   LOG_INFO("Downloading Whisper model '%s' to %s/", model_name, dest_dir);
@@ -216,7 +227,11 @@ static void* audio_capture_thread(void* arg) {
       // Note: buffer size is reset at the top of the loop before next read
     } else if (samples_read == 0) {
       // No audio available yet, sleep briefly
+#ifdef _WIN32
+      Sleep(50);  // 50ms
+#else
       usleep(50000);  // 50ms
+#endif
     } else {
       LOG_ERROR("Audio read error: %d", samples_read);
       break;
@@ -278,20 +293,32 @@ ethervox_result_t ethervox_voice_tools_init(ethervox_voice_session_t* session, v
 
   // Platform-specific default paths
   const char* android_files_dir = ethervox_get_android_files_dir();
-  const char* home = getenv("HOME");
   char default_model_dir[ETHERVOX_FILE_MAX_PATH];
+  char local_app_data[512];
   
   if (android_files_dir) {
     // Android: Use app-specific files directory
     snprintf(default_model_dir, sizeof(default_model_dir), "%s/models/whisper", android_files_dir);
     LOG_INFO("[Android] Using app files directory for models: %s", default_model_dir);
-  } else if (home) {
-    // macOS/Linux: Use home directory
-    snprintf(default_model_dir, sizeof(default_model_dir), "%s/.ethervox/models/whisper", home);
-    LOG_DEBUG("Using home directory for models: %s", default_model_dir);
+  } else if (platform_get_local_app_data_dir(local_app_data, sizeof(local_app_data)) == ETHERVOX_SUCCESS) {
+    // Windows/macOS/Linux: Use platform-specific local app data
+    snprintf(default_model_dir, sizeof(default_model_dir), "%s%cmodels%cwhisper", local_app_data,
+#ifdef _WIN32
+             '\\', '\\'
+#else
+             '/', '/'
+#endif
+    );
+    LOG_DEBUG("Using platform app data for models: %s", default_model_dir);
   } else {
     // Fallback: relative path
-    snprintf(default_model_dir, sizeof(default_model_dir), ".ethervox/models/whisper");
+    snprintf(default_model_dir, sizeof(default_model_dir), "models%cwhisper",
+#ifdef _WIN32
+             '\\'
+#else
+             '/'
+#endif
+    );
     LOG_WARN("No platform-specific path available, using relative path");
   }
 
@@ -334,18 +361,17 @@ ethervox_result_t ethervox_voice_tools_init(ethervox_voice_session_t* session, v
     }
   }
 
-  if (home) {
+  // Add platform-specific app data paths
+  if (platform_get_local_app_data_dir(local_app_data, sizeof(local_app_data)) == ETHERVOX_SUCCESS) {
     if (path_count < MAX_MODEL_PATHS) {
       snprintf(possible_paths[path_count++], ETHERVOX_FILE_MAX_PATH,
-               "%s/.ethervox/models/whisper/%s", home, preferred_model);
-    }
-    if (path_count < MAX_MODEL_PATHS) {
-      snprintf(possible_paths[path_count++], ETHERVOX_FILE_MAX_PATH,
-               "%s/ethervox/models/whisper/%s", home, preferred_model);
-    }
-    if (path_count < MAX_MODEL_PATHS) {
-      snprintf(possible_paths[path_count++], ETHERVOX_FILE_MAX_PATH,
-               "%s/Documents/ethervox/models/whisper/%s", home, preferred_model);
+               "%s%cmodels%cwhisper%c%s", local_app_data,
+#ifdef _WIN32
+               '\\', '\\', '\\',
+#else
+               '/', '/', '/',
+#endif
+               preferred_model);
     }
   }
 
@@ -396,18 +422,17 @@ ethervox_result_t ethervox_voice_tools_init(ethervox_voice_session_t* session, v
       }
     }
     
-    if (home) {
+    // Add platform-specific app data paths for this candidate
+    if (platform_get_local_app_data_dir(local_app_data, sizeof(local_app_data)) == ETHERVOX_SUCCESS) {
       if (path_count < MAX_MODEL_PATHS) {
         snprintf(possible_paths[path_count++], ETHERVOX_FILE_MAX_PATH,
-                 "%s/.ethervox/models/whisper/%s", home, preferred_model);
-      }
-      if (path_count < MAX_MODEL_PATHS) {
-        snprintf(possible_paths[path_count++], ETHERVOX_FILE_MAX_PATH,
-                 "%s/ethervox/models/whisper/%s", home, preferred_model);
-      }
-      if (path_count < MAX_MODEL_PATHS) {
-        snprintf(possible_paths[path_count++], ETHERVOX_FILE_MAX_PATH,
-                 "%s/Documents/ethervox/models/whisper/%s", home, preferred_model);
+                 "%s%cmodels%cwhisper%c%s", local_app_data,
+#ifdef _WIN32
+                 '\\', '\\', '\\',
+#else
+                 '/', '/', '/',
+#endif
+                 preferred_model);
       }
     }
     
@@ -459,18 +484,17 @@ ethervox_result_t ethervox_voice_tools_init(ethervox_voice_session_t* session, v
                  fallback_model);
       }
 
-      if (home) {
+      // Add platform-specific app data paths for fallback
+      if (platform_get_local_app_data_dir(local_app_data, sizeof(local_app_data)) == ETHERVOX_SUCCESS) {
         if (fallback_count < MAX_MODEL_PATHS) {
           snprintf(possible_paths[fallback_count++], ETHERVOX_FILE_MAX_PATH,
-                   "%s/.ethervox/models/whisper/%s", home, fallback_model);
-        }
-        if (fallback_count < MAX_MODEL_PATHS) {
-          snprintf(possible_paths[fallback_count++], ETHERVOX_FILE_MAX_PATH,
-                   "%s/ethervox/models/whisper/%s", home, fallback_model);
-        }
-        if (fallback_count < MAX_MODEL_PATHS) {
-          snprintf(possible_paths[fallback_count++], ETHERVOX_FILE_MAX_PATH,
-                   "%s/Documents/ethervox/models/whisper/%s", home, fallback_model);
+                   "%s%cmodels%cwhisper%c%s", local_app_data,
+#ifdef _WIN32
+                   '\\', '\\', '\\',
+#else
+                   '/', '/', '/',
+#endif
+                   fallback_model);
         }
       }
 
@@ -688,27 +712,37 @@ ethervox_result_t ethervox_voice_tools_start_listen(ethervox_voice_session_t* se
   session->is_recording = true;
 
   // Create transcript file immediately for live LLM monitoring
-  // Use platform-specific path (Android app files or macOS home directory)
+  // Use platform-specific path (Android app files or platform app data)
   const char* android_files_dir = ethervox_get_android_files_dir();
-  const char* home = getenv("HOME");
   char transcript_dir[512];
+  char local_app_data[512];
   
   if (android_files_dir) {
     // Android: Use app-specific files directory
     snprintf(transcript_dir, sizeof(transcript_dir), "%s/transcripts", android_files_dir);
     LOG_INFO("[Android] Saving transcripts to: %s", transcript_dir);
-  } else if (home) {
-    // macOS/Linux: Use home directory
-    snprintf(transcript_dir, sizeof(transcript_dir), "%s/.ethervox/transcripts", home);
-    LOG_INFO("[macOS] Saving transcripts to: %s", transcript_dir);
+  } else if (platform_get_local_app_data_dir(local_app_data, sizeof(local_app_data)) == ETHERVOX_SUCCESS) {
+    // Windows/macOS/Linux: Use platform-specific local app data
+    snprintf(transcript_dir, sizeof(transcript_dir), "%s%ctranscripts", local_app_data,
+#ifdef _WIN32
+             '\\'
+#else
+             '/'
+#endif
+    );
+    LOG_INFO("Saving transcripts to: %s", transcript_dir);
   } else {
     // Fallback: current directory
-    snprintf(transcript_dir, sizeof(transcript_dir), "./transcripts");
+    snprintf(transcript_dir, sizeof(transcript_dir), "transcripts");
     LOG_WARN("No platform-specific path, using ./transcripts");
   }
   
   // Create directory (platform-safe)
+#ifdef _WIN32
+  int mkdir_result = _mkdir(transcript_dir);
+#else
   int mkdir_result = mkdir(transcript_dir, 0755);
+#endif
   if (mkdir_result != 0 && errno != EEXIST) {
     LOG_ERROR("Failed to create transcript directory %s: errno=%d", transcript_dir, errno);
   } else {
@@ -731,9 +765,9 @@ ethervox_result_t ethervox_voice_tools_start_listen(ethervox_voice_session_t* se
     fprintf(f, "========================================\n\n");
     fflush(f);  // Force write to disk
     fclose(f);
-    LOG_INFO("✓ Created live transcript file: %s", session->last_transcript_file);
+    LOG_INFO("[OK] Created live transcript file: %s", session->last_transcript_file);
   } else {
-    LOG_ERROR("✗ Failed to create transcript file: %s (errno=%d)", session->last_transcript_file, errno);
+    LOG_ERROR("[FAIL] Failed to create transcript file: %s (errno=%d)", session->last_transcript_file, errno);
     session->last_transcript_file[0] = '\0';  // Clear the path since file creation failed
   }
 
@@ -1300,8 +1334,8 @@ ethervox_result_t ethervox_voice_tools_assign_speaker_names(ethervox_voice_sessi
   free(file_content);
   free(updated_content);
   
-  LOG_INFO("✓ Updated transcript file with speaker names: %s", session->last_transcript_file);
-  printf("✓ Transcript updated with speaker names\n");
+  LOG_INFO("[OK] Updated transcript file with speaker names: %s", session->last_transcript_file);
+  printf("[OK] Transcript updated with speaker names\n");
   printf("  File: %s\n\n", session->last_transcript_file);
   
   return ETHERVOX_SUCCESS;

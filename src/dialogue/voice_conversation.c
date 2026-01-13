@@ -142,9 +142,9 @@ static int conversation_on_speak(const char* text, bool wait_for_response,
     );
     
     // Print to console
-    printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    printf("\n========================================================\n");
     printf("🤖 Assistant [%s]: %s\n", detected_language, text);
-    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
+    printf("========================================================\n\n");
     
     // Synthesize and play audio with Piper TTS
     if (session->tts_initialized && session->tts_context) {
@@ -191,6 +191,8 @@ static int conversation_on_speak(const char* text, bool wait_for_response,
                         
                         // ALWAYS wait for playback to finish before resuming listening
                         // This prevents microphone from capturing TTS echo/feedback
+#ifdef __APPLE__
+                        // macOS-specific playback synchronization
                         macos_audio_state_t* state = (macos_audio_state_t*)session->audio_runtime.platform_data;
                         if (state) {
                             ETHERVOX_LOG_DEBUG("Waiting for audio playback to complete (allow_interrupt=%d)...", allow_interrupt);
@@ -235,6 +237,7 @@ static int conversation_on_speak(const char* text, bool wait_for_response,
                             }
                             ETHERVOX_LOG_DEBUG("Audio playback completed");
                         }
+#endif
                     } else {
                         ETHERVOX_LOG_WARN("Audio playback failed: %d", play_result);
                     }
@@ -339,14 +342,14 @@ static int conversation_on_listen(char** user_input, int timeout_ms,
                                      session->last_detected_language);
                 }
                 
-                printf(" ✓\n");
+                printf(" [OK]\n");
                 ethervox_audio_buffer_free(&audio_chunk);
                 return ETHERVOX_SUCCESS;
             }
         } else if (speech_detected) {
             silence_frames++;
             if (silence_frames >= silence_threshold) {
-                printf(" ✓\n");
+                printf(" [OK]\n");
                 // Speech ended - finalize transcription
                 ethervox_stt_result_t final_result;
                 if (ethervox_stt_finalize(&session->stt_runtime, &final_result) == 0) {
@@ -417,9 +420,9 @@ static int conversation_on_interrupt(void* user_data) {
 static void* conversation_thread(void* arg) {
     ethervox_conversation_session_t* session = (ethervox_conversation_session_t*)arg;
     
-    printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    printf("\n========================================================\n");
     printf("🎙️  CONVERSATION THREAD STARTED\n");
-    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    printf("========================================================\n");
     
     pthread_mutex_lock(&session->mutex);
     
@@ -432,8 +435,8 @@ static void* conversation_thread(void* arg) {
         printf("👂 Wake word mode: ENABLED (waiting for wake word trigger)\n");
     }
     
-    printf("Governor: %s\n", session->governor ? "✓ Connected" : "❌ Not connected");
-    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
+    printf("Governor: %s\n", session->governor ? "[OK] Connected" : "❌ Not connected");
+    printf("========================================================\n\n");
     
     pthread_mutex_unlock(&session->mutex);
     
@@ -449,7 +452,7 @@ static void* conversation_thread(void* arg) {
         if (ethervox_audio_register_platform_driver(&session->audio_runtime) == 0 &&
             session->audio_runtime.driver.init(&session->audio_runtime, &audio_config) == 0) {
             session->audio_initialized = true;
-            printf("✓ Microphone ready\n");
+            printf("[OK] Microphone ready\n");
         } else {
             printf("❌ Failed to initialize microphone\n");
             return NULL;
@@ -476,14 +479,14 @@ static void* conversation_thread(void* arg) {
         
         if (ethervox_stt_init(&session->stt_runtime, &stt_config) == 0) {
             session->stt_initialized = true;
-            printf("✓ Speech recognition ready\n");
+            printf("[OK] Speech recognition ready\n");
         } else {
             printf("❌ Failed to initialize speech recognition\n");
             return NULL;
         }
     }
     
-    printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    printf("\n========================================================\n");
     if (always_listening) {
         printf("🎙️  CONTINUOUS LISTENING MODE ACTIVE\n");
         printf("   Speak anytime - no wake word needed\n");
@@ -491,7 +494,7 @@ static void* conversation_thread(void* arg) {
         printf("👂 WAKE WORD MODE ACTIVE\n");
         printf("   Say 'hey ethervox' to start\n");
     }
-    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
+    printf("========================================================\n\n");
     
     while (!session->thread_should_exit) {
         pthread_mutex_lock(&session->mutex);
@@ -612,7 +615,7 @@ static void* conversation_thread(void* arg) {
                         
                         strncpy(recognized_text, stt_result.text, sizeof(recognized_text) - 1);
                         speech_detected = true;
-                        printf("\r✓ Final: %s\n", stt_result.text);
+                        printf("\r[OK] Final: %s\n", stt_result.text);
                         
                         // Capture detected language from Whisper
                         if (stt_result.language && strlen(stt_result.language) > 0) {

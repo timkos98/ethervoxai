@@ -583,7 +583,7 @@ ethervox_result_t ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
       ctx->language_detected = true;
       
       if (!lang_changed) {
-        LOG_INFO("✓ Detected language: %s (will use for next %d segments)", 
+        LOG_INFO("[OK] Detected language: %s (will use for next %d segments)", 
                  ctx->detected_language, ctx->redetect_interval);
       }
       
@@ -624,7 +624,7 @@ ethervox_result_t ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
         ctx->params.detect_language = false;
         ret_code = whisper_full(ctx->ctx, ctx->params, process_buffer, total_samples);
         if (ret_code == 0) {
-          LOG_INFO("✓ Recovery successful - detect_language flag was the issue");
+          LOG_INFO("[OK] Recovery successful - detect_language flag was the issue");
           goto transcription_success;
         }
         LOG_WARN("Recovery attempt 1 failed (code: %d)", ret_code);
@@ -639,7 +639,7 @@ ethervox_result_t ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
         ctx->params.detect_language = false;
         ret_code = whisper_full(ctx->ctx, ctx->params, process_buffer, total_samples);
         if (ret_code == 0) {
-          LOG_INFO("✓ Recovery successful - English language works");
+          LOG_INFO("[OK] Recovery successful - English language works");
           goto transcription_success;
         }
         LOG_WARN("Recovery attempt 2 failed (code: %d)", ret_code);
@@ -651,7 +651,7 @@ ethervox_result_t ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
         ctx->params.translate = false;
         ret_code = whisper_full(ctx->ctx, ctx->params, process_buffer, total_samples);
         if (ret_code == 0) {
-          LOG_INFO("✓ Recovery successful - translation was conflicting");
+          LOG_INFO("[OK] Recovery successful - translation was conflicting");
           goto transcription_success;
         }
         LOG_WARN("Recovery attempt 3 failed (code: %d)", ret_code);

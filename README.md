@@ -77,12 +77,31 @@ EtherVoxAI is an open-source voice AI platform designed for privacy-conscious us
 git clone https://github.com/ethervox-ai/ethervoxai.git
 cd ethervoxai
 
+# Option A: Automatic dependency download (recommended for first-time users)
+# llama.cpp and whisper.cpp will be downloaded automatically during cmake configure
+mkdir build && cd build
+cmake ..  # Downloads dependencies on first run (~2-5 minutes one-time)
+make -j$(nproc)
+
+# Option B: Manual submodule initialization (advanced users/offline development)
+git submodule update --init --recursive  # Downloads ~80MB
+mkdir build && cd build
+cmake ..
+make -j$(nproc)
+
 # Download phonemizer dictionaries (required for TTS)
 ./scripts/download_phonemizer_data.sh
 
-# Install dependencies (optional - auto-installs on first build)
+# Install system dependencies (optional - auto-installs on first build)
 make install-deps
 ```
+
+**Note**: After the first build, dependencies are cached in `external/` and never re-downloaded, even for clean rebuilds.
+
+**Advanced Options:**
+- Disable auto-download: `cmake -B build -DETHERVOX_AUTO_FETCH_DEPS=OFF`
+- Use custom dependency paths: `cmake -B build -DLLAMA_CPP_CUSTOM_DIR=/path/to/llama.cpp`
+- See [Dependency Management Guide](docs/DEPENDENCY_MANAGEMENT.md) for details
 
 ## Platform-Specific Builds
 

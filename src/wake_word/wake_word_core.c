@@ -500,7 +500,7 @@ ethervox_result_t ethervox_wake_record_template(ethervox_wake_runtime_t* runtime
   state->template_length = sample_count;
 
   float duration_sec = (float)sample_count / (float)runtime->config.sample_rate;
-  printf("✓ Wake word template recorded (%.2f seconds, %u samples)\n", 
+  printf("[OK] Wake word template recorded (%.2f seconds, %u samples)\n", 
          duration_sec, sample_count);
 
   return ETHERVOX_SUCCESS;

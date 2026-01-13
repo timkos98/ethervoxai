@@ -33,7 +33,12 @@ struct pronunciation_override_store {
 static int ensure_directory(const char* path) {
     struct stat st = {0};
     if (stat(path, &st) == -1) {
+#ifdef _WIN32
+#include <direct.h>  // for _mkdir on Windows
+        if (_mkdir(path) != 0 && errno != EEXIST) {
+#else
         if (mkdir(path, 0755) != 0 && errno != EEXIST) {
+#endif
             return -1;
         }
     }
@@ -469,7 +474,7 @@ ethervox_result_t pronunciation_overrides_reset(void) {
     
     // Delete personal overrides file
     if (remove(personal_path) == 0) {
-        printf("✓ Deleted personal pronunciation overrides\n");
+        printf("[OK] Deleted personal pronunciation overrides\n");
     } else if (errno != ENOENT) {
         fprintf(stderr, "⚠️  Failed to delete %s: %s\n", personal_path, strerror(errno));
         result = -1;
@@ -477,7 +482,7 @@ ethervox_result_t pronunciation_overrides_reset(void) {
     
     // Delete community overrides file
     if (remove(community_path) == 0) {
-        printf("✓ Deleted community pronunciation overrides\n");
+        printf("[OK] Deleted community pronunciation overrides\n");
     } else if (errno != ENOENT) {
         fprintf(stderr, "⚠️  Failed to delete %s: %s\n", community_path, strerror(errno));
         result = -1;

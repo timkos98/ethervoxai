@@ -16,6 +16,10 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
+#ifdef _WIN32
+#include <direct.h>
+#endif
+
 #define STARTUP_LOG(...) ETHERVOX_LOG_INFO(__VA_ARGS__)
 #define STARTUP_ERROR(...) ETHERVOX_LOG_ERROR(__VA_ARGS__)
 

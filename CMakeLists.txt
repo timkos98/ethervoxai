@@ -280,11 +280,33 @@ FetchContent_Declare(
     cJSON
     GIT_REPOSITORY https://github.com/DaveGamble/cJSON.git
     GIT_TAG v1.7.18
-    PATCH_COMMAND sed -i.bak "s/cmake_minimum_required(VERSION 3.0)/cmake_minimum_required(VERSION 3.16)/" CMakeLists.txt || true
+    PATCH_COMMAND ${CMAKE_COMMAND} -E echo_append ""
 )
+# Set minimum CMake version for cJSON subdirectory before including it
+set(CMAKE_POLICY_DEFAULT_CMP0000 NEW CACHE STRING "" FORCE)
 set(ENABLE_CJSON_TEST OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_AND_STATIC_LIBS OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(cJSON)
+set(CJSON_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(ENABLE_CUSTOM_COMPILER_FLAGS OFF CACHE BOOL "" FORCE)
+FetchContent_GetProperties(cJSON)
+if(NOT cjson_POPULATED)
+    FetchContent_Populate(cJSON)
+    # Patch the CMakeLists.txt to require CMake 3.16
+    file(READ "${cjson_SOURCE_DIR}/CMakeLists.txt" CJSON_CMAKE_CONTENT)
+    string(REPLACE "cmake_minimum_required(VERSION 3.0)" 
+                   "cmake_minimum_required(VERSION 3.16)" 
+                   CJSON_CMAKE_CONTENT "${CJSON_CMAKE_CONTENT}")
+    file(WRITE "${cjson_SOURCE_DIR}/CMakeLists.txt" "${CJSON_CMAKE_CONTENT}")
+    add_subdirectory(${cjson_SOURCE_DIR} ${cjson_BINARY_DIR})
+    # Remove -Werror from cjson compilation flags
+    if(TARGET cjson)
+        get_target_property(CJSON_FLAGS cjson COMPILE_OPTIONS)
+        if(CJSON_FLAGS)
+            list(REMOVE_ITEM CJSON_FLAGS "-Werror")
+            set_target_properties(cjson PROPERTIES COMPILE_OPTIONS "${CJSON_FLAGS}")
+        endif()
+    endif()
+endif()
 
 # Find libcurl for bug reporter (not needed on Android - uses Kotlin BugReporter instead)
 if(NOT TARGET_PLATFORM STREQUAL "ANDROID")
@@ -313,17 +335,38 @@ if(WITH_TINYLLAMA)
     message(STATUS "TinyLlama backend enabled")
 endif()
 
-# llama.cpp integration
-message(STATUS "Checking llama.cpp: WITH_LLAMA=${WITH_LLAMA}, CMAKE_CURRENT_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}")
-message(STATUS "Checking path: ${CMAKE_CURRENT_SOURCE_DIR}/external/llama.cpp")
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/llama.cpp")
-    message(STATUS "llama.cpp directory EXISTS")
-else()
-    message(WARNING "llama.cpp directory DOES NOT EXIST at ${CMAKE_CURRENT_SOURCE_DIR}/external/llama.cpp")
+# ============================================================================
+# Dependency Management - llama.cpp and whisper.cpp
+# ============================================================================
+# Automatically fetches dependencies if not present as git submodules
+# Users can:
+#   1. Use git submodules: git submodule update --init --recursive
+#   2. Let CMake auto-download (default, one-time)
+#   3. Provide custom paths: -DLLAMA_CPP_CUSTOM_DIR=/path/to/llama.cpp
+#   4. Disable auto-fetch: -DETHERVOX_AUTO_FETCH_DEPS=OFF
+
+include(cmake/FetchDependencies.cmake)
+
+# Fetch llama.cpp
+if(WITH_LLAMA)
+    fetch_llama_cpp()
 endif()
 
-if(WITH_LLAMA AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/llama.cpp")
-    message(STATUS "Adding llama.cpp from external/llama.cpp")
+# Fetch whisper.cpp  
+option(WITH_WHISPER "Enable whisper.cpp for speech-to-text" ON)
+if(WITH_WHISPER)
+    fetch_whisper_cpp()
+endif()
+
+# Print summary
+print_dependency_status()
+
+# ============================================================================
+# llama.cpp Integration
+# ============================================================================
+
+if(WITH_LLAMA AND LLAMA_CPP_SOURCE_DIR)
+    message(STATUS "Configuring llama.cpp from: ${LLAMA_CPP_SOURCE_DIR}")
     
     # llama.cpp build options
     set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -360,22 +403,24 @@ if(WITH_LLAMA AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/llama.cpp")
     endif()
     
     # Add llama.cpp as subdirectory
-    add_subdirectory(external/llama.cpp)
+    add_subdirectory(${LLAMA_CPP_SOURCE_DIR})
     
     add_definitions(-DLLAMA_CPP_AVAILABLE=1)
-    message(STATUS "llama.cpp successfully configured")
+    message(STATUS "✓ llama.cpp successfully configured")
 elseif(WITH_LLAMA)
-    message(WARNING "llama.cpp not found in external/llama.cpp - LLM features will be limited")
+    message(WARNING "llama.cpp not available - LLM features will be limited")
+    message(WARNING "To enable: git submodule update --init or set ETHERVOX_AUTO_FETCH_DEPS=ON")
     add_definitions(-DLLAMA_CPP_AVAILABLE=0)
 else()
     add_definitions(-DLLAMA_CPP_AVAILABLE=0)
 endif()
 
-# whisper.cpp integration for speech-to-text
-option(WITH_WHISPER "Enable whisper.cpp for speech-to-text" ON)
+# ============================================================================
+# whisper.cpp Integration
+# ============================================================================
 
-if(WITH_WHISPER AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/whisper.cpp")
-    message(STATUS "Adding whisper.cpp from external/whisper.cpp")
+if(WITH_WHISPER AND WHISPER_CPP_SOURCE_DIR)
+    message(STATUS "Configuring whisper.cpp from: ${WHISPER_CPP_SOURCE_DIR}")
     
     # whisper.cpp build options
     set(WHISPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -406,12 +451,13 @@ if(WITH_WHISPER AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/whisper.cpp")
     endif()
     
     # Add whisper.cpp as subdirectory
-    add_subdirectory(external/whisper.cpp)
+    add_subdirectory(${WHISPER_CPP_SOURCE_DIR})
     
     add_definitions(-DWHISPER_CPP_AVAILABLE=1)
-    message(STATUS "whisper.cpp successfully configured")
+    message(STATUS "✓ whisper.cpp successfully configured")
 elseif(WITH_WHISPER)
-    message(WARNING "whisper.cpp not found in external/whisper.cpp - Voice features will be disabled")
+    message(WARNING "whisper.cpp not available - Voice features will be disabled")
+    message(WARNING "To enable: git submodule update --init or set ETHERVOX_AUTO_FETCH_DEPS=ON")
     add_definitions(-DWHISPER_CPP_AVAILABLE=0)
 else()
     add_definitions(-DWHISPER_CPP_AVAILABLE=0)
@@ -429,6 +475,17 @@ set(COMMON_SOURCES
     src/common/language_detector.c
     src/common/model_downloader.c
     src/config/settings.c
+)
+
+# Platform-specific utility implementations
+if(ETHERVOX_PLATFORM_WINDOWS)
+    list(APPEND COMMON_SOURCES src/common/platform_utils_windows.c)
+elseif(ETHERVOX_PLATFORM_LINUX OR ETHERVOX_PLATFORM_MACOS OR ETHERVOX_PLATFORM_RPI)
+    list(APPEND COMMON_SOURCES src/common/platform_utils_unix.c)
+endif()
+
+# Continue adding common sources
+list(APPEND COMMON_SOURCES
     src/audio/reference_buffer.c
     src/audio/aec_speex.c
     src/audio/audio_stream_player.c
@@ -797,9 +854,44 @@ if(PkgConfig_FOUND)
     # espeak-ng REMOVED - replaced with custom phonemizer (MIT-licensed)
     # See src/tts/phonemizer.c for dictionary-based G2P implementation
     message(STATUS "Using custom phonemizer (espeak-ng dependency removed for licensing)")
+    
+    # Link libcurl for HTTP downloads (model downloader)
+    pkg_check_modules(CURL libcurl)
+    if(CURL_FOUND)
+        target_link_libraries(ethervoxai PUBLIC ${CURL_LINK_LIBRARIES})
+        target_include_directories(ethervoxai PRIVATE ${CURL_INCLUDE_DIRS})
+        target_link_directories(ethervoxai PRIVATE ${CURL_LIBRARY_DIRS})
+        target_compile_definitions(ethervoxai PUBLIC HAVE_LIBCURL=1)
+        message(STATUS "✓ Linked libcurl: ${CURL_VERSION}")
+    else()
+        # Try find_package fallback for Windows
+        find_package(CURL)
+        if(CURL_FOUND)
+            target_link_libraries(ethervoxai PUBLIC CURL::libcurl)
+            target_compile_definitions(ethervoxai PUBLIC HAVE_LIBCURL=1)
+            message(STATUS "✓ Linked libcurl via find_package")
+        else()
+            message(WARNING "libcurl not found - model downloads will require manual installation")
+            target_compile_definitions(ethervoxai PUBLIC HAVE_LIBCURL=0)
+        endif()
+    endif()
 else()
-    message(WARNING "PkgConfig not found - skipping Speex and ONNX Runtime detection")
+    message(WARNING "PkgConfig not found - trying direct libcurl detection")
+    
+    # Try to find libcurl without pkg-config (Windows MinGW)
+    find_package(CURL)
+    if(CURL_FOUND)
+        target_link_libraries(ethervoxai PUBLIC CURL::libcurl)
+        target_compile_definitions(ethervoxai PUBLIC HAVE_LIBCURL=1)
+        message(STATUS "✓ Linked libcurl via find_package")
+    else()
+        message(WARNING "libcurl not found - model downloads will require manual installation")
+        target_compile_definitions(ethervoxai PUBLIC HAVE_LIBCURL=0)
+    endif()
 endif()
+
+# Add platform HTTP utilities (uses libcurl)
+target_sources(ethervoxai PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/common/platform_http.c)
 
 # Platform-specific linking for library consumers
 set(ETHERVOXAI_PLATFORM_LIBS "")
@@ -895,8 +987,8 @@ if(NOT ANDROID)
     set_target_properties(ethervoxai_app PROPERTIES OUTPUT_NAME ethervoxai)
 endif()
 
-# Voice quality tuner tool
-if(NOT ANDROID)
+# Voice quality tuner tool (Unix only - uses termios.h)
+if(NOT ANDROID AND NOT WIN32)
     add_executable(voice_tuner tools/voice_tuner.c)
     target_link_libraries(voice_tuner PRIVATE ethervoxai cjson)
     target_include_directories(voice_tuner PRIVATE 

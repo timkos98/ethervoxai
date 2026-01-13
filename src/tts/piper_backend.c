@@ -16,8 +16,32 @@
 #include <string.h>
 #include <ctype.h>
 #include <math.h>
-#include <onnxruntime/onnxruntime_c_api.h>
-#include <speex/speex_resampler.h>
+
+// Check if ONNX Runtime is available
+#if defined(__has_include)
+  #if __has_include(<onnxruntime/onnxruntime_c_api.h>)
+    #define HAVE_ONNX 1
+    #include <onnxruntime/onnxruntime_c_api.h>
+  #else
+    #define HAVE_ONNX 0
+  #endif
+#else
+  #define HAVE_ONNX 0
+#endif
+
+// Check if Speex is available  
+#if defined(__has_include)
+  #if __has_include(<speex/speex_resampler.h>)
+    #define HAVE_SPEEX 1
+    #include <speex/speex_resampler.h>
+  #else
+    #define HAVE_SPEEX 0
+  #endif
+#else
+  #define HAVE_SPEEX 0
+#endif
+
+#if HAVE_ONNX && HAVE_SPEEX
 
 #define PIPER_MAX_PHONEMES 512
 #define PIPER_SAMPLE_RATE 22050
@@ -1168,3 +1192,41 @@ void ethervox_tts_piper_destroy(ethervox_tts_context_t* ctx) {
     
     free(piper);
 }
+
+#else // !HAVE_ONNX || !HAVE_SPEEX
+
+// Stub implementations when ONNX Runtime or Speex is not available
+#include "ethervox/tts.h"
+#include "ethervox/logging.h"
+#include "ethervox/error.h"
+
+ethervox_result_t ethervox_tts_piper_init(
+    ethervox_tts_context_t** ctx_out,
+    const char* model_path,
+    const char* config_path
+) {
+    (void)ctx_out;
+    (void)model_path;
+    (void)config_path;
+    ETHERVOX_LOG_WARN("Piper TTS not available - ONNX Runtime or Speex not found");
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_IMPLEMENTED, "Piper TTS requires ONNX Runtime and Speex");
+}
+
+ethervox_result_t ethervox_tts_piper_synthesize(
+    ethervox_tts_context_t* ctx,
+    const char* text,
+    int16_t** audio_out,
+    size_t* samples_out
+) {
+    (void)ctx;
+    (void)text;
+    (void)audio_out;
+    (void)samples_out;
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_IMPLEMENTED, "Piper TTS not available");
+}
+
+void ethervox_tts_piper_destroy(ethervox_tts_context_t* ctx) {
+    (void)ctx;
+}
+
+#endif // HAVE_ONNX && HAVE_SPEEX

@@ -350,21 +350,25 @@ ethervox_result_t ethervox_optimize_tool_prompts_v2(
     
     // Set up signal handler for Ctrl+C
     g_optimization_cancelled = 0;
+#ifndef _WIN32
     struct sigaction sa;
     sa.sa_handler = handle_sigint;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
     sigaction(SIGINT, &sa, NULL);
+#else
+    signal(SIGINT, handle_sigint);
+#endif
     
     // Create test report file
     char ethervox_dir[512];
     if (ethervox_get_runtime_path("reports", ethervox_dir, sizeof(ethervox_dir)) == 0) {
         // Ensure reports directory exists
-        #ifdef _WIN32
+#ifdef _WIN32
         _mkdir(ethervox_dir);
-        #else
+#else
         mkdir(ethervox_dir, 0755);
-        #endif
+#endif
         
         time_t now = time(NULL);
         snprintf(g_report_path, sizeof(g_report_path),
@@ -498,7 +502,7 @@ ethervox_result_t ethervox_optimize_tool_prompts_v2(
     
     // If no new tools to optimize, we're done
     if (tools_to_optimize == 0) {
-        printf(COLOR_GREEN "✓" COLOR_RESET " All tools already optimized!\n");
+        printf(COLOR_GREEN "[OK]" COLOR_RESET " All tools already optimized!\n");
         manifest_registry->tools_available = original_tools_available;  // Restore state
         if (existing_entries) free(existing_entries);
         if (g_report_file) {
@@ -608,14 +612,14 @@ ethervox_result_t ethervox_optimize_tool_prompts_v2(
             // Allocate params on heap to avoid stack overflow (7.7KB array)
             tool_param_t* params = malloc(MAX_PARAMETERS * sizeof(tool_param_t));
             if (!params) {
-                printf("  ✗ %s: memory allocation failed for params\n", tool_idx->name);
+                printf("  [FAIL] %s: memory allocation failed for params\n", tool_idx->name);
                 continue;
             }
             uint8_t param_count;
             
             if (ethervox_tool_get_detail(manifest_registry, tool_idx->name, 
                                         &detail, params, &param_count) != 0) {
-                printf("  ✗ %s: failed to load detail\n", tool_idx->name);
+                printf("  [FAIL] %s: failed to load detail\n", tool_idx->name);
                 free(params);
                 continue;
             }
@@ -624,7 +628,7 @@ ethervox_result_t ethervox_optimize_tool_prompts_v2(
             // Allocate on heap to avoid stack overflow
             char* query = malloc(4096);
             if (!query) {
-                printf("  ✗ %s: memory allocation failed\n", tool_idx->name);
+                printf("  [FAIL] %s: memory allocation failed\n", tool_idx->name);
                 free(params);
                 continue;
             }
@@ -652,7 +656,7 @@ ethervox_result_t ethervox_optimize_tool_prompts_v2(
             // Allocate on heap to avoid stack overflow
             char* tool_format = malloc(512);
             if (!tool_format) {
-                printf("  ✗ %s: memory allocation failed for tool_format\n", tool_idx->name);
+                printf("  [FAIL] %s: memory allocation failed for tool_format\n", tool_idx->name);
                 free(query);
                 free(params);
                 continue;
@@ -775,11 +779,11 @@ ethervox_result_t ethervox_optimize_tool_prompts_v2(
                 fprintf(fp, "      \"token_count\": %d\n", token_estimate);
                 fprintf(fp, "    }%s\n", (i < total_tools - 1) ? "," : "");
                 
-                printf("  " COLOR_GREEN "✓" COLOR_RESET " %s: %s (%d tokens)\n", 
+                printf("  " COLOR_GREEN "[OK]" COLOR_RESET " %s: %s (%d tokens)\n", 
                        tool_idx->name, optimized, token_estimate);
                 
                 if (g_report_file) {
-                    fprintf(g_report_file, "  ✓ %s\n", tool_idx->name);
+                    fprintf(g_report_file, "  [OK] %s\n", tool_idx->name);
                     fprintf(g_report_file, "    Optimized: %s\n", optimized);
                     fprintf(g_report_file, "    Tokens: %d\n", token_estimate);
                     fflush(g_report_file);
@@ -790,11 +794,11 @@ ethervox_result_t ethervox_optimize_tool_prompts_v2(
                 // Re-enable tool execution even on failure
                 ethervox_governor_set_tool_execution(governor, true);
                 
-                printf("  ✗ %s: optimization failed - %s\n", 
+                printf("  [FAIL] %s: optimization failed - %s\n", 
                        tool_idx->name, error ? error : "unknown");
                        
                 if (g_report_file) {
-                    fprintf(g_report_file, "  ✗ %s: optimization failed\n", tool_idx->name);
+                    fprintf(g_report_file, "  [FAIL] %s: optimization failed\n", tool_idx->name);
                     if (error) {
                         fprintf(g_report_file, "    Error: %s\n", error);
                     }
@@ -822,7 +826,7 @@ ethervox_result_t ethervox_optimize_tool_prompts_v2(
     fprintf(fp, "}\n");
     fclose(fp);
     
-    printf("\n" COLOR_GREEN "✓" COLOR_RESET " Optimization complete!\n");
+    printf("\n" COLOR_GREEN "[OK]" COLOR_RESET " Optimization complete!\n");
     printf("  Tools processed: %u/%u\n", tools_processed, total_tools);
     printf("  Output file: %s\n", output_path);
     

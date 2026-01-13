@@ -259,13 +259,13 @@ static int action_export_config(void* data) {
             if (f) {
                 fprintf(f, "%s", json_string);
                 fclose(f);
-                printf("\n✓ Configuration exported to: %s\n", export_path);
+                printf("\n[OK] Configuration exported to: %s\n", export_path);
             } else {
-                printf("\n✗ Failed to write to file: %s\n", export_path);
+                printf("\n[FAIL] Failed to write to file: %s\n", export_path);
             }
             free(json_string);
         } else {
-            printf("\n✗ Failed to export configuration\n");
+            printf("\n[FAIL] Failed to export configuration\n");
         }
     }
     
@@ -300,14 +300,14 @@ static int action_import_config(void* data) {
                 // Save to default location
                 ethervox_result_t save_result = ethervox_settings_save(&settings, NULL);
                 if (ethervox_is_success(save_result)) {
-                    printf("\n✓ Configuration imported from: %s\n", import_path);
-                    printf("✓ Saved to: %s\n", ethervox_settings_get_default_path());
+                    printf("\n[OK] Configuration imported from: %s\n", import_path);
+                    printf("[OK] Saved to: %s\n", ethervox_settings_get_default_path());
                     printf("\nRestart the application for changes to take effect.\n");
                 } else {
-                    printf("\n✗ Failed to save imported configuration: %s\n", ethervox_error_string(save_result));
+                    printf("\n[FAIL] Failed to save imported configuration: %s\n", ethervox_error_string(save_result));
                 }
             } else {
-                printf("\n✗ Failed to load configuration from: %s (%s)\n", import_path, ethervox_error_string(load_result));
+                printf("\n[FAIL] Failed to load configuration from: %s (%s)\n", import_path, ethervox_error_string(load_result));
             }
         } else {
             printf("\nImport cancelled.\n");
@@ -644,7 +644,7 @@ static int action_select_tts_voice(void* data) {
                                     
                                     int play_result = audio_runtime.driver.write_audio(&audio_runtime, &play_buffer);
                                     if (play_result == 0) {
-                                        printf("✓ Audio played successfully\n");
+                                        printf("[OK] Audio played successfully\n");
                                         // Wait for audio to finish playing
                                         usleep((audio.sample_count * 1000000) / audio.sample_rate + 500000);
                                     } else {
@@ -708,7 +708,7 @@ static int action_select_tts_voice(void* data) {
                 // Ensure piper engine is selected
                 strncpy(settings->tts.engine, "piper", sizeof(settings->tts.engine) - 1);
                 
-                printf("\n✓ %s voice changed to: %s\n", lang_name, selected->display_name);
+                printf("\n[OK] %s voice changed to: %s\n", lang_name, selected->display_name);
                 printf("    Model path: %s\n", settings->tts.piper_model_path);
                 
                 // Save settings immediately to persist voice selection
@@ -723,7 +723,7 @@ static int action_select_tts_voice(void* data) {
                 if (action_data->tts_reload_callback) {
                     printf("\n🔄 Reloading TTS with new voice...\n");
                     if (action_data->tts_reload_callback(&settings->tts, action_data->tts_user_data) == 0) {
-                        printf("✓ TTS reloaded successfully - new voice is active!\n");
+                        printf("[OK] TTS reloaded successfully - new voice is active!\n");
                     } else {
                         printf("⚠️  TTS reload failed - restart may be required\n");
                     }
@@ -760,7 +760,7 @@ static int action_select_tts_voice(void* data) {
                     // Ensure piper engine is selected
                     strncpy(settings->tts.engine, "piper", sizeof(settings->tts.engine) - 1);
                     
-                    printf("\n✓ %s voice changed to: %s\n", lang_name, selected->display_name);
+                    printf("\n[OK] %s voice changed to: %s\n", lang_name, selected->display_name);
                     printf("    Model path: %s\n", settings->tts.piper_model_path);
                     
                     // Save settings immediately
@@ -775,7 +775,7 @@ static int action_select_tts_voice(void* data) {
                     if (action_data->tts_reload_callback) {
                         printf("\n🔄 Reloading TTS with new voice...\n");
                         if (action_data->tts_reload_callback(&settings->tts, action_data->tts_user_data) == 0) {
-                            printf("✓ TTS reloaded successfully - new voice is active!\n");
+                            printf("[OK] TTS reloaded successfully - new voice is active!\n");
                         } else {
                             printf("⚠️  TTS reload failed - restart may be required\n");
                         }
@@ -1516,7 +1516,7 @@ ethervox_result_t ethervox_settings_menu_show(ethervox_settings_t* settings, con
                 {
                     ethervox_result_t save_result = ethervox_settings_save(&persistent, NULL);
                     if (ethervox_is_success(save_result)) {
-                        show_status("✓ Settings saved successfully!");
+                        show_status("[OK] Settings saved successfully!");
                     } else {
                         show_status("⚠ Failed to save settings");
                     }
@@ -1542,7 +1542,7 @@ ethervox_result_t ethervox_settings_menu_show(ethervox_settings_t* settings, con
     // Save persistent settings to disk
     ethervox_result_t save_result = ethervox_settings_save(&persistent, NULL);
     if (ethervox_is_success(save_result)) {
-        printf("\n✓ Settings saved to %s\n\n", ethervox_settings_get_default_path());
+        printf("\n[OK] Settings saved to %s\n\n", ethervox_settings_get_default_path());
     } else {
         printf("\n⚠ Warning: Failed to save settings: %s\n\n", ethervox_error_string(save_result));
     }
@@ -1575,9 +1575,9 @@ ethervox_result_t ethervox_settings_menu_show(ethervox_settings_t* settings, con
                 if (reload_callback) {
                     int ret = reload_callback(model_path, user_data);
                     if (ret == 0) {
-                        printf("✓ Model reloaded successfully with new settings\n\n");
+                        printf("[OK] Model reloaded successfully with new settings\n\n");
                     } else {
-                        printf("✗ Failed to reload model (code: %d)\n", ret);
+                        printf("[FAIL] Failed to reload model (code: %d)\n", ret);
                         printf("  You can manually reload with: /load %s\n\n", model_path);
                     }
                 } else {

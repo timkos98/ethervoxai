@@ -13,17 +13,39 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <dirent.h>
 #include <errno.h>
-#include <libgen.h>
 #include <limits.h>
 
 #ifdef _WIN32
 #include <direct.h>
+#include <windows.h>
+#include <stdlib.h>  // For _fullpath
 #define PATH_SEPARATOR '\\'
+// Windows doesn't have dirent.h, but we can use FindFirstFile for directory operations
+#include <io.h>
 #else
+#include <dirent.h>
+#include <libgen.h>
 #include <unistd.h>
 #define PATH_SEPARATOR '/'
+#endif
+
+#ifdef _WIN32
+// Simple dirname implementation for Windows
+static char* win_dirname(char* path) {
+    static char dir[PATH_MAX];
+    strncpy(dir, path, PATH_MAX - 1);
+    dir[PATH_MAX - 1] = '\0';
+    char* last_slash = strrchr(dir, '\\');
+    if (!last_slash) last_slash = strrchr(dir, '/');
+    if (last_slash) {
+        *last_slash = '\0';
+    } else {
+        strcpy(dir, ".");
+    }
+    return dir;
+}
+#define dirname win_dirname
 #endif
 
 // Check if path is within allowed base paths
@@ -37,14 +59,24 @@ static bool is_path_allowed(
     
     // Resolve to absolute path
     char resolved[PATH_MAX];
+#ifdef _WIN32
+    if (!_fullpath(resolved, path, PATH_MAX)) {
+#else
     if (!realpath(path, resolved)) {
+#endif
         // If realpath fails (e.g., file doesn't exist yet), try resolving the directory
         char path_copy[PATH_MAX];
         strncpy(path_copy, path, sizeof(path_copy) - 1);
         path_copy[sizeof(path_copy) - 1] = '\0';
         
         char* dir = dirname(path_copy);
+        if (!dir) return false;
+        
+#ifdef _WIN32
+        if (!_fullpath(resolved, dir, PATH_MAX)) {
+#else
         if (!realpath(dir, resolved)) {
+#endif
             ethervox_log(ETHERVOX_LOG_LEVEL_WARN, __FILE__, __LINE__, __func__,
                         "Cannot resolve path: %s", path);
             return false;
@@ -118,7 +150,11 @@ ethervox_result_t ethervox_file_tools_init(
     if (base_paths) {
         for (int i = 0; base_paths[i] && i < 8; i++) {
             // Resolve to absolute path
+#ifdef _WIN32
+            if (_fullpath(config->allowed_base_paths[config->allowed_base_path_count], base_paths[i], PATH_MAX)) {
+#else
             if (realpath(base_paths[i], config->allowed_base_paths[config->allowed_base_path_count])) {
+#endif
                 config->allowed_base_path_count++;
             } else {
                 ethervox_log(ETHERVOX_LOG_LEVEL_WARN, __FILE__, __LINE__, __func__,
@@ -196,6 +232,76 @@ ethervox_result_t ethervox_file_list(
     
     uint32_t count = 0;
     
+#ifdef _WIN32
+    // Windows implementation using FindFirstFile
+    WIN32_FIND_DATAA find_data;
+    char search_path[ETHERVOX_FILE_MAX_PATH];
+    snprintf(search_path, sizeof(search_path), "%s\\*", directory_path);
+    
+    HANDLE hFind = FindFirstFileA(search_path, &find_data);
+    if (hFind == INVALID_HANDLE_VALUE) {
+        free(temp_entries);
+        ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__,
+                    "Failed to open directory: %s", directory_path);
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
+    
+    do {
+        // Skip . and ..
+        if (strcmp(find_data.cFileName, ".") == 0 || strcmp(find_data.cFileName, "..") == 0) {
+            continue;
+        }
+        
+        // Skip hidden files if not allowed
+        if (!config->allow_hidden_files && find_data.cFileName[0] == '.') {
+            continue;
+        }
+        
+        // Build full path
+        char full_path[ETHERVOX_FILE_MAX_PATH];
+        snprintf(full_path, sizeof(full_path), "%s\\%s", directory_path, find_data.cFileName);
+        
+        struct stat st;
+        if (stat(full_path, &st) != 0) {
+            continue;
+        }
+        
+        bool is_dir = (find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+        
+        // Filter files by extension
+        if (!is_dir && !is_extension_allowed(config, find_data.cFileName)) {
+            continue;
+        }
+        
+        // Add entry
+        ethervox_file_entry_t* file_entry = &temp_entries[count];
+        snprintf(file_entry->path, sizeof(file_entry->path), "%s", full_path);
+        snprintf(file_entry->name, sizeof(file_entry->name), "%s", find_data.cFileName);
+        file_entry->is_directory = is_dir;
+        file_entry->size = st.st_size;
+        file_entry->modified_time = st.st_mtime;
+        count++;
+        
+        // Recurse into subdirectories
+        if (recursive && is_dir) {
+            ethervox_file_entry_t* sub_entries = NULL;
+            uint32_t sub_count = 0;
+            
+            if (ethervox_file_list(config, full_path, recursive, &sub_entries, &sub_count) == 0) {
+                // Append sub-entries
+                for (uint32_t i = 0; i < sub_count && count < ETHERVOX_FILE_MAX_ENTRIES; i++) {
+                    temp_entries[count++] = sub_entries[i];
+                }
+                free(sub_entries);
+            }
+        }
+        
+        if (count >= ETHERVOX_FILE_MAX_ENTRIES) break;
+    } while (FindNextFileA(hFind, &find_data));
+    
+    FindClose(hFind);
+#else
+    // Unix implementation using readdir
     DIR* dir = opendir(directory_path);
     if (!dir) {
         free(temp_entries);
@@ -257,6 +363,7 @@ ethervox_result_t ethervox_file_list(
     }
     
     closedir(dir);
+#endif
     
     *entries = temp_entries;
     *entry_count = count;

@@ -40,7 +40,7 @@ static void test_calculator(void) {
         int status = calc->execute(tests[i].input, &result, &error);
         
         if (status == 0 && result) {
-            printf("✓ %s -> %s\n", tests[i].input, result);
+            printf("[OK] %s -> %s\n", tests[i].input, result);
             
             if (!strstr(result, tests[i].expected_contains)) {
                 printf("  WARNING: Expected result to contain '%s'\n", tests[i].expected_contains);
@@ -48,7 +48,7 @@ static void test_calculator(void) {
             
             free(result);
         } else {
-            printf("✗ %s -> ERROR: %s\n", tests[i].input, error ? error : "unknown");
+            printf("[FAIL] %s -> ERROR: %s\n", tests[i].input, error ? error : "unknown");
             if (error) free(error);
         }
     }
@@ -77,7 +77,7 @@ static void test_percentage(void) {
         int status = percent->execute(tests[i].input, &result, &error);
         
         if (status == 0 && result) {
-            printf("✓ %s -> %s\n", tests[i].input, result);
+            printf("[OK] %s -> %s\n", tests[i].input, result);
             
             if (!strstr(result, tests[i].expected_contains)) {
                 printf("  WARNING: Expected result to contain '%s'\n", tests[i].expected_contains);
@@ -85,7 +85,7 @@ static void test_percentage(void) {
             
             free(result);
         } else {
-            printf("✗ %s -> ERROR: %s\n", tests[i].input, error ? error : "unknown");
+            printf("[FAIL] %s -> ERROR: %s\n", tests[i].input, error ? error : "unknown");
             if (error) free(error);
         }
     }
@@ -96,7 +96,7 @@ static void test_registry(void) {
     
     ethervox_tool_registry_t registry;
     if (ethervox_tool_registry_init(&registry, 8) != 0) {
-        printf("✗ Failed to initialize registry\n");
+        printf("[FAIL] Failed to initialize registry\n");
         return;
     }
     
@@ -104,34 +104,34 @@ static void test_registry(void) {
     const chat_template_t* template = chat_template_get(CHAT_TEMPLATE_CHATML, NULL);
     
     int count = ethervox_compute_tools_register_all(&registry);
-    printf("✓ Registered %d compute tools\n", count);
+    printf("[OK] Registered %d compute tools\n", count);
     
     // Test finding tools
     const ethervox_tool_t* calc = ethervox_tool_registry_find(&registry, "calculator_compute");
     if (calc) {
-        printf("✓ Found calculator_compute tool\n");
+        printf("[OK] Found calculator_compute tool\n");
     } else {
-        printf("✗ Could not find calculator_compute tool\n");
+        printf("[FAIL] Could not find calculator_compute tool\n");
     }
     
     const ethervox_tool_t* percent = ethervox_tool_registry_find(&registry, "percentage_calculate");
     if (percent) {
-        printf("✓ Found percentage_calculate tool\n");
+        printf("[OK] Found percentage_calculate tool\n");
     } else {
-        printf("✗ Could not find percentage_calculate tool\n");
+        printf("[FAIL] Could not find percentage_calculate tool\n");
     }
     
     // Test system prompt building
     char system_prompt[4096];
     if (ethervox_tool_registry_build_system_prompt(&registry, &template, system_prompt, sizeof(system_prompt), NULL) == 0) {
-        printf("✓ Built system prompt (%zu chars)\n", strlen(system_prompt));
+        printf("[OK] Built system prompt (%zu chars)\n", strlen(system_prompt));
         printf("\nSystem Prompt Preview:\n%s\n", system_prompt);
     } else {
-        printf("✗ Failed to build system prompt\n");
+        printf("[FAIL] Failed to build system prompt\n");
     }
     
     ethervox_tool_registry_cleanup(&registry);
-    printf("✓ Cleaned up registry\n");
+    printf("[OK] Cleaned up registry\n");
 }
 
 int main(void) {

@@ -321,7 +321,7 @@ ethervox_result_t ethervox_optimize_tool_prompts(ethervox_governor_t* governor, 
     fclose(fp);
     
     // Phase 4: Generate optimized startup prompt
-    printf("\n━━━ Phase 4: Generating Startup Prompt ━━━\n");
+    printf("\n=== Phase 4: Generating Startup Prompt ===\n");
     printf("Asking the model to write an optimized startup instruction...\n");
     
     // The startup prompt is an INSTRUCTION that will be executed by the model at startup
@@ -364,9 +364,9 @@ ethervox_result_t ethervox_optimize_tool_prompts(ethervox_governor_t* governor, 
         for (uint32_t i = 0; i < reg->tool_count; i++) {
             if (strcmp(reg->tools[i].name, "startup_prompt_update") == 0) {
                 if (reg->tools[i].execute(update_args, &result, &error) == 0) {
-                    printf("✓ Generated and saved startup prompt\n");
+                    printf("[OK] Generated and saved startup prompt\n");
                 } else {
-                    printf("✗ Failed to save startup prompt: %s\n", error ? error : "unknown error");
+                    printf("[FAIL] Failed to save startup prompt: %s\n", error ? error : "unknown error");
                 }
                 if (result) free(result);
                 if (error) free(error);
@@ -375,7 +375,7 @@ ethervox_result_t ethervox_optimize_tool_prompts(ethervox_governor_t* governor, 
         }
         // startup_text is a const char* literal, no need to free
     } else {
-        printf("✗ Startup instruction is empty\n");
+        printf("[FAIL] Startup instruction is empty\n");
     }
     
     // Cleanup
@@ -387,7 +387,7 @@ ethervox_result_t ethervox_optimize_tool_prompts(ethervox_governor_t* governor, 
     free(tool_when_prompts);
     free(tool_examples);
     
-    printf("\n✓ Optimization complete!\n");
+    printf("\n[OK] Optimization complete!\n");
     printf("Saved to: %s\n", prompt_file);
     printf("Generated prompts for %u tools\n", registry->tool_count);
     printf("\nNext steps:\n");

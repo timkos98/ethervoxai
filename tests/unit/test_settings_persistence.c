@@ -15,7 +15,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#ifndef _WIN32
 #include <unistd.h>
+#else
+#include <direct.h>
+#endif
 #include <time.h>
 
 #include "ethervox/settings.h"
@@ -39,7 +43,11 @@ static void test_report_init(void) {
     if (home) {
         char reports_dir[512];
         snprintf(reports_dir, sizeof(reports_dir), "%s/.ethervox/reports", home);
+#ifdef _WIN32
+        _mkdir(reports_dir);
+#else
         mkdir(reports_dir, 0755);
+#endif
         
         snprintf(test_report_path, sizeof(test_report_path),
                  "%s/settings_test_%ld.txt", reports_dir, test_start_time);
@@ -97,8 +105,13 @@ static void test_report_finalize(void) {
 static char test_settings_path[512];
 
 static void setup_test_file(void) {
+#ifdef _WIN32
+    snprintf(test_settings_path, sizeof(test_settings_path),
+             "ethervox_test_settings_%ld.json", (long)time(NULL));
+#else
     snprintf(test_settings_path, sizeof(test_settings_path),
              "/tmp/ethervox_test_settings_%d.json", getpid());
+#endif
     unlink(test_settings_path); // Remove if exists
 }
 

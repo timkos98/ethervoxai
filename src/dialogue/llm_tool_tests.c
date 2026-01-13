@@ -57,16 +57,16 @@
 #define COLOR_BOLD    "\033[1m"
 
 #define LLM_TEST_PASS(msg, ...) do { \
-    printf(COLOR_GREEN "  ✓ " COLOR_RESET msg "\n", ##__VA_ARGS__); \
+    printf(COLOR_GREEN "  [OK] " COLOR_RESET msg "\n", ##__VA_ARGS__); \
     if (g_test_report_file) { \
-        fprintf(g_test_report_file, "  ✓ " msg "\n", ##__VA_ARGS__); \
+        fprintf(g_test_report_file, "  [OK] " msg "\n", ##__VA_ARGS__); \
         fflush(g_test_report_file); \
     } \
 } while(0)
 #define LLM_TEST_FAIL(msg, ...) do { \
-    printf(COLOR_RED "  ✗ " COLOR_RESET msg "\n", ##__VA_ARGS__); \
+    printf(COLOR_RED "  [FAIL] " COLOR_RESET msg "\n", ##__VA_ARGS__); \
     if (g_test_report_file) { \
-        fprintf(g_test_report_file, "  ✗ " msg "\n", ##__VA_ARGS__); \
+        fprintf(g_test_report_file, "  [FAIL] " msg "\n", ##__VA_ARGS__); \
         fflush(g_test_report_file); \
     } \
 } while(0)
@@ -179,11 +179,11 @@ static void report_test_header(const char* test_name) {
 }
 
 static void report_test_pass(const char* msg) {
-    write_to_report("  ✓ %s\n", msg);
+    write_to_report("  [OK] %s\n", msg);
 }
 
 static void report_test_fail(const char* msg) {
-    write_to_report("  ✗ %s\n", msg);
+    write_to_report("  [FAIL] %s\n", msg);
 }
 
 static void report_test_info(const char* format, ...) {
@@ -309,7 +309,9 @@ static const char* signal_name(int sig) {
         case SIGABRT: return "SIGABRT (Abort)";
         case SIGFPE:  return "SIGFPE (Floating Point Exception)";
         case SIGILL:  return "SIGILL (Illegal Instruction)";
+#ifndef _WIN32
         case SIGBUS:  return "SIGBUS (Bus Error)";
+#endif
         default:      return "Unknown Signal";
     }
 }
@@ -401,7 +403,9 @@ static void install_crash_handlers(void) {
     signal(SIGABRT, crash_handler);
     signal(SIGFPE, crash_handler);
     signal(SIGILL, crash_handler);
+#ifndef _WIN32
     signal(SIGBUS, crash_handler);
+#endif
     signal(SIGINT, interrupt_handler);  // Ctrl+C handler
 }
 
@@ -410,7 +414,9 @@ static void remove_crash_handlers(void) {
     signal(SIGABRT, SIG_DFL);
     signal(SIGFPE, SIG_DFL);
     signal(SIGILL, SIG_DFL);
+#ifndef _WIN32
     signal(SIGBUS, SIG_DFL);
+#endif
     signal(SIGINT, SIG_DFL);
 }
 
@@ -1063,12 +1069,12 @@ static void test_llm_long_runtime(ethervox_governor_t* governor) {
         
         if (status == ETHERVOX_GOVERNOR_SUCCESS && response) {
             successful_queries++;
-            write_to_report("    ✓ Success (response length: %zu)\n", strlen(response));
+            write_to_report("    [OK] Success (response length: %zu)\n", strlen(response));
         } else {
             failed_queries++;
             LLM_TEST_WARN("Query #%d failed: %s", total_queries + 1, 
                          error ? error : "unknown");
-            write_to_report("    ✗ Failed: %s\n", error ? error : "unknown");
+            write_to_report("    [FAIL] Failed: %s\n", error ? error : "unknown");
         }
         
         if (response) free(response);
@@ -1196,10 +1202,10 @@ static void test_context_window_management(ethervox_governor_t* governor) {
         
         if (status == ETHERVOX_GOVERNOR_SUCCESS || status == ETHERVOX_GOVERNOR_NEED_CLARIFICATION) {
             successful_turns++;
-            LLM_TEST_INFO("Turn %d/%d: ✓ Success", i + 1, num_queries);
+            LLM_TEST_INFO("Turn %d/%d: [OK] Success", i + 1, num_queries);
         } else {
             failed_turns++;
-            LLM_TEST_WARN("Turn %d/%d: ✗ Failed - %s", i + 1, num_queries, 
+            LLM_TEST_WARN("Turn %d/%d: [FAIL] Failed - %s", i + 1, num_queries, 
                          error ? error : "unknown error");
         }
         
@@ -1782,7 +1788,7 @@ void run_llm_tool_tests(ethervox_governor_t* governor,
     if (g_llm_passed_count > 0) {
         printf(COLOR_GREEN "  Passed Tests:\n" COLOR_RESET);
         for (int i = 0; i < g_llm_passed_count; i++) {
-            printf(COLOR_GREEN "    ✓ %s\n" COLOR_RESET, g_llm_passed_tests[i]);
+            printf(COLOR_GREEN "    [OK] %s\n" COLOR_RESET, g_llm_passed_tests[i]);
             free(g_llm_passed_tests[i]);
         }
         printf("\n");
@@ -1792,7 +1798,7 @@ void run_llm_tool_tests(ethervox_governor_t* governor,
     if (g_llm_failed_count > 0) {
         printf(COLOR_RED "  Failed Tests:\n" COLOR_RESET);
         for (int i = 0; i < g_llm_failed_count; i++) {
-            printf(COLOR_RED "    ✗ %s\n" COLOR_RESET, g_llm_failed_tests[i]);
+            printf(COLOR_RED "    [FAIL] %s\n" COLOR_RESET, g_llm_failed_tests[i]);
             free(g_llm_failed_tests[i]);
         }
         printf("\n");
@@ -1800,7 +1806,7 @@ void run_llm_tool_tests(ethervox_governor_t* governor,
     
     if (g_llm_tests_failed == 0 && total_tests > 0) {
         printf(COLOR_BOLD COLOR_GREEN);
-        printf("  ✓✓✓ ALL LLM TESTS PASSED! ✓✓✓\n");
+        printf("  [OK][OK][OK] ALL LLM TESTS PASSED! [OK][OK][OK]\n");
         printf(COLOR_RESET);
         printf("\n");
         printf(COLOR_CYAN);

@@ -7,6 +7,7 @@
 #include "ethervox/config.h"
 #include "ethervox/logging.h"
 #include "ethervox/error.h"
+#include "ethervox/platform_utils.h"
 #include "cJSON.h"
 
 #include <stdio.h>
@@ -22,18 +23,21 @@
 #include <unistd.h>
 #endif
 
-// Default settings path: ~/.ethervox/settings.json
+// Default settings path: Windows: %APPDATA%\EthervoxAI\settings.json, Unix: ~/.ethervox/settings.json
 static char s_default_path[512] = {0};
 
 const char* ethervox_settings_get_default_path(void) {
     if (s_default_path[0] == '\0') {
-        const char* home = getenv("HOME");
-        if (!home) {
-            home = getenv("USERPROFILE"); // Windows fallback
-        }
-        if (home) {
+        char app_data_dir[512];
+        if (platform_get_app_data_dir(app_data_dir, sizeof(app_data_dir)) == ETHERVOX_SUCCESS) {
             snprintf(s_default_path, sizeof(s_default_path), 
-                     "%s/.ethervox/settings.json", home);
+                     "%s%csettings.json", app_data_dir, 
+#ifdef _WIN32
+                     '\\'
+#else
+                     '/'
+#endif
+            );
         } else {
             // Fallback to current directory
             strncpy(s_default_path, "settings.json", sizeof(s_default_path) - 1);

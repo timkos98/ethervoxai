@@ -1953,7 +1953,7 @@ Java_com_droid_ethervox_1core_NativeLib_startVoiceTranscription(
             LOGE("[Voice] ERROR: Failed to allocate voice session memory");
             return -1;
         }
-        LOGI("[Voice] ✓ Voice session memory allocated");
+        LOGI("[Voice] [OK] Voice session memory allocated");
         
         // Initialize voice tools (requires memory store)
         if (!g_memory_store) {
@@ -1962,20 +1962,20 @@ Java_com_droid_ethervox_1core_NativeLib_startVoiceTranscription(
             g_voice_session = NULL;
             return -1;
         }
-        LOGI("[Voice] ✓ Memory store exists");
+        LOGI("[Voice] [OK] Memory store exists");
         
         LOGI("[Voice] Calling ethervox_voice_tools_init...");
         int ret = ethervox_voice_tools_init(g_voice_session, g_memory_store);
         if (ret != 0) {
-            LOGE("[Voice] ✗ ERROR: Failed to initialize voice tools: %d", ret);
+            LOGE("[Voice] [FAIL] ERROR: Failed to initialize voice tools: %d", ret);
             LOGE("[Voice] This usually means Whisper model not found!");
             LOGE("[Voice] Check Settings → Whisper Model section to download");
             free(g_voice_session);
             g_voice_session = NULL;
             return ret;
         }
-        LOGI("[Voice] ✓ Voice tools initialized successfully!");
-        LOGI("[Voice] ✓ Whisper model loaded and ready");
+        LOGI("[Voice] [OK] Voice tools initialized successfully!");
+        LOGI("[Voice] [OK] Whisper model loaded and ready");
     } else {
         LOGI("[Voice] Voice session already initialized (is_initialized=%d)",
              g_voice_session->is_initialized);
@@ -1987,17 +1987,17 @@ Java_com_droid_ethervox_1core_NativeLib_startVoiceTranscription(
         LOGE("[Voice] This shouldn't happen - initialization must have failed silently");
         return -1;
     }
-    LOGI("[Voice] ✓ Session verification passed");
+    LOGI("[Voice] [OK] Session verification passed");
     
     // Start listening (recording + VAD)
     LOGI("[Voice] Starting voice recording...");
     int ret = ethervox_voice_tools_start_listen(g_voice_session);
     if (ret != 0) {
-        LOGE("[Voice] ✗ ERROR: Failed to start voice recording: %d", ret);
+        LOGE("[Voice] [FAIL] ERROR: Failed to start voice recording: %d", ret);
         return ret;
     }
     
-    LOGI("[Voice] ✓ Voice transcription started successfully!");
+    LOGI("[Voice] [OK] Voice transcription started successfully!");
     LOGI("[Voice] ========================================");
     return 0;
 }

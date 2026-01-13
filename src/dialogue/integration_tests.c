@@ -20,6 +20,7 @@
 #include "ethervox/logging.h"
 #include "ethervox/chat_template.h"
 #include "ethervox/platform.h"
+#include "ethervox/platform_utils.h"
 #include "ethervox/unit_conversion.h"
 #include <stdio.h>
 #include <string.h>
@@ -53,8 +54,8 @@
 #define COLOR_CYAN    "\033[36m"
 #define COLOR_BOLD    "\033[1m"
 
-#define TEST_PASS(msg, ...) printf(COLOR_GREEN "  ✓ " COLOR_RESET msg "\n", ##__VA_ARGS__)
-#define TEST_FAIL(msg, ...) printf(COLOR_RED "  ✗ " COLOR_RESET msg "\n", ##__VA_ARGS__)
+#define TEST_PASS(msg, ...) printf(COLOR_GREEN "  [OK] " COLOR_RESET msg "\n", ##__VA_ARGS__)
+#define TEST_FAIL(msg, ...) printf(COLOR_RED "  [FAIL] " COLOR_RESET msg "\n", ##__VA_ARGS__)
 #define TEST_INFO(msg, ...) printf(COLOR_CYAN "  ℹ " COLOR_RESET msg "\n", ##__VA_ARGS__)
 #define TEST_HEADER(msg, ...) printf("\n" COLOR_BOLD COLOR_BLUE "=== " msg " ===" COLOR_RESET "\n", ##__VA_ARGS__)
 #define TEST_SUBHEADER(msg, ...) printf("\n" COLOR_YELLOW "→ " msg COLOR_RESET "\n", ##__VA_ARGS__)
@@ -236,7 +237,7 @@ static void test_adaptive_memory(void) {
         const ethervox_memory_entry_t* entry;
         if (ethervox_memory_get_by_id(&store, corr_id1, &entry) == 0) {
             if (entry->importance == 0.99f) {
-                TEST_PASS("Correction has importance=0.99 ✓");
+                TEST_PASS("Correction has importance=0.99 [OK]");
                 g_tests_passed++;
             } else {
                 TEST_FAIL("Correction importance is %.2f, expected 0.99", entry->importance);
@@ -552,9 +553,20 @@ static void test_memory_archive(void) {
     
     // Create a temporary test directory
     const char* test_dir = "/tmp/ethervox_archive_test";
+    
+    // Remove old test directory if it exists (ignore errors)
+#ifdef _WIN32
     char cmd[512];
-    snprintf(cmd, sizeof(cmd), "rm -rf %s && mkdir -p %s", test_dir, test_dir);
+    snprintf(cmd, sizeof(cmd), "rmdir /s /q \"%s\" 2>nul", test_dir);
     system(cmd);
+#else
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s", test_dir);
+    system(cmd);
+#endif
+    
+    // Create test directory
+    platform_mkdir_recursive(test_dir);
     
     // Create some fake old session files
     char filepath[512];
@@ -997,7 +1009,12 @@ void run_integration_tests(ethervox_governor_t* governor) {
 #endif
     
     // Create directory if it doesn't exist
+#ifdef _WIN32
+#include <direct.h>  // for _mkdir on Windows
+    int mkdir_result = _mkdir(report_dir);
+#else
     int mkdir_result = mkdir(report_dir, 0755);
+#endif
     if (mkdir_result != 0 && errno != EEXIST) {
         INTEGRATION_LOG("Warning: mkdir(%s) failed with errno %d: %s", 
                        report_dir, errno, strerror(errno));
@@ -1204,9 +1221,9 @@ void run_integration_tests(ethervox_governor_t* governor) {
     if (g_passed_count > 0) {
         printf(COLOR_GREEN "  Passed Tests:\n" COLOR_RESET);
         for (int i = 0; i < g_passed_count; i++) {
-            printf(COLOR_GREEN "    ✓ %s\n" COLOR_RESET, g_passed_tests[i]);
+            printf(COLOR_GREEN "    [OK] %s\n" COLOR_RESET, g_passed_tests[i]);
 #ifdef __ANDROID__
-            INTEGRATION_LOG("  ✓ %s", g_passed_tests[i]);
+            INTEGRATION_LOG("  [OK] %s", g_passed_tests[i]);
 #endif
             free(g_passed_tests[i]);
         }
@@ -1217,9 +1234,9 @@ void run_integration_tests(ethervox_governor_t* governor) {
     if (g_failed_count > 0) {
         printf(COLOR_RED "  Failed Tests:\n" COLOR_RESET);
         for (int i = 0; i < g_failed_count; i++) {
-            printf(COLOR_RED "    ✗ %s\n" COLOR_RESET, g_failed_tests[i]);
+            printf(COLOR_RED "    [FAIL] %s\n" COLOR_RESET, g_failed_tests[i]);
 #ifdef __ANDROID__
-            INTEGRATION_LOG("  ✗ %s", g_failed_tests[i]);
+            INTEGRATION_LOG("  [FAIL] %s", g_failed_tests[i]);
 #endif
             free(g_failed_tests[i]);
         }
@@ -1228,10 +1245,10 @@ void run_integration_tests(ethervox_governor_t* governor) {
     
     if (g_tests_failed == 0) {
         printf(COLOR_BOLD COLOR_GREEN);
-        printf("  ✓✓✓ ALL TESTS PASSED! ✓✓✓\n");
+        printf("  [OK][OK][OK] ALL TESTS PASSED! [OK][OK][OK]\n");
         printf(COLOR_RESET);
 #ifdef __ANDROID__
-        INTEGRATION_LOG("✓✓✓ ALL TESTS PASSED! ✓✓✓");
+        INTEGRATION_LOG("[OK][OK][OK] ALL TESTS PASSED! [OK][OK][OK]");
 #endif
     } else {
         printf(COLOR_BOLD COLOR_YELLOW);
@@ -1261,7 +1278,7 @@ void run_integration_tests(ethervox_governor_t* governor) {
         if (g_passed_count > 0) {
             fprintf(g_report_file, "Passed Tests:\n");
             for (int i = 0; i < g_passed_count; i++) {
-                fprintf(g_report_file, "  ✓ %s\n", g_passed_tests[i]);
+                fprintf(g_report_file, "  [OK] %s\n", g_passed_tests[i]);
             }
             fprintf(g_report_file, "\n");
         }
@@ -1269,13 +1286,13 @@ void run_integration_tests(ethervox_governor_t* governor) {
         if (g_failed_count > 0) {
             fprintf(g_report_file, "Failed Tests:\n");
             for (int i = 0; i < g_failed_count; i++) {
-                fprintf(g_report_file, "  ✗ %s\n", g_failed_tests[i]);
+                fprintf(g_report_file, "  [FAIL] %s\n", g_failed_tests[i]);
             }
             fprintf(g_report_file, "\n");
         }
         
         if (g_tests_failed == 0) {
-            fprintf(g_report_file, "✓✓✓ ALL TESTS PASSED! ✓✓✓\n");
+            fprintf(g_report_file, "[OK][OK][OK] ALL TESTS PASSED! [OK][OK][OK]\n");
         } else {
             fprintf(g_report_file, "⚠ Some tests failed - %d passed, %d failed\n", 
                    g_tests_passed, g_tests_failed);

@@ -18,6 +18,10 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#ifdef _WIN32
+#include <direct.h>
+#endif
+
 /**
  * Initialize governor with Tool Manifest System
  * 
@@ -84,11 +88,11 @@ ethervox_result_t ethervox_governor_init_with_manifest(
     }
 #endif
     
-    #ifdef _WIN32
+#ifdef _WIN32
     _mkdir(tools_dir);
-    #else
+#else
     mkdir(tools_dir, 0755);
-    #endif
+#endif
     
     ETHERVOX_LOGI("Exporting tool manifest to: %s", manifest_path);
     
@@ -121,7 +125,7 @@ ethervox_result_t ethervox_governor_init_with_manifest(
     
     // Tools binary manifest was found and loaded
     manifest_registry->tools_detected = true;
-    ETHERVOX_LOGI("✓ Tools detected: %u tools in manifest", runtime_registry->tool_count);
+    ETHERVOX_LOGI("[OK] Tools detected: %u tools in manifest", runtime_registry->tool_count);
     
     // === STEP 3: Detect model name ===
     // Extract model name from path (e.g., "granite-4.0-Q4_K_M.gguf" -> "granite-4.0")
@@ -169,7 +173,7 @@ ethervox_result_t ethervox_governor_init_with_manifest(
         manifest_registry->fallback_level = 0;
         manifest_registry->tools_loaded_count = manifest_registry->header.tool_count;
         manifest_registry->tools_available = true;
-        ETHERVOX_LOGI("✓ Loaded optimized prompts: %s",
+        ETHERVOX_LOGI("[OK] Loaded optimized prompts: %s",
                       ethervox_tool_fallback_level_name(0));
         ETHERVOX_LOGI("  Tools will be available for use");
         ETHERVOX_LOGI("  DEBUG: Set tools_loaded_count=%u from header.tool_count=%u",

@@ -14,13 +14,12 @@
 #include "ethervox/config.h"
 #include "ethervox/governor.h"
 #include "ethervox/settings.h"
+#include "ethervox/platform_utils.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <curl/curl.h>
-#include <sys/utsname.h>
-#include <unistd.h>
 
 // GitHub API configuration
 #define GITHUB_API_URL "https://api.github.com/repos/timkos98/ethervoxai/issues"
@@ -168,40 +167,34 @@ ethervox_result_t ethervox_report_get_system_info(char* buffer, size_t buffer_si
         return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
-    struct utsname sys_info;
-    char hostname[256] = "Unknown";
-    int written = 0;
+    // Use cross-platform utilities
+    char os_name[64];
+    char os_version[64];
+    char architecture[64];
+    char hostname[256];
     
-    // Get system information
-    if (uname(&sys_info) == 0) {
-        gethostname(hostname, sizeof(hostname));
-        
-        written = snprintf(buffer, buffer_size,
-            "### System Information\n\n"
-            "- **OS:** %s %s\n"
-            "- **Architecture:** %s\n"
-            "- **Machine:** %s\n"
-            "- **Hostname:** %s\n"
-            "- **App Version:** %s\n"
-            "- **Git Branch:** %s\n"
-            "- **Git Commit:** %s\n\n",
-            sys_info.sysname,
-            sys_info.release,
-            sys_info.machine,
-            sys_info.nodename,
-            hostname,
-            ETHERVOX_BACKEND_VERSION,
-            ETHERVOX_GIT_BRANCH,
-            ETHERVOX_GIT_COMMIT
-        );
-    } else {
-        written = snprintf(buffer, buffer_size,
-            "### System Information\n\n"
-            "- **OS:** Unknown\n"
-            "- **App Version:** %s\n\n",
-            ETHERVOX_BACKEND_VERSION
-        );
-    }
+    platform_get_os_version(os_name, sizeof(os_name), os_version, sizeof(os_version));
+    platform_get_architecture(architecture, sizeof(architecture));
+    platform_get_hostname(hostname, sizeof(hostname));
+    
+    int written = snprintf(buffer, buffer_size,
+        "### System Information\\n\\n"
+        "- **OS:** %s %s\\n"
+        "- **Architecture:** %s\\n"
+        "- **Machine:** %s\\n"
+        "- **Hostname:** %s\\n"
+        "- **App Version:** %s\\n"
+        "- **Git Branch:** %s\\n"
+        "- **Git Commit:** %s\\n\\n",
+        os_name,
+        os_version,
+        architecture,
+        hostname,
+        hostname,
+        ETHERVOX_BACKEND_VERSION,
+        ETHERVOX_GIT_BRANCH,
+        ETHERVOX_GIT_COMMIT
+    );
     
     // Append configuration information directly to buffer
     int config_written = get_configuration_info(buffer + written, buffer_size - written);

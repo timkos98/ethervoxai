@@ -204,7 +204,11 @@ ethervox_result_t ethervox_audio_record_to_file(
     
     for (int chunk = 0; chunk < total_chunks; chunk++) {
         // Sleep to allow audio to accumulate in driver buffer
+#ifdef _WIN32
+        Sleep(chunk_ms);  // Sleep in milliseconds on Windows
+#else
         usleep(chunk_ms * 1000);  // Convert ms to microseconds
+#endif
         
         // Read audio chunk
         int samples_read = ethervox_audio_read(&audio_runtime, &audio_buf);

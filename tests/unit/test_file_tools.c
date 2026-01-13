@@ -19,6 +19,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+
+#ifdef _WIN32
+#include <direct.h>
+#endif
 #include <unistd.h>
 
 // Test data directory
@@ -26,7 +30,11 @@
 
 // Helper: Create test directory
 static void setup_test_dir(void) {
+#ifdef _WIN32
+    _mkdir(TEST_DIR);
+#else
     mkdir(TEST_DIR, 0755);
+#endif
 }
 
 // Helper: Clean up test directory

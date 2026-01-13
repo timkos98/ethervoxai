@@ -13,7 +13,11 @@
 #include <time.h>
 #include <assert.h>
 #include <sys/stat.h>
+#ifndef _WIN32
 #include <unistd.h>
+#else
+#include <direct.h>
+#endif
 
 #include "ethervox/governor.h"
 #include "ethervox/memory_tools.h"
@@ -249,7 +253,11 @@ static void generate_report() {
         snprintf(report_dir, sizeof(report_dir), "./.ethervox/reports");
     }
     
+#ifdef _WIN32
+    _mkdir(report_dir);
+#else
     mkdir(report_dir, 0755);
+#endif
     
     // Generate filename with timestamp
     time_t now = time(NULL);

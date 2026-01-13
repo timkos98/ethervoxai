@@ -18,12 +18,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include "ethervox/error.h"
+#include "ethervox/platform_utils.h"
 
 #ifdef ETHERVOX_PLATFORM_ANDROID
 #include <android/log.h>
 #include <sys/system_properties.h>  // For Android properties
-#else
-#include <sys/utsname.h>  // For system info on non-Android platforms
 #endif
 
 #include "ethervox/compute_tools.h"  // Compute tools
@@ -1403,44 +1402,32 @@ static const char* answer_simple_question(const char* normalized_text, const cha
                device_model);
     }
 #else
-    // Non-Android platform
-    struct utsname sys_info;
-    if (uname(&sys_info) == 0) {
-      if (strcmp(language_code, "es") == 0) {
-        snprintf(version_response, sizeof(version_response),
-                 "EthervoxAI versión %s, compilación %s. Ejecutándose en %s %s",
-                 ETHERVOX_VERSION_STRING, ETHERVOX_BUILD_TYPE, sys_info.sysname, sys_info.release);
-      } else if (strcmp(language_code, "zh") == 0) {
-        snprintf(version_response, sizeof(version_response),
-                 "EthervoxAI版本%s，%s版本。运行在%s %s", ETHERVOX_VERSION_STRING,
-                 ETHERVOX_BUILD_TYPE, sys_info.sysname, sys_info.release);
-      } else if (strcmp(language_code, "de") == 0) {
-        snprintf(version_response, sizeof(version_response),
-                 "EthervoxAI Version %s, %s Build. Läuft auf %s %s", ETHERVOX_VERSION_STRING,
-                 ETHERVOX_BUILD_TYPE, sys_info.sysname, sys_info.release);
-      } else {
-        snprintf(version_response, sizeof(version_response),
-                 "EthervoxAI version %s, %s build. Running on %s %s", ETHERVOX_VERSION_STRING,
-                 ETHERVOX_BUILD_TYPE, sys_info.sysname, sys_info.release);
-      }
+    // Non-Android platform - use cross-platform utility
+    char os_name[64];
+    char os_version[64];
+    platform_get_os_version(os_name, sizeof(os_name), os_version, sizeof(os_version));
+    
+    if (strcmp(language_code, "es") == 0) {
+      snprintf(version_response, sizeof(version_response),
+               "EthervoxAI versión %s, compilación %s. Ejecutándose en %s %s",
+               ETHERVOX_VERSION_STRING, ETHERVOX_BUILD_TYPE, os_name, os_version);
+    } else if (strcmp(language_code, "zh") == 0) {
+      snprintf(version_response, sizeof(version_response),
+               "EthervoxAI版本%s，%s版本。运行在%s %s", ETHERVOX_VERSION_STRING,
+               ETHERVOX_BUILD_TYPE, os_name, os_version);
+    } else if (strcmp(language_code, "de") == 0) {
+      snprintf(version_response, sizeof(version_response),
+               "EthervoxAI Version %s, %s Build. Läuft auf %s %s", ETHERVOX_VERSION_STRING,
+               ETHERVOX_BUILD_TYPE, os_name, os_version);
     } else {
-      // Fallback if uname fails
-      if (strcmp(language_code, "es") == 0) {
-        snprintf(version_response, sizeof(version_response),
-                 "EthervoxAI versión %s, compilación %s", ETHERVOX_VERSION_STRING,
-                 ETHERVOX_BUILD_TYPE);
-      } else if (strcmp(language_code, "zh") == 0) {
-        snprintf(version_response, sizeof(version_response), "EthervoxAI版本%s，%s版本",
-                 ETHERVOX_VERSION_STRING, ETHERVOX_BUILD_TYPE);
-      } else if (strcmp(language_code, "de") == 0) {
-        snprintf(version_response, sizeof(version_response), "EthervoxAI Version %s, %s Build",
-                 ETHERVOX_VERSION_STRING, ETHERVOX_BUILD_TYPE);
-      } else {
-        snprintf(version_response, sizeof(version_response), "EthervoxAI version %s, %s build",
-                 ETHERVOX_VERSION_STRING, ETHERVOX_BUILD_TYPE);
-      }
+      snprintf(version_response, sizeof(version_response),
+               "EthervoxAI version %s, %s build. Running on %s %s", ETHERVOX_VERSION_STRING,
+               ETHERVOX_BUILD_TYPE, os_name, os_version);
     }
+    
+    // Note: Removed fallback - platform_get_os_version always returns something
 #endif
+
     return version_response;
   }
 
@@ -1479,25 +1466,28 @@ static const char* answer_simple_question(const char* normalized_text, const cha
                device_model, android_version);
     }
 #else
-    struct utsname sys_info;
-    if (uname(&sys_info) == 0) {
-      if (strcmp(language_code, "es") == 0) {
-        snprintf(device_response, sizeof(device_response), "Estoy ejecutándome en %s %s, %s",
-                 sys_info.sysname, sys_info.release, sys_info.machine);
-      } else if (strcmp(language_code, "zh") == 0) {
-        snprintf(device_response, sizeof(device_response), "我在%s %s上运行，%s", sys_info.sysname,
-                 sys_info.release, sys_info.machine);
-      } else if (strcmp(language_code, "de") == 0) {
-        snprintf(device_response, sizeof(device_response), "Ich laufe auf %s %s, %s Architektur",
-                 sys_info.sysname, sys_info.release, sys_info.machine);
-      } else {
-        snprintf(device_response, sizeof(device_response), "I'm running on %s %s, %s architecture",
-                 sys_info.sysname, sys_info.release, sys_info.machine);
-      }
+    // Non-Android platform - use cross-platform utility
+    char os_name[64];
+    char os_version[64];
+    char architecture[64];
+    platform_get_os_version(os_name, sizeof(os_name), os_version, sizeof(os_version));
+    platform_get_architecture(architecture, sizeof(architecture));
+    
+    if (strcmp(language_code, "es") == 0) {
+      snprintf(device_response, sizeof(device_response), "Estoy ejecutándome en %s %s, %s",
+               os_name, os_version, architecture);
+    } else if (strcmp(language_code, "zh") == 0) {
+      snprintf(device_response, sizeof(device_response), "我在%s %s上运行，%s", os_name,
+               os_version, architecture);
+    } else if (strcmp(language_code, "de") == 0) {
+      snprintf(device_response, sizeof(device_response), "Ich laufe auf %s %s, %s Architektur",
+               os_name, os_version, architecture);
     } else {
-      return "I'm running locally on your system";
+      snprintf(device_response, sizeof(device_response), "I'm running on %s %s, %s architecture",
+               os_name, os_version, architecture);
     }
 #endif
+    
     return device_response;
   }
 
