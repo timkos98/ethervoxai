@@ -12,7 +12,10 @@
 #include "ethervox/platform.h"
 #include "ethervox/platform_utils.h"
 #include "ethervox/error.h"
+
+#if HAVE_LIBCURL
 #include "ethervox/platform_http.h"
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -531,7 +534,7 @@ int ethervox_model_download(
         ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_IMPLEMENTED, "ZIP extraction not implemented - please extract manually");
     }
     
-#ifdef HAVE_LIBCURL
+#if HAVE_LIBCURL
     // Use native C HTTP download
     ETHERVOX_LOG_INFO("Downloading %s...", def->name);
     ETHERVOX_LOG_DEBUG("URL: %s", def->url);

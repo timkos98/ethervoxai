@@ -1743,6 +1743,56 @@ Java_com_droid_ethervox_1core_NativeLib_getDebugMode(JNIEnv* env, jobject thiz) 
 }
 
 // C callback that forwards logs to Java
+/**
+ * Sanitize UTF-8 string to be compatible with Java's Modified UTF-8
+ * Replaces invalid or problematic bytes with '?'
+ */
+static void sanitize_utf8_for_java(char* buffer, size_t max_len) {
+    if (!buffer) return;
+    
+    size_t i = 0;
+    while (i < max_len && buffer[i] != '\0') {
+        unsigned char c = buffer[i];
+        
+        // Check for invalid UTF-8 sequences
+        if (c >= 0x80) {
+            // Multi-byte UTF-8 sequence
+            int bytes = 0;
+            if ((c & 0xE0) == 0xC0) bytes = 2;
+            else if ((c & 0xF0) == 0xE0) bytes = 3;
+            else if ((c & 0xF8) == 0xF0) bytes = 4;
+            
+            // Verify continuation bytes
+            bool valid = true;
+            for (int j = 1; j < bytes && (i + j) < max_len; j++) {
+                if ((buffer[i + j] & 0xC0) != 0x80) {
+                    valid = false;
+                    break;
+                }
+            }
+            
+            // Replace invalid sequences with '?'
+            if (!valid || bytes == 0) {
+                buffer[i] = '?';
+                i++;
+            } else {
+                // Valid UTF-8 sequence, but Java Modified UTF-8 doesn't support 4-byte sequences
+                // Replace 4-byte sequences with '?'
+                if (bytes == 4) {
+                    buffer[i] = '?';
+                    for (int j = 1; j < bytes && (i + j) < max_len; j++) {
+                        memmove(&buffer[i + 1], &buffer[i + bytes], strlen(&buffer[i + bytes]) + 1);
+                    }
+                } else {
+                    i += bytes;
+                }
+            }
+        } else {
+            i++;
+        }
+    }
+}
+
 static void java_log_callback_wrapper(int level, const char* tag, const char* message) {
     if (!g_jvm || !g_log_callback_obj || !g_log_callback_method) {
         return;
@@ -1763,8 +1813,19 @@ static void java_log_callback_wrapper(int level, const char* tag, const char* me
         detach = true;
     }
     
-    jstring jTag = (*env)->NewStringUTF(env, tag);
-    jstring jMessage = (*env)->NewStringUTF(env, message);
+    // Sanitize strings for Java Modified UTF-8 compatibility
+    char safe_tag[256];
+    char safe_message[4096];
+    strncpy(safe_tag, tag, sizeof(safe_tag) - 1);
+    safe_tag[sizeof(safe_tag) - 1] = '\0';
+    strncpy(safe_message, message, sizeof(safe_message) - 1);
+    safe_message[sizeof(safe_message) - 1] = '\0';
+    
+    sanitize_utf8_for_java(safe_tag, sizeof(safe_tag));
+    sanitize_utf8_for_java(safe_message, sizeof(safe_message));
+    
+    jstring jTag = (*env)->NewStringUTF(env, safe_tag);
+    jstring jMessage = (*env)->NewStringUTF(env, safe_message);
     
     if (jTag && jMessage) {
         (*env)->CallVoidMethod(env, g_log_callback_obj, g_log_callback_method, level, jTag, jMessage);

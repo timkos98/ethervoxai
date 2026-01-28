@@ -38,6 +38,7 @@ typedef enum {
     CHAT_TEMPLATE_GRANITE,   // IBM Granite format: <|system|>, <|user|>, <|assistant|>
     CHAT_TEMPLATE_PHI,       // Microsoft Phi format: <|system|>...<|end|><|user|>...<|end|>
     CHAT_TEMPLATE_LLAMA3,    // Meta Llama 3 format: <|begin_of_text|><|start_header_id|>role<|end_header_id|>
+    CHAT_TEMPLATE_LFM,       // Liquid AI LFM2.5 format: ChatML with tool calling tokens
     CHAT_TEMPLATE_AUTO       // Auto-detect from model name/metadata
 } chat_template_type_t;
 

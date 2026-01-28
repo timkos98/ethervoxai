@@ -102,6 +102,29 @@ static const chat_template_t llama3_template = {
     .tool_format = TOOL_FORMAT_XML_ATTR  // Uses XML with attributes
 };
 
+// Liquid AI LFM2.5 template (ChatML with native tool calling)
+static const chat_template_t lfm_template = {
+    .type = CHAT_TEMPLATE_LFM,
+    .system_start = "<|startoftext|><|im_start|>system\n",
+    .system_end = "<|im_end|>\n",
+    .user_start = "<|im_start|>user\n",
+    .user_end = "<|im_end|>\n",
+    .assistant_start = "<|im_start|>assistant\n",
+    .assistant_end = "<|im_end|>\n",
+    .tool_result_start = "<|im_start|>tool\n",
+    .tool_result_end = "<|im_end|>\n<|im_start|>assistant\n",
+    .stop_sequences = {
+        "<|im_end|>",
+        "<|im_start|>",
+        "<|tool_call_end|>",
+        "im_end",
+        "im_start",
+        NULL
+    },
+    .stop_sequence_count = 5,
+    .tool_format = TOOL_FORMAT_JSON_ONLY  // LFM2.5 uses pure Pythonic function calls between special tokens
+};
+
 // ============================================================================
 // Helper Functions
 // ============================================================================
@@ -126,6 +149,11 @@ chat_template_type_t chat_template_detect(const char* model_path) {
     
     char lower_path[512];
     str_tolower(lower_path, model_path, sizeof(lower_path));
+    
+    // Check for LFM (Liquid AI)
+    if (strstr(lower_path, "lfm") || strstr(lower_path, "liquid")) {
+        return CHAT_TEMPLATE_LFM;
+    }
     
     // Check for Granite
     if (strstr(lower_path, "granite")) {
@@ -158,6 +186,8 @@ const chat_template_t* chat_template_get(chat_template_type_t type, const char* 
     }
     
     switch (type) {
+        case CHAT_TEMPLATE_LFM:
+            return &lfm_template;
         case CHAT_TEMPLATE_GRANITE:
             return &granite_template;
         case CHAT_TEMPLATE_PHI:
