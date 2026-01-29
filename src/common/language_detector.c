@@ -76,14 +76,21 @@ const char* ethervox_detect_language(const char* text) {
     int total_chars = 0;
     
     // Check for common German words as additional signal
-    const char* german_words[] = {"ich", "und", "der", "die", "das", "ist", "nicht", "sich", 
-                                   "auf", "für", "mit", "nach", "bei", "über", "möchte", "guten",
-                                   "auch", "kann", "jetzt", "hallo", "wie", "von", "es", "wir",
-                                   "sehr", "gut", "bin", "haben", "werden", "war", "dich", NULL};
+    // IMPORTANT: Use word boundaries to avoid false positives (e.g., "can" in English "can")
+    const char* german_words[] = {"ich ", " ich", "und ", " und", "der ", " der", 
+                                   "die ", " die", "das ", " das", "ist ", " ist", 
+                                   "nicht ", " nicht", "sich ", " sich",
+                                   "auf ", " auf", "für ", " für", "mit ", " mit", 
+                                   "nach ", " nach", "bei ", " bei", "über ", " über", 
+                                   "möchte", "guten", "auch ", " auch", "jetzt ", " jetzt", 
+                                   "hallo", "wie ", " wie", "von ", " von", "wir ", " wir",
+                                   "sehr ", " sehr", "gut ", " gut", "haben ", " haben", 
+                                   "werden ", " werden", "dich ", " dich", NULL};
     int german_word_count = 0;
     for (const char** word = german_words; *word != NULL; word++) {
         if (strstr(text, *word) != NULL) {
             german_word_count++;
+            ETHERVOX_LOG_DEBUG("[Language Detection] German word match: '%s' in text", *word);
         }
     }
     
@@ -131,6 +138,9 @@ const char* ethervox_detect_language(const char* text) {
         return "en";
     }
     
+    ETHERVOX_LOG_DEBUG("[Language Detection] Counts: german_markers=%d, german_word_count=%d, spanish_markers=%d, spanish_word_count=%d, cjk_count=%d, total_chars=%d",
+                      german_markers, german_word_count, spanish_markers, spanish_word_count, cjk_count, total_chars);
+    
     // Decision logic
     // CJK takes priority (most distinctive)
     if (cjk_count > 0 && (cjk_count * 100 / total_chars) > 10) {
@@ -139,6 +149,7 @@ const char* ethervox_detect_language(const char* text) {
     
     // German detection: any umlaut/ß OR 2+ common German words
     if (german_markers > 0 || german_word_count >= 2) {
+        ETHERVOX_LOG_DEBUG("[Language Detection] Returning 'de': german_markers=%d, german_word_count=%d", german_markers, german_word_count);
         return "de";
     }
     
