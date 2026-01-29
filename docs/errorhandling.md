@@ -357,6 +357,41 @@ try {
 
 ## Migration Strategy
 
+### Migration Status Summary
+
+**Phase 1: Infrastructure** ✅ **COMPLETED** - All error handling infrastructure is implemented and tested (16/16 tests passing).
+
+**Phase 2: Call Site Migration** ⚠️ **IN PROGRESS** - Critical audio bugs fixed, but systematic audit needed for remaining ~40+ locations.
+
+**Critical Bug Pattern Discovered (January 28, 2026):**
+During transcription feature debugging, we discovered that many call sites were incorrectly treating `ethervox_result_t` return values as data instead of error codes. This occurred because functions were migrated from returning `int` (data/count) to `ethervox_result_t` (error code) with data moved to out-parameters, but not all call sites were updated.
+
+**Bug Pattern:**
+```c
+// ❌ WRONG: Treats ETHERVOX_SUCCESS (0) as "0 samples"
+int samples_read = ethervox_audio_read(&runtime, &buffer);
+if (samples_read > 0) { /* never executes */ }
+
+// ✅ CORRECT: Check result code, use out-parameter for data
+ethervox_result_t result = ethervox_audio_read(&runtime, &buffer);
+if (ethervox_is_success(result) && buffer.size > 0) {
+    int samples_read = (int)buffer.size;  // Get actual sample count
+}
+```
+
+**Fixed Locations:**
+- `src/plugins/voice_tools/voice_tools.c` (lines 130-240) - audio capture thread
+- `src/audio/audio_recording.c` (line 214) - recording utility
+- `src/dialogue/voice_conversation.c` (lines 310, 330, 565, 599) - voice conversation
+
+**Remaining Work:**
+Grep search (`int\s+\w+\s*=\s*ethervox_\w+\(`) found ~40 additional locations in:
+- `src/platform/ethervox_android_core.c` (~15 instances) - Type consistency, logic correct
+- `src/main.c` (~20 instances) - Type consistency, logic correct  
+- Various test files - Need case-by-case review
+
+Most remaining instances correctly check `result == 0` for success, but use `int` instead of `ethervox_result_t` for type consistency. Priority is fixing any that treat return values as data.
+
 ### Phase 1: Core Infrastructure ✅ COMPLETED
 
 - [x] Create `include/ethervox/error.h` with error codes and API
@@ -368,11 +403,16 @@ try {
 - [x] Integrate tests into CTest with 100% pass rate
 - [ ] Create TypeScript error classes in `src/common/errors.ts` (if needed)
 
-### Phase 2: Critical Path (Weeks 2-3)
+### Phase 2: Critical Path (Weeks 2-3) ⚠️ IN PROGRESS
 
+- [x] Fix critical call site bugs treating `ethervox_result_t` as data
+  - [x] `src/audio/audio_recording.c` (line 214)
+  - [x] `src/dialogue/voice_conversation.c` (lines 310, 330, 565, 599)
+  - [x] `src/plugins/voice_tools/voice_tools.c` (lines 130-240)
 - [ ] Migrate `src/audio/audio_core.c` to use new error codes
 - [ ] Migrate platform HAL files (`src/platform/*.c`)
 - [ ] Update plugin manager (`src/plugins/plugin_manager.c`)
+- [ ] Systematic audit: Convert remaining `int result = ethervox_*()` to `ethervox_result_t`
 - [ ] Ensure all tests pass with graceful degradation
 - [ ] Update SDK wrappers to use new error types
 

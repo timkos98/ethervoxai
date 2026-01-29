@@ -466,24 +466,48 @@ ethervox_result_t ethervox_stt_whisper_process(ethervox_stt_runtime_t* runtime,
   const float* samples = (const float*)audio_buffer->data;
   uint32_t sample_count = audio_buffer->size;
   
-  if (sample_count == 0) return 1;
+  LOG_DEBUG("[Whisper Process] Received %u samples, current buffer: %zu/%zu samples",
+            sample_count, ctx->audio_buffer_size, ctx->audio_buffer_capacity);
+  
+  if (sample_count == 0) {
+    LOG_DEBUG("[Whisper Process] No samples in audio_buffer, returning 1");
+    return 1;
+  }
   
   // Add samples to buffer
+  size_t samples_added = 0;
   for (uint32_t i = 0; i < sample_count; i++) {
     if (ctx->audio_buffer_size >= ctx->audio_buffer_capacity) {
       LOG_WARN("Audio buffer overflow, processing early");
       break;
     }
     ctx->audio_buffer[ctx->audio_buffer_size++] = samples[i];
+    samples_added++;
   }
+  
+  // Calculate audio energy to verify we're getting real audio (not silence)
+  float energy = 0.0f;
+  for (uint32_t i = 0; i < sample_count; i++) {
+    energy += samples[i] * samples[i];
+  }
+  energy = energy / sample_count;
+  
+  LOG_DEBUG("[Whisper Process] Added %zu samples, buffer now: %zu samples (%.2fs), audio energy: %.6f",
+            samples_added, ctx->audio_buffer_size, 
+            (float)ctx->audio_buffer_size / 16000.0f, energy);
   
   // Process when we have 3 seconds (stream.cpp uses step_ms=3000)
   const size_t chunk_size = 16000 * 3;  // 3 seconds @ 16kHz
   
   if (ctx->audio_buffer_size < chunk_size) {
     // Not enough audio yet - keep accumulating
+    LOG_DEBUG("[Whisper Process] Buffer not full yet (%zu/%zu samples), accumulating...",
+              ctx->audio_buffer_size, chunk_size);
     return 1;
   }
+  
+  LOG_INFO("[Whisper Process] Buffer threshold reached (%zu samples >= %zu), processing chunk...",
+           ctx->audio_buffer_size, chunk_size);
   
   // Prepare processing buffer: overlap + new audio
   size_t total_samples = ctx->overlap_size + ctx->audio_buffer_size;
@@ -940,9 +964,20 @@ ethervox_result_t ethervox_stt_whisper_finalize(ethervox_stt_runtime_t* runtime,
   
   memset(result, 0, sizeof(ethervox_stt_result_t));
   
+  LOG_DEBUG("[Whisper Finalize] ========================================");
+  LOG_DEBUG("[Whisper Finalize] Buffer state at finalize:");
+  LOG_DEBUG("[Whisper Finalize]   audio_buffer_size = %zu samples (%.2fs)",
+            ctx->audio_buffer_size, (float)ctx->audio_buffer_size / 16000.0f);
+  LOG_DEBUG("[Whisper Finalize]   overlap_size = %zu samples (%.2fs)",
+            ctx->overlap_size, (float)ctx->overlap_size / 16000.0f);
+  LOG_DEBUG("[Whisper Finalize] ========================================");
+  
   // CRITICAL: Process remaining audio WITH overlap (just like during normal processing)
   // This ensures we don't lose context from the previous chunk
   size_t total_samples = ctx->overlap_size + ctx->audio_buffer_size;
+  
+  LOG_INFO("[Whisper Finalize] Total samples to process: %zu (%.2fs)",
+           total_samples, (float)total_samples / 16000.0f);
   
   if (total_samples > 8000) { // At least 0.5 seconds total
     LOG_INFO("Finalizing with %.1f seconds total (%.1f overlap + %.1f new)", 

@@ -211,9 +211,10 @@ ethervox_result_t ethervox_audio_record_to_file(
 #endif
         
         // Read audio chunk
-        int samples_read = ethervox_audio_read(&audio_runtime, &audio_buf);
+        ethervox_result_t read_result = ethervox_audio_read(&audio_runtime, &audio_buf);
         
-        if (samples_read > 0) {
+        if (ethervox_is_success(read_result) && audio_buf.size > 0) {
+            int samples_read = (int)audio_buf.size;
             // Clamp to available space
             int samples_to_copy = samples_read;
             if (samples_recorded + samples_to_copy > total_samples) {

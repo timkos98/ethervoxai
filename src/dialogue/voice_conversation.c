@@ -307,8 +307,8 @@ static int conversation_on_listen(char** user_input, int timeout_ms,
     const int silence_threshold = 10;  // frames of silence before considering speech ended
     
     while ((get_time_ms() - start_time) < (uint64_t)timeout_ms) {
-        int result = ethervox_audio_read(&session->audio_runtime, &audio_chunk);
-        if (result != 0) {
+        ethervox_result_t audio_result = ethervox_audio_read(&session->audio_runtime, &audio_chunk);
+        if (ethervox_is_error(audio_result) || audio_chunk.size == 0) {
             break;
         }
         
@@ -327,8 +327,8 @@ static int conversation_on_listen(char** user_input, int timeout_ms,
             
             // Process audio chunk through STT
             ethervox_stt_result_t stt_result;
-            int ret = ethervox_stt_process(&session->stt_runtime, &audio_chunk, &stt_result);
-            if (ret == 0 && stt_result.is_final && stt_result.text && strlen(stt_result.text) > 0) {
+            ethervox_result_t stt_ret = ethervox_stt_process(&session->stt_runtime, &audio_chunk, &stt_result);
+            if (ethervox_is_success(stt_ret) && stt_result.is_final && stt_result.text && strlen(stt_result.text) > 0) {
                 // Got final transcription
                 *user_input = strdup(stt_result.text);
                 ETHERVOX_LOG_INFO("Transcribed from listen tool: %s", *user_input);
@@ -561,12 +561,14 @@ static void* conversation_thread(void* arg) {
                 break;
             }
             
-            int samples_read = session->audio_runtime.driver.read_audio(&session->audio_runtime, &audio_chunk);
-            if (samples_read <= 0) {
+            ethervox_result_t read_result = session->audio_runtime.driver.read_audio(&session->audio_runtime, &audio_chunk);
+            if (ethervox_is_error(read_result) || audio_chunk.size == 0) {
                 free(audio_chunk.data);
                 usleep(10000);  // Wait and try again
                 continue;
             }
+            
+            int samples_read = (int)audio_chunk.size;
             
             // Apply AEC to remove speaker output from microphone input
             // AEC requires 10ms frames (160 samples at 16kHz), so process in chunks
@@ -596,10 +598,10 @@ static void* conversation_thread(void* arg) {
             
             // Feed all audio to Whisper - let it decide on VAD and boundaries
             ethervox_stt_result_t stt_result = {0};
-            int ret = ethervox_stt_process(&session->stt_runtime, &audio_chunk, &stt_result);
+            ethervox_result_t stt_ret = ethervox_stt_process(&session->stt_runtime, &audio_chunk, &stt_result);
             
             // Check for results (Whisper returns is_final when it detects sentence boundary)
-            if (ret == 0 && stt_result.text && strlen(stt_result.text) > 3) {
+            if (ethervox_is_success(stt_ret) && stt_result.text && strlen(stt_result.text) > 3) {
                 // Show partial results
                 if (stt_result.is_partial) {
                     printf("\r🎤 %s", stt_result.text);

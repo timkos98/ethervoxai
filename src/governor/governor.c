@@ -2054,14 +2054,8 @@ ethervox_governor_status_t ethervox_governor_execute(
         while (generated_count < max_tokens) {
             llama_token next_token = llama_sampler_sample(sampler, governor->llm_ctx, -1);
             
-            // Check for EOG token (proper way)
-            // NOTE: For Granite models, <|end_of_text|> (token 100257) is incorrectly marked as EOG
-            // in the GGUF file. It's actually a role separator, not a true EOG. We rely on stop
-            // sequence detection instead for Granite.
-            bool is_eog = llama_vocab_is_eog(vocab, next_token);
-            bool ignore_eog = (governor->chat_template->type == CHAT_TEMPLATE_GRANITE && is_eog);
-            
-            if (is_eog && !ignore_eog) {
+            // Check for EOG token
+            if (llama_vocab_is_eog(vocab, next_token)) {
                 if (generated_count == 0) {
                     GOV_LOG("WARNING: Model immediately generated EOG token (id=%d) - this suggests prompt/context issue", next_token);
                 } else {
@@ -2140,9 +2134,25 @@ ethervox_governor_status_t ethervox_governor_execute(
                     size_t buf_len = strlen(llm_response_buffer);
                     const char* buf_end = llm_response_buffer + buf_len;
                     
-                    // Check if buffer ends with potential tool call start patterns
-                    // Be more specific - only hold back if we're building "<tool_call"
+                    // Check if buffer ends with potential tool call start patterns OR stop sequence starts
+                    // Be more specific - only hold back if we're building "<tool_call" or a stop sequence
                     bool might_be_tool_start = false;
+                    bool might_be_stop_sequence = false;
+                    
+                    // Check for partial stop sequences at end of buffer
+                    // Granite: <|start_of_role|>, <|end_of_role|>, <|end_of_text|>
+                    if (buf_len >= 1 && buf_end[-1] == '<') {
+                        might_be_stop_sequence = true;  // Might be starting <| pattern
+                    } else if (buf_len >= 2 && strncmp(buf_end - 2, "<|", 2) == 0) {
+                        might_be_stop_sequence = true;
+                    } else if (buf_len >= 3 && (strncmp(buf_end - 3, "<|s", 3) == 0 || strncmp(buf_end - 3, "<|e", 3) == 0)) {
+                        might_be_stop_sequence = true;
+                    } else if (strstr(buf_end - (buf_len >= 20 ? 20 : buf_len), "<|start_of") ||
+                               strstr(buf_end - (buf_len >= 20 ? 20 : buf_len), "<|end_of")) {
+                        might_be_stop_sequence = true;
+                    }
+                    
+                    // Check for tool call start patterns
                     if (buf_len >= 1 && buf_end[-1] == '<' && token_text[0] == 't') {
                         might_be_tool_start = true;  // '<' followed by 't' - might be '<tool_call'
                     } else if (buf_len >= 2 && strncmp(buf_end - 2, "<t", 2) == 0) {
@@ -2165,6 +2175,7 @@ ethervox_governor_status_t ethervox_governor_execute(
                     
                     // Only stream if we're sure it's not a tool call, no STOP sequences, and not a stop fragment
                     should_stream = !might_be_tool_start && 
+                                   !might_be_stop_sequence &&
                                    !is_stop_fragment &&
                                    !strstr(llm_response_buffer, "STOP") && 
                                    !chat_template_has_stop_sequence(governor->chat_template, llm_response_buffer);
@@ -2266,11 +2277,18 @@ ethervox_governor_status_t ethervox_governor_execute(
         append_turn(&governor->conversation_history, &assistant_turn);
         
         // Clean up any stop tokens that made it into the output
-        // Check for all possible partial versions starting with <|im
-        char* stop_marker = strstr(llm_response_buffer, " <|im");
+        // Check for Granite patterns: <|start_of_role|>, <|end_of_role|>, <|end_of_text|>
+        char* stop_marker = strstr(llm_response_buffer, "<|start_of_role|>");
+        if (!stop_marker) stop_marker = strstr(llm_response_buffer, "<|end_of_role|>");
+        if (!stop_marker) stop_marker = strstr(llm_response_buffer, "<|end_of_text|>");
+        if (!stop_marker) stop_marker = strstr(llm_response_buffer, "<|start_of");
+        if (!stop_marker) stop_marker = strstr(llm_response_buffer, "<|end_of");
+        // Check for Qwen/LFM patterns: <|im_end|>, <|im_start|>
+        if (!stop_marker) stop_marker = strstr(llm_response_buffer, " <|im");
         if (!stop_marker) stop_marker = strstr(llm_response_buffer, "<|im");
         if (stop_marker) {
             *stop_marker = '\0';
+            GOV_LOG("Cleaned up stop sequence from output at position %ld", stop_marker - llm_response_buffer);
         }
         
         const char* llm_response = llm_response_buffer;

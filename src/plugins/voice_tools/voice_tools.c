@@ -132,9 +132,11 @@ static void* audio_capture_thread(void* arg) {
     // Read audio from platform driver
     // CRITICAL: Reset buffer size before each read to prevent buffer overflow
     audio_buf.size = buffer_capacity;
-    int samples_read = ethervox_audio_read(&session->audio_runtime, &audio_buf);
+    ethervox_result_t read_result = ethervox_audio_read(&session->audio_runtime, &audio_buf);
 
-    if (samples_read > 0) {
+    if (ethervox_is_success(read_result) && audio_buf.size > 0) {
+      int samples_read = (int)audio_buf.size;
+      
       // Clamp samples_read to buffer capacity to prevent overflow
       if (samples_read > (int)buffer_capacity) {
         LOG_WARN("Audio driver returned more samples (%d) than buffer capacity (%u) - clamping",
@@ -225,7 +227,7 @@ static void* audio_capture_thread(void* arg) {
         ethervox_stt_result_free(&result);
       }
       // Note: buffer size is reset at the top of the loop before next read
-    } else if (samples_read == 0) {
+    } else if (ethervox_is_success(read_result) && audio_buf.size == 0) {
       // No audio available yet, sleep briefly
 #ifdef _WIN32
       Sleep(50);  // 50ms
@@ -233,7 +235,7 @@ static void* audio_capture_thread(void* arg) {
       usleep(50000);  // 50ms
 #endif
     } else {
-      LOG_ERROR("Audio read error: %d", samples_read);
+      LOG_ERROR("Audio read error: result=%d", read_result);
       break;
     }
   }

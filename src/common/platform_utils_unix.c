@@ -15,6 +15,7 @@
 #include <stdint.h>
 #include <errno.h>
 #include <stdlib.h>
+#include <limits.h>
 
 /**
  * Get Unix OS version information

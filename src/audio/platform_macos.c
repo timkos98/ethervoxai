@@ -65,6 +65,7 @@ static void input_callback(void* user_data, AudioQueueRef queue,
   (void)queue;
   (void)start_time;
   (void)packet_desc;
+  (void)num_packets;
   
   macos_audio_state_t* state = (macos_audio_state_t*)user_data;
   if (!state || !state->is_recording) {
