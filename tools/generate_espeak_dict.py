@@ -182,6 +182,8 @@ def read_dictionary(input_path):
             parts = line.split('\t')
             if len(parts) == 2:
                 word, ipa = parts
+                # Strip frequency suffix if present (e.g., "word 1234" → "word")
+                word = word.split()[0] if ' ' in word else word
                 pronunciations[word] = ipa
     
     print(f"📖 Read {len(pronunciations)} entries from {input_path}")

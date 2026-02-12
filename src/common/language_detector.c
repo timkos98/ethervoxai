@@ -64,10 +64,70 @@ static unsigned int decode_utf8(const char** text_ptr) {
     return codepoint;
 }
 
+/**
+ * Check if character is a word boundary
+ */
+static inline bool is_word_boundary(char c) {
+    return c == '\0' || c == ' ' || c == ',' || c == '.' || c == '!' || 
+           c == '?' || c == ';' || c == ':' || c == '\n' || c == '\t' ||
+           c == '(' || c == ')' || c == '[' || c == ']' || c == '"' || c == '\'';
+}
+
+/**
+ * Case-insensitive substring search
+ */
+static const char* stristr(const char* haystack, const char* needle) {
+    if (!haystack || !needle) return NULL;
+    
+    size_t needle_len = strlen(needle);
+    if (needle_len == 0) return haystack;
+    
+    for (const char* p = haystack; *p != '\0'; p++) {
+        if (tolower((unsigned char)*p) == tolower((unsigned char)*needle)) {
+            // Potential match - check rest of string
+            size_t i;
+            for (i = 0; i < needle_len; i++) {
+                if (tolower((unsigned char)p[i]) != tolower((unsigned char)needle[i])) {
+                    break;
+                }
+            }
+            if (i == needle_len) {
+                return p;  // Found match
+            }
+        }
+    }
+    return NULL;
+}
+
 const char* ethervox_detect_language(const char* text) {
     if (!text || text[0] == '\0') {
         return "en";  // Default to English
     }
+    
+    // Performance optimization: only analyze first sentence (up to first .!? followed by space/end)
+    // This is sufficient for language detection and much faster for long texts
+    char first_sentence[512] = {0};
+    size_t i = 0;
+    bool found_sentence_end = false;
+    
+    for (i = 0; i < sizeof(first_sentence) - 1 && text[i] != '\0'; i++) {
+        first_sentence[i] = text[i];
+        // Check for sentence-ending punctuation followed by space or end
+        if ((text[i] == '.' || text[i] == '!' || text[i] == '?') && 
+            (text[i+1] == ' ' || text[i+1] == '\0' || text[i+1] == '\n')) {
+            first_sentence[i+1] = '\0';
+            found_sentence_end = true;
+            break;
+        }
+    }
+    
+    if (!found_sentence_end && i == sizeof(first_sentence) - 1) {
+        // Truncated - ensure null termination
+        first_sentence[sizeof(first_sentence) - 1] = '\0';
+    }
+    
+    // Use first sentence (or truncated text) for analysis
+    text = first_sentence;
     
     // Language detection scores
     int cjk_count = 0;
@@ -75,22 +135,57 @@ const char* ethervox_detect_language(const char* text) {
     int spanish_markers = 0;
     int total_chars = 0;
     
+    // Check for common English words
+    const char* english_words[] = {"the", "be", "to", "of", "and", "a", "in", "that", "have", "it",
+                                    "for", "not", "on", "with", "he", "as", "you", "do", "at", "this",
+                                    "but", "his", "by", "from", "they", "we", "say", "her", "she", "or",
+                                    "an", "will", "my", "one", "all", "would", "there", "their", NULL};
+    int english_word_count = 0;
+    
+    for (const char** word = english_words; *word != NULL; word++) {
+        size_t word_len = strlen(*word);
+        const char* pos = text;
+        
+        // Search for word with proper boundaries (case-insensitive)
+        while ((pos = stristr(pos, *word)) != NULL) {
+            bool is_start_boundary = (pos == text) || is_word_boundary(*(pos - 1));
+            bool is_end_boundary = is_word_boundary(pos[word_len]);
+            
+            if (is_start_boundary && is_end_boundary) {
+                english_word_count++;
+                ETHERVOX_LOG_DEBUG("[Language Detection] English word match: '%s' in text", *word);
+                break;
+            }
+            pos++;
+        }
+    }
+    
     // Check for common German words as additional signal
-    // IMPORTANT: Use word boundaries to avoid false positives (e.g., "can" in English "can")
-    const char* german_words[] = {"ich ", " ich", "und ", " und", "der ", " der", 
-                                   "die ", " die", "das ", " das", "ist ", " ist", 
-                                   "nicht ", " nicht", "sich ", " sich",
-                                   "auf ", " auf", "für ", " für", "mit ", " mit", 
-                                   "nach ", " nach", "bei ", " bei", "über ", " über", 
-                                   "möchte", "guten", "auch ", " auch", "jetzt ", " jetzt", 
-                                   "hallo", "wie ", " wie", "von ", " von", "wir ", " wir",
-                                   "sehr ", " sehr", "gut ", " gut", "haben ", " haben", 
-                                   "werden ", " werden", "dich ", " dich", NULL};
+    // IMPORTANT: Must match complete words with boundaries on BOTH sides to avoid false positives
+    // (e.g., "und" not as substring in "found", "der" not in "wonder")
+    const char* german_words[] = {"ich", "und", "der", "die", "das", "ist", 
+                                   "nicht", "sich", "auf", "für", "mit", "nach", 
+                                   "bei", "über", "möchte", "guten", "auch", "jetzt", 
+                                   "hallo", "wie", "von", "wir", "sehr", "gut", 
+                                   "haben", "werden", "dich", NULL};
     int german_word_count = 0;
+    
     for (const char** word = german_words; *word != NULL; word++) {
-        if (strstr(text, *word) != NULL) {
-            german_word_count++;
-            ETHERVOX_LOG_DEBUG("[Language Detection] German word match: '%s' in text", *word);
+        size_t word_len = strlen(*word);
+        const char* pos = text;
+        
+        // Search for word with proper boundaries (case-insensitive)
+        while ((pos = stristr(pos, *word)) != NULL) {
+            // Check if it's a complete word (boundaries on both sides)
+            bool is_start_boundary = (pos == text) || is_word_boundary(*(pos - 1));
+            bool is_end_boundary = is_word_boundary(pos[word_len]);
+            
+            if (is_start_boundary && is_end_boundary) {
+                german_word_count++;
+                ETHERVOX_LOG_DEBUG("[Language Detection] German word match: '%s' in text", *word);
+                break;  // Count each word only once
+            }
+            pos++;  // Continue searching
         }
     }
     
@@ -138,28 +233,50 @@ const char* ethervox_detect_language(const char* text) {
         return "en";
     }
     
-    ETHERVOX_LOG_DEBUG("[Language Detection] Counts: german_markers=%d, german_word_count=%d, spanish_markers=%d, spanish_word_count=%d, cjk_count=%d, total_chars=%d",
-                      german_markers, german_word_count, spanish_markers, spanish_word_count, cjk_count, total_chars);
+    ETHERVOX_LOG_DEBUG("[Language Detection] Counts: english_words=%d, german_markers=%d, german_words=%d, spanish_markers=%d, spanish_words=%d, cjk=%d, total=%d",
+                      english_word_count, german_markers, german_word_count, spanish_markers, spanish_word_count, cjk_count, total_chars);
     
-    // Decision logic
+    // Decision logic: score-based with CJK priority
     // CJK takes priority (most distinctive)
     if (cjk_count > 0 && (cjk_count * 100 / total_chars) > 10) {
         return "zh";  // Chinese (also covers Japanese)
     }
     
-    // German detection: any umlaut/ß OR 2+ common German words
-    if (german_markers > 0 || german_word_count >= 2) {
-        ETHERVOX_LOG_DEBUG("[Language Detection] Returning 'de': german_markers=%d, german_word_count=%d", german_markers, german_word_count);
-        return "de";
+    // Calculate scores for all languages
+    // Score = (character markers * 2) + (word count * 1)
+    // Character markers weighted higher as they're more distinctive
+    // English has no special markers, so only word count
+    int english_score = english_word_count;
+    int german_score = (german_markers * 2) + german_word_count;
+    int spanish_score = (spanish_markers * 2) + spanish_word_count;
+    
+    ETHERVOX_LOG_DEBUG("[Language Detection] Scores: en=%d (%d words), de=%d (%d markers, %d words), es=%d (%d markers, %d words)",
+                      english_score, english_word_count,
+                      german_score, german_markers, german_word_count,
+                      spanish_score, spanish_markers, spanish_word_count);
+    
+    // Return language with highest score (minimum threshold: 2)
+    int max_score = english_score;
+    const char* detected_lang = "en";
+    
+    if (german_score > max_score) {
+        max_score = german_score;
+        detected_lang = "de";
     }
     
-    // Spanish detection: markers OR 2+ common Spanish words
-    if (spanish_markers > 0 || spanish_word_count >= 2) {
-        return "es";
+    if (spanish_score > max_score) {
+        max_score = spanish_score;
+        detected_lang = "es";
     }
     
-    // Default to English
-    return "en";
+    // Require minimum confidence (at least 2 points)
+    if (max_score < 2) {
+        ETHERVOX_LOG_DEBUG("[Language Detection] All scores below threshold (max=%d), defaulting to 'en'", max_score);
+        return "en";
+    }
+    
+    ETHERVOX_LOG_DEBUG("[Language Detection] Returning '%s' (score: %d)", detected_lang, max_score);
+    return detected_lang;
 }
 
 const char* ethervox_get_voice_for_language(const char* language, 

@@ -61,7 +61,7 @@ int main(void) {
     ASSERT_EQ("de", ethervox_detect_language("Ich möchte nach Hause gehen."));
 
     TEST("German formal greeting");
-    ASSERT_EQ("en", ethervox_detect_language("Guten Tag! Wie geht es Ihnen?"));  // No common words in our list
+    ASSERT_EQ("de", ethervox_detect_language("Guten Tag, wie geht es Ihnen heute?"));  // First sentence has "guten" and "wie"
 
     TEST("German with ß");
     ASSERT_EQ("de", ethervox_detect_language("Das ist groß und weiß."));
@@ -71,6 +71,16 @@ int main(void) {
 
     TEST("German casual");
     ASSERT_EQ("de", ethervox_detect_language("Das ist gut und richtig."));
+
+    // False positive prevention tests
+    TEST("English story with 'und' substring");
+    ASSERT_EQ("en", ethervox_detect_language("Once upon a time, she found a book bound in leather."));
+
+    TEST("English with 'der' substring");
+    ASSERT_EQ("en", ethervox_detect_language("She wandered through the forest filled with wonder."));
+
+    TEST("English long story");
+    ASSERT_EQ("en", ethervox_detect_language("Of course! Once upon a time, in a small village nestled between two towering mountains, there lived a young girl named Lily. She had golden hair that shimmered like the sun and eyes as blue as the sky on a clear day."));
 
     // Spanish detection tests
     TEST("Spanish with accents");
