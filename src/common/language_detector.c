@@ -99,6 +99,7 @@ static const char* stristr(const char* haystack, const char* needle) {
     return NULL;
 }
 
+// Abandoning this approach for now - too many false positives 2026-01-30
 const char* ethervox_detect_language(const char* text) {
     if (!text || text[0] == '\0') {
         return "en";  // Default to English
@@ -408,4 +409,92 @@ const char* ethervox_detect_and_switch_voice(const char* text,
     }
     
     return detected_language;
+}
+const char* ethervox_switch_to_language(const char* language, void** tts_context) {
+    if (!language) {
+        return "en";  // Default
+    }
+    
+    ETHERVOX_LOG_INFO("[Language Switch] Switching to explicit language: %s", language);
+    
+    // Load settings to check and update voice
+    ethervox_persistent_settings_t settings;
+    if (ethervox_is_error(ethervox_settings_load(&settings, NULL))) {
+        ETHERVOX_LOG_ERROR("[Language Switch] Failed to load settings");
+        return language;
+    }
+    
+    // Get target voice for specified language
+    const char* target_voice = ethervox_get_voice_for_language(language, &settings);
+    if (!target_voice) {
+        ETHERVOX_LOG_ERROR("[Language Switch] No voice configured for language: %s", language);
+        return language;
+    }
+    
+    ETHERVOX_LOG_DEBUG("[Language Switch] Target voice for %s: %s", language, target_voice);
+    
+    // Determine what voice is currently loaded by checking piper_model_path
+    // Extract voice ID from path like "/path/to/en_US-libritts-high.onnx"
+    const char* current_model = settings.tts.piper_model_path;
+    const char* last_slash = strrchr(current_model, '/');
+    if (!last_slash) last_slash = current_model;
+    else last_slash++; // Skip the '/'
+    
+    ETHERVOX_LOG_DEBUG("[Language Switch] Current model filename: %s", last_slash);
+    
+    // Check if target voice is in the current model path
+    bool voice_needs_change = (strstr(last_slash, target_voice) == NULL);
+    
+    ETHERVOX_LOG_DEBUG("[Language Switch] Voice needs change? %s (checking if '%s' contains '%s')",
+                       voice_needs_change ? "YES" : "NO", last_slash, target_voice);
+    
+    if (voice_needs_change) {
+        ETHERVOX_LOG_INFO("[Language Switch] Changing TTS voice: %s → %s (language: %s)",
+                         last_slash, target_voice, language);
+        
+        // Update settings voice field for the specified language
+        if (strcmp(language, "en") == 0) {
+            strncpy(settings.tts.voice_en, target_voice, sizeof(settings.tts.voice_en) - 1);
+        } else if (strcmp(language, "zh") == 0) {
+            strncpy(settings.tts.voice_zh, target_voice, sizeof(settings.tts.voice_zh) - 1);
+        } else if (strcmp(language, "de") == 0) {
+            strncpy(settings.tts.voice_de, target_voice, sizeof(settings.tts.voice_de) - 1);
+        } else if (strcmp(language, "es") == 0) {
+            strncpy(settings.tts.voice_es, target_voice, sizeof(settings.tts.voice_es) - 1);
+        }
+        
+        // Reconstruct piper_model_path from target voice
+        const char* home = getenv("HOME");
+        if (home) {
+            snprintf(settings.tts.piper_model_path,
+                    sizeof(settings.tts.piper_model_path),
+                    "%s/.ethervox/models/piper/%s.onnx",
+                    home, target_voice);
+        } else {
+            snprintf(settings.tts.piper_model_path,
+                    sizeof(settings.tts.piper_model_path),
+                    ".ethervox/models/piper/%s.onnx",
+                    target_voice);
+        }
+        
+        ETHERVOX_LOG_DEBUG("[Language Switch] New model path: %s", settings.tts.piper_model_path);
+        
+        // Reload TTS with new voice
+        if (ethervox_reload_global_tts(&settings.tts, NULL, NULL) == 0) {
+            ETHERVOX_LOG_INFO("[Language Switch] ✅ TTS reloaded with %s voice", language);
+            
+            // Update caller's TTS context pointer if provided
+            if (tts_context) {
+                extern ethervox_tts_context_t* g_global_tts;
+                *tts_context = g_global_tts;
+            }
+        } else {
+            ETHERVOX_LOG_ERROR("[Language Switch] ❌ Failed to reload TTS");
+        }
+    } else {
+        ETHERVOX_LOG_DEBUG("[Language Switch] Voice already correct for language %s: %s",
+                          language, target_voice);
+    }
+    
+    return language;
 }

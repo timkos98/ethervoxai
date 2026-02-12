@@ -60,12 +60,13 @@ typedef struct {
     /**
      * Called when LLM invokes "speak" tool
      * @param text Text to speak via TTS
+     * @param language Language code ("en", "de", "es", "zh") or NULL for auto-detect
      * @param wait_for_response If true, open microphone after speaking
      * @param allow_interrupt If true, user can interrupt by speaking
      * @param user_data Typically the conversation session
      * @return ETHERVOX_SUCCESS or error code
      */
-    ethervox_result_t (*on_speak)(const char* text, bool wait_for_response, bool allow_interrupt, void* user_data);
+    ethervox_result_t (*on_speak)(const char* text, const char* language, bool wait_for_response, bool allow_interrupt, void* user_data);
     
     /**
      * Called when LLM invokes "listen" tool

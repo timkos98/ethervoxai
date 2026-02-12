@@ -121,11 +121,134 @@ ethervox_result_t ethervox_tool_registry_export_manifest(
         return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
-    // Write index entries and collect detail info
+    // First pass: calculate detail sizes and write index entries
     uint32_t current_detail_offset = header.detail_offset;
     
+    // Allocate temporary buffer for parsed parameters
+    typedef struct {
+        uint8_t param_count;
+        tool_param_t params[MAX_PARAMETERS];
+        uint16_t detail_size;
+    } tool_export_info_t;
+    
+    tool_export_info_t* tool_infos = calloc(registry->tool_count, sizeof(tool_export_info_t));
+    if (!tool_infos) {
+        fclose(fp);
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
+    
+    // Parse all tool schemas first to calculate sizes
     for (uint32_t i = 0; i < registry->tool_count; i++) {
         const ethervox_tool_t* tool = &registry->tools[i];
+        tool_export_info_t* info = &tool_infos[i];
+        
+        // Parse JSON schema to extract parameters
+        const char* schema = tool->parameters_json_schema;
+        if (schema && schema[0] != '\0') {
+            // Simple JSON parsing for parameters
+            const char* properties = strstr(schema, "\"properties\"");
+            const char* required_arr = strstr(schema, "\"required\"");
+            
+            if (properties) {
+                properties = strchr(properties, '{');
+                if (properties) {
+                    properties++; // Skip opening brace
+                    
+                    // Parse each property
+                    const char* cursor = properties;
+                    while (*cursor && info->param_count < MAX_PARAMETERS) {
+                        // Find next property name
+                        const char* name_start = strchr(cursor, '"');
+                        if (!name_start || name_start >= strstr(cursor, "}")) break;
+                        name_start++;
+                        
+                        const char* name_end = strchr(name_start, '"');
+                        if (!name_end) break;
+                        
+                        // Extract parameter name
+                        size_t name_len = name_end - name_start;
+                        if (name_len >= 32) name_len = 31;
+                        
+                        tool_param_t* param = &info->params[info->param_count];
+                        strncpy(param->name, name_start, name_len);
+                        param->name[name_len] = '\0';
+                        
+                        // Find the property value object
+                        const char* prop_obj = strchr(name_end, '{');
+                        if (!prop_obj) break;
+                        
+                        // Extract type
+                        const char* type_field = strstr(prop_obj, "\"type\"");
+                        if (type_field && type_field < strstr(prop_obj + 1, "}")) {
+                            const char* type_val = strchr(type_field, ':');
+                            if (type_val) {
+                                type_val = strchr(type_val, '"');
+                                if (type_val) {
+                                    type_val++;
+                                    const char* type_end = strchr(type_val, '"');
+                                    if (type_end) {
+                                        size_t type_len = type_end - type_val;
+                                        if (type_len >= 16) type_len = 15;
+                                        strncpy(param->type, type_val, type_len);
+                                        param->type[type_len] = '\0';
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // Extract description
+                        const char* desc_field = strstr(prop_obj, "\"description\"");
+                        if (desc_field && desc_field < strstr(prop_obj + 1, "}")) {
+                            const char* desc_val = strchr(desc_field, ':');
+                            if (desc_val) {
+                                desc_val = strchr(desc_val, '"');
+                                if (desc_val) {
+                                    desc_val++;
+                                    const char* desc_end = desc_val;
+                                    // Find end quote, handling escaped quotes
+                                    while (*desc_end && !(*desc_end == '"' && *(desc_end - 1) != '\\')) {
+                                        desc_end++;
+                                    }
+                                    if (*desc_end == '"') {
+                                        size_t desc_len = desc_end - desc_val;
+                                        if (desc_len >= 128) desc_len = 127;
+                                        strncpy(param->default_value, desc_val, desc_len);
+                                        param->default_value[desc_len] = '\0';
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // Check if required
+                        param->required = 0;
+                        if (required_arr) {
+                            char search_pattern[36];
+                            snprintf(search_pattern, sizeof(search_pattern), "\"%s\"", param->name);
+                            if (strstr(required_arr, search_pattern)) {
+                                param->required = 1;
+                            }
+                        }
+                        
+                        info->param_count++;
+                        
+                        // Move cursor past this property
+                        cursor = strstr(prop_obj, "}");
+                        if (!cursor) break;
+                        cursor++;
+                    }
+                }
+            }
+        }
+        
+        // Calculate detail size: header + parameters
+        info->detail_size = sizeof(tool_detail_header_t) + 
+                           (info->param_count * sizeof(tool_param_t));
+    }
+    
+    // Write index entries
+    for (uint32_t i = 0; i < registry->tool_count; i++) {
+        const ethervox_tool_t* tool = &registry->tools[i];
+        const tool_export_info_t* info = &tool_infos[i];
         
         tool_index_entry_t entry = {0};
         strncpy(entry.name, tool->name, TOOL_NAME_MAX - 1);
@@ -133,38 +256,47 @@ ethervox_result_t ethervox_tool_registry_export_manifest(
         strncpy(entry.category, "general", TOOL_CATEGORY_MAX - 1);
         entry.priority = 5;
         entry.enabled = 1;
-        
-        // Calculate detail size
-        tool_detail_header_t detail_hdr = {0};
-        uint16_t detail_size = sizeof(tool_detail_header_t);
-        
         entry.detail_offset = current_detail_offset;
-        entry.detail_size = detail_size;
+        entry.detail_size = info->detail_size;
         
         if (fwrite(&entry, sizeof(tool_index_entry_t), 1, fp) != 1) {
+            free(tool_infos);
             fclose(fp);
             return ETHERVOX_ERROR_INVALID_ARGUMENT;
         }
         
-        current_detail_offset += detail_size;
+        current_detail_offset += info->detail_size;
     }
     
-    // Write detail sections
+    // Write detail sections with parameters
     for (uint32_t i = 0; i < registry->tool_count; i++) {
         const ethervox_tool_t* tool = &registry->tools[i];
+        const tool_export_info_t* info = &tool_infos[i];
         
         tool_detail_header_t detail = {0};
         strncpy(detail.name, tool->name, TOOL_NAME_MAX - 1);
-        // Note: description and example are variable-length in the actual format
-        // For now just store basic info
-        detail.param_count = 0;
+        strncpy(detail.description, tool->description, TOOL_DESC_MAX - 1);
+        strncpy(detail.category, "general", TOOL_CATEGORY_MAX - 1);
+        detail.param_count = info->param_count;
         detail.trigger_count = 0;
         
         if (fwrite(&detail, sizeof(tool_detail_header_t), 1, fp) != 1) {
+            free(tool_infos);
             fclose(fp);
             return ETHERVOX_ERROR_INVALID_ARGUMENT;
         }
+        
+        // Write parameters
+        for (uint8_t p = 0; p < info->param_count; p++) {
+            if (fwrite(&info->params[p], sizeof(tool_param_t), 1, fp) != 1) {
+                free(tool_infos);
+                fclose(fp);
+                return ETHERVOX_ERROR_INVALID_ARGUMENT;
+            }
+        }
     }
+    
+    free(tool_infos);
     
     // Write CRC32 footer
     fseek(fp, 0, SEEK_SET);

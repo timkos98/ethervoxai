@@ -125,18 +125,38 @@ static int count_words(const char* text) {
 static void extract_optimized_sentence(const char* response, char* output, size_t max_len) {
     if (!response || !output || max_len == 0) return;
     
-    // Look for "Call <tool> when..." pattern
+    // Look for "Call <tool> when..." pattern or "Use <tool> when..."
     const char* start = strstr(response, "Call ");
+    if (!start) start = strstr(response, "Use ");
     if (!start) {
         // Fallback: take first sentence
         start = response;
         while (*start && isspace(*start)) start++;
     }
     
-    // Find end of sentence
-    const char* end = strchr(start, '.');
-    if (!end) end = strchr(start, '\n');
-    if (!end) end = start + strlen(start);
+    // Find end of sentence - must be period followed by space/newline/EOF
+    // This avoids cutting off at periods inside parentheses like "(e.g., ...)"
+    const char* end = start;
+    int paren_depth = 0;
+    int quote_depth = 0;
+    
+    while (*end) {
+        if (*end == '(') paren_depth++;
+        else if (*end == ')') paren_depth--;
+        else if (*end == '"') quote_depth = !quote_depth;
+        else if (*end == '.' && paren_depth == 0 && quote_depth == 0) {
+            // Check if this is a sentence-ending period
+            if (*(end + 1) == '\0' || *(end + 1) == '\n' || isspace(*(end + 1))) {
+                end++; // Include the period
+                break;
+            }
+        } else if (*end == '\n' && paren_depth == 0 && quote_depth == 0) {
+            break;
+        }
+        end++;
+    }
+    
+    if (end == start) end = start + strlen(start);
     
     size_t len = end - start;
     if (len >= max_len) len = max_len - 1;
@@ -772,12 +792,14 @@ ethervox_result_t ethervox_optimize_tool_prompts_v2(
                 int word_count = count_words(optimized);
                 int token_estimate = (int)(word_count * 0.75);
                 
-                // Write to JSON
+                // Write to JSON (always add comma - we're in incremental mode after existing entries)
+                if (!first_entry) fprintf(fp, ",\n");
                 fprintf(fp, "    {\n");
                 fprintf(fp, "      \"name\": \"%s\",\n", tool_idx->name);
                 fprintf(fp, "      \"optimized_prompt\": \"%s\",\n", optimized);
                 fprintf(fp, "      \"token_count\": %d\n", token_estimate);
-                fprintf(fp, "    }%s\n", (i < total_tools - 1) ? "," : "");
+                fprintf(fp, "    }");
+                first_entry = false;
                 
                 printf("  " COLOR_GREEN "[OK]" COLOR_RESET " %s: %s (%d tokens)\n", 
                        tool_idx->name, optimized, token_estimate);
@@ -806,11 +828,13 @@ ethervox_result_t ethervox_optimize_tool_prompts_v2(
                 }
                        
                 // Write fallback entry using one-liner
+                if (!first_entry) fprintf(fp, ",\n");
                 fprintf(fp, "    {\n");
                 fprintf(fp, "      \"name\": \"%s\",\n", tool_idx->name);
                 fprintf(fp, "      \"optimized_prompt\": \"%s\",\n", tool_idx->one_line);
                 fprintf(fp, "      \"token_count\": %d\n", count_words(tool_idx->one_line));
-                fprintf(fp, "    }%s\n", (i < total_tools - 1) ? "," : "");
+                fprintf(fp, "    }");
+                first_entry = false;
             }
             
             free(response);

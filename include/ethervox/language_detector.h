@@ -104,6 +104,24 @@ const char* ethervox_detect_and_switch_voice(const char* text,
                                             const char* last_detected_language,
                                             void** tts_context);
 
+/**
+ * @brief Switch TTS voice to a specific language
+ * 
+ * Directly loads the TTS voice for the specified language without detection.
+ * Used when the language is already known (e.g., from explicit parameter).
+ * 
+ * @param language Target language code ("en", "de", "es", "zh")
+ * @param tts_context Pointer to TTS context pointer (will be updated if reloaded), can be NULL
+ * @return Same as input language, or "en" on error
+ * 
+ * @example
+ * ```c
+ * // Switch to German voice explicitly
+ * ethervox_switch_to_language("de", (void**)&session->tts_context);
+ * ```
+ */
+const char* ethervox_switch_to_language(const char* language, void** tts_context);
+
 #ifdef __cplusplus
 }
 #endif

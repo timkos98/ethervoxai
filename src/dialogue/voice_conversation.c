@@ -118,32 +118,38 @@ static uint64_t get_time_ms(void) {
 /**
  * @brief Callback for speak tool - handles TTS synthesis and playback
  */
-static int conversation_on_speak(const char* text, bool wait_for_response, 
-                                  bool allow_interrupt, void* user_data) {
+static int conversation_on_speak(const char* text, const char* language,
+                                  bool wait_for_response, bool allow_interrupt, 
+                                  void* user_data) {
     ethervox_conversation_session_t* session = (ethervox_conversation_session_t*)user_data;
     if (!session || !text) {
         return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
-    ETHERVOX_LOG_INFO("[Speak Tool] Synthesizing: %s (wait=%d, interrupt=%d)",
-                      text, wait_for_response, allow_interrupt);
+    ETHERVOX_LOG_INFO("[Speak Tool] Synthesizing: %s (language=%s, wait=%d, interrupt=%d)",
+                      text, language ? language : "auto", wait_for_response, allow_interrupt);
     
     pthread_mutex_lock(&session->mutex);
     session->state = ETHERVOX_CONV_STATE_SPEAKING;
     pthread_mutex_unlock(&session->mutex);
     
-    // Detect language and switch TTS voice if needed
-    // NOTE: Pass NULL for last_detected_language so we detect from the assistant's text,
-    // not reuse the user's STT language (which might be different)
-    const char* detected_language = ethervox_detect_and_switch_voice(
-        text,
-        NULL,  // Force detection from text, don't inherit user's STT language
-        (void**)&session->tts_context
-    );
+    // Use explicit language if provided, otherwise auto-detect from text
+    const char* target_language = language;
+    if (!target_language) {
+        // Auto-detect from assistant's text when language not specified
+        target_language = ethervox_detect_and_switch_voice(
+            text,
+            NULL,  // Force detection from text, don't inherit user's STT language
+            (void**)&session->tts_context
+        );
+    } else {
+        // Explicit language specified - switch voice directly
+        target_language = ethervox_switch_to_language(target_language, (void**)&session->tts_context);
+    }
     
     // Print to console
     printf("\n========================================================\n");
-    printf("🤖 Assistant [%s]: %s\n", detected_language, text);
+    printf("🤖 Assistant [%s]: %s\n", target_language, text);
     printf("========================================================\n\n");
     
     // Synthesize and play audio with Piper TTS

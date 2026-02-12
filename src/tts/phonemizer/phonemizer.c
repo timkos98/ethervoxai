@@ -99,6 +99,7 @@ phonemizer_t* phonemizer_create(const char* lang_code) {
         // Try to find cmudict relative to binary or in data directory
         const char* dict_paths[] = {
             "src/tts/phonemizer/data/cmudict-0.7b.txt",
+            "../../src/tts/phonemizer/data/cmudict-0.7b.txt",  // From build/tests/
             "data/cmudict-0.7b.txt",
             "/usr/share/ethervox/cmudict-0.7b.txt",
             NULL
@@ -121,6 +122,7 @@ phonemizer_t* phonemizer_create(const char* lang_code) {
     if (lang == PHONEMIZER_LANG_ZH_CN) {
         const char* unihan_paths[] = {
             "src/tts/phonemizer/data/Unihan_Readings.txt",
+            "../../src/tts/phonemizer/data/Unihan_Readings.txt",  // From build/tests/
             "data/Unihan_Readings.txt",
             "/usr/share/ethervox/Unihan_Readings.txt",
             NULL

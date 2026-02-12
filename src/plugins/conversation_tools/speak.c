@@ -23,6 +23,7 @@
 #define LOG_ERROR(...) ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__, __VA_ARGS__)
 #define LOG_INFO(...) ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__, __VA_ARGS__)
 #define LOG_DEBUG(...) ethervox_log(ETHERVOX_LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__, __VA_ARGS__)
+#define LOG_WARN(...) ethervox_log(ETHERVOX_LOG_LEVEL_WARN, __FILE__, __LINE__, __func__, __VA_ARGS__)
 
 // Global callbacks (set by conversation session)
 static ethervox_conversation_callbacks_t* g_callbacks = NULL;
@@ -135,6 +136,7 @@ static char* parse_json_string(const char* json, const char* key) {
  * JSON Parameters:
  * {
  *   "text": "Text to speak" (required),
+ *   "language": "en|de|es|zh" (optional, default: auto-detect from text),
  *   "wait_for_response": true|false (optional, default: false),
  *   "allow_interrupt": true|false (optional, default: true),
  *   "voice_style": "normal"|"enthusiastic"|"calm" (optional, default: "normal")
@@ -170,6 +172,29 @@ static int tool_speak_wrapper(
     bool wait_for_response = parse_json_bool(args_json, "wait_for_response", false);
     bool allow_interrupt = parse_json_bool(args_json, "allow_interrupt", true);
     
+    // Parse language parameter (optional, NULL means auto-detect)
+    char* language = parse_json_string(args_json, "language");
+    if (language && strlen(language) == 0) {
+        free(language);
+        language = NULL;  // Empty string → auto-detect
+    }
+    
+    // Validate language code if provided
+    if (language) {
+        if (strcmp(language, "en") != 0 && strcmp(language, "de") != 0 &&
+            strcmp(language, "es") != 0 && strcmp(language, "zh") != 0) {
+            // Return error so Governor can retry with valid code
+            char error_msg[256];
+            snprintf(error_msg, sizeof(error_msg),
+                    "Invalid language code '%s'. Supported languages: en (English), de (German), es (Spanish), zh (Chinese). "
+                    "Omit language parameter for auto-detection.", language);
+            free(language);
+            free(text);
+            *error = strdup(error_msg);
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
+        }
+    }
+    
     // Parse emotion parameter (maps to Piper speaker_id for emotional models)
     char* emotion = parse_json_string(args_json, "emotion");
     if (!emotion) {
@@ -197,15 +222,16 @@ static int tool_speak_wrapper(
     // Note: speaker_id mapping is currently not passed to TTS backend
     // TODO: Add speaker_id parameter to on_speak callback signature
     
-    LOG_INFO("speak tool: text='%s', emotion='%s' (speaker_id=%d), wait_for_response=%d, allow_interrupt=%d",
-             text, emotion, speaker_id, wait_for_response, allow_interrupt);
+    LOG_INFO("speak tool: text='%s', language='%s', emotion='%s' (speaker_id=%d), wait_for_response=%d, allow_interrupt=%d",
+             text, language ? language : "auto", emotion, speaker_id, wait_for_response, allow_interrupt);
     
     free(emotion);
     
     // Call the callback (typically implemented in voice_conversation.c)
-    int ret = g_callbacks->on_speak(text, wait_for_response, allow_interrupt, g_callbacks->user_data);
+    int ret = g_callbacks->on_speak(text, language, wait_for_response, allow_interrupt, g_callbacks->user_data);
     
     free(text);
+    if (language) free(language);
     
     if (ret != 0) {
         *error = strdup("TTS playback failed");
@@ -230,13 +256,18 @@ ethervox_tool_t* ethervox_tool_speak_create(void) {
     static ethervox_tool_t tool = {
         .name = "speak",
         .description = 
-            "TTS audio output with emotional control (English/Chinese/German). Use for voice responses. "
+            "TTS audio output with language and emotion control. Use for voice responses. "
+            "CRITICAL: Call this tool sentence-by-sentence. Split responses into individual sentences for natural speech flow. "
+            "Never send multiple sentences in one call - break them up for better prosody and interruption support. "
+            "ALWAYS specify language parameter (en/de/es/zh) to match the user's language - this is critical for proper voice selection. "
+            "Languages: en (English), de (German), es (Spanish), zh (Chinese). "
             "Emotions: neutral, happy, sad, calm, excited. "
             "wait_for_response=true auto-opens mic after speaking. "
             "allow_interrupt=true lets user interrupt. Degrades to text in CLI mode.",
         .parameters_json_schema =
             "{\"type\":\"object\",\"properties\":{"
             "\"text\":{\"type\":\"string\",\"description\":\"The text to speak aloud\"},"
+            "\"language\":{\"type\":\"string\",\"enum\":[\"en\",\"de\",\"es\",\"zh\"],\"description\":\"Language code for TTS voice (en=English, de=German, es=Spanish, zh=Chinese). If omitted, auto-detects from text.\"},"
             "\"emotion\":{\"type\":\"string\",\"enum\":[\"neutral\",\"happy\",\"sad\",\"calm\",\"excited\",\"professional\",\"friendly\",\"serious\",\"enthusiastic\",\"somber\",\"soothing\",\"energetic\",\"formal\",\"warm\",\"grave\"],\"description\":\"Voice emotion/style to use (default: neutral). For system prompts use: neutral, happy, sad, calm, excited.\"},"
             "\"wait_for_response\":{\"type\":\"boolean\",\"description\":\"If true, automatically open microphone after speaking to listen for user's response (turn-taking)\"},"
             "\"allow_interrupt\":{\"type\":\"boolean\",\"description\":\"If true, user can interrupt by speaking during playback (default: true)\"}"
