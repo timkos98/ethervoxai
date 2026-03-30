@@ -183,7 +183,7 @@ static int record_user_audio(const char* output_path, int duration_seconds) {
     char temp_path[512];
     snprintf(temp_path, sizeof(temp_path), "%s.tmp", output_path);
     
-    int result = ethervox_audio_record_to_file(temp_path, duration_seconds, 16000, 1);
+    ethervox_result_t result = ethervox_audio_record_to_file(temp_path, duration_seconds, 16000, 1);
     if (result != 0) {
         return result;
     }
@@ -257,7 +257,7 @@ static int train_word_pronunciation(
     config.verbose = true;  // Enable verbose to see what's failing
     
     pronunciation_training_result_t result = {0};  // Initialize to zero!
-    int ret = pronunciation_trainer_train(
+    ethervox_result_t ret = pronunciation_trainer_train(
         word,
         audio_path,
         session->phonemizer,
@@ -267,7 +267,7 @@ static int train_word_pronunciation(
         &result
     );
     
-    if (ret == 0 && result.success) {
+    if (ethervox_is_success(ret) && result.success) {
         printf("  [OK] Learned pronunciation: %s → %s (similarity: %.2f)\n",
                word, result.best_phonemes, result.similarity_score);
         

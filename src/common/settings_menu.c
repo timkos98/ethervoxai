@@ -589,9 +589,9 @@ static int action_select_tts_voice(void* data) {
                         printf("Synthesizing audio...\n");
                         
                         ethervox_tts_audio_t audio = {0};
-                        int result = ethervox_tts_synthesize_text(test_tts, test_voice->test_sentence, &audio);
+                        ethervox_result_t result = ethervox_tts_synthesize_text(test_tts, test_voice->test_sentence, &audio);
                         
-                        if (result == 0 && audio.samples && audio.sample_count > 0) {
+                        if (ethervox_is_success(result) && audio.samples && audio.sample_count > 0) {
                             printf("Playing %zu samples (%d Hz)...\n", audio.sample_count, audio.sample_rate);
                             
                             // Initialize audio runtime for playback
@@ -814,7 +814,7 @@ static int action_select_tts_voice(void* data) {
                         ethervox_tts_context_t* test_tts = ethervox_tts_create(&test_config);
                         if (test_tts) {
                             ethervox_tts_audio_t audio = {0};
-                            int result = ethervox_tts_synthesize_text(test_tts, test_voice->test_sentence, &audio);
+                            ethervox_result_t result = ethervox_tts_synthesize_text(test_tts, test_voice->test_sentence, &audio);
                             
                             if (result == 0 && audio.samples && audio.sample_count > 0) {
                                 ethervox_audio_runtime_t audio_runtime = {0};
@@ -1573,8 +1573,8 @@ ethervox_result_t ethervox_settings_menu_show(ethervox_settings_t* settings, con
                 
                 // Trigger model reload via callback
                 if (reload_callback) {
-                    int ret = reload_callback(model_path, user_data);
-                    if (ret == 0) {
+                    ethervox_result_t ret = reload_callback(model_path, user_data);
+                    if (ethervox_is_success(ret)) {
                         printf("[OK] Model reloaded successfully with new settings\n\n");
                     } else {
                         printf("[FAIL] Failed to reload model (code: %d)\n", ret);

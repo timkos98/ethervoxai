@@ -65,9 +65,9 @@ pronunciation_training_config_t pronunciation_trainer_default_config(void);
  * @param stt STT context for transcribing user audio (optional verification)
  * @param config Training configuration (NULL = defaults)
  * @param[out] result Training result with best phonemes and score
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int pronunciation_trainer_train(
+ethervox_result_t pronunciation_trainer_train(
     const char* word,
     const char* user_audio_path,
     phonemizer_context_t* phonemizer,

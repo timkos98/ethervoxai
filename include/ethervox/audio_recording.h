@@ -12,6 +12,7 @@
 #include "ethervox/audio.h"
 #include <stdint.h>
 #include <stdbool.h>
+#include "ethervox/error.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -65,9 +66,9 @@ int ethervox_audio_record_with_vad(
  * @param num_samples Number of samples
  * @param sample_rate Sample rate in Hz
  * @param channels Number of channels
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_audio_write_wav(
+ethervox_result_t ethervox_audio_write_wav(
     const char* output_path,
     const float* samples,
     int num_samples,

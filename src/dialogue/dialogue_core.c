@@ -602,11 +602,11 @@ ethervox_result_t ethervox_dialogue_init(ethervox_dialogue_engine_t* engine,
     ethervox_llm_backend_t* backend = ethervox_llm_create_llama_backend();
     if (backend) {
       // Initialize backend
-      int result = ethervox_llm_backend_init(backend, config);
-      if (result == 0) {
+      ethervox_result_t result = ethervox_llm_backend_init(backend, config);
+      if (ethervox_is_success(result)) {
         // Load model
         result = ethervox_llm_backend_load_model(backend, config->model_path);
-        if (result == 0) {
+        if (ethervox_is_success(result)) {
           engine->llm_backend = backend;
           engine->use_llm_for_unknown = true;
 #ifdef ETHERVOX_PLATFORM_ANDROID
@@ -1958,8 +1958,8 @@ ethervox_result_t ethervox_dialogue_process_llm_stream(ethervox_dialogue_engine_
   ethervox_llm_response_t response;
   memset(&response, 0, sizeof(ethervox_llm_response_t));
 
-  int result = ethervox_dialogue_process_llm(engine, intent, NULL, &response);
-  if (result == 0 && response.text) {
+  ethervox_result_t result = ethervox_dialogue_process_llm(engine, intent, NULL, &response);
+  if (ethervox_is_success(result) && response.text) {
     // Stream the complete response as one token
     if (token_callback) {
       token_callback(response.text, user_data);

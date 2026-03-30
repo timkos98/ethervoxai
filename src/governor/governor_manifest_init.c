@@ -311,9 +311,9 @@ ethervox_result_t ethervox_governor_setup_manifest(
     
     memset(manifest, 0, sizeof(tool_manifest_registry_t));
     
-    int result = ethervox_governor_init_with_manifest(governor, model_path, manifest);
+    ethervox_result_t result = ethervox_governor_init_with_manifest(governor, model_path, manifest);
     
-    if (result == 0) {
+    if (ethervox_is_success(result)) {
         *manifest_out = manifest;
         
         // Log manifest level for diagnostic purposes

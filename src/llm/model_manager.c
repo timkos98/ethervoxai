@@ -383,7 +383,7 @@ static int download_with_wininet(ethervox_model_manager_t* manager,
     HINTERNET hInternet = NULL;
     HINTERNET hUrl = NULL;
     FILE* fp = NULL;
-    int result = ETHERVOX_ERROR_FAILED;
+    ethervox_result_t result = ETHERVOX_ERROR_FAILED;
     
     // Initialize WinINet
     hInternet = InternetOpenA("EthervoxAI-ModelManager/1.0",
@@ -548,7 +548,7 @@ ethervox_result_t ethervox_model_manager_delete_model(
     }
     
     char path[1024];
-    int result = ethervox_model_manager_get_path(g_manager, model_info, path, sizeof(path));
+    ethervox_result_t result = ethervox_model_manager_get_path(g_manager, model_info, path, sizeof(path));
     if (result != ETHERVOX_SUCCESS) {
         return result;
     }

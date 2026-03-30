@@ -162,7 +162,7 @@ static void* audio_capture_thread(void* arg) {
       }
 
       // stt_ret == 0: Whisper's VAD detected a natural speech boundary and transcribed
-      if (stt_ret == 0 && result.text && strlen(result.text) > 0) {
+      if (ethervox_is_success(stt_ret) && result.text && strlen(result.text) > 0) {
         LOG_INFO("📥 Whisper VAD segment complete: %zu chars", strlen(result.text));
 
         // Track max speaker ID for later naming

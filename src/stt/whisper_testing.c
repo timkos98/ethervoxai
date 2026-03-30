@@ -229,10 +229,10 @@ ethervox_result_t ethervox_whisper_test_wav(
         
         // Process chunk
         ethervox_stt_result_t chunk_result;
-        int ret = ethervox_stt_process(runtime, &audio_buf, &chunk_result);
+        ethervox_result_t ret = ethervox_stt_process(runtime, &audio_buf, &chunk_result);
         
         printf("     Result: ret=%d", ret);
-        if (ret == 0 && chunk_result.text && strlen(chunk_result.text) > 0) {
+        if (ethervox_is_success(ret) && chunk_result.text && strlen(chunk_result.text) > 0) {
             printf(", text=\"%s\"\n", chunk_result.text);
             LOG_INFO("[%.2f-%.2f] %s", 
                     (float)offset / 16000.0f,
@@ -317,9 +317,9 @@ ethervox_result_t ethervox_whisper_test_jfk(ethervox_stt_runtime_t* runtime) {
     printf("\n");
     
     ethervox_stt_result_t result;
-    int ret = ethervox_whisper_test_wav(runtime, wav_file, &result);
+    ethervox_result_t ret = ethervox_whisper_test_wav(runtime, wav_file, &result);
     
-    if (ret == 0) {
+    if (ethervox_is_success(ret)) {
         printf("\n");
         printf("✅ Test PASSED - Whisper infrastructure working!\n");
         printf("Transcription: %s\n", result.text);

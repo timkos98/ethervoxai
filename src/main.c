@@ -192,7 +192,7 @@ static ethervox_result_t standalone_speak_callback(const char* text, const char*
     
     pthread_mutex_unlock(&g_tts_mutex);
     
-    if (result == ETHERVOX_SUCCESS && output.samples && output.sample_count > 0) {
+    if (ethervox_is_success(result) && output.samples && output.sample_count > 0) {
         printf("   [OK] Synthesized %zu samples at %d Hz\n", output.sample_count, output.sample_rate);
         
         // Save and play
@@ -200,8 +200,8 @@ static ethervox_result_t standalone_speak_callback(const char* text, const char*
         snprintf(temp_file, sizeof(temp_file), "%s/.ethervox/temp_speak.wav",
                  getenv("HOME") ? getenv("HOME") : ".");
         
-        if (ethervox_audio_write_wav(temp_file, output.samples, (int)output.sample_count,
-                                     output.sample_rate, output.channels) == ETHERVOX_SUCCESS) {
+        if (ethervox_is_success(ethervox_audio_write_wav(temp_file, output.samples, (int)output.sample_count,
+                                     output.sample_rate, output.channels))) {
             printf("   🎵 Playing audio...\n");
             
 #ifdef __APPLE__
@@ -264,15 +264,25 @@ static void* wake_word_listen_thread(void* arg) {
     }
     
     result = audio_runtime.driver.init(&audio_runtime, &audio_config);
-    if (result != 0) {
-        fprintf(stderr, "[Wake] Failed to initialize audio (code: %d)\n", result);
+    if (ethervox_is_error(result)) {
+        const ethervox_error_context_t* ctx = ethervox_error_get_context();
+        if (ctx && ctx->message) {
+            fprintf(stderr, "[Wake] Failed to initialize audio: %s\n", ctx->message);
+        } else {
+            fprintf(stderr, "[Wake] Failed to initialize audio: %s\n", ethervox_error_string(result));
+        }
         g_wake_thread_running = false;
         return NULL;
     }
     
     result = audio_runtime.driver.start_capture(&audio_runtime);
-    if (result != 0) {
-        fprintf(stderr, "[Wake] Failed to start audio capture (code: %d)\n", result);
+    if (ethervox_is_error(result)) {
+        const ethervox_error_context_t* ctx = ethervox_error_get_context();
+        if (ctx && ctx->message) {
+            fprintf(stderr, "[Wake] Failed to start audio capture: %s\n", ctx->message);
+        } else {
+            fprintf(stderr, "[Wake] Failed to start audio capture: %s\n", ethervox_error_string(result));
+        }
         audio_runtime.driver.cleanup(&audio_runtime);
         g_wake_thread_running = false;
         return NULL;
@@ -328,23 +338,29 @@ static void* wake_word_listen_thread(void* arg) {
             ethervox_wake_result_t wake_result = {0};
             
             pthread_mutex_lock(&g_wake_mutex);
-            int result = ethervox_wake_process(runtime, &buffer, &wake_result);
+            ethervox_result_t result = ethervox_wake_process(runtime, &buffer, &wake_result);
             pthread_mutex_unlock(&g_wake_mutex);
             
             // Debug: Show wake word processing results occasionally
             static int debug_counter = 0;
             if (g_debug_enabled && ++debug_counter % 50 == 0) {  // Every 5 seconds
-                printf("[Wake Debug] result=%d, detected=%d, confidence=%.3f, samples=%d\n", 
-                       result, wake_result.detected, wake_result.confidence, samples);
+                printf("[Wake Debug] result=%s, detected=%d, confidence=%.3f, samples=%d\n", 
+                       ethervox_is_success(result) ? "SUCCESS" : ethervox_error_string(result),
+                       wake_result.detected, wake_result.confidence, samples);
             }
             
-            if (result == 0 && wake_result.detected) {
+            if (ethervox_is_success(result) && wake_result.detected) {
                 // Wake word detected!
                 printf("\n🎤 Wake word detected! (confidence: %.2f)\n", wake_result.confidence);
                 
                 // Trigger conversation if available
                 if (g_conversation_session) {
-                    ethervox_conversation_trigger(g_conversation_session);
+                    ethervox_result_t trigger_result = ethervox_conversation_trigger(g_conversation_session);
+                    if (ethervox_is_error(trigger_result)) {
+                        const ethervox_error_context_t* ctx = ethervox_error_get_context();
+                        fprintf(stderr, "[Wake] Failed to trigger conversation: %s\n",
+                                ctx && ctx->message ? ctx->message : ethervox_error_string(trigger_result));
+                    }
                 } else {
                     printf("💡 Voice conversation not enabled. Use /convon first.\n");
                 }
@@ -439,11 +455,17 @@ static ethervox_result_t reload_model_callback(const char* model_path, void* use
         new_config.confidence_threshold = g_settings.governor.confidence_threshold;
         
         // Update governor's config (need to expose this via API)
-        ethervox_governor_update_config(gov, &new_config);
+        ethervox_result_t update_result = ethervox_governor_update_config(gov, &new_config);
         
         if (g_debug_enabled) {
-            printf("Applied updated settings: gpu_layers=%u, context=%u, threads=%d\n",
-                   new_config.gpu_layers, new_config.context_size, new_config.n_threads);
+            if (ethervox_is_success(update_result)) {
+                printf("Applied updated settings: gpu_layers=%u, context=%u, threads=%d\n",
+                       new_config.gpu_layers, new_config.context_size, new_config.n_threads);
+            } else {
+                const ethervox_error_context_t* ctx = ethervox_error_get_context();
+                fprintf(stderr, "Failed to update governor config: %s\n",
+                        ctx && ctx->message ? ctx->message : ethervox_error_string(update_result));
+            }
         }
     }
     
@@ -907,10 +929,17 @@ static void handle_search(ethervox_memory_store_t* memory, const char* query) {
     ethervox_memory_search_result_t* results = NULL;
     uint32_t result_count = 0;
     
-    int ret = ethervox_memory_search(memory, query, NULL, 0, 10, &results, &result_count);
+    ethervox_result_t ret = ethervox_memory_search(memory, query, NULL, 0, 10, &results, &result_count);
     
-    if (ret != 0 || result_count == 0) {
-        printf("No results found for: %s\n", query);
+    if (ethervox_is_error(ret) || result_count == 0) {
+        if (ethervox_is_error(ret)) {
+            const ethervox_error_context_t* ctx = ethervox_error_get_context();
+            if (ctx && ctx->message) {
+                printf("Search error: %s\n", ctx->message);
+            }
+        } else {
+            printf("No results found for: %s\n", query);
+        }
         return;
     }
     
@@ -940,11 +969,16 @@ static void handle_summary(ethervox_memory_store_t* memory, int window_size) {
     char** key_points = NULL;
     uint32_t kp_count = 0;
     
-    int ret = ethervox_memory_summarize(memory, window_size, NULL, 
+    ethervox_result_t ret = ethervox_memory_summarize(memory, window_size, NULL, 
                                         &summary, &key_points, &kp_count);
     
-    if (ret != 0 || !summary) {
-        printf("Failed to generate summary\n");
+    if (ethervox_is_error(ret) || !summary) {
+        const ethervox_error_context_t* ctx = ethervox_error_get_context();
+        if (ctx && ctx->message) {
+            printf("Failed to generate summary: %s\n", ctx->message);
+        } else {
+            printf("Failed to generate summary\n");
+        }
         return;
     }
     
@@ -967,10 +1001,15 @@ static void handle_summary(ethervox_memory_store_t* memory, int window_size) {
 static void handle_export(ethervox_memory_store_t* memory, const char* filepath) {
     uint64_t bytes_written = 0;
     
-    int ret = ethervox_memory_export(memory, filepath, "json", &bytes_written);
+    ethervox_result_t ret = ethervox_memory_export(memory, filepath, "json", &bytes_written);
     
-    if (ret != 0) {
-        printf("Failed to export memory to: %s\n", filepath);
+    if (ethervox_is_error(ret)) {
+        const ethervox_error_context_t* ctx = ethervox_error_get_context();
+        if (ctx && ctx->message) {
+            printf("Failed to export memory: %s\n", ctx->message);
+        } else {
+            printf("Failed to export memory to: %s\n", filepath);
+        }
         return;
     }
     
@@ -982,7 +1021,10 @@ static void store_message(ethervox_memory_store_t* memory, const char* text,
     const char* tags[] = {"conversation"};
     uint64_t memory_id;
     
-    ethervox_memory_store_add(memory, text, tags, 1, importance, is_user, &memory_id);
+    ethervox_result_t result = ethervox_memory_store_add(memory, text, tags, 1, importance, is_user, &memory_id);
+    if (ethervox_is_error(result) && g_debug_enabled) {
+        fprintf(stderr, "[Memory] Failed to store message: Error %d occurred\n", result);
+    }
 }
 
 // Convert markdown formatting to ANSI escape codes for terminal display
@@ -1619,9 +1661,9 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         }
         
         ethervox_voice_session_t* session = (ethervox_voice_session_t*)voice_session;
-        int test_result = ethervox_whisper_test_jfk(&session->stt_runtime);
+        ethervox_result_t test_result = ethervox_whisper_test_jfk(&session->stt_runtime);
         
-        if (test_result == 0) {
+        if (ethervox_is_success(test_result)) {
             printf("\n✅ Whisper test PASSED!\n");
             printf("   The STT infrastructure is working correctly.\n");
             printf("   You can now use /transcribe for live recording.\n");
@@ -1881,7 +1923,10 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         
         // Stop recording
         const char* transcript = NULL;
-        ethervox_voice_tools_stop_listen(session, &transcript);
+        ethervox_result_t stop_result = ethervox_voice_tools_stop_listen(session, &transcript);
+        if (ethervox_is_error(stop_result)) {
+            fprintf(stderr, "[WARN] Error stopping recording\n");
+        }
         
         printf("[OK] Recording stopped\n");
         printf("\n💡 Template recording feature requires direct audio access.\n");
@@ -2007,9 +2052,14 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         printf("(Vosk STT will process your speech in real-time)\n");
         printf("========================================================\n\n");
         
-        int result = ethervox_conversation_trigger(g_conversation_session);
-        if (result != 0) {
-            printf("❌ Failed to trigger conversation (error: %d)\n", result);
+        ethervox_result_t result = ethervox_conversation_trigger(g_conversation_session);
+        if (ethervox_is_error(result)) {
+            const ethervox_error_context_t* ctx = ethervox_error_get_context();
+            if (ctx && ctx->message) {
+                printf("❌ Failed to trigger conversation: %s\n", ctx->message);
+            } else {
+                printf("❌ Failed to trigger conversation: %s\n", ethervox_error_string(result));
+            }
             printf("   Make sure the conversation thread is running (/convon)\n");
         } else {
             printf("[OK] Conversation triggered successfully!\n");
@@ -2041,9 +2091,9 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         
         // Synthesize the text
         ethervox_tts_audio_t output = {0};
-        int result = ethervox_tts_synthesize_text(tts, text, &output);
+        ethervox_result_t result = ethervox_tts_synthesize_text(tts, text, &output);
         
-        if (result == 0 && output.samples && output.sample_count > 0) {
+        if (ethervox_is_success(result) && output.samples && output.sample_count > 0) {
             printf("   [OK] Synthesized %zu samples at %d Hz\n", output.sample_count, output.sample_rate);
             printf("   🎵 Playing audio...\n");
             
@@ -2052,11 +2102,8 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
             snprintf(temp_file, sizeof(temp_file), "%s/.ethervox/temp_speak.wav", 
                      getenv("HOME") ? getenv("HOME") : ".");
             
-            if (ethervox_audio_write_wav(temp_file, output.samples, (int)output.sample_count, 
-                                         output.sample_rate, output.channels) == 0) {
-                printf("   💾 Saved to: %s\n", temp_file);
-                
-                // Play using system command (macOS/Linux)
+        if (ethervox_is_success(ethervox_audio_write_wav(temp_file, output.samples, (int)output.sample_count, 
+                                         output.sample_rate, output.channels))) {
 #ifdef __APPLE__
                 char cmd[600];
                 snprintf(cmd, sizeof(cmd), "afplay %s", temp_file);
@@ -2106,9 +2153,9 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         
         // Synthesize from IPA directly (bypass phonemizer)
         ethervox_tts_audio_t output = {0};
-        int result = ethervox_tts_synthesize_ipa(tts, ipa, &output);
+        ethervox_result_t result = ethervox_tts_synthesize_ipa(tts, ipa, &output);
         
-        if (result == 0 && output.samples && output.sample_count > 0) {
+        if (ethervox_is_success(result) && output.samples && output.sample_count > 0) {
             printf("   [OK] Synthesized %zu samples at %d Hz\n", output.sample_count, output.sample_rate);
             printf("   🎵 Playing audio...\n");
             
@@ -2117,8 +2164,8 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
             snprintf(temp_file, sizeof(temp_file), "%s/.ethervox/temp_speak_direct.wav", 
                      getenv("HOME") ? getenv("HOME") : ".");
             
-            if (ethervox_audio_write_wav(temp_file, output.samples, (int)output.sample_count, 
-                                         output.sample_rate, output.channels) == 0) {
+            if (ethervox_is_success(ethervox_audio_write_wav(temp_file, output.samples, (int)output.sample_count, 
+                                         output.sample_rate, output.channels))) {
                 printf("   💾 Saved to: %s\n", temp_file);
                 
                 // Play using system command (macOS/Linux)
@@ -2232,7 +2279,12 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         printf("\n");
         
         // Run training session
-        ethervox_voice_training_run(g_governor, phonemizer, tts, stt);
+        ethervox_result_t training_result = ethervox_voice_training_run(g_governor, phonemizer, tts, stt);
+        if (ethervox_is_error(training_result)) {
+            const ethervox_error_context_t* ctx = ethervox_error_get_context();
+            fprintf(stderr, "\n❌ Voice training failed: %s\n",
+                    ctx && ctx->message ? ctx->message : ethervox_error_string(training_result));
+        }
         
         // Clean up standalone TTS if we created it
         if (created_tts && tts) {
@@ -2252,8 +2304,12 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         
         // Get disk usage
         uint64_t total_usage = 0;
-        ethervox_model_get_disk_usage(&total_usage);
-        printf("Total disk usage: %.2f MB\n\n", total_usage / 1024.0 / 1024.0);
+        ethervox_result_t disk_result = ethervox_model_get_disk_usage(&total_usage);
+        if (ethervox_is_success(disk_result)) {
+            printf("Total disk usage: %.2f MB\n\n", total_usage / 1024.0 / 1024.0);
+        } else if (g_debug_enabled) {
+            fprintf(stderr, "[WARNING] Failed to get disk usage: Error %d occurred\n", disk_result);
+        }
         
         // Check all model types
         const char* model_types[] = {
@@ -2559,9 +2615,9 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
             
             // Synthesize
             ethervox_tts_audio_t output = {0};
-            int result = ethervox_tts_synthesize_text(g_global_tts, tests[i].text, &output);
+            ethervox_result_t result = ethervox_tts_synthesize_text(g_global_tts, tests[i].text, &output);
             
-            if (result == 0 && output.samples && output.sample_count > 0) {
+            if (ethervox_is_success(result) && output.samples && output.sample_count > 0) {
                 printf("[OK] Synthesized %zu samples at %d Hz\n", 
                        output.sample_count, output.sample_rate);
                 
@@ -2571,8 +2627,8 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
                 snprintf(temp_file, sizeof(temp_file), "%s/.ethervox/temp_voice_test_%s.wav",
                          getenv("HOME") ? getenv("HOME") : ".", tests[i].lang_code);
                 
-                if (ethervox_audio_write_wav(temp_file, output.samples, (int)output.sample_count,
-                                             output.sample_rate, output.channels) == 0) {
+                if (ethervox_is_success(ethervox_audio_write_wav(temp_file, output.samples, (int)output.sample_count,
+                                             output.sample_rate, output.channels))) {
 #ifdef __APPLE__
                     char cmd[600];
                     snprintf(cmd, sizeof(cmd), "afplay %s", temp_file);
@@ -2652,8 +2708,16 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         // Only initialize if not already loaded (avoid wiping existing file pointer)
         printf("Step 1: Initializing Tool Manifest System...\n");
         if (!g_manifest_registry.manifest_file) {
-            ethervox_governor_init_with_manifest(g_governor, g_loaded_model_path, 
+            ethervox_result_t init_result = ethervox_governor_init_with_manifest(g_governor, g_loaded_model_path, 
                                                 &g_manifest_registry);
+            if (ethervox_is_error(init_result)) {
+                const ethervox_error_context_t* ctx = ethervox_error_get_context();
+                printf("[FAIL] Failed to initialize manifest system: %s\n",
+                       ctx && ctx->message ? ctx->message : ethervox_error_string(init_result));
+                printf("  Cannot run optimization without manifest\n");
+                printf("\n");
+                return;
+            }
             
             // Check if manifest was actually loaded
             if (!g_manifest_registry.manifest_file) {
@@ -2672,18 +2736,20 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         
         // Step 2: Run optimizer v2 (JSON output, batch processing)
         printf("\nStep 2: Running optimization (this may take 30-60 seconds)...\n");
-        int ret = ethervox_optimize_tool_prompts_v2(g_governor, g_loaded_model_path,
+        ethervox_result_t ret = ethervox_optimize_tool_prompts_v2(g_governor, g_loaded_model_path,
                                                      &g_manifest_registry,
                                                      true);  // optimize_new_only = true (incremental)
         
-        if (ret == 0) {
+        if (ethervox_is_success(ret)) {
             printf("\n[OK] Optimization complete!\n");
             printf("\nNext steps:\n");
             printf("1. Restart EthervoxAI to use optimized prompts\n");
             printf("2. Your system prompt will now use ~150 tokens instead of ~15K\n");
             printf("3. Tool schemas will be injected on-demand only when called\n");
         } else {
-            printf("\n[FAIL] Optimization failed (code: %d)\n", ret);
+            const ethervox_error_context_t* ctx = ethervox_error_get_context();
+            printf("\n[FAIL] Optimization failed: %s\n",
+                   ctx && ctx->message ? ctx->message : ethervox_error_string(ret));
             printf("  The assistant will still work with fallback level 1 (binary one-liners)\n");
         }
         printf("\n");
@@ -2694,8 +2760,8 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         const char* model_path = line + 6;
         printf("Loading model: %s\n", model_path);
         
-        int ret = ethervox_governor_load_model(g_governor, model_path);
-        if (ret == 0) {
+        ethervox_result_t ret = ethervox_governor_load_model(g_governor, model_path);
+        if (ethervox_is_success(ret)) {
             snprintf(g_loaded_model_path, sizeof(g_loaded_model_path), "%s", model_path);
             
             // Initialize manifest system after model load
@@ -2711,7 +2777,9 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
             
             printf("[OK] Model loaded successfully\n");
         } else {
-            printf("[FAIL] Failed to load model (code: %d)\n", ret);
+            const ethervox_error_context_t* ctx = ethervox_error_get_context();
+            printf("[FAIL] Failed to load model: %s\n",
+                   ctx && ctx->message ? ctx->message : ethervox_error_string(ret));
         }
         return;
     }
@@ -2737,8 +2805,14 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
     
     if (strcmp(line, "/clear") == 0) {
         uint32_t pruned = 0;
-        ethervox_memory_forget(memory, 0, 1.1f, &pruned); // Remove all (importance > 1.0)
-        printf("Cleared %u memories\n", pruned);
+        ethervox_result_t result = ethervox_memory_forget(memory, 0, 1.1f, &pruned); // Remove all (importance > 1.0)
+        if (ethervox_is_success(result)) {
+            printf("Cleared %u memories\n", pruned);
+        } else {
+            const ethervox_error_context_t* ctx = ethervox_error_get_context();
+            fprintf(stderr, "Failed to clear memories: %s\n",
+                    ctx && ctx->message ? ctx->message : ethervox_error_string(result));
+        }
         return;
     }
     
@@ -2756,14 +2830,16 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
         
         printf("\n📝 Generating conversation summary and clearing KV cache...\n");
         
-        int result = ethervox_governor_summarize_and_clear_cache(g_governor, true);
+        ethervox_result_t result = ethervox_governor_summarize_and_clear_cache(g_governor, true);
         
-        if (result == 0) {
+        if (ethervox_is_success(result)) {
             printf("[OK] Cache summarized and cleared successfully\n");
             printf("  Summary has been stored in memory with tags: [context_summary, manual_clear]\n");
             printf("  Use /search to find it later\n\n");
         } else {
-            printf("[FAIL] Failed to summarize cache\n\n");
+            const ethervox_error_context_t* ctx = ethervox_error_get_context();
+            printf("[FAIL] Failed to summarize cache: %s\n\n",
+                   ctx && ctx->message ? ctx->message : ethervox_error_string(result));
         }
         return;
     }
@@ -3261,15 +3337,21 @@ int main(int argc, char** argv) {
         // This handles all the complexity of finding the most recent file,
         // preserving tags, IDs, and adding the "imported" tag
         uint32_t turns_loaded = 0;
-        int load_result = ethervox_memory_load_previous_session(&memory, &turns_loaded);
+        ethervox_result_t load_result = ethervox_memory_load_previous_session(&memory, &turns_loaded);
+        
+        if (ethervox_is_error(load_result)) {
+            fprintf(stderr, "[WARNING] Memory load previous session failed: Error %d occurred\n", load_result);
+        }
         
         if (g_debug_enabled) {
             printf("Memory: Persistent storage at %s\n", memory.storage_filepath);
             printf("Memory: Current entry count before load: %u\n", memory.entry_count);
-            printf("Memory: Load result = %d, turns_loaded = %u\n", load_result, turns_loaded);
+            printf("Memory: Load result = %s, turns_loaded = %u\n", 
+                   ethervox_is_success(load_result) ? "SUCCESS" : ethervox_error_string(load_result), 
+                   turns_loaded);
             printf("Memory: Current entry count after load: %u\n", memory.entry_count);
             
-            if (load_result == 0 && turns_loaded > 0) {
+            if (ethervox_is_success(load_result) && turns_loaded > 0) {
                 printf("Memory: Successfully loaded %u previous memories from last session\n", turns_loaded);
                 
                 // Show a sample of what was loaded (first 10 entries)
@@ -3293,8 +3375,10 @@ int main(int argc, char** argv) {
                 if (memory.entry_count > 10) {
                     printf("  ... and %u more entries\n", memory.entry_count - 10);
                 }
-            } else if (load_result != 0) {
-                printf("Memory: Failed to load previous session (error %d)\n", load_result);
+            } else if (ethervox_is_error(load_result)) {
+                const ethervox_error_context_t* ctx = ethervox_error_get_context();
+                printf("Memory: Failed to load previous session: %s\n", 
+                       ctx && ctx->message ? ctx->message : ethervox_error_string(load_result));
             } else {
                 printf("Memory: No previous session to load\n");
             }
@@ -3328,12 +3412,14 @@ int main(int argc, char** argv) {
         
         // Open settings menu (pass model_path for display, but no callback since model not loaded yet)
         // Settings will be applied automatically after menu exits via g_settings reload
-        int menu_result = ethervox_settings_menu_show(&menu_settings, model_path, NULL, NULL,
+        ethervox_result_t menu_result = ethervox_settings_menu_show(&menu_settings, model_path, NULL, NULL,
                                                        tts_reload_callback, NULL);
         
         // Now ncurses has cleaned up, we can print normally
-        if (menu_result != 0 && g_debug_enabled) {
-            printf("\nSettings menu exited with code: %d\n", menu_result);
+        if (ethervox_is_error(menu_result) && g_debug_enabled) {
+            const ethervox_error_context_t* ctx = ethervox_error_get_context();
+            printf("\nSettings menu exited with error: %s\n",
+                   ctx && ctx->message ? ctx->message : ethervox_error_string(menu_result));
         }
         
         // Reload settings from disk in case they were changed
@@ -3501,13 +3587,13 @@ int main(int argc, char** argv) {
             result = ethervox_tts_synthesize_text(g_global_tts, tts_text, &output);
         }
         
-        if (result == 0 && output.samples && output.sample_count > 0) {
+        if (ethervox_is_success(result) && output.samples && output.sample_count > 0) {
             printf("   [OK] Synthesized %zu samples at %d Hz\n", output.sample_count, output.sample_rate);
             
             // Save to file only if -af was specified
             if (audio_file) {
-                if (ethervox_audio_write_wav(audio_file, output.samples, (int)output.sample_count,
-                                             output.sample_rate, output.channels) == 0) {
+                if (ethervox_is_success(ethervox_audio_write_wav(audio_file, output.samples, (int)output.sample_count,
+                                             output.sample_rate, output.channels))) {
                     printf("   💾 Saved to: %s\n", audio_file);
                 } else {
                     fprintf(stderr, "   ❌ Failed to save audio file\n");
@@ -3531,8 +3617,8 @@ int main(int argc, char** argv) {
                 snprintf(temp_file, sizeof(temp_file), "%s/.ethervox/temp_%s.wav",
                          getenv("HOME") ? getenv("HOME") : ".", mode_suffix);
                 
-                if (ethervox_audio_write_wav(temp_file, output.samples, (int)output.sample_count,
-                                             output.sample_rate, output.channels) == 0) {
+                if (ethervox_is_success(ethervox_audio_write_wav(temp_file, output.samples, (int)output.sample_count,
+                                             output.sample_rate, output.channels))) {
 #ifdef __APPLE__
                     char cmd[600];
                     snprintf(cmd, sizeof(cmd), "afplay %s", temp_file);
@@ -3548,7 +3634,9 @@ int main(int argc, char** argv) {
             
             free(output.samples);
         } else {
-            fprintf(stderr, "❌ TTS synthesis failed (error: %d)\n", result);
+            const ethervox_error_context_t* ctx = ethervox_error_get_context();
+            fprintf(stderr, "❌ TTS synthesis failed: %s\n",
+                    ctx && ctx->message ? ctx->message : ethervox_error_string(result));
         }
         
         // Cleanup and exit
@@ -3561,7 +3649,7 @@ int main(int argc, char** argv) {
             g_global_tts = NULL;
         }
         ethervox_memory_cleanup(&memory);
-        return result == 0 ? 0 : 1;
+        return ethervox_is_success(result) ? 0 : 1;
     }
     
     // Test voices mode: demonstrate all configured voices
@@ -3642,9 +3730,9 @@ int main(int argc, char** argv) {
             
             // Synthesize
             ethervox_tts_audio_t output = {0};
-            int result = ethervox_tts_synthesize_text(g_global_tts, tests[i].text, &output);
+            ethervox_result_t result = ethervox_tts_synthesize_text(g_global_tts, tests[i].text, &output);
             
-            if (result == 0 && output.samples && output.sample_count > 0) {
+            if (ethervox_is_success(result) && output.samples && output.sample_count > 0) {
                 printf("[OK] Synthesized %zu samples at %d Hz\n", 
                        output.sample_count, output.sample_rate);
                 
@@ -3665,8 +3753,8 @@ int main(int argc, char** argv) {
                     snprintf(temp_file, sizeof(temp_file), "%s/.ethervox/temp_voice_test_%s.wav",
                              getenv("HOME") ? getenv("HOME") : ".", tests[i].lang_code);
                     
-                    if (ethervox_audio_write_wav(temp_file, output.samples, (int)output.sample_count,
-                                                 output.sample_rate, output.channels) == 0) {
+                    if (ethervox_is_success(ethervox_audio_write_wav(temp_file, output.samples, (int)output.sample_count,
+                                                 output.sample_rate, output.channels))) {
 #ifdef __APPLE__
                         char cmd[600];
                         snprintf(cmd, sizeof(cmd), "afplay %s", temp_file);
@@ -3783,6 +3871,7 @@ int main(int argc, char** argv) {
     }
     
     // Register compute tools with Governor
+    // NOTE: Returns int (count of tools), not ethervox_result_t - intentional
     int compute_count = ethervox_compute_tools_register_all(&registry);
     if (g_debug_enabled && compute_count > 0) {
         printf("Compute Tools: Registered %d tools with Governor\n", compute_count);
@@ -3793,9 +3882,8 @@ int main(int argc, char** argv) {
     if (ethervox_is_success(result) && g_debug_enabled) {
         printf("Memory Tools: Registered with Governor\n");
     } else if (ethervox_is_error(result)) {
-        const ethervox_error_context_t* ctx = ethervox_error_get_context();
-        fprintf(stderr, "[WARNING] Failed to register memory tools: %s\n",
-                ctx && ctx->message ? ctx->message : ethervox_error_string(result));
+        // NOTE: Can be simplified to simple error code if preferred (non-critical tool)
+        fprintf(stderr, "[WARNING] Memory tools registration failed: Error %d occurred\n", result);
     }
     
     // Initialize and register file tools (read-only by default)
@@ -3813,26 +3901,41 @@ int main(int argc, char** argv) {
         // Allow common document paths
         char docs_path[512];
         snprintf(docs_path, sizeof(docs_path), "%s/Documents", home_dir);
-        base_paths[path_count++] = strdup(docs_path);  // Needs to persist
+        char* docs_copy = strdup(docs_path);
+        if (!docs_copy) {
+            fprintf(stderr, "[ERROR] Failed to allocate memory for docs path\n");
+            goto file_tools_cleanup;
+        }
+        base_paths[path_count++] = docs_copy;
     }
     
     // Allow current directory
     char cwd[512];
     if (getcwd(cwd, sizeof(cwd))) {
-        base_paths[path_count++] = strdup(cwd);  // Needs to persist
+        char* cwd_copy = strdup(cwd);
+        if (!cwd_copy) {
+            fprintf(stderr, "[ERROR] Failed to allocate memory for cwd path\n");
+            goto file_tools_cleanup;
+        }
+        base_paths[path_count++] = cwd_copy;
     }
     
     // Re-use result variable for file tools init
     result = ethervox_file_tools_init(&file_config, base_paths, ETHERVOX_FILE_ACCESS_READ_WRITE);
     if (ethervox_is_success(result)) {
-        // Add allowed file extensions
-        ethervox_file_tools_add_filter(&file_config, ".txt");
-        ethervox_file_tools_add_filter(&file_config, ".md");
-        ethervox_file_tools_add_filter(&file_config, ".org");
-        ethervox_file_tools_add_filter(&file_config, ".c");
-        ethervox_file_tools_add_filter(&file_config, ".cpp");
-        ethervox_file_tools_add_filter(&file_config, ".h");
-        ethervox_file_tools_add_filter(&file_config, ".sh");
+        // Add allowed file extensions (batch check)
+        const char* filters[] = {".txt", ".md", ".org", ".c", ".cpp", ".h", ".sh", NULL};
+        int filters_added = 0;
+        for (int i = 0; filters[i] != NULL; i++) {
+            if (ethervox_is_success(ethervox_file_tools_add_filter(&file_config, filters[i]))) {
+                filters_added++;
+            } else if (g_debug_enabled) {
+                fprintf(stderr, "[WARNING] Failed to add file filter %s\n", filters[i]);
+            }
+        }
+        if (g_debug_enabled) {
+            printf("File Tools: Added %d/%d file filters\n", filters_added, (int)(sizeof(filters)/sizeof(filters[0])-1));
+        }
         
         // Register with Governor
         result = ethervox_file_tools_register(&registry, &file_config);
@@ -3843,25 +3946,50 @@ int main(int argc, char** argv) {
             if (file_config.access_mode == ETHERVOX_FILE_ACCESS_READ_ONLY) {
                 printf("            LLM can use file_set_safe_mode tool to enable writes when needed\n");
             }
+        } else if (ethervox_is_error(result)) {
+            fprintf(stderr, "[WARNING] File tools registration failed: Error %d occurred\n", result);
+        }
+    } else {
+        fprintf(stderr, "[WARNING] File tools initialization failed: Error %d occurred\n", result);
+    }
+    
+file_tools_cleanup:
+    // Free allocated path strings
+    for (int i = 1; i < path_count; i++) {  // Skip index 0 (home_dir is not allocated)
+        if (base_paths[i] && base_paths[i] != home_dir) {
+            free((void*)base_paths[i]);
         }
     }
     
-    // Register path configuration tools
-    result = ethervox_path_config_register(&registry, &path_config);
-    if (ethervox_is_success(result) && g_debug_enabled) {
-        printf("Path Config Tools: Registered with Governor\n");
+    // Batch register optional tools
+    typedef struct {
+        const char* name;
+        ethervox_result_t result;
+    } tool_reg_result_t;
+    
+    tool_reg_result_t tool_registrations[] = {
+        {"Path Config", ethervox_path_config_register(&registry, &path_config)},
+        {"Unit Conversion", ethervox_unit_conversion_register(&registry)},
+        {"Conversation", ethervox_conversation_tools_register(&registry)},
+        {"Get Tool Info", ethervox_get_tool_info_register(&registry)},
+        {"Startup Prompt", ethervox_startup_prompt_tools_register(&registry)},
+        {"System Info", ethervox_system_info_tools_register(&registry)},
+        {NULL, ETHERVOX_SUCCESS}
+    };
+    
+    int tools_succeeded = 0, tools_failed = 0;
+    for (int i = 0; tool_registrations[i].name != NULL; i++) {
+        if (ethervox_is_success(tool_registrations[i].result)) {
+            tools_succeeded++;
+        } else {
+            tools_failed++;
+            fprintf(stderr, "[WARNING] Tool %s registration failed: Error %d occurred\n", 
+                   tool_registrations[i].name, tool_registrations[i].result);
+        }
     }
     
-    // Register unit conversion tool
-    result = ethervox_unit_conversion_register(&registry);
-    if (ethervox_is_success(result) && g_debug_enabled) {
-        printf("Unit Conversion Tool: Registered with Governor\n");
-    }
-    
-    // Register conversation tools (speak, listen for LLM-controlled voice interaction)
-    result = ethervox_conversation_tools_register(&registry);
-    if (ethervox_is_success(result) && g_debug_enabled) {
-        printf("Conversation Tools: Registered speak and listen with Governor\n");
+    if (g_debug_enabled) {
+        printf("Tools: %d registered successfully, %d failed\n", tools_succeeded, tools_failed);
     }
     
     // Set up standalone callbacks for conversation tools
@@ -3879,24 +4007,6 @@ int main(int argc, char** argv) {
         printf("Conversation Tools: Standalone callbacks registered (speak tool ready)\n");
     }
     
-    // Register get_tool_info meta-tool (for dynamic schema loading)
-    result = ethervox_get_tool_info_register(&registry);
-    if (ethervox_is_success(result) && g_debug_enabled) {
-        printf("Get Tool Info: Registered with Governor\n");
-    }
-    
-    // Register startup prompt tools
-    result = ethervox_startup_prompt_tools_register(&registry);
-    if (ethervox_is_success(result) && g_debug_enabled) {
-        printf("Startup Prompt Tools: Registered with Governor\n");
-    }
-    
-    // Register system info tools
-    result = ethervox_system_info_tools_register(&registry);
-    if (ethervox_is_success(result) && g_debug_enabled) {
-        printf("System Info Tools: Registered with Governor\n");
-    }
-    
     // Initialize and register voice tools
     result = ethervox_voice_tools_init(&voice_state, &memory);
     if (ethervox_is_success(result)) {
@@ -3908,11 +4018,11 @@ int main(int argc, char** argv) {
                 printf("Voice Tools: Registered with Governor (Whisper STT with speaker detection)\n");
                 printf("             Use /transcribe and /stoptranscribe commands\n");
             }
-        } else if (g_debug_enabled) {
-            printf("⚠️  Voice Tools: Failed to register with Governor\n");
+        } else {
+            fprintf(stderr, "[WARNING] Voice tools registration failed: Error %d occurred\n", result);
         }
-    } else if (g_debug_enabled) {
-        printf("⚠️  Voice Tools: Failed to initialize (check whisper model at ~/.ethervox/models/whisper/base.bin or base.en.bin)\n");
+    } else {
+        fprintf(stderr, "[WARNING] Voice tools initialization failed: Error %d occurred\n", result);
     }
     
     // Auto-load model if requested
@@ -3945,7 +4055,7 @@ int main(int argc, char** argv) {
             
             // Try 1: ~/.ethervox/models/
             char ethervox_model_path[512];
-            if (ethervox_get_runtime_path(ETHERVOX_MODELS_SUBDIR, ethervox_model_path, sizeof(ethervox_model_path)) == 0) {
+            if (ethervox_is_success(ethervox_get_runtime_path(ETHERVOX_MODELS_SUBDIR, ethervox_model_path, sizeof(ethervox_model_path)))) {
                 snprintf(resolved_path, sizeof(resolved_path), "%s/%s", ethervox_model_path, model_path);
                 if (access(resolved_path, R_OK) == 0) {
                     path_found = true;
@@ -4036,8 +4146,8 @@ int main(int argc, char** argv) {
             fprintf(stderr, "[ERROR] Model file not found or not readable: %s\n", resolved_path);
             fprintf(stderr, "[INFO] Run './scripts/download-governor-model.sh' to download it\n");
         } else {
-            int ret = ethervox_governor_load_model(g_governor, resolved_path);
-            if (ret == 0) {
+            ethervox_result_t ret = ethervox_governor_load_model(g_governor, resolved_path);
+            if (ethervox_is_success(ret)) {
                 snprintf(g_loaded_model_path, sizeof(g_loaded_model_path), "%s", resolved_path);
                 
                 // Initialize manifest system after model load
@@ -4057,7 +4167,9 @@ int main(int argc, char** argv) {
                     printf("[INFO] [OK] Model loaded successfully\n");
                 }
             } else {
-                fprintf(stderr, "[ERROR] [FAIL] Failed to load model (code: %d)\n", ret);
+                const ethervox_error_context_t* ctx = ethervox_error_get_context();
+                fprintf(stderr, "[ERROR] [FAIL] Failed to load model: %s\n",
+                        ctx && ctx->message ? ctx->message : ethervox_error_string(ret));
             }
         }
         
@@ -4139,7 +4251,7 @@ int main(int argc, char** argv) {
         char* response = NULL;
         char* error = NULL;
         
-        int status = ethervox_governor_execute(
+        ethervox_governor_status_t status = ethervox_governor_execute(
             g_governor,
             startup_prompt,
             &response,
@@ -4159,15 +4271,19 @@ int main(int argc, char** argv) {
             close(stderr_backup);
         }
         
-        if (status == 0 && response) {
+        if (status == ETHERVOX_GOVERNOR_SUCCESS && response) {
             // Display the startup response
             printf("\n\033[36m%s\033[0m\n\n", response);
             
             // Store the startup exchange in memory
             const char* tags[] = {"startup", "auto_generated"};
             uint64_t user_id, assistant_id;
-            ethervox_memory_store_add(&memory, startup_prompt, tags, 2, 0.7f, true, &user_id);
-            ethervox_memory_store_add(&memory, response, tags, 2, 0.7f, false, &assistant_id);
+            if (ethervox_is_success(ethervox_memory_store_add(&memory, startup_prompt, tags, 2, 0.7f, true, &user_id))) {
+                ethervox_result_t store_result = ethervox_memory_store_add(&memory, response, tags, 2, 0.7f, false, &assistant_id);
+                if (ethervox_is_error(store_result)) {
+                    ETHERVOX_LOG_DEBUG("Failed to store assistant response in memory: %s", ethervox_error_string(store_result));
+                }
+            }
             
             free(response);
         } else if (error) {
@@ -4233,9 +4349,12 @@ int main(int argc, char** argv) {
         
         // Step 1: Initialize manifest system
         printf("Step 1: Initializing Tool Manifest System...\n");
-        if (ethervox_governor_init_with_manifest(g_governor, g_loaded_model_path, 
-                                                 &g_manifest_registry) != 0) {
-            printf("[FAIL] Failed to initialize manifest system\n");
+        ethervox_result_t init_result = ethervox_governor_init_with_manifest(g_governor, g_loaded_model_path, 
+                                                 &g_manifest_registry);
+        if (ethervox_is_error(init_result)) {
+            const ethervox_error_context_t* ctx = ethervox_error_get_context();
+            printf("[FAIL] Failed to initialize manifest system: %s\n",
+                   ctx && ctx->message ? ctx->message : ethervox_error_string(init_result));
             printf("  (Continuing anyway - will use runtime registry)\n");
         } else {
             printf("[OK] Manifest exported and loaded: %u tools\n", 
@@ -4244,20 +4363,22 @@ int main(int argc, char** argv) {
         
         // Step 2: Run optimizer
         printf("\nStep 2: Running optimization (this may take 30-60 seconds)...\n");
-        int ret = ethervox_optimize_tool_prompts_v2(g_governor, g_loaded_model_path,
+        ethervox_result_t ret = ethervox_optimize_tool_prompts_v2(g_governor, g_loaded_model_path,
                                                      &g_manifest_registry,
                                                      true);  // optimize_new_only = true (incremental)
         
-        if (ret == 0) {
+        if (ethervox_is_success(ret)) {
             printf("\n[OK] Optimization complete!\n");
             printf("\nNext steps:\n");
             printf("1. Restart EthervoxAI to use optimized prompts\n");
             printf("2. Your system prompt will now use ~150 tokens instead of ~15K\n");
             printf("3. Tool schemas will be injected on-demand only when called\n");
-        } else if (ret == -2) {
+        } else if (ret == ETHERVOX_ERROR_INTERRUPTED) {
             printf("\n⚠️  Optimization cancelled by user\n");
         } else {
-            printf("\n[FAIL] Optimization failed (code: %d)\n", ret);
+            const ethervox_error_context_t* ctx = ethervox_error_get_context();
+            printf("\n[FAIL] Optimization failed: %s\n",
+                   ctx && ctx->message ? ctx->message : ethervox_error_string(ret));
             printf("  The assistant will still work with fallback level 1 (binary one-liners)\n");
         }
         
@@ -4389,7 +4510,7 @@ int main(int argc, char** argv) {
                 char* response = NULL;
                 char* error = NULL;
                 
-                int status = ethervox_governor_execute(
+                ethervox_governor_status_t status = ethervox_governor_execute(
                     g_governor,
                     summary_query,
                     &response,
@@ -4414,7 +4535,7 @@ int main(int argc, char** argv) {
                     }
                 }
                 
-                if (status == 0 && response) {
+                if (status == ETHERVOX_GOVERNOR_SUCCESS && response) {
                     printf("\n\u2713 Summary completed\n\n");
                     if (g_debug_enabled) {
                         fprintf(stderr, "[DEBUG] Summary response: %s\n", response);
@@ -4495,7 +4616,7 @@ int main(int argc, char** argv) {
                 char* response = NULL;
                 char* error = NULL;
                 
-                int status = ethervox_governor_execute(
+                ethervox_governor_status_t status = ethervox_governor_execute(
                     g_governor,
                     summary_query,
                     &response,
@@ -4520,7 +4641,7 @@ int main(int argc, char** argv) {
                     }
                 }
                 
-                if (status == 0 && response) {
+                if (status == ETHERVOX_GOVERNOR_SUCCESS && response) {
                     printf("\\n\u2713 Summary completed\\n\\n");
                     if (g_debug_enabled) {
                         fprintf(stderr, "[DEBUG] Summary response: %s\n", response);
@@ -4553,15 +4674,19 @@ int main(int argc, char** argv) {
         uint32_t kp_count = 0;
         
         // Summarize the entire session
-        int ret = ethervox_memory_summarize(&memory, memory.entry_count, NULL,
+        ethervox_result_t ret = ethervox_memory_summarize(&memory, memory.entry_count, NULL,
                                            &summary, &key_points, &kp_count);
         
-        if (ret == 0 && summary) {
+        if (ethervox_is_success(ret) && summary) {
             // Store summary as a special memory entry for the next session
             const char* tags[] = {"session_summary", "auto_generated"};
             uint64_t summary_id;
             
-            ethervox_memory_store_add(&memory, summary, tags, 2, 0.95f, false, &summary_id);
+            if (ethervox_is_error(ethervox_memory_store_add(&memory, summary, tags, 2, 0.95f, false, &summary_id))) {
+                if (g_debug_enabled) {
+                    fprintf(stderr, "[WARN] Failed to store summary in memory\n");
+                }
+            }
             
             if (!quiet_mode) {
                 printf("Session summary saved to memory.\n");

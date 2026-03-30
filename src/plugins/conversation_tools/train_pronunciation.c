@@ -140,7 +140,7 @@ static int tool_train_pronunciation_wrapper(
     
     // Run training
     pronunciation_training_result_t training_result;
-    int ret = pronunciation_trainer_train(
+    ethervox_result_t ret = pronunciation_trainer_train(
         word, 
         audio_path, 
         g_phonemizer, 
@@ -150,7 +150,7 @@ static int tool_train_pronunciation_wrapper(
         &training_result
     );
     
-    if (ret == 0 && training_result.success) {
+    if (ethervox_is_success(ret) && training_result.success) {
         LOG_INFO("Training successful: %s → %s (similarity: %.3f)",
                  word, training_result.best_phonemes, training_result.similarity_score);
         

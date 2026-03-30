@@ -165,7 +165,7 @@ ethervox_result_t ethervox_system_info_tools_register(ethervox_tool_registry_t* 
     
     ret |= ethervox_tool_registry_add(registry, &capabilities_tool);
     
-    if (ret == 0) {
+    if (ethervox_is_success(ret)) {
         SYSINFO_LOG("System info tools registered successfully");
     } else {
         ETHERVOX_LOG_ERROR("Failed to register system info tools");

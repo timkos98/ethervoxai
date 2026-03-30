@@ -20,6 +20,7 @@
 #include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include "ethervox/error.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -457,23 +458,23 @@ void ethervox_log_with_callback(int level, const char* tag, const char* fmt, ...
  * @param subdir Subdirectory constant (e.g., ETHERVOX_MODELS_SUBDIR) or NULL for base
  * @param out Output buffer
  * @param out_size Size of output buffer
- * @return 0 on success, -1 on failure
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  * 
  * Example:
  *   char path[512];
  *   ethervox_get_runtime_path(ETHERVOX_MODELS_SUBDIR, path, sizeof(path));
  *   // Result: "~/.ethervox/models" or "$HOME/.ethervox/models" (expanded)
  */
-static inline int ethervox_get_runtime_path(const char* subdir, char* out, size_t out_size);
+static inline ethervox_result_t ethervox_get_runtime_path(const char* subdir, char* out, size_t out_size);
 
-static inline int ethervox_get_runtime_path(const char* subdir, char* out, size_t out_size) {
-    if (!out || out_size == 0) { return -1; }
+static inline ethervox_result_t ethervox_get_runtime_path(const char* subdir, char* out, size_t out_size) {
+    if (!out || out_size == 0) { return ETHERVOX_ERROR_INVALID_ARGUMENT; }
     
     const char* base = ETHERVOX_RUNTIME_DIR_BASE;
     
 #if defined(ETHERVOX_PLATFORM_ANDROID)
     // Android: should be set at runtime, not compile time
-    return -1;  // Caller must handle Android paths via JNI
+    return ETHERVOX_ERROR_NOT_SUPPORTED;  // Caller must handle Android paths via JNI
 #else
     // Expand ~ or %USERPROFILE% if needed
     if (base && base[0] == '~') {
@@ -485,7 +486,7 @@ static inline int ethervox_get_runtime_path(const char* subdir, char* out, size_
                 snprintf(out, out_size, "%s%s", home, base + 1);
             }
         } else {
-            return -1;
+            return ETHERVOX_ERROR_PLATFORM_INIT;
         }
     } else if (base) {
         if (subdir) {
@@ -494,9 +495,9 @@ static inline int ethervox_get_runtime_path(const char* subdir, char* out, size_
             snprintf(out, out_size, "%s", base);
         }
     } else {
-        return -1;
+        return ETHERVOX_ERROR_CONFIG_LOAD_FAILED;
     }
-    return 0;
+    return ETHERVOX_SUCCESS;
 #endif
 }
 

@@ -382,7 +382,7 @@ ethervox_result_t ethervox_optimize_tool_prompts_v2(
     
     // Create test report file
     char ethervox_dir[512];
-    if (ethervox_get_runtime_path("reports", ethervox_dir, sizeof(ethervox_dir)) == 0) {
+    if (ethervox_is_success(ethervox_get_runtime_path("reports", ethervox_dir, sizeof(ethervox_dir)))) {
         // Ensure reports directory exists
 #ifdef _WIN32
         _mkdir(ethervox_dir);
@@ -575,7 +575,7 @@ ethervox_result_t ethervox_optimize_tool_prompts_v2(
                 printf("📄 Partial report saved: %s\n", g_report_path);
             }
             fclose(fp);
-            return -2;  // Special code for user cancellation
+            return ETHERVOX_ERROR_INTERRUPTED;
         }
         
         uint32_t batch_end = batch_start + BATCH_SIZE;
@@ -607,7 +607,7 @@ ethervox_result_t ethervox_optimize_tool_prompts_v2(
                     fclose(g_report_file);
                 }
                 fclose(fp);
-                return -2;
+                return ETHERVOX_ERROR_INTERRUPTED;
             }
             const tool_index_entry_t* tool_idx = &manifest_registry->index[i];
             

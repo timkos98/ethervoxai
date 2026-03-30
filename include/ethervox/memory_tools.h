@@ -17,6 +17,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <time.h>
+#include "ethervox/error.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -117,9 +118,9 @@ typedef struct {
  *                    - Desktop: "/tmp" or "~/.ethervoxai/memory"
  *                    - Android: Use app's internal storage (context.getFilesDir())
  *                    - ESP32: "/spiffs/memory" or NULL to disable persistence
- * @return 0 on success, -1 on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_memory_init(
+ethervox_result_t ethervox_memory_init(
     ethervox_memory_store_t* store,
     const char* session_id,
     const char* storage_dir
@@ -142,9 +143,9 @@ void ethervox_memory_cleanup(ethervox_memory_store_t* store);
  * @param importance Relevance score 0.0-1.0
  * @param is_user_message True if from user, false if from assistant
  * @param memory_id_out Output: assigned memory ID
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_memory_store_add(
+ethervox_result_t ethervox_memory_store_add(
     ethervox_memory_store_t* store,
     const char* text,
     const char* tags[],
@@ -164,9 +165,9 @@ int ethervox_memory_store_add(
  * @param limit Maximum results to return
  * @param results Output: array of search results (caller must free)
  * @param result_count Output: number of results
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_memory_search(
+ethervox_result_t ethervox_memory_search(
     ethervox_memory_store_t* store,
     const char* query,
     const char* tag_filter[],
@@ -183,9 +184,9 @@ int ethervox_memory_search(
  * @param memory_id ID of memory to update
  * @param tags Array of new tags (replaces all existing tags)
  * @param tag_count Number of tags
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_memory_update_tags(
+ethervox_result_t ethervox_memory_update_tags(
     ethervox_memory_store_t* store,
     uint64_t memory_id,
     const char* tags[],
@@ -198,9 +199,9 @@ int ethervox_memory_update_tags(
  * @param store Memory store
  * @param memory_id ID of memory to update
  * @param new_text New text content
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_memory_update_text(
+ethervox_result_t ethervox_memory_update_text(
     ethervox_memory_store_t* store,
     uint64_t memory_id,
     const char* new_text
@@ -215,9 +216,9 @@ int ethervox_memory_update_text(
  * @param summary_out Output: summary text (caller must free)
  * @param key_points_out Output: array of key points (caller must free)
  * @param key_points_count Output: number of key points
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_memory_summarize(
+ethervox_result_t ethervox_memory_summarize(
     ethervox_memory_store_t* store,
     uint32_t window_size,
     const char* focus_topic,
@@ -233,9 +234,9 @@ int ethervox_memory_summarize(
  * @param filepath Output file path
  * @param format "json" or "markdown"
  * @param bytes_written Output: number of bytes written
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_memory_export(
+ethervox_result_t ethervox_memory_export(
     ethervox_memory_store_t* store,
     const char* filepath,
     const char* format,
@@ -251,9 +252,9 @@ int ethervox_memory_export(
  * @param store Memory store
  * @param filepath Input file path
  * @param turns_loaded Output: number of turns loaded
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_memory_import(
+ethervox_result_t ethervox_memory_import(
     ethervox_memory_store_t* store,
     const char* filepath,
     uint32_t* turns_loaded
@@ -269,9 +270,9 @@ int ethervox_memory_import(
  * 
  * @param store Memory store (must be initialized with storage directory)
  * @param turns_loaded Output: number of turns loaded (can be NULL)
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_memory_load_previous_session(
+ethervox_result_t ethervox_memory_load_previous_session(
     ethervox_memory_store_t* store,
     uint32_t* turns_loaded
 );
@@ -290,9 +291,9 @@ int ethervox_memory_load_previous_session(
  * 
  * @param store Memory store (must be initialized with storage directory)
  * @param files_archived Output: number of files archived (can be NULL)
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_memory_archive_sessions(
+ethervox_result_t ethervox_memory_archive_sessions(
     ethervox_memory_store_t* store,
     uint32_t* files_archived
 );
@@ -304,9 +305,9 @@ int ethervox_memory_archive_sessions(
  * @param older_than_seconds Remove entries older than this (0 = ignore)
  * @param importance_threshold Remove entries below this importance (0.0 = ignore)
  * @param items_pruned Output: number of items removed
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_memory_forget(
+ethervox_result_t ethervox_memory_forget(
     ethervox_memory_store_t* store,
     uint64_t older_than_seconds,
     float importance_threshold,
@@ -320,9 +321,9 @@ int ethervox_memory_forget(
  * @param memory_ids Array of memory IDs to delete
  * @param id_count Number of IDs in the array
  * @param items_deleted Output: number of items deleted
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_memory_delete_by_ids(
+ethervox_result_t ethervox_memory_delete_by_ids(
     ethervox_memory_store_t* store,
     const uint64_t* memory_ids,
     uint32_t id_count,
@@ -335,9 +336,9 @@ int ethervox_memory_delete_by_ids(
  * @param store Memory store
  * @param memory_id Memory ID to retrieve
  * @param entry_out Output: memory entry (not owned by caller)
- * @return 0 on success, negative if not found
+ * @return ETHERVOX_SUCCESS on success, error code if not found
  */
-int ethervox_memory_get_by_id(
+ethervox_result_t ethervox_memory_get_by_id(
     ethervox_memory_store_t* store,
     uint64_t memory_id,
     const ethervox_memory_entry_t** entry_out
@@ -353,9 +354,9 @@ int ethervox_memory_get_by_id(
  * @param correction_text What the user corrected
  * @param context Optional context about what was wrong (can be NULL)
  * @param memory_id_out Output: assigned memory ID
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_memory_store_correction(
+ethervox_result_t ethervox_memory_store_correction(
     ethervox_memory_store_t* store,
     const char* correction_text,
     const char* context,
@@ -371,9 +372,9 @@ int ethervox_memory_store_correction(
  * @param store Memory store
  * @param pattern_description What worked well
  * @param memory_id_out Output: assigned memory ID
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_memory_store_pattern(
+ethervox_result_t ethervox_memory_store_pattern(
     ethervox_memory_store_t* store,
     const char* pattern_description,
     uint64_t* memory_id_out
@@ -386,9 +387,9 @@ int ethervox_memory_store_pattern(
  * @param results Output: array of correction results (caller must free)
  * @param result_count Output: number of results
  * @param limit Maximum results to return
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_memory_get_corrections(
+ethervox_result_t ethervox_memory_get_corrections(
     ethervox_memory_store_t* store,
     ethervox_memory_search_result_t** results,
     uint32_t* result_count,
@@ -402,9 +403,9 @@ int ethervox_memory_get_corrections(
  * @param results Output: array of pattern results (caller must free)
  * @param result_count Output: number of results
  * @param limit Maximum results to return
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_memory_get_patterns(
+ethervox_result_t ethervox_memory_get_patterns(
     ethervox_memory_store_t* store,
     ethervox_memory_search_result_t** results,
     uint32_t* result_count,
@@ -416,9 +417,9 @@ int ethervox_memory_get_patterns(
  * 
  * @param registry Governor tool registry
  * @param store Memory store instance to use
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_memory_tools_register(
+ethervox_result_t ethervox_memory_tools_register(
     void* registry,
     ethervox_memory_store_t* store
 );

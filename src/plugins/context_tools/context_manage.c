@@ -149,7 +149,7 @@ static int context_manage_execute(
     if (detail) free(detail);
     
     // Build result JSON
-    if (ret == 0 && ctx_result.success) {
+    if (ethervox_is_success(ret) && ctx_result.success) {
         char result_json[512];
         snprintf(result_json, sizeof(result_json),
                  "{\"success\": true, \"tokens_freed\": %d, "

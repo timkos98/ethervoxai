@@ -179,7 +179,7 @@ ethervox_result_t ethervox_unit_conversion_register(void* registry_ptr) {
     
     int ret = ethervox_tool_registry_add(registry, &tool);
     
-    if (ret == 0) {
+    if (ethervox_is_success(ret)) {
         ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
                     "Registered unit_convert tool");
     } else {

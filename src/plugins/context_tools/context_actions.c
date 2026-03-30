@@ -438,7 +438,7 @@ ethervox_result_t context_action_summarize_old(
             &summary_id
         );
         
-        if (store_ret == 0) {
+        if (ethervox_is_success(store_ret)) {
             CTX_LOG("[Context] Stored summary in memory with ID %llu", 
                     (unsigned long long)summary_id);
         } else {

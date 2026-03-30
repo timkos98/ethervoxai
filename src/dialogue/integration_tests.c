@@ -802,7 +802,7 @@ static void test_unit_conversion_tool(void) {
     
     // Error handling: incompatible units
     ret = ethervox_unit_convert(10.0, "meter", "kilogram", &result, &error);
-    if (ret == 0) {
+    if (ethervox_is_success(ret)) {
         TEST_FAIL("Should reject incompatible units");
         g_tests_failed++;
         return;
@@ -813,7 +813,7 @@ static void test_unit_conversion_tool(void) {
     
     // Error handling: unknown unit
     ret = ethervox_unit_convert(10.0, "foobar", "meter", &result, &error);
-    if (ret == 0) {
+    if (ethervox_is_success(ret)) {
         TEST_FAIL("Should reject unknown units");
         g_tests_failed++;
         return;
@@ -912,7 +912,7 @@ static void test_cache_summarization_live(ethervox_governor_t* governor) {
     TEST_INFO("KV cache position before: %d tokens", pos_before);
     
     // Force summarization even if cache isn't full
-    int ret = ethervox_governor_summarize_and_clear_cache(governor, true);
+    ethervox_result_t ret = ethervox_governor_summarize_and_clear_cache(governor, true);
     
     if (ret != 0) {
         TEST_FAIL("Summarization failed with error code %d", ret);

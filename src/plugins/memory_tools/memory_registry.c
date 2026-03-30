@@ -901,7 +901,7 @@ ethervox_result_t ethervox_memory_tools_register(
     
     ret |= ethervox_tool_registry_add(registry, &tool_pattern);
     
-    if (ret == 0) {
+    if (ethervox_is_success(ret)) {
         ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
                     "Registered 8 memory tools with Governor (including correction and pattern learning)");
     }

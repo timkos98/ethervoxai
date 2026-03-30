@@ -155,9 +155,9 @@ static int conversation_on_speak(const char* text, const char* language,
     // Synthesize and play audio with Piper TTS
     if (session->tts_initialized && session->tts_context) {
         ethervox_tts_audio_t tts_output = {0};
-        int result = ethervox_tts_synthesize_text(session->tts_context, text, &tts_output);
+        ethervox_result_t result = ethervox_tts_synthesize_text(session->tts_context, text, &tts_output);
         
-        if (result == 0 && tts_output.samples && tts_output.sample_count > 0) {
+        if (ethervox_is_success(result) && tts_output.samples && tts_output.sample_count > 0) {
             ETHERVOX_LOG_INFO("TTS synthesized %zu samples at %dHz", 
                             tts_output.sample_count, tts_output.sample_rate);
             
