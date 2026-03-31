@@ -28,9 +28,9 @@ extern "C" {
  * @param duration_seconds Recording duration in seconds
  * @param sample_rate Sample rate (default: 16000 Hz)
  * @param channels Number of channels (default: 1 = mono)
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_audio_record_to_file(
+ethervox_result_t ethervox_audio_record_to_file(
     const char* output_path,
     int duration_seconds,
     int sample_rate,
@@ -47,9 +47,9 @@ int ethervox_audio_record_to_file(
  * @param max_duration_seconds Maximum recording duration
  * @param silence_threshold Silence detection threshold (0.0-1.0)
  * @param silence_duration_ms Duration of silence to stop recording
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_audio_record_with_vad(
+ethervox_result_t ethervox_audio_record_with_vad(
     const char* output_path,
     int max_duration_seconds,
     float silence_threshold,

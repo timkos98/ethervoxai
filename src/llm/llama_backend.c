@@ -125,26 +125,26 @@ static uint32_t get_optimal_thread_count(void) {
 }
 
 // Forward declarations
-static int ethervox_llama_backend_init(ethervox_llm_backend_t* backend, const ethervox_llm_config_t* config);
+static ethervox_result_t ethervox_llama_backend_init(ethervox_llm_backend_t* backend, const ethervox_llm_config_t* config);
 static void llama_backend_cleanup(ethervox_llm_backend_t* backend);
-static int llama_backend_load_model(ethervox_llm_backend_t* backend, const char* model_path);
+static ethervox_result_t llama_backend_load_model(ethervox_llm_backend_t* backend, const char* model_path);
 static void llama_backend_unload_model(ethervox_llm_backend_t* backend);
-static int llama_backend_generate(ethervox_llm_backend_t* backend,
+static ethervox_result_t llama_backend_generate(ethervox_llm_backend_t* backend,
                                  const char* prompt,
                                  const char* language_code,
                                  ethervox_llm_response_t* response);
-static int llama_backend_generate_stream(ethervox_llm_backend_t* backend,
+static ethervox_result_t llama_backend_generate_stream(ethervox_llm_backend_t* backend,
                                          const char* prompt,
                                          const char* language_code,
                                          void (*callback)(const char* token, void* user_data),
                                          void* user_data);
-static int llama_backend_get_capabilities(ethervox_llm_backend_t* backend,
+static ethervox_result_t llama_backend_get_capabilities(ethervox_llm_backend_t* backend,
                                         ethervox_llm_capabilities_t* capabilities);
-static int llama_backend_update_config(ethervox_llm_backend_t* backend,
+static ethervox_result_t llama_backend_update_config(ethervox_llm_backend_t* backend,
                                        const ethervox_llm_config_t* config);
 
 // Update runtime generation parameters (can be changed without reloading model)
-static int llama_backend_update_config(ethervox_llm_backend_t* backend,
+static ethervox_result_t llama_backend_update_config(ethervox_llm_backend_t* backend,
                                        const ethervox_llm_config_t* config) {
   if (!backend || !backend->handle || !config) {
     return ETHERVOX_ERROR_INVALID_ARGUMENT;
@@ -208,7 +208,7 @@ ethervox_llm_backend_t* ethervox_llm_create_llama_backend(void) {
   return backend;
 }
 
-static int ethervox_llama_backend_init(ethervox_llm_backend_t* backend, const ethervox_llm_config_t* config) {
+static ethervox_result_t ethervox_llama_backend_init(ethervox_llm_backend_t* backend, const ethervox_llm_config_t* config) {
   if (!backend) {
     return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
@@ -329,7 +329,7 @@ static void llama_backend_cleanup(ethervox_llm_backend_t* backend) {
 #endif
 }
 
-static int llama_backend_load_model(ethervox_llm_backend_t* backend, const char* model_path) {
+static ethervox_result_t llama_backend_load_model(ethervox_llm_backend_t* backend, const char* model_path) {
   if (!backend || !backend->handle || !model_path) {
     return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
@@ -453,7 +453,7 @@ static void llama_backend_unload_model(ethervox_llm_backend_t* backend) {
 #endif
 }
 
-static int llama_backend_generate(ethervox_llm_backend_t* backend,
+static ethervox_result_t llama_backend_generate(ethervox_llm_backend_t* backend,
                                  const char* prompt,
                                  const char* language_code,
                                  ethervox_llm_response_t* response) {
@@ -618,7 +618,7 @@ static int llama_backend_generate(ethervox_llm_backend_t* backend,
 }
 
 // Generate response with streaming token callback
-static int llama_backend_generate_stream(ethervox_llm_backend_t* backend,
+static ethervox_result_t llama_backend_generate_stream(ethervox_llm_backend_t* backend,
                                          const char* prompt,
                                          const char* language_code,
                                          void (*callback)(const char* token, void* user_data),
@@ -769,7 +769,7 @@ static int llama_backend_generate_stream(ethervox_llm_backend_t* backend,
     if (llama_decode(ctx->ctx, llama_batch_get_one(&prompt_tokens[i], chunk_size)) != 0) {
       LLAMA_ERROR("Failed to evaluate prompt at position %d", i);
       free(prompt_tokens);
-      return -1;
+      ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_LLM_INFERENCE_FAILED, "Failed to decode prompt batch");
     }
     uint32_t chunk_time = (uint32_t)(((double)(clock() - chunk_start) / CLOCKS_PER_SEC) * 1000);
     LLAMA_LOG("Batch %d/%d (%d tokens) processed in %u ms", 
@@ -885,7 +885,7 @@ static int llama_backend_generate_stream(ethervox_llm_backend_t* backend,
 #endif
 }
 
-static int llama_backend_get_capabilities(ethervox_llm_backend_t* backend,
+static ethervox_result_t llama_backend_get_capabilities(ethervox_llm_backend_t* backend,
                                         ethervox_llm_capabilities_t* capabilities) {
   if (!backend || !capabilities) {
     return ETHERVOX_ERROR_INVALID_ARGUMENT;

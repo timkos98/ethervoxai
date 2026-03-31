@@ -150,7 +150,7 @@ static void* audio_capture_thread(void* arg) {
       // Feed audio to STT - it will accumulate internally
       // Whisper's VAD will decide when to segment and transcribe
       ethervox_stt_result_t result;
-      int stt_ret = ethervox_stt_process(&session->stt_runtime, &audio_buf, &result);
+      ethervox_result_t stt_ret = ethervox_stt_process(&session->stt_runtime, &audio_buf, &result);
 
       if (stt_ret == 1) {
         // Normal: audio is accumulating in Whisper's buffer, VAD hasn't triggered yet

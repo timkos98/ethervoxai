@@ -112,8 +112,8 @@ typedef struct {
   uint32_t (*get_free_heap_size)(void);
 
   // Power management
-  int (*set_cpu_frequency)(uint32_t frequency_mhz);
-  int (*enable_power_saving)(bool enable);
+  ethervox_result_t (*set_cpu_frequency)(uint32_t frequency_mhz);
+  ethervox_result_t (*enable_power_saving)(bool enable);
   float (*get_battery_voltage)(void);
   uint32_t (*delay_us)(uint32_t us);
   uint32_t (*delay_ms)(uint32_t ms);

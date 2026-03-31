@@ -689,8 +689,8 @@ ethervox_result_t ethervox_dialogue_init(ethervox_dialogue_engine_t* engine,
     }
     
     // Register conversation tools (speak, listen for LLM-controlled voice interaction)
-    int conv_tools_result = ethervox_conversation_tools_register(registry);
-    if (conv_tools_result == 0) {
+    ethervox_result_t conv_tools_result = ethervox_conversation_tools_register(registry);
+    if (ethervox_is_success(conv_tools_result)) {
       tool_count += 2;  // speak and listen
 #ifdef ETHERVOX_PLATFORM_ANDROID
       ETHERVOX_LOGI("Registered conversation tools (speak, listen) with Governor");
@@ -707,8 +707,8 @@ ethervox_result_t ethervox_dialogue_init(ethervox_dialogue_engine_t* engine,
     
     // Register memory tools if memory store is available
     if (g_dialogue_memory_store) {
-      int memory_tools = ethervox_memory_tools_register(registry, (ethervox_memory_store_t*)g_dialogue_memory_store);
-      if (memory_tools == 0) {
+      ethervox_result_t memory_tools = ethervox_memory_tools_register(registry, (ethervox_memory_store_t*)g_dialogue_memory_store);
+      if (ethervox_is_success(memory_tools)) {
         tool_count += 6;  // 6 memory tools registered
 #ifdef ETHERVOX_PLATFORM_ANDROID
         ETHERVOX_LOGI("Registered memory tools with Governor");
@@ -1604,9 +1604,9 @@ ethervox_result_t ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engi
       ETHERVOX_LOGI(
                           "Using LLM backend for intent: %s", intent->raw_text);
 #endif
-      int llm_result = ethervox_llm_backend_generate(backend, intent->raw_text,
+      ethervox_result_t llm_result = ethervox_llm_backend_generate(backend, intent->raw_text,
                                                      intent->language_code, response);
-      if (llm_result == 0 && response->text && response->text[0] != '\0') {
+      if (ethervox_is_success(llm_result) && response->text && response->text[0] != '\0') {
         response->confidence = 0.7f;
         response->processing_time_ms = kEthervoxResponseProcessingTimeMs;
         response->conversation_ended = (intent->type != ETHERVOX_INTENT_UNKNOWN);
@@ -1698,9 +1698,9 @@ ethervox_result_t ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engi
 #endif
 
             // Generate response with LLM
-            int llm_result = ethervox_llm_backend_generate(backend, intent->raw_text,
+            ethervox_result_t llm_result = ethervox_llm_backend_generate(backend, intent->raw_text,
                                                            intent->language_code, response);
-            if (llm_result == 0 && response->text && response->text[0] != '\0') {
+            if (ethervox_is_success(llm_result) && response->text && response->text[0] != '\0') {
               response->confidence = 0.7f;
               response->processing_time_ms = kEthervoxResponseProcessingTimeMs;
               response->conversation_ended = true;  // LLM questions also end conversation

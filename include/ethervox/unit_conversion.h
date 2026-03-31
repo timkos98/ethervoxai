@@ -49,7 +49,7 @@ extern "C" {
  *     free(error);
  * }
  */
-int ethervox_unit_convert(
+ethervox_result_t ethervox_unit_convert(
     double value,
     const char* from_unit,
     const char* to_unit,
@@ -61,9 +61,9 @@ int ethervox_unit_convert(
  * @brief Register unit conversion tool with the tool registry
  * 
  * @param registry_ptr Pointer to ethervox_tool_registry_t
- * @return 0 on success, -1 on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_unit_conversion_register(void* registry_ptr);
+ethervox_result_t ethervox_unit_conversion_register(void* registry_ptr);
 
 #ifdef __cplusplus
 }

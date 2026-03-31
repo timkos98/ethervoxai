@@ -177,7 +177,7 @@ ethervox_result_t ethervox_unit_conversion_register(void* registry_ptr) {
         .estimated_latency_ms = 1.0f      // Very fast
     };
     
-    int ret = ethervox_tool_registry_add(registry, &tool);
+    ethervox_result_t ret = ethervox_tool_registry_add(registry, &tool);
     
     if (ethervox_is_success(ret)) {
         ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,

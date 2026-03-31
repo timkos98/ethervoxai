@@ -306,7 +306,7 @@ ethervox_result_t ethervox_whisper_test_jfk(ethervox_stt_runtime_t* runtime) {
             printf("  - %s\n", test_paths[i]);
         }
         LOG_ERROR("JFK test file not found");
-        return -1;
+        ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_FILE_NOT_FOUND, "JFK test file not found");
     }
     
     printf("========================================\n");
@@ -329,6 +329,6 @@ ethervox_result_t ethervox_whisper_test_jfk(ethervox_stt_runtime_t* runtime) {
     } else {
         printf("\n❌ Test FAILED (error code: %d)\n", ret);
         LOG_ERROR("Whisper test failed with code %d", ret);
-        return -1;
+        return ret;
     }
 }

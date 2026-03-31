@@ -428,7 +428,7 @@ ethervox_result_t context_action_summarize_old(
     if (memory_store) {
         const char* tags[] = {"context_summary", "auto_generated", "conversation"};
         
-        int store_ret = ethervox_memory_store_add(
+        ethervox_result_t store_ret = ethervox_memory_store_add(
             memory_store,
             summary,
             tags,

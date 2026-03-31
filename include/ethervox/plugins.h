@@ -23,6 +23,7 @@
 #include <time.h>
 
 #include "ethervox/config.h"
+#include "ethervox/error.h"
 #include "ethervox/dialogue.h"
 #include "ethervox/error.h"
 
@@ -81,8 +82,8 @@ typedef struct ethervox_plugin_manager ethervox_plugin_manager_t;
 
 // Plugin interface structure
 typedef struct {
-  int (*init)(struct ethervox_plugin* plugin);
-  int (*process)(struct ethervox_plugin* plugin, const void* input, void* output);
+  ethervox_result_t (*init)(struct ethervox_plugin* plugin);
+  ethervox_result_t (*process)(struct ethervox_plugin* plugin, const void* input, void* output);
   void (*cleanup)(struct ethervox_plugin* plugin);
 } ethervox_plugin_interface_t;
 
@@ -94,7 +95,7 @@ typedef struct ethervox_plugin {
   ethervox_plugin_type_t type;
   ethervox_plugin_status_t status;
   void* handle;  // Dynamic library handle
-  int (*execute)(const void* input, void* output);
+  ethervox_result_t (*execute)(const void* input, void* output);
   void* user_data;
   ethervox_plugin_metadata_t metadata;
   ethervox_plugin_interface_t plugin_interface;
@@ -149,13 +150,13 @@ ethervox_result_t ethervox_plugin_execute(ethervox_plugin_t* plugin, const void*
 ethervox_result_t ethervox_plugin_configure(ethervox_plugin_t* plugin, const char* config_json);
 
 // External LLM integrations
-int ethervox_llm_plugin_openai(const ethervox_llm_request_t* request,
+ethervox_result_t ethervox_llm_plugin_openai(const ethervox_llm_request_t* request,
                                ethervox_llm_response_t* response, void* user_data);
 
-int ethervox_llm_plugin_huggingface(const ethervox_llm_request_t* request,
+ethervox_result_t ethervox_llm_plugin_huggingface(const ethervox_llm_request_t* request,
                                     ethervox_llm_response_t* response, void* user_data);
 
-int ethervox_llm_plugin_local_rag(const ethervox_llm_request_t* request,
+ethervox_result_t ethervox_llm_plugin_local_rag(const ethervox_llm_request_t* request,
                                   ethervox_llm_response_t* response, void* user_data);
 
 // Built-in plugins

@@ -588,10 +588,10 @@ static void* conversation_thread(void* arg) {
                     
                     // Only process full frames (AEC needs exact frame size)
                     if (frame_samples == aec_frame_size) {
-                        int aec_result = ethervox_aec_process(session->aec_context, 
+                        ethervox_result_t aec_result = ethervox_aec_process(session->aec_context, 
                                                               audio_chunk.data + offset, 
                                                               frame_samples);
-                        if (aec_result != 0) {
+                        if (ethervox_is_error(aec_result)) {
                             ETHERVOX_LOG_WARN("AEC processing failed at offset %zu: %d", offset, aec_result);
                             break;  // Stop processing on error
                         }

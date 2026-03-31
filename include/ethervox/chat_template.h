@@ -12,6 +12,7 @@
 #ifndef ETHERVOX_CHAT_TEMPLATE_H
 #define ETHERVOX_CHAT_TEMPLATE_H
 
+#include "ethervox/error.h"
 #include <stddef.h>
 #include <stdbool.h>
 
@@ -102,9 +103,9 @@ chat_template_type_t chat_template_detect(const char* model_path);
  * @param content System message content
  * @param output Output buffer
  * @param output_size Size of output buffer
- * @return Number of bytes written (excluding null terminator)
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int chat_template_format_system(
+ethervox_result_t chat_template_format_system(
     const chat_template_t* template,
     const char* content,
     char* output,
@@ -118,9 +119,9 @@ int chat_template_format_system(
  * @param content User message content
  * @param output Output buffer
  * @param output_size Size of output buffer
- * @return Number of bytes written (excluding null terminator)
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int chat_template_format_user(
+ethervox_result_t chat_template_format_user(
     const chat_template_t* template,
     const char* content,
     char* output,
@@ -133,9 +134,9 @@ int chat_template_format_user(
  * @param template Chat template to use
  * @param output Output buffer
  * @param output_size Size of output buffer
- * @return Number of bytes written (excluding null terminator)
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int chat_template_format_assistant_start(
+ethervox_result_t chat_template_format_assistant_start(
     const chat_template_t* template,
     char* output,
     size_t output_size
@@ -148,9 +149,9 @@ int chat_template_format_assistant_start(
  * @param result Tool result content
  * @param output Output buffer
  * @param output_size Size of output buffer
- * @return Number of bytes written (excluding null terminator)
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int chat_template_format_tool_result(
+ethervox_result_t chat_template_format_tool_result(
     const chat_template_t* template,
     const char* result,
     char* output,

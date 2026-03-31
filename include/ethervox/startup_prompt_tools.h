@@ -10,6 +10,7 @@
 #define ETHERVOX_STARTUP_PROMPT_TOOLS_H
 
 #include <stddef.h>
+#include "ethervox/error.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -19,9 +20,9 @@ extern "C" {
  * Register startup prompt management tool with the Governor
  * 
  * @param registry Tool registry to register with
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_startup_prompt_tools_register(void* registry);
+ethervox_result_t ethervox_startup_prompt_tools_register(void* registry);
 
 #ifdef __cplusplus
 }

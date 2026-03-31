@@ -14,6 +14,7 @@
 #include "ethervox/stt.h"
 #include "ethervox/audio.h"
 #include "ethervox/memory_tools.h"
+#include "ethervox/error.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -114,9 +115,9 @@ int ethervox_voice_tools_assign_speaker_names(ethervox_voice_session_t* session)
  * 
  * @param registry Governor tool registry
  * @param session Voice session state
- * @return 0 on success, -1 on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_voice_tools_register(void* registry, ethervox_voice_session_t* session);
+ethervox_result_t ethervox_voice_tools_register(void* registry, ethervox_voice_session_t* session);
 
 /**
  * Register advanced voice training tools with Governor
@@ -129,9 +130,9 @@ int ethervox_voice_tools_register(void* registry, ethervox_voice_session_t* sess
  * @param phonemizer_ctx Phonemizer context for training
  * @param tts_ctx TTS context for synthesis
  * @param stt_ctx STT context for transcription
- * @return 0 on success, -1 on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_voice_tools_register_training(
+ethervox_result_t ethervox_voice_tools_register_training(
     void* registry, 
     ethervox_voice_session_t* session,
     void* phonemizer_ctx,

@@ -92,9 +92,9 @@ ethervox_result_t pronunciation_trainer_train(
  * @param max_variants Maximum number of variants to generate
  * @param[out] variants Array of phoneme variant strings (caller must free)
  * @param[out] variant_count Number of variants generated
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int pronunciation_trainer_generate_variants(
+ethervox_result_t pronunciation_trainer_generate_variants(
     const char* word,
     const char* base_phonemes,
     phonemizer_context_t* phonemizer,
@@ -112,9 +112,9 @@ int pronunciation_trainer_generate_variants(
  * @param audio_path1 First audio file (WAV format)
  * @param audio_path2 Second audio file (WAV format)
  * @param[out] similarity Similarity score (0-1, higher = more similar)
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int pronunciation_trainer_compare_audio(
+ethervox_result_t pronunciation_trainer_compare_audio(
     const char* audio_path1,
     const char* audio_path2,
     float* similarity
@@ -127,9 +127,9 @@ int pronunciation_trainer_compare_audio(
  * @param n_mels Number of mel bands (default: 80)
  * @param[out] mel_data Mel spectrogram data (caller must free)
  * @param[out] n_frames Number of time frames
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int pronunciation_trainer_extract_mels(
+ethervox_result_t pronunciation_trainer_extract_mels(
     const char* audio_path,
     int n_mels,
     float** mel_data,
@@ -145,9 +145,9 @@ int pronunciation_trainer_extract_mels(
  * @param n_frames2 Number of frames in mels2
  * @param n_mels Number of mel bands (must match for both)
  * @param[out] distance DTW distance (lower = more similar)
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int pronunciation_trainer_dtw_distance(
+ethervox_result_t pronunciation_trainer_dtw_distance(
     const float* mels1,
     int n_frames1,
     const float* mels2,

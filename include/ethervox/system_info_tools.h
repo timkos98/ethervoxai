@@ -10,6 +10,7 @@
 #define ETHERVOX_SYSTEM_INFO_TOOLS_H
 
 #include "ethervox/governor.h"
+#include "ethervox/error.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -23,9 +24,9 @@ extern "C" {
  * - system_capabilities: Get system capabilities and limits
  * 
  * @param registry Tool registry to register with
- * @return 0 on success, -1 on failure
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_system_info_tools_register(ethervox_tool_registry_t* registry);
+ethervox_result_t ethervox_system_info_tools_register(ethervox_tool_registry_t* registry);
 
 #ifdef __cplusplus
 }

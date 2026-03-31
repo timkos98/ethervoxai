@@ -773,9 +773,9 @@ ethervox_result_t ethervox_memory_load_previous_session(
     // Load the latest previous session if found
     if (latest_session[0] != '\0') {
         uint32_t loaded = 0;
-        int result = ethervox_memory_import(store, latest_session, &loaded);
+        ethervox_result_t result = ethervox_memory_import(store, latest_session, &loaded);
         
-        if (result == 0 && loaded > 0) {
+        if (ethervox_is_success(result) && loaded > 0) {
             ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
                         "Loaded %u previous memories from %s", loaded, latest_session);
             if (turns_loaded) *turns_loaded = loaded;

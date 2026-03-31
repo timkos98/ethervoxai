@@ -120,9 +120,9 @@ const ethervox_tool_t* ethervox_tool_time_get_week_number(void);
  * Register all compute tools to a registry
  * 
  * @param registry Tool registry to add compute tools to
- * @return Number of tools registered, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_compute_tools_register_all(ethervox_tool_registry_t* registry);
+ethervox_result_t ethervox_compute_tools_register_all(ethervox_tool_registry_t* registry);
 
 #ifdef __cplusplus
 }

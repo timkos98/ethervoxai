@@ -80,7 +80,7 @@ int main(void) {
     printf("About to call ethervox_memory_search...\n");
     fflush(stdout);
     
-    int search_ret = ethervox_memory_search(&memory_store, "llama.cpp compilation",
+    ethervox_result_t search_ret = ethervox_memory_search(&memory_store, "llama.cpp compilation",
                           NULL, 0, 5, &results, &result_count);
     
     printf("Search returned: %d, result_count=%u\n", search_ret, result_count);

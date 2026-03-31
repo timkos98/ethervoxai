@@ -233,14 +233,14 @@ Java_com_droid_ethervox_1core_NativeLib_loadGovernorModel(
     
     LOGI("[JNI] Loading Governor model from: %s", path);
     
-    int result = ethervox_governor_load_model(g_governor, path);
+    ethervox_result_t result = ethervox_governor_load_model(g_governor, path);
     
     (*env)->ReleaseStringUTFChars(env, modelPath, path);
     
     // Store error code for corruption detection
     g_last_governor_load_error = result;
     
-    if (result == 0) {
+    if (ethervox_is_success(result)) {
         LOGI("[JNI] Governor model loaded successfully");
         
         // Initialize Tool Manifest System (after Governor model is loaded)
@@ -253,9 +253,9 @@ Java_com_droid_ethervox_1core_NativeLib_loadGovernorModel(
             
             // Use the centralized manifest setup helper
             tool_manifest_registry_t* manifest = NULL;
-            int manifest_result = ethervox_governor_setup_manifest(g_governor, model_path_for_manifest, &manifest);
+            ethervox_result_t manifest_result = ethervox_governor_setup_manifest(g_governor, model_path_for_manifest, &manifest);
             
-            if (manifest_result == 0 && manifest) {
+            if (ethervox_is_success(manifest_result) && manifest) {
                 g_manifest_registry = manifest;
                 LOGI("[JNI] Manifest initialized successfully");
             } else {
@@ -299,9 +299,9 @@ Java_com_droid_ethervox_1core_NativeLib_unloadGovernorModel(
     
     LOGI("[JNI] Unloading Governor model to free memory");
     
-    int result = ethervox_governor_unload_model(g_governor);
+    ethervox_result_t result = ethervox_governor_unload_model(g_governor);
     
-    if (result == 0) {
+    if (ethervox_is_success(result)) {
         LOGI("[JNI] Governor model unloaded successfully");
         return JNI_TRUE;
     } else {
@@ -323,9 +323,9 @@ Java_com_droid_ethervox_1core_NativeLib_reloadGovernorModel(
     
     LOGI("[JNI] Reloading Governor model");
     
-    int result = ethervox_governor_reload_model(g_governor);
+    ethervox_result_t result = ethervox_governor_reload_model(g_governor);
     
-    if (result == 0) {
+    if (ethervox_is_success(result)) {
         LOGI("[JNI] Governor model reloaded successfully");
         return JNI_TRUE;
     } else {
@@ -391,7 +391,7 @@ static void* optimization_thread_func(void* arg) {
     LOGI("Optimization thread started for model: %s", data->model_path);
     
     // Run V2 optimizer (this can take 30-60 seconds)
-    int result = ethervox_optimize_tool_prompts_v2(
+    ethervox_result_t result = ethervox_optimize_tool_prompts_v2(
         data->governor,
         data->model_path,
         data->manifest_registry,
@@ -404,7 +404,7 @@ static void* optimization_thread_func(void* arg) {
     data->completed = true;
     pthread_mutex_unlock(&data->mutex);
     
-    if (result == 0) {
+    if (ethervox_is_success(result)) {
         LOGI("Optimization thread completed successfully");
     } else {
         LOGE("Optimization thread failed with code: %d", result);
@@ -494,7 +494,7 @@ Java_com_droid_ethervox_1core_NativeLib_optimizeToolPrompts(
     pthread_mutex_destroy(&thread_data->mutex);
     free(thread_data);
     
-    if (result == 0) {
+    if (ethervox_is_success(result)) {
         LOGI("Tool prompt optimization completed successfully");
     } else {
         LOGE("Tool prompt optimization failed with code: %d", result);
@@ -518,7 +518,7 @@ Java_com_droid_ethervox_1core_NativeLib_loadOptimizedPrompts(
     char instruction[4096] = {0};
     char examples[8192] = {0};
     
-    int result = ethervox_load_optimized_prompts(
+    ethervox_result_t result = ethervox_load_optimized_prompts(
         model_path,
         instruction,
         sizeof(instruction),
@@ -528,7 +528,7 @@ Java_com_droid_ethervox_1core_NativeLib_loadOptimizedPrompts(
     
     (*env)->ReleaseStringUTFChars(env, modelPath, model_path);
     
-    if (result != 0) {
+    if (ethervox_is_error(result)) {
         // No optimized prompts found
         return NULL;
     }
@@ -781,12 +781,13 @@ Java_com_droid_ethervox_1core_NativeLib_platformInit(
     g_memory_store = (ethervox_memory_store_t*)calloc(1, sizeof(ethervox_memory_store_t));
     if (g_memory_store) {
         // Initialize with NULL session_id (auto-generated) and NULL storage_dir (set later via JNI)
-        if (ethervox_memory_init(g_memory_store, NULL, NULL) != 0) {
-            LOGE("Failed to initialize memory store");
+        ethervox_result_t mem_result = ethervox_memory_init(g_memory_store, NULL, NULL);
+        if (ethervox_is_error(mem_result)) {
+            LOGE("Failed to initialize memory store - error code: %d", mem_result);
             free(g_memory_store);
             g_memory_store = NULL;
         } else {
-            LOGI("Memory store initialized (in-memory mode until storage dir set)");
+            LOGI("Memory store initialized successfully (in-memory mode until storage dir set)");
         }
     } else {
         LOGE("Failed to allocate memory store");
@@ -794,9 +795,23 @@ Java_com_droid_ethervox_1core_NativeLib_platformInit(
     
     // Create and initialize tool registry
     g_registry = (ethervox_tool_registry_t*)malloc(sizeof(ethervox_tool_registry_t));
-    if (!g_registry || ethervox_tool_registry_init(g_registry, 16) != 0) {
-        LOGE("Failed to initialize tool registry");
-        if (g_registry) free(g_registry);
+    if (!g_registry) {
+        LOGE("Failed to allocate tool registry");
+        if (g_memory_store) {
+            ethervox_memory_cleanup(g_memory_store);
+            free(g_memory_store);
+            g_memory_store = NULL;
+        }
+        ethervox_platform_cleanup(g_platform);
+        free(g_platform);
+        g_platform = NULL;
+        return -1;
+    }
+    
+    ethervox_result_t registry_result = ethervox_tool_registry_init(g_registry, 16);
+    if (ethervox_is_error(registry_result)) {
+        LOGE("Failed to initialize tool registry - error code: %d", registry_result);
+        free(g_registry);
         g_registry = NULL;
         if (g_memory_store) {
             ethervox_memory_cleanup(g_memory_store);
@@ -808,6 +823,8 @@ Java_com_droid_ethervox_1core_NativeLib_platformInit(
         g_platform = NULL;
         return -1;
     }
+    
+    LOGI("Tool registry initialized successfully");
     
     // Register compute tools (math, logic, etc.)
     int tool_count = ethervox_compute_tools_register_all(g_registry);
@@ -822,12 +839,15 @@ Java_com_droid_ethervox_1core_NativeLib_platformInit(
     
     // Register memory tools if memory store is available
     if (g_memory_store) {
-        if (ethervox_memory_tools_register(g_registry, g_memory_store) == 0) {
+        ethervox_result_t mem_tools_result = ethervox_memory_tools_register(g_registry, g_memory_store);
+        if (ethervox_is_success(mem_tools_result)) {
             tool_count += 6;  // 6 memory tools
-            LOGI("Registered memory tools");
+            LOGI("Registered memory tools successfully");
         } else {
-            LOGE("Failed to register memory tools");
+            LOGE("Failed to register memory tools - error code: %d", mem_tools_result);
         }
+    } else {
+        LOGI("Memory store not available, skipping memory tools registration");
     }
     
     LOGI("Total tools registered: %d", tool_count);
@@ -869,8 +889,9 @@ Java_com_droid_ethervox_1core_NativeLib_platformInitGovernor(
         LOGI("Initializing Governor in FULL MODE (all tools available)");
     }
     
-    if (ethervox_governor_init(&g_governor, &gov_config, g_registry) != 0) {
-        LOGE("Failed to initialize Governor");
+    ethervox_result_t gov_result = ethervox_governor_init(&g_governor, &gov_config, g_registry);
+    if (ethervox_is_error(gov_result)) {
+        LOGE("Failed to initialize Governor - error code: %d", gov_result);
         return -1;
     }
     
@@ -1029,8 +1050,8 @@ Java_com_droid_ethervox_1core_NativeLib_audioInit(
     config.channels = (uint16_t)channels;
     config.buffer_size = (uint32_t)buffer_size;
     
-    int result = ethervox_audio_init(g_audio_runtime, &config);
-    if (result != 0) {
+    ethervox_result_t result = ethervox_audio_init(g_audio_runtime, &config);
+    if (ethervox_is_error(result)) {
         LOGE("Failed to initialize audio");
         free(g_audio_runtime);
         g_audio_runtime = NULL;
@@ -1054,8 +1075,8 @@ Java_com_droid_ethervox_1core_NativeLib_audioStartCapture(
         return -1;
     }
     
-    int result = ethervox_audio_start_capture(g_audio_runtime);
-    if (result != 0) {
+    ethervox_result_t result = ethervox_audio_start_capture(g_audio_runtime);
+    if (ethervox_is_error(result)) {
         LOGE("Failed to start audio capture");
         return -1;
     }
@@ -1075,9 +1096,9 @@ Java_com_droid_ethervox_1core_NativeLib_audioStopCapture(
         return 0;
     }
     
-    int result = ethervox_audio_stop_capture(g_audio_runtime);
+    ethervox_result_t result = ethervox_audio_stop_capture(g_audio_runtime);
     LOGI("Audio capture stopped");
-    return result;
+    return ethervox_is_success(result) ? 0 : -1;
 }
 
 JNIEXPORT void JNICALL
@@ -1124,11 +1145,11 @@ Java_com_droid_ethervox_1core_NativeLib_wakeWordInit(
     config.wake_word = wake_word_str;
     config.sensitivity = (float)sensitivity;
     
-    int result = ethervox_wake_init(g_wake_runtime, &config);
+    ethervox_result_t result = ethervox_wake_init(g_wake_runtime, &config);
     
     (*env)->ReleaseStringUTFChars(env, wake_word, wake_word_str);
     
-    if (result != 0) {
+    if (ethervox_is_error(result)) {
         LOGE("Failed to initialize wake word");
         free(g_wake_runtime);
         g_wake_runtime = NULL;
@@ -1185,12 +1206,12 @@ Java_com_droid_ethervox_1core_NativeLib_sttInit(
     config.model_path = model_path_str;
     config.language = language_str;
     
-    int result = ethervox_stt_init(g_stt_runtime, &config);
+    ethervox_result_t result = ethervox_stt_init(g_stt_runtime, &config);
     
     (*env)->ReleaseStringUTFChars(env, model_path, model_path_str);
     (*env)->ReleaseStringUTFChars(env, language, language_str);
     
-    if (result != 0) {
+    if (ethervox_is_error(result)) {
         LOGE("Failed to initialize STT");
         free(g_stt_runtime);
         g_stt_runtime = NULL;
@@ -1213,8 +1234,8 @@ Java_com_droid_ethervox_1core_NativeLib_sttStart(
         return -1;
     }
     
-    int result = ethervox_stt_start(g_stt_runtime);
-    if (result != 0) {
+    ethervox_result_t result = ethervox_stt_start(g_stt_runtime);
+    if (ethervox_is_error(result)) {
         LOGE("Failed to start STT");
         return -1;
     }
@@ -1712,7 +1733,8 @@ Java_com_droid_ethervox_1core_NativeLib_setMemoryStorageDir(
     
     // Re-initialize memory store with storage directory
     // This will enable file persistence
-    if (ethervox_memory_init(g_memory_store, NULL, dir_path) != 0) {
+    ethervox_result_t mem_init_result = ethervox_memory_init(g_memory_store, NULL, dir_path);
+    if (ethervox_is_error(mem_init_result)) {
         LOGE("Failed to set memory storage directory: %s", dir_path);
         (*env)->ReleaseStringUTFChars(env, storage_dir, dir_path);
         return;
@@ -1724,7 +1746,8 @@ Java_com_droid_ethervox_1core_NativeLib_setMemoryStorageDir(
     // This handles all the complexity of finding the most recent file,
     // preserving tags, IDs, and adding the "imported" tag
     uint32_t turns_loaded = 0;
-    if (ethervox_memory_load_previous_session(g_memory_store, &turns_loaded) == 0 && turns_loaded > 0) {
+    ethervox_result_t load_result = ethervox_memory_load_previous_session(g_memory_store, &turns_loaded);
+    if (ethervox_is_success(load_result) && turns_loaded > 0) {
         LOGI("Memory: Loaded %u previous memories from last session", turns_loaded);
     }
     
@@ -2184,11 +2207,11 @@ Java_com_droid_ethervox_1core_NativeLib_loadGovernorModelMinimal(
     // This function is now equivalent to loadGovernorModel
     // TODO: Add proper API to change governor mode at runtime
     
-    int result = ethervox_governor_load_model(g_governor, path);
+    ethervox_result_t result = ethervox_governor_load_model(g_governor, path);
     
     (*env)->ReleaseStringUTFChars(env, modelPath, path);
     
-    if (result == 0) {
+    if (ethervox_is_success(result)) {
         LOGI("[JNI] Governor model loaded successfully");
         LOGW("[JNI] MINIMAL MODE must be set via config in platformInit - cannot change at load time");
         return JNI_TRUE;

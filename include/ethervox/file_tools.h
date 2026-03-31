@@ -200,9 +200,9 @@ int ethervox_file_write(
  * 
  * @param registry Governor tool registry
  * @param config File tools config instance
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_file_tools_register(
+ethervox_result_t ethervox_file_tools_register(
     void* registry,
     ethervox_file_tools_config_t* config
 );
@@ -212,9 +212,9 @@ int ethervox_file_tools_register(
  * 
  * @param registry Governor tool registry
  * @param config Path configuration instance
- * @return 0 on success, negative on error
+ * @return ETHERVOX_SUCCESS on success, error code on failure
  */
-int ethervox_path_config_register(
+ethervox_result_t ethervox_path_config_register(
     void* registry,
     ethervox_path_config_t* config
 );
