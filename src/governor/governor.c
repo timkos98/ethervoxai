@@ -83,7 +83,21 @@ static void governor_ggml_log_callback(enum ggml_log_level level, const char* te
 
 // Progress callback for model loading
 static bool governor_load_progress_callback(float progress, void* user_data) {
-  (void)user_data;
+  // user_data contains our custom callback wrapper
+  if (user_data) {
+    typedef struct {
+      ethervox_load_progress_callback callback;
+      void* callback_user_data;
+    } callback_context_t;
+
+    callback_context_t* ctx = (callback_context_t*)user_data;
+    if (ctx->callback) {
+      char msg[128];
+      snprintf(msg, sizeof(msg), "Loading model: %.1f%%", progress * 100.0f);
+      ctx->callback("loading_model", progress, msg, ctx->callback_user_data);
+    }
+  }
+
   GOV_LOG("[Governor] Model load progress: %.1f%%", progress * 100.0f);
   return true;  // Continue loading
 }
@@ -948,8 +962,18 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
   model_params.n_gpu_layers = governor->config.gpu_layers;
   model_params.use_mmap = ETHERVOX_GOVERNOR_USE_MMAP;
   model_params.use_mlock = false;  // Don't lock memory (let OS manage)
+
+  // Set up callback context for model loading progress
+  typedef struct {
+    ethervox_load_progress_callback callback;
+    void* callback_user_data;
+  } callback_context_t;
+
+  callback_context_t callback_ctx = {.callback = progress_callback,
+                                     .callback_user_data = user_data};
+
   model_params.progress_callback = governor_load_progress_callback;
-  model_params.progress_callback_user_data = NULL;
+  model_params.progress_callback_user_data = progress_callback ? &callback_ctx : NULL;
 
   GOV_LOG("[Governor] Model params: n_gpu_layers=%d, use_mmap=%d", model_params.n_gpu_layers,
           model_params.use_mmap);
