@@ -180,6 +180,12 @@ elseif(TARGET_PLATFORM STREQUAL "WINDOWS")
     add_definitions(-DETHERVOX_PLATFORM_WINDOWS=1)
     add_definitions(-DETHERVOX_PLATFORM_DESKTOP=1)
     add_definitions(-DPLATFORM_DESKTOP=1)
+    
+    # Windows compatibility: Disable advanced KV cache features that cause crashes
+    # LM Studio and llama.cpp CLI use standard F16 cache - we should too
+    add_definitions(-DETHERVOX_GOVERNOR_KV_CACHE_TYPE=GGML_TYPE_F16)  # Use F16 instead of Q8_0
+    add_definitions(-DETHERVOX_GOVERNOR_FLASH_ATTN_TYPE=0)            # Disable flash attention
+    
     set(ETHERVOX_PLATFORM_WINDOWS 1)
     set(ETHERVOX_PLATFORM_DESKTOP 1)
     
@@ -313,13 +319,21 @@ if(NOT cjson_POPULATED)
     endif()
 endif()
 
-# Find libcurl for bug reporter (not needed on Android - uses Kotlin BugReporter instead)
-if(NOT TARGET_PLATFORM STREQUAL "ANDROID")
+# Find libcurl for bug reporter (optional on Windows, not needed on Android)
+if(NOT TARGET_PLATFORM STREQUAL "ANDROID" AND NOT WIN32)
     find_package(CURL REQUIRED)
     if(CURL_FOUND)
         message(STATUS "Found CURL: ${CURL_LIBRARIES}")
     else()
         message(FATAL_ERROR "CURL not found - required for bug reporter")
+    endif()
+elseif(WIN32)
+    # CURL is optional on Windows - bug reporter will be disabled if not found
+    find_package(CURL QUIET)
+    if(CURL_FOUND)
+        message(STATUS "Found CURL: ${CURL_LIBRARIES} - bug reporter enabled")
+    else()
+        message(STATUS "CURL not found on Windows - bug reporter will be disabled")
     endif()
 else()
     message(STATUS "Skipping CURL (Android uses Kotlin BugReporter)")
@@ -476,11 +490,15 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 set(COMMON_SOURCES
     src/common/error.c
     src/common/logging.c
-    src/common/settings_menu.c
     src/common/language_detector.c
     src/common/model_downloader.c
     src/config/settings.c
 )
+
+# Terminal settings menu (requires unistd.h - skip on Windows)
+if(NOT WIN32)
+    list(APPEND COMMON_SOURCES src/common/settings_menu.c)
+endif()
 
 # Platform-specific utility implementations
 if(ETHERVOX_PLATFORM_WINDOWS)
@@ -490,24 +508,44 @@ elseif(ETHERVOX_PLATFORM_LINUX OR ETHERVOX_PLATFORM_MACOS OR ETHERVOX_PLATFORM_R
 endif()
 
 # Continue adding common sources
-list(APPEND COMMON_SOURCES
-    src/audio/reference_buffer.c
-    src/audio/aec_speex.c
-    src/audio/audio_stream_player.c
-    src/tts/tts.c
-    src/tts/text_normalizer.c
-    src/tts/piper_backend.c
-    src/tts/phonemizer/phonemizer.c
-    src/tts/phonemizer/dictionary.c
-    src/tts/phonemizer/espeak_dict.c
-    src/tts/phonemizer/rules_en.c
-    src/tts/phonemizer/rules_de.c
-    src/tts/phonemizer/dict_chinese.c
-    src/tts/phonemizer/chinese_segmenter.c
-    src/tts/phonemizer/pronunciation_overrides.c
-    src/tts/phonemizer/pronunciation_trainer.c
-    src/tts/phonemizer/stress_reduction.c
-)
+if(WIN32)
+    # Windows: Exclude pthread and M_PI dependent sources
+    list(APPEND COMMON_SOURCES
+        src/audio/aec_speex.c
+        src/tts/tts.c
+        src/tts/text_normalizer.c
+        src/tts/piper_backend.c
+        src/tts/phonemizer/phonemizer.c
+        src/tts/phonemizer/dictionary.c
+        src/tts/phonemizer/espeak_dict.c
+        src/tts/phonemizer/rules_en.c
+        src/tts/phonemizer/rules_de.c
+        src/tts/phonemizer/dict_chinese.c
+        src/tts/phonemizer/chinese_segmenter.c
+        src/tts/phonemizer/pronunciation_overrides.c
+        src/tts/phonemizer/stress_reduction.c
+    )
+    message(STATUS "Windows: Excluded reference_buffer, audio_stream_player (pthread), pronunciation_trainer (M_PI)")
+else()
+    list(APPEND COMMON_SOURCES
+        src/audio/reference_buffer.c
+        src/audio/aec_speex.c
+        src/audio/audio_stream_player.c
+        src/tts/tts.c
+        src/tts/text_normalizer.c
+        src/tts/piper_backend.c
+        src/tts/phonemizer/phonemizer.c
+        src/tts/phonemizer/dictionary.c
+        src/tts/phonemizer/espeak_dict.c
+        src/tts/phonemizer/rules_en.c
+        src/tts/phonemizer/rules_de.c
+        src/tts/phonemizer/dict_chinese.c
+        src/tts/phonemizer/chinese_segmenter.c
+        src/tts/phonemizer/pronunciation_overrides.c
+        src/tts/phonemizer/pronunciation_trainer.c
+        src/tts/phonemizer/stress_reduction.c
+    )
+endif()
 
 # Espeak-trained dictionary embeddings (VARIANT-SPECIFIC DICTIONARIES REQUIRED)
 # Each Piper model is trained with a SPECIFIC espeak language variant (e.g., en-us vs en-gb-x-rp).
@@ -579,8 +617,11 @@ if(ENABLE_ESPEAK_DICT)
 endif()
 
 # Add bug_reporter.c only for non-Android platforms (Android uses Kotlin BugReporter)
-if(NOT TARGET_PLATFORM STREQUAL "ANDROID")
+if(NOT TARGET_PLATFORM STREQUAL "ANDROID" AND NOT WIN32)
     list(APPEND COMMON_SOURCES src/common/bug_reporter.c)
+    message(STATUS "Bug reporter enabled")
+else()
+    message(STATUS "Bug reporter disabled (Android or Windows)")
 endif()
 
 # Collect core source files (non-platform specific)
@@ -599,6 +640,19 @@ file(GLOB ETHERVOXAI_CORE_SOURCES
 # Exclude test files from the main library
 list(FILTER ETHERVOXAI_CORE_SOURCES EXCLUDE REGEX ".*test_.*\\.c$")
 
+# Exclude Windows-incompatible sources (wake_word, stt require Unix headers)
+if(WIN32)
+    list(FILTER ETHERVOXAI_CORE_SOURCES EXCLUDE REGEX ".*/wake_word/.*\\.c$")
+    list(FILTER ETHERVOXAI_CORE_SOURCES EXCLUDE REGEX ".*/stt/.*\\.c$")
+    # Exclude dialogue sources that require pthread
+    list(FILTER ETHERVOXAI_CORE_SOURCES EXCLUDE REGEX ".*/dialogue/global_tts\\.c$")
+    list(FILTER ETHERVOXAI_CORE_SOURCES EXCLUDE REGEX ".*/dialogue/voice_conversation\\.c$")
+    list(FILTER ETHERVOXAI_CORE_SOURCES EXCLUDE REGEX ".*/dialogue/voice_training\\.c$")
+    list(FILTER ETHERVOXAI_CORE_SOURCES EXCLUDE REGEX ".*/dialogue/integration_tests\\.c$")
+    list(FILTER ETHERVOXAI_CORE_SOURCES EXCLUDE REGEX ".*/dialogue/llm_tool_tests\\.c$")
+    message(STATUS "Excluded wake_word, STT, and pthread-dependent dialogue sources on Windows")
+endif()
+
 # Add LLM sources only if LLM backends are enabled
 if(WITH_LLAMA OR WITH_TINYLLAMA)
     file(GLOB LLM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/llm/*.c")
@@ -613,14 +667,22 @@ else()
 endif()
 
 # Add memory tools plugin sources
-file(GLOB MEMORY_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/memory_tools/*.c")
-list(APPEND ETHERVOXAI_CORE_SOURCES ${MEMORY_TOOLS_SOURCES})
-message(STATUS "Memory tools plugin sources included")
+if(NOT WIN32)
+    file(GLOB MEMORY_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/memory_tools/*.c")
+    list(APPEND ETHERVOXAI_CORE_SOURCES ${MEMORY_TOOLS_SOURCES})
+    message(STATUS "Memory tools plugin sources included")
+else()
+    message(STATUS "Memory tools plugin SKIPPED on Windows (requires dirent.h)")
+endif()
 
 # Add file tools plugin sources
-file(GLOB FILE_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/file_tools/*.c")
-list(APPEND ETHERVOXAI_CORE_SOURCES ${FILE_TOOLS_SOURCES})
-message(STATUS "File tools plugin sources included")
+if(NOT WIN32)
+    file(GLOB FILE_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/file_tools/*.c")
+    list(APPEND ETHERVOXAI_CORE_SOURCES ${FILE_TOOLS_SOURCES})
+    message(STATUS "File tools plugin sources included")
+else()
+    message(STATUS "File tools plugin SKIPPED on Windows (requires PATH_MAX)")
+endif()
 
 # Add unit conversion plugin sources
 file(GLOB UNIT_CONVERSION_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/unit_conversion/*.c")
@@ -642,25 +704,35 @@ list(APPEND ETHERVOXAI_CORE_SOURCES ${CONTEXT_TOOLS_SOURCES})
 message(STATUS "Context tools plugin sources included")
 
 # Add conversation tools plugin sources (speak, listen for LLM-controlled interaction)
-file(GLOB CONVERSATION_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/conversation_tools/*.c")
-list(APPEND ETHERVOXAI_CORE_SOURCES ${CONVERSATION_TOOLS_SOURCES})
-message(STATUS "Conversation tools plugin sources included")
+if(NOT WIN32)
+    file(GLOB CONVERSATION_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/conversation_tools/*.c")
+    list(APPEND ETHERVOXAI_CORE_SOURCES ${CONVERSATION_TOOLS_SOURCES})
+    message(STATUS "Conversation tools plugin sources included")
+else()
+    message(STATUS "Conversation tools plugin SKIPPED on Windows (requires voice tools)")
+endif()
 
 # Add voice tools plugin sources
-file(GLOB VOICE_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/voice_tools/*.c")
-list(APPEND ETHERVOXAI_CORE_SOURCES ${VOICE_TOOLS_SOURCES})
-message(STATUS "Voice tools plugin sources included")
+if(NOT WIN32)
+    file(GLOB VOICE_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/voice_tools/*.c")
+    list(APPEND ETHERVOXAI_CORE_SOURCES ${VOICE_TOOLS_SOURCES})
+    message(STATUS "Voice tools plugin sources included")
+else()
+    message(STATUS "Voice tools plugin SKIPPED on Windows (requires pthread.h)")
+endif()
 
 # Add meta tools plugin sources (get_tool_info for dynamic schema loading)
 file(GLOB META_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/meta_tools/*.c")
 list(APPEND ETHERVOXAI_CORE_SOURCES ${META_TOOLS_SOURCES})
 message(STATUS "Meta tools plugin sources included")
 
-# Add dialogue sources (including integration tests)
-file(GLOB DIALOGUE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/dialogue/*.c")
-list(FILTER DIALOGUE_SOURCES EXCLUDE REGEX ".*test_.*\\.c$")  # Exclude test_ files
-list(APPEND ETHERVOXAI_CORE_SOURCES ${DIALOGUE_SOURCES})
-message(STATUS "Dialogue sources included: ${DIALOGUE_SOURCES}")
+# Add workspace tools plugin sources (Tauri workspace integration)
+file(GLOB WORKSPACE_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/workspace_tools/*.c")
+list(APPEND ETHERVOXAI_CORE_SOURCES ${WORKSPACE_TOOLS_SOURCES})
+message(STATUS "Workspace tools plugin sources included")
+
+# Note: Dialogue sources already added via initial GLOB (lines 596-603)
+# and filtered for Windows compatibility above
 
 # Shared audio core implementation (excluding platform-specific files)
 list(APPEND ETHERVOXAI_CORE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/audio/audio_core.c")
@@ -687,6 +759,7 @@ elseif(WIN32 OR TARGET_PLATFORM STREQUAL "WINDOWS")
     set(PLATFORM_SOURCES
         src/audio/platform_windows.c
         src/platform/desktop_hal.c
+        src/platform/windows_stubs.c  # Stubs for excluded features
     )
 elseif(APPLE OR TARGET_PLATFORM STREQUAL "MACOS")
     message(STATUS "Building for macOS - using macOS platform sources")
@@ -990,8 +1063,8 @@ endif()
 
 set_property(GLOBAL PROPERTY ETHERVOXAI_PLATFORM_LIBS "${ETHERVOXAI_PLATFORM_LIBS}")
 
-# CLI executable built on top of the reusable library (not for Android)
-if(NOT ANDROID)
+# CLI executable built on top of the reusable library (not for Android or Windows)
+if(NOT ANDROID AND NOT WIN32)
     add_executable(ethervoxai_app src/main.c)
     target_link_libraries(ethervoxai_app PRIVATE ethervoxai)
     
@@ -1052,7 +1125,7 @@ endif()
 install(TARGETS ethervoxai
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib)
-if(NOT ANDROID)
+if(NOT ANDROID AND NOT WIN32)
     install(TARGETS ethervoxai_app RUNTIME DESTINATION bin)
 endif()
 install(DIRECTORY include/ DESTINATION include)
