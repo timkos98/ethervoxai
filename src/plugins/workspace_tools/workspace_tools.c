@@ -225,6 +225,66 @@ static int tool_workspace_create_connection_wrapper(const char* args_json, char*
   return g_workspace_ops->create_connection(from_id, to_id, label_param, result, error);
 }
 
+/**
+ * @brief Tool wrapper: workspace_update_object
+ */
+static int tool_workspace_update_object_wrapper(const char* args_json, char** result,
+                                                char** error) {
+  if (!g_workspace_ops || !g_workspace_ops->update_object) {
+    *error = strdup("Workspace operations not initialized");
+    return -1;
+  }
+
+  char object_id[64];
+  char* content = NULL;
+  char append[16] = "true";  // Default to append mode
+
+  // Parse required parameters
+  if (parse_json_string(args_json, "object_id", object_id, sizeof(object_id)) != 0) {
+    *error = strdup("Missing required parameter: 'object_id'");
+    return -1;
+  }
+
+  // Parse content (can be large, so we need special handling)
+  const char* content_key = "\"content\":\"";
+  const char* content_start = strstr(args_json, content_key);
+  if (!content_start) {
+    content_key = "\"content\": \"";
+    content_start = strstr(args_json, content_key);
+  }
+
+  if (content_start) {
+    content_start += strlen(content_key);
+    const char* content_end = strstr(content_start, "\",");
+    if (!content_end)
+      content_end = strstr(content_start, "\"}");
+
+    if (content_end) {
+      size_t content_len = content_end - content_start;
+      content = (char*)malloc(content_len + 1);
+      if (content) {
+        memcpy(content, content_start, content_len);
+        content[content_len] = '\0';
+      }
+    }
+  }
+
+  if (!content) {
+    *error = strdup("Missing required parameter: 'content'");
+    return -1;
+  }
+
+  // Parse optional append mode
+  parse_json_string(args_json, "append", append, sizeof(append));
+
+  ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
+               "Updating object: %s (append=%s)", object_id, append);
+
+  int ret = g_workspace_ops->update_object(object_id, content, append, result, error);
+  free(content);
+  return ret;
+}
+
 //=============================================================================
 // Tool Registration
 //=============================================================================
@@ -307,15 +367,17 @@ ethervox_result_t ethervox_workspace_tools_register(ethervox_tool_registry_t* re
   ethervox_tool_t create_note_tool = {
       .name = "workspace_create_note",
       .description =
-          "CREATE a new markdown note in workspace. Use when user asks to add, create, make, or "
-          "write a note. Required: title and content parameters. Returns the created note object "
-          "with new UUID.",
+          "CREATE a new standalone markdown note in workspace. Use when user asks to create, add, "
+          "or make a NEW note (not attached to existing objects). Parameters: 'title' (string, "
+          "required) and 'content' (string, required, markdown format). Returns newly created note "
+          "UUID. IMPORTANT: This creates a NEW standalone note. To add info to an EXISTING object "
+          "(like a person), first search for it with workspace_search_objects, then use that "
+          "object's existing notes/files.",
       .parameters_json_schema =
-          "{\"title\":{\"type\":\"string\",\"description\":\"Note title (any "
-          "text)\",\"required\":true},\"content\":{\"type\":\"string\",\"description\":\"Note "
-          "content (markdown "
-          "format)\",\"required\":true},\"tags\":{\"type\":\"array\",\"description\":\"Optional "
-          "tags array\"}}",
+          "{\"title\":{\"type\":\"string\",\"description\":\"Note title\",\"required\":true},"
+          "\"content\":{\"type\":\"string\",\"description\":\"Note content in markdown "
+          "format\",\"required\":true},\"tags\":{\"type\":\"array\",\"description\":\"Optional "
+          "tags list\",\"required\":false}}",
       .execute = tool_workspace_create_note_wrapper,
       .requires_confirmation = 0};
   result = ethervox_tool_registry_add(registry, &create_note_tool);
@@ -346,8 +408,34 @@ ethervox_result_t ethervox_workspace_tools_register(ethervox_tool_registry_t* re
     return result;
   }
 
+  // Register: workspace_update_object
+  ethervox_tool_t update_object_tool = {
+      .name = "workspace_update_object",
+      .description =
+          "Update or append content to an EXISTING object in the workspace. Use when user wants "
+          "to add information to an existing note, person, or object. First use "
+          "workspace_search_objects to find the object_id, then call this to update its content. "
+          "Parameters: 'object_id' (string, required), 'content' (string, required), 'append' "
+          "(string, optional, 'true' or 'false', defaults to 'true'). When append=true, adds new "
+          "content after existing content. When append=false, replaces entire content. Returns "
+          "updated object details.",
+      .parameters_json_schema =
+          "{\"object_id\":{\"type\":\"string\",\"description\":\"UUID of object to "
+          "update\",\"required\":true},\"content\":{\"type\":\"string\",\"description\":\"New "
+          "content to add or replace\",\"required\":true},\"append\":{\"type\":\"string\","
+          "\"description\":\"Append (true) or replace (false) "
+          "content\",\"default\":\"true\"}}",
+      .execute = tool_workspace_update_object_wrapper,
+      .requires_confirmation = 0};
+  result = ethervox_tool_registry_add(registry, &update_object_tool);
+  if (result != ETHERVOX_SUCCESS) {
+    ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__,
+                 "Failed to register workspace_update_object");
+    return result;
+  }
+
   ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
-               "Registered 5 workspace tools successfully");
+               "Registered 6 workspace tools successfully");
 
   return ETHERVOX_SUCCESS;
 }

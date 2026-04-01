@@ -71,6 +71,19 @@ typedef int (*workspace_create_connection_fn)(const char* from_id, const char* t
                                               const char* label, char** result, char** error);
 
 /**
+ * @brief Update or append content to an existing object
+ *
+ * @param object_id UUID of the object to update
+ * @param content New content to add or replace
+ * @param append String "true" or "false" to append or replace content
+ * @param result Output parameter for JSON object with updated details
+ * @param error Output parameter for error messages
+ * @return 0 on success, -1 on error
+ */
+typedef int (*workspace_update_object_fn)(const char* object_id, const char* content,
+                                          const char* append, char** result, char** error);
+
+/**
  * @brief Collection of workspace operation function pointers
  *
  * This struct is populated by Rust and passed to the C plugin during
@@ -81,6 +94,7 @@ typedef struct {
   workspace_search_objects_fn search_objects;
   workspace_get_object_fn get_object;
   workspace_create_note_fn create_note;
+  workspace_update_object_fn update_object;
   workspace_create_connection_fn create_connection;
 } workspace_operations_t;
 
