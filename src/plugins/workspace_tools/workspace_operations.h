@@ -94,6 +94,16 @@ typedef int (*workspace_update_object_fn)(const char* object_id, const char* con
 typedef int (*workspace_export_to_docx_fn)(const char* object_id, char** result, char** error);
 
 /**
+ * @brief Highlight nodes in the graph visualization
+ *
+ * @param node_ids_json JSON array of node IDs to highlight (e.g., ["id1", "id2"])
+ * @param result Output parameter for JSON response
+ * @param error Output parameter for error messages
+ * @return 0 on success, -1 on error
+ */
+typedef int (*workspace_highlight_nodes_fn)(const char* node_ids_json, char** result, char** error);
+
+/**
  * @brief Collection of workspace operation function pointers
  *
  * This struct is populated by Rust and passed to the C plugin during
@@ -107,6 +117,7 @@ typedef struct {
   workspace_update_object_fn update_object;
   workspace_create_connection_fn create_connection;
   workspace_export_to_docx_fn export_to_docx;
+  workspace_highlight_nodes_fn highlight_nodes;
 } workspace_operations_t;
 
 #ifdef __cplusplus

@@ -309,6 +309,60 @@ static int tool_workspace_export_to_docx_wrapper(const char* args_json, char** r
   return g_workspace_ops->export_to_docx(object_id, result, error);
 }
 
+/**
+ * @brief Tool wrapper: workspace_highlight_nodes
+ */
+static int tool_workspace_highlight_nodes_wrapper(const char* args_json, char** result,
+                                                   char** error) {
+  if (!g_workspace_ops || !g_workspace_ops->highlight_nodes) {
+    *error = strdup("Workspace operations not initialized");
+    return -1;
+  }
+
+  // Parse node_ids array from JSON
+  // args_json should be: {"node_ids": ["id1", "id2", ...]}
+  
+  // Extract just the node_ids array JSON string
+  // For now, simple extraction - in production you'd use a JSON parser
+  const char* node_ids_start = strstr(args_json, "\"node_ids\"");
+  if (!node_ids_start) {
+    *error = strdup("Missing required parameter: 'node_ids'");
+    return -1;
+  }
+  
+  // Find the array value
+  const char* array_start = strchr(node_ids_start, '[');
+  if (!array_start) {
+    *error = strdup("Invalid node_ids format (expected array)");
+    return -1;
+  }
+  
+  // Find the matching closing bracket
+  int bracket_count = 1;
+  const char* p = array_start + 1;
+  while (*p && bracket_count > 0) {
+    if (*p == '[') bracket_count++;
+    else if (*p == ']') bracket_count--;
+    p++;
+  }
+  
+  if (bracket_count != 0) {
+    *error = strdup("Malformed node_ids array");
+    return -1;
+  }
+  
+  // Extract the array substring
+  size_t array_len = p - array_start;
+  char* node_ids_json = strndup(array_start, array_len);
+  
+  ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
+               "Highlighting nodes: %s", node_ids_json);
+
+  int ret = g_workspace_ops->highlight_nodes(node_ids_json, result, error);
+  free(node_ids_json);
+  return ret;
+}
+
 //=============================================================================
 // Tool Registration
 //=============================================================================
@@ -479,8 +533,30 @@ ethervox_result_t ethervox_workspace_tools_register(ethervox_tool_registry_t* re
     return result;
   }
 
+  // Register: workspace_highlight_nodes
+  ethervox_tool_t highlight_tool = {
+      .name = "workspace_highlight_nodes",
+      .description =
+          "Highlight specific nodes in the graph visualization. Use this when the user searches "
+          "for objects, asks to find or show specific items, or wants visual emphasis on certain "
+          "nodes. This tool takes an array of node IDs and highlights them in the UI so the user "
+          "can see them clearly. Combine with workspace_search_objects to first find nodes, then "
+          "highlight the results. Parameters: 'node_ids' (array of strings, required). Returns "
+          "success status and the count of highlighted nodes.",
+      .parameters_json_schema =
+          "{\"node_ids\":{\"type\":\"array\",\"description\":\"Array of node UUIDs to highlight "
+          "in the graph\",\"items\":{\"type\":\"string\"},\"required\":true}}",
+      .execute = tool_workspace_highlight_nodes_wrapper,
+      .requires_confirmation = 0};
+  result = ethervox_tool_registry_add(registry, &highlight_tool);
+  if (result != ETHERVOX_SUCCESS) {
+    ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__,
+                 "Failed to register workspace_highlight_nodes");
+    return result;
+  }
+
   ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
-               "Registered 7 workspace tools successfully");
+               "Registered 8 workspace tools successfully");
 
   return ETHERVOX_SUCCESS;
 }
