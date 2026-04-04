@@ -285,6 +285,30 @@ static int tool_workspace_update_object_wrapper(const char* args_json, char** re
   return ret;
 }
 
+/**
+ * @brief Tool wrapper: workspace_export_to_docx
+ */
+static int tool_workspace_export_to_docx_wrapper(const char* args_json, char** result,
+                                                 char** error) {
+  if (!g_workspace_ops || !g_workspace_ops->export_to_docx) {
+    *error = strdup("Workspace operations not initialized or export function not available");
+    return -1;
+  }
+
+  char object_id[64];
+
+  // Parse required object_id parameter
+  if (parse_json_string(args_json, "object_id", object_id, sizeof(object_id)) != 0) {
+    *error = strdup("Missing required parameter: 'object_id'");
+    return -1;
+  }
+
+  ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
+               "Exporting object to DOCX: %s", object_id);
+
+  return g_workspace_ops->export_to_docx(object_id, result, error);
+}
+
 //=============================================================================
 // Tool Registration
 //=============================================================================
@@ -367,15 +391,15 @@ ethervox_result_t ethervox_workspace_tools_register(ethervox_tool_registry_t* re
   ethervox_tool_t create_note_tool = {
       .name = "workspace_create_note",
       .description =
-          "CREATE a new standalone markdown note in workspace. Use when user asks to create, add, "
-          "or make a NEW note (not attached to existing objects). Parameters: 'title' (string, "
-          "required) and 'content' (string, required, markdown format). Returns newly created note "
-          "UUID. IMPORTANT: This creates a NEW standalone note. To add info to an EXISTING object "
-          "(like a person), first search for it with workspace_search_objects, then use that "
-          "object's existing notes/files.",
+          "CREATE a new graph node/object in the workspace (stored as a markdown note). Use this "
+          "when the user asks to create/add a new 'node', 'object', 'note', or 'item' in the graph. "
+          "Parameters: 'title' (string, required) - the node name/title, and 'content' (string, "
+          "required) - node content in markdown format. Returns the newly created node's UUID. "
+          "IMPORTANT: This creates a NEW standalone graph node. To add info to an EXISTING node, "
+          "first search for it with workspace_search_objects, then use workspace_update_object.",
       .parameters_json_schema =
-          "{\"title\":{\"type\":\"string\",\"description\":\"Note title\",\"required\":true},"
-          "\"content\":{\"type\":\"string\",\"description\":\"Note content in markdown "
+          "{\"title\":{\"type\":\"string\",\"description\":\"Node/object title/name\",\"required\":true},"
+          "\"content\":{\"type\":\"string\",\"description\":\"Node content in markdown "
           "format\",\"required\":true},\"tags\":{\"type\":\"array\",\"description\":\"Optional "
           "tags list\",\"required\":false}}",
       .execute = tool_workspace_create_note_wrapper,
@@ -434,8 +458,29 @@ ethervox_result_t ethervox_workspace_tools_register(ethervox_tool_registry_t* re
     return result;
   }
 
+  // Register: workspace_export_to_docx
+  ethervox_tool_t export_docx_tool = {
+      .name = "workspace_export_to_docx",
+      .description =
+          "Export a markdown note to Microsoft Word (.docx) format. Use this when the user asks "
+          "to create a Word document, export to Word, or wants a .docx file. The system stores "
+          "everything as markdown internally, but can export to Word format on demand. "
+          "Parameters: 'object_id' (string, required). Returns the path to the generated .docx "
+          "file. Requires pandoc to be installed on the system.",
+      .parameters_json_schema =
+          "{\"object_id\":{\"type\":\"string\",\"description\":\"UUID of the markdown note to "
+          "export\",\"required\":true}}",
+      .execute = tool_workspace_export_to_docx_wrapper,
+      .requires_confirmation = 0};
+  result = ethervox_tool_registry_add(registry, &export_docx_tool);
+  if (result != ETHERVOX_SUCCESS) {
+    ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__,
+                 "Failed to register workspace_export_to_docx");
+    return result;
+  }
+
   ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
-               "Registered 6 workspace tools successfully");
+               "Registered 7 workspace tools successfully");
 
   return ETHERVOX_SUCCESS;
 }

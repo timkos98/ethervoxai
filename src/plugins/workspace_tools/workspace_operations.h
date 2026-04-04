@@ -84,6 +84,16 @@ typedef int (*workspace_update_object_fn)(const char* object_id, const char* con
                                           const char* append, char** result, char** error);
 
 /**
+ * @brief Export a markdown note to Word (.docx) format
+ *
+ * @param object_id UUID of the markdown note to export
+ * @param result Output parameter for JSON object with export details (docx_path, etc.)
+ * @param error Output parameter for error messages
+ * @return 0 on success, -1 on error (e.g., pandoc not installed)
+ */
+typedef int (*workspace_export_to_docx_fn)(const char* object_id, char** result, char** error);
+
+/**
  * @brief Collection of workspace operation function pointers
  *
  * This struct is populated by Rust and passed to the C plugin during
@@ -96,6 +106,7 @@ typedef struct {
   workspace_create_note_fn create_note;
   workspace_update_object_fn update_object;
   workspace_create_connection_fn create_connection;
+  workspace_export_to_docx_fn export_to_docx;
 } workspace_operations_t;
 
 #ifdef __cplusplus
