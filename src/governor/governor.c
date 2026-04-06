@@ -60,7 +60,9 @@ static void governor_ggml_log_callback(enum ggml_log_level level, const char* te
   // Remove trailing newline if present
   size_t len = strlen(text);
   char* clean_text = (char*)alloca(len + 1);
-  strcpy(clean_text, text);
+  // Security fix: Use strncpy instead of strcpy to prevent buffer overflow
+  strncpy(clean_text, text, len);
+  clean_text[len] = '\0';  // Ensure null termination
   if (len > 0 && clean_text[len - 1] == '\n') {
     clean_text[len - 1] = '\0';
   }
@@ -785,8 +787,15 @@ static int execute_tool_call(const char* tool_call_xml, ethervox_tool_registry_t
   for (int i = 0; attrs[i] != NULL; i++) {
     char* attr_value = parse_attribute(tool_call_xml, attrs[i]);
     if (attr_value) {
-      if (!first)
-        strcat(json_input, ", ");
+      // Security fix: Check buffer space before appending separator
+      size_t current_len = strlen(json_input);
+      size_t remaining = sizeof(json_input) - current_len - 1;
+      
+      if (!first && remaining > 3) {
+        strncat(json_input, ", ", remaining);
+        current_len = strlen(json_input);  // Update after append
+        remaining = sizeof(json_input) - current_len - 1;
+      }
 
       // Check if value is numeric (must have at least one digit)
       // Exception: memory_id, file_path, filepath, tags should always be strings
@@ -822,9 +831,9 @@ static int execute_tool_call(const char* tool_call_xml, ethervox_tool_registry_t
         is_numeric = has_digit && (p > attr_value);
       }
 
-      // Append field directly to json_input to avoid 256-byte truncation
-      size_t current_len = strlen(json_input);
-      size_t remaining = sizeof(json_input) - current_len - 1;
+      // Append field directly to json_input (reuse current_len and remaining)
+      current_len = strlen(json_input);
+      remaining = sizeof(json_input) - current_len - 1;
 
       if (is_numeric) {
         snprintf(json_input + current_len, remaining, "\"%s\": %s", attrs[i], attr_value);
@@ -837,7 +846,17 @@ static int execute_tool_call(const char* tool_call_xml, ethervox_tool_registry_t
     }
   }
 
-  strcat(json_input, "}");
+  // Security fix: Use strncat to safely append closing brace
+  size_t final_len = strlen(json_input);
+  size_t final_remaining = sizeof(json_input) - final_len - 1;
+  if (final_remaining > 1) {
+    strncat(json_input, "}", final_remaining);
+  } else {
+    GOV_ERROR("JSON buffer overflow prevented - input too long");
+    free(tool_name);
+    *error = strdup("Tool arguments too large");
+    return ETHERVOX_ERROR_BUFFER_TOO_SMALL;
+  }
 
   GOV_LOG("Built JSON for tool '%s': %s", tool->name, json_input);
 

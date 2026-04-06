@@ -252,7 +252,7 @@ static int aaudio_read_audio(ethervox_audio_runtime_t* runtime, ethervox_audio_b
   clock_gettime(CLOCK_MONOTONIC, &ts);
   buffer->timestamp_us = (uint64_t)ts.tv_sec * 1000000ULL + (uint64_t)ts.tv_nsec / 1000ULL;
   
-  return frames_read;
+  return ETHERVOX_SUCCESS; // Return 0 for success, not frame count
 }
 
 static int aaudio_write_audio(ethervox_audio_runtime_t* runtime, 
@@ -740,7 +740,8 @@ static int opensl_read_audio(ethervox_audio_runtime_t* runtime, ethervox_audio_b
   
   pthread_mutex_unlock(&data->lock);
   
-  return (int)to_read; // Return number of samples read
+  buffer->size = to_read; // Update buffer with actual samples read
+  return ETHERVOX_SUCCESS; // Return 0 for success, not sample count
 }
 
 static int opensl_write_audio(ethervox_audio_runtime_t* runtime,

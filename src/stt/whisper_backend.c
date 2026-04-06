@@ -335,12 +335,12 @@ ethervox_result_t ethervox_stt_whisper_init(ethervox_stt_runtime_t* runtime) {
   
   // Initial prompt to guide transcription style and improve accuracy
   // Based on whisper.cpp best practices for conversational speech
-  // This helps Whisper understand context and improves word detection
+  // Strong anti-hallucination prompt based on OpenAI recommendations
   ctx->params.initial_prompt = 
-    "This is conversational speech with natural pronunciation. "
-    "Transcribe exactly what is said, including all words clearly. "
-    "Avoid hallucinations and stay accurate to the audio.";
-  LOG_INFO("Using context-aware initial prompt for better word detection");
+    "Transcribe only the actual spoken words clearly audible in the audio. "
+    "Do not add any text, words, or sounds that are not clearly present. "
+    "During silence or noise, output nothing. Stay precise and accurate.";
+  LOG_INFO("Using strict anti-hallucination prompt for accurate transcription");
   
   // Advanced tuning for word-level accuracy
   ctx->params.split_on_word = true;     // Split segments on word boundaries (cleaner output)
@@ -348,14 +348,17 @@ ethervox_result_t ethervox_stt_whisper_init(ethervox_stt_runtime_t* runtime) {
   ctx->params.audio_ctx = 0;            // Use model default audio context (1500 for most models)
   
   // Streaming optimization (based on stream.cpp example)
-  ctx->params.no_context = true;        // Reset context each chunk to avoid loops
+  ctx->params.no_context = true;        // Reset context each chunk to avoid hallucination loops
   ctx->params.single_segment = false;   // Allow multiple segments per chunk
-  ctx->params.max_tokens = 0;           // No token limit - process full chunk
+  ctx->params.max_tokens = 64;          // Limit tokens per segment to reduce hallucinations
+  
+  // Additional anti-hallucination settings
+  ctx->params.max_len = 1;              // Limit segment length to reduce run-on hallucinations
   
   // DISABLE experimental VAD - it requires a separate VAD model we don't have
   // We'll use time-based chunking instead (like stream.cpp default mode)
   ctx->params.vad = false;
-  LOG_INFO("Using time-based chunking (3s steps) instead of experimental VAD");
+  LOG_INFO("Using time-based chunking (3s steps) with strict hallucination prevention");
   
   // Allocate main audio buffer (10 seconds @ 16kHz for chunk processing)
   ctx->audio_buffer_capacity = 16000 * 10;
@@ -979,14 +982,27 @@ ethervox_result_t ethervox_stt_whisper_finalize(ethervox_stt_runtime_t* runtime,
   LOG_INFO("[Whisper Finalize] Total samples to process: %zu (%.2fs)",
            total_samples, (float)total_samples / 16000.0f);
   
-  if (total_samples > 8000) { // At least 0.5 seconds total
-    LOG_INFO("Finalizing with %.1f seconds total (%.1f overlap + %.1f new)", 
-             (float)total_samples / 16000.0f,
-             (float)ctx->overlap_size / 16000.0f,
-             (float)ctx->audio_buffer_size / 16000.0f);
+  if (total_samples > 0) { // Process any remaining audio
+    // Pad short audio to minimum chunk size (0.5 seconds = 8000 samples)
+    const size_t min_chunk_size = 8000;
+    size_t padded_size = total_samples;
+    bool needs_padding = false;
     
-    // Prepare processing buffer: overlap + remaining audio (same as normal processing)
-    float* process_buffer = (float*)malloc(total_samples * sizeof(float));
+    if (total_samples < min_chunk_size) {
+      padded_size = min_chunk_size;
+      needs_padding = true;
+      LOG_INFO("Finalizing with padding: %.1fs audio -> %.1fs (padded with zeros)",
+               (float)total_samples / 16000.0f,
+               (float)padded_size / 16000.0f);
+    } else {
+      LOG_INFO("Finalizing with %.1f seconds total (%.1f overlap + %.1f new)", 
+               (float)total_samples / 16000.0f,
+               (float)ctx->overlap_size / 16000.0f,
+               (float)ctx->audio_buffer_size / 16000.0f);
+    }
+    
+    // Prepare processing buffer: overlap + remaining audio + padding
+    float* process_buffer = (float*)malloc(padded_size * sizeof(float));
     if (!process_buffer) {
       LOG_ERROR("Failed to allocate finalize processing buffer");
       result->text = strdup("");
@@ -1005,9 +1021,15 @@ ethervox_result_t ethervox_stt_whisper_finalize(ethervox_stt_runtime_t* runtime,
              ctx->audio_buffer_size * sizeof(float));
     }
     
-    log_audio_stats(process_buffer, total_samples, "Finalize audio stats (with overlap)");
+    // Pad with zeros if needed
+    if (needs_padding) {
+      memset(process_buffer + total_samples, 0, (padded_size - total_samples) * sizeof(float));
+      LOG_INFO("Padded %zu samples with zeros", padded_size - total_samples);
+    }
     
-    if (whisper_full(ctx->ctx, ctx->params, process_buffer, total_samples) == 0) {
+    log_audio_stats(process_buffer, padded_size, "Finalize audio stats (with overlap and padding)");
+    
+    if (whisper_full(ctx->ctx, ctx->params, process_buffer, padded_size) == 0) {
       const int n_segments = whisper_full_n_segments(ctx->ctx);
       LOG_INFO("Finalize produced %d segment(s)", n_segments);
       
@@ -1034,11 +1056,6 @@ ethervox_result_t ethervox_stt_whisper_finalize(ethervox_stt_runtime_t* runtime,
     
     // CRITICAL: Clear the buffer sizes after processing
     // Buffer memory will be zeroed by stop() function
-    ctx->audio_buffer_size = 0;
-    ctx->overlap_size = 0;
-  } else if (total_samples > 0) {
-    LOG_INFO("Finalize: Remaining audio too short (%.1fs total) - discarding", 
-             (float)total_samples / 16000.0f);
     ctx->audio_buffer_size = 0;
     ctx->overlap_size = 0;
   } else {

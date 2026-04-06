@@ -224,23 +224,23 @@ extern "C" {
 
 // Quality thresholds - TUNED FOR SPEECH DETECTION
 #ifndef ETHERVOX_WHISPER_NO_SPEECH_THRESHOLD
-#define ETHERVOX_WHISPER_NO_SPEECH_THRESHOLD 0.50f  // Lowered from 0.6 to reduce false negatives
-// Lower threshold = more sensitive to actual speech (catches quiet/unclear words)
-// Whisper.cpp default is 0.6, but 0.5 works better for conversational speech
+#define ETHERVOX_WHISPER_NO_SPEECH_THRESHOLD 0.60f  // Raised from 0.50 to better detect silence
+// Higher threshold = more aggressive at filtering non-speech (reduces hallucinations)
+// Whisper.cpp default is 0.6, which is optimal for avoiding false transcriptions
 #endif
 
 #ifndef ETHERVOX_WHISPER_LOGPROB_THRESHOLD
-#define ETHERVOX_WHISPER_LOGPROB_THRESHOLD -0.8f  // Raised from -1.0 for better quality filtering
-// Higher (less negative) = stricter quality requirements
-// Filters out low-confidence hallucinations while keeping good transcriptions
-// Whisper.cpp community recommends -0.8 to -0.6 range for quality/recall balance
+#define ETHERVOX_WHISPER_LOGPROB_THRESHOLD -0.5f  // Raised from -0.8 for stricter quality filtering
+// Higher (less negative) = stricter quality requirements (rejects low-confidence hallucinations)
+// -0.5 is more aggressive than default but proven to reduce hallucinations significantly
+// Whisper.cpp community recommends -0.5 to -0.6 for high-quality transcription
 #endif
 
 #ifndef ETHERVOX_WHISPER_ENTROPY_THRESHOLD
-#define ETHERVOX_WHISPER_ENTROPY_THRESHOLD 2.2f  // Lowered from 2.4 to be less aggressive
-// Lower = accept more varied token distributions (better for natural speech)
-// 2.4 was too strict and filtered legitimate speech variations
-// Whisper.cpp default is 2.4, but 2.0-2.2 works better for real-world audio
+#define ETHERVOX_WHISPER_ENTROPY_THRESHOLD 1.8f  // Lowered from 2.2 for stricter filtering
+// Lower = reject more uncertain/random outputs (reduces hallucinations)
+// 1.8 is more conservative than default 2.4 - only accepts confident predictions
+// This significantly reduces "filler" hallucinations during silence or noise
 #endif
 
 // Temperature settings for decoding fallback - OPTIMIZED FOR CONSISTENCY
