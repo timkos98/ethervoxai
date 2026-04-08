@@ -110,7 +110,8 @@ typedef struct {
 
 // Dialogue context
 typedef struct {
-  char* conversation_id;
+  char* conversation_id;        // Internal unique ID
+  char* display_name;           // User-friendly display name for UI
   char* user_id;
   char current_language[ETHERVOX_LANG_CODE_LEN];
   ethervox_intent_t* conversation_history;
@@ -197,6 +198,26 @@ ethervox_result_t ethervox_dialogue_create_context(ethervox_dialogue_engine_t* e
 ethervox_result_t ethervox_dialogue_get_context(ethervox_dialogue_engine_t* engine, const char* context_id,
                                   ethervox_dialogue_context_t** context);
 void ethervox_dialogue_destroy_context(ethervox_dialogue_engine_t* engine, const char* context_id);
+
+/**
+ * Get the display name for a conversation context
+ * @param engine Dialogue engine
+ * @param context_id Conversation context ID
+ * @return Display name string (owned by context, do not free), or NULL if not found
+ */
+const char* ethervox_dialogue_get_display_name(ethervox_dialogue_engine_t* engine, 
+                                               const char* context_id);
+
+/**
+ * Rename a conversation context
+ * @param engine Dialogue engine
+ * @param context_id Conversation context ID
+ * @param new_name New display name for the conversation
+ * @return ETHERVOX_SUCCESS on success, error code on failure
+ */
+ethervox_result_t ethervox_dialogue_rename_context(ethervox_dialogue_engine_t* engine,
+                                                   const char* context_id,
+                                                   const char* new_name);
 
 ethervox_result_t ethervox_dialogue_set_language(ethervox_dialogue_engine_t* engine, const char* language_code);
 const char* ethervox_dialogue_get_language(const ethervox_dialogue_engine_t* engine);

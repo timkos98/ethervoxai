@@ -531,6 +531,38 @@ static char* generate_conversation_id(void) {
   return id;
 }
 
+/**
+ * Generate user-friendly display name from timestamp
+ * 
+ * Current implementation: Timestamp-based naming (Option C)
+ * Format: "Apr 8, 3:45 PM"
+ * 
+ * Future enhancement: Can be upgraded to topic-based naming (Option A) by:
+ * 1. Detecting first real user message (ignoring silent startup prompts)
+ * 2. Extracting key topics or using first 30 chars of user's message
+ * 3. Optionally using LLM to generate smart titles after 3-5 turns
+ * 
+ * @return Allocated string with display name (caller must free)
+ */
+static char* generate_display_name(void) {
+  char* name = (char*)malloc(64);
+  if (!name) {
+    return strdup("New Conversation");
+  }
+  
+  time_t now = time(NULL);
+  struct tm* tm_info = localtime(&now);
+  
+  if (!tm_info) {
+    free(name);
+    return strdup("New Conversation");
+  }
+  
+  // Format: "Apr 8, 3:45 PM"
+  strftime(name, 64, "%b %d, %I:%M %p", tm_info);
+  return name;
+}
+
 // Initialize dialogue engine
 ethervox_result_t ethervox_dialogue_init(ethervox_dialogue_engine_t* engine,
                            const ethervox_llm_config_t* config) {
@@ -806,6 +838,9 @@ void ethervox_dialogue_cleanup(ethervox_dialogue_engine_t* engine) {
       ethervox_dialogue_context_t* ctx = &engine->contexts[i];
       if (ctx->conversation_id) {
         free(ctx->conversation_id);
+      }
+      if (ctx->display_name) {
+        free(ctx->display_name);
       }
       free(ctx->user_id);
 
@@ -1996,6 +2031,7 @@ ethervox_result_t ethervox_dialogue_create_context(ethervox_dialogue_engine_t* e
     ethervox_dialogue_context_t* ctx = &engine->contexts[i];
     if (!ctx->conversation_id) {  // Empty slot
       ctx->conversation_id = generate_conversation_id();
+      ctx->display_name = generate_display_name();
       ctx->user_id = strdup(request->user_id);
       snprintf(ctx->current_language, sizeof(ctx->current_language), "%s", language_code);
       ctx->max_history = kEthervoxDefaultMaxHistory;
@@ -2006,12 +2042,61 @@ ethervox_result_t ethervox_dialogue_create_context(ethervox_dialogue_engine_t* e
       *context_id = strdup(ctx->conversation_id);
       engine->active_contexts++;
 
-      printf("Created dialogue context: %s for user: %s\n", ctx->conversation_id, request->user_id);
+      printf("Created dialogue context: %s ('%s') for user: %s\n", 
+             ctx->conversation_id, ctx->display_name, request->user_id);
       return ETHERVOX_SUCCESS;
     }
   }
 
   return ETHERVOX_ERROR_INVALID_ARGUMENT;  // No available slots
+}
+
+// Get display name for a conversation context
+const char* ethervox_dialogue_get_display_name(ethervox_dialogue_engine_t* engine, 
+                                               const char* context_id) {
+  if (!engine || !context_id) {
+    return NULL;
+  }
+  
+  for (uint32_t i = 0; i < engine->max_contexts; i++) {
+    ethervox_dialogue_context_t* ctx = &engine->contexts[i];
+    if (ctx->conversation_id && strcmp(ctx->conversation_id, context_id) == 0) {
+      return ctx->display_name;
+    }
+  }
+  
+  return NULL;
+}
+
+// Rename a conversation context
+ethervox_result_t ethervox_dialogue_rename_context(ethervox_dialogue_engine_t* engine,
+                                                   const char* context_id,
+                                                   const char* new_name) {
+  ETHERVOX_CHECK_PTR(engine);
+  ETHERVOX_CHECK_PTR(context_id);
+  ETHERVOX_CHECK_PTR(new_name);
+  
+  for (uint32_t i = 0; i < engine->max_contexts; i++) {
+    ethervox_dialogue_context_t* ctx = &engine->contexts[i];
+    if (ctx->conversation_id && strcmp(ctx->conversation_id, context_id) == 0) {
+      // Free old display name
+      if (ctx->display_name) {
+        free(ctx->display_name);
+      }
+      
+      // Set new display name
+      ctx->display_name = strdup(new_name);
+      if (!ctx->display_name) {
+        ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_OUT_OF_MEMORY, 
+                             "Failed to allocate memory for new conversation name");
+      }
+      
+      printf("Renamed conversation %s to '%s'\n", context_id, new_name);
+      return ETHERVOX_SUCCESS;
+    }
+  }
+  
+  ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_FOUND, "Conversation context not found");
 }
 
 ethervox_result_t ethervox_dialogue_set_language(ethervox_dialogue_engine_t* engine, const char* language_code) {

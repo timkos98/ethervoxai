@@ -335,12 +335,12 @@ ethervox_result_t ethervox_stt_whisper_init(ethervox_stt_runtime_t* runtime) {
   
   // Initial prompt to guide transcription style and improve accuracy
   // Based on whisper.cpp best practices for conversational speech
-  // Strong anti-hallucination prompt based on OpenAI recommendations
+  // Anti-hallucination prompt that prevents common filler phrases
   ctx->params.initial_prompt = 
-    "Transcribe only the actual spoken words clearly audible in the audio. "
-    "Do not add any text, words, or sounds that are not clearly present. "
-    "During silence or noise, output nothing. Stay precise and accurate.";
-  LOG_INFO("Using strict anti-hallucination prompt for accurate transcription");
+    "Transcribe the exact words spoken in this conversational audio. "
+    "Do not add phrases like 'thanks for watching', 'please subscribe', or any closing remarks. "
+    "Only transcribe what is actually said. Output nothing during silence.";
+  LOG_INFO("Using anti-hallucination prompt (prevents filler phrases)");
   
   // Advanced tuning for word-level accuracy
   ctx->params.split_on_word = true;     // Split segments on word boundaries (cleaner output)
@@ -350,15 +350,13 @@ ethervox_result_t ethervox_stt_whisper_init(ethervox_stt_runtime_t* runtime) {
   // Streaming optimization (based on stream.cpp example)
   ctx->params.no_context = true;        // Reset context each chunk to avoid hallucination loops
   ctx->params.single_segment = false;   // Allow multiple segments per chunk
-  ctx->params.max_tokens = 64;          // Limit tokens per segment to reduce hallucinations
-  
-  // Additional anti-hallucination settings
-  ctx->params.max_len = 1;              // Limit segment length to reduce run-on hallucinations
+  ctx->params.max_tokens = 0;           // No token limit (letting natural speech flow)
+  ctx->params.max_len = 0;              // No segment length limit (natural segmentation)
   
   // DISABLE experimental VAD - it requires a separate VAD model we don't have
   // We'll use time-based chunking instead (like stream.cpp default mode)
   ctx->params.vad = false;
-  LOG_INFO("Using time-based chunking (3s steps) with strict hallucination prevention");
+  LOG_INFO("Using time-based chunking with balanced anti-hallucination settings");
   
   // Allocate main audio buffer (10 seconds @ 16kHz for chunk processing)
   ctx->audio_buffer_capacity = 16000 * 10;

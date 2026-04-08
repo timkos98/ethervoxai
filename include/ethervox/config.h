@@ -224,23 +224,23 @@ extern "C" {
 
 // Quality thresholds - TUNED FOR SPEECH DETECTION
 #ifndef ETHERVOX_WHISPER_NO_SPEECH_THRESHOLD
-#define ETHERVOX_WHISPER_NO_SPEECH_THRESHOLD 0.60f  // Raised from 0.50 to better detect silence
-// Higher threshold = more aggressive at filtering non-speech (reduces hallucinations)
-// Whisper.cpp default is 0.6, which is optimal for avoiding false transcriptions
+#define ETHERVOX_WHISPER_NO_SPEECH_THRESHOLD 0.55f  // Moderate filtering (0.5 too loose, 0.6 too strict)
+// Balanced threshold to detect silence without being overly aggressive
+// 0.55 reduces hallucinations while still catching quiet speech
 #endif
 
 #ifndef ETHERVOX_WHISPER_LOGPROB_THRESHOLD
-#define ETHERVOX_WHISPER_LOGPROB_THRESHOLD -0.5f  // Raised from -0.8 for stricter quality filtering
-// Higher (less negative) = stricter quality requirements (rejects low-confidence hallucinations)
-// -0.5 is more aggressive than default but proven to reduce hallucinations significantly
-// Whisper.cpp community recommends -0.5 to -0.6 for high-quality transcription
+#define ETHERVOX_WHISPER_LOGPROB_THRESHOLD -0.6f  // Moderate quality filtering (balanced)
+// Higher (less negative) = stricter quality requirements
+// -0.6 is a good balance: filters hallucinations without being too strict
+// Whisper.cpp community recommends -0.6 to -0.8 for good quality/recall balance
 #endif
 
 #ifndef ETHERVOX_WHISPER_ENTROPY_THRESHOLD
-#define ETHERVOX_WHISPER_ENTROPY_THRESHOLD 1.8f  // Lowered from 2.2 for stricter filtering
-// Lower = reject more uncertain/random outputs (reduces hallucinations)
-// 1.8 is more conservative than default 2.4 - only accepts confident predictions
-// This significantly reduces "filler" hallucinations during silence or noise
+#define ETHERVOX_WHISPER_ENTROPY_THRESHOLD 2.0f  // Moderate filtering (balanced)
+// Lower = reject more uncertain outputs
+// 2.0 is balanced between default 2.4 (too loose) and 1.8 (too strict)
+// Reduces hallucinations without over-filtering legitimate speech
 #endif
 
 // Temperature settings for decoding fallback - OPTIMIZED FOR CONSISTENCY
@@ -271,11 +271,11 @@ extern "C" {
 
 // Acoustic feature thresholds for speaker change detection
 #ifndef ETHERVOX_SPEAKER_ENERGY_CHANGE_THRESHOLD
-#define ETHERVOX_SPEAKER_ENERGY_CHANGE_THRESHOLD 0.3f  // 30% change in RMS energy
+#define ETHERVOX_SPEAKER_ENERGY_CHANGE_THRESHOLD 0.5f  // Raised from 0.3 to 50% change (less sensitive)
 #endif
 
 #ifndef ETHERVOX_SPEAKER_PITCH_CHANGE_THRESHOLD
-#define ETHERVOX_SPEAKER_PITCH_CHANGE_THRESHOLD 0.12f  // 12% change in estimated pitch
+#define ETHERVOX_SPEAKER_PITCH_CHANGE_THRESHOLD 0.20f  // Raised from 0.12 to 20% change (less sensitive)
 #endif
 
 #ifndef ETHERVOX_SPEAKER_PAUSE_THRESHOLD
