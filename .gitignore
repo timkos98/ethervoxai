@@ -204,3 +204,4 @@ _deps/
 examples/memory_example_memonly
 ethervox-test-emotions
 *.lldb
+external/
