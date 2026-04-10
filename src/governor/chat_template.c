@@ -39,7 +39,7 @@ static const chat_template_t qwen_template = {
     .tool_format = TOOL_FORMAT_XML_ATTR  // Uses XML with attributes
 };
 
-// IBM Granite 4.0 template
+// IBM Granite 4.0 template  
 static const chat_template_t granite_template = {
     .type = CHAT_TEMPLATE_GRANITE,
     .system_start = "<|start_of_role|>system<|end_of_role|>",
@@ -54,9 +54,11 @@ static const chat_template_t granite_template = {
         "<|end_of_text|>",
         "<|start_of_role|>",
         "<|end_of_role|>",
+        "<|start_of_text|>",  // Add this to filter hallucinated Llama-style tokens
+        "<|begin_of_text|>",  // Also filter Llama 3's BOS token
         NULL
     },
-    .stop_sequence_count = 3,
+    .stop_sequence_count = 5,  // Updated from 3 to 5
     .tool_format = TOOL_FORMAT_JSON_IN_XML  // Granite 4.0 uses JSON inside <tool_call> tags
 };
 
