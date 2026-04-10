@@ -2350,12 +2350,29 @@ ethervox_governor_status_t ethervox_governor_execute(
     append_turn(&governor->conversation_history, &assistant_turn);
 
     // Clean up any stop tokens that made it into the output
-    // Check for all possible partial versions starting with <|im
-    char* stop_marker = strstr(llm_response_buffer, " <|im");
-    if (!stop_marker)
-      stop_marker = strstr(llm_response_buffer, "<|im");
-    if (stop_marker) {
-      *stop_marker = '\0';
+    // Check for all possible partial versions and template markers
+    
+    // Common template markers to clean (both complete and partial)
+    const char* markers_to_clean[] = {
+        " <|im",          // Qwen partial
+        "<|im",           // Qwen partial
+        "<|start_of_",    // Any Llama/Granite start marker
+        "<|end_of_",      // Any end marker
+        "<|begin_of_",    // Llama BOS marker
+        " <|start",       // Granite partial with space
+        "<|start",        // Granite partial
+        " <|end",         // End marker partial with space
+        "<|end",          // End marker partial
+        NULL
+    };
+    
+    for (int i = 0; markers_to_clean[i] != NULL; i++) {
+        char* marker_pos = strstr(llm_response_buffer, markers_to_clean[i]);
+        if (marker_pos) {
+            *marker_pos = '\0';
+            GOV_LOG("Cleaned up leaked template marker: %s", markers_to_clean[i]);
+            break;  // Stop after first match to avoid over-trimming
+        }
     }
 
     const char* llm_response = llm_response_buffer;
