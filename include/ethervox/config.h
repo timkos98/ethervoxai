@@ -345,15 +345,15 @@ extern "C" {
 #endif
 
 #ifndef ETHERVOX_GOVERNOR_REPETITION_PENALTY
-#define ETHERVOX_GOVERNOR_REPETITION_PENALTY 1.1f  // Penalty for repeating tokens (1.0 = no penalty)
+#define ETHERVOX_GOVERNOR_REPETITION_PENALTY 1.3f  // Penalty for repeating tokens (1.0 = no penalty) - increased to prevent infinite loops
 #endif
 
 #ifndef ETHERVOX_GOVERNOR_FREQUENCY_PENALTY
-#define ETHERVOX_GOVERNOR_FREQUENCY_PENALTY 0.0f  // Penalty based on token frequency
+#define ETHERVOX_GOVERNOR_FREQUENCY_PENALTY 0.2f  // Penalty based on token frequency - helps prevent repetition
 #endif
 
 #ifndef ETHERVOX_GOVERNOR_PRESENCE_PENALTY
-#define ETHERVOX_GOVERNOR_PRESENCE_PENALTY 0.0f  // Penalty for tokens already present
+#define ETHERVOX_GOVERNOR_PRESENCE_PENALTY 0.6f  // Penalty for tokens already present - encourages diversity
 #endif
 
 #ifndef ETHERVOX_GOVERNOR_PENALTY_LAST_N

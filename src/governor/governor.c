@@ -2115,6 +2115,12 @@ ethervox_governor_status_t ethervox_governor_execute(
     const int max_tokens = governor->config.max_tokens_per_response;  // Use configured limit
     bool inside_tool_call = false;  // Track if we're inside a tool call
 
+    // Repetition detection circuit breaker
+    #define REPETITION_WINDOW 50
+    char last_tokens[REPETITION_WINDOW][128];
+    int token_ring_buffer_pos = 0;
+    memset(last_tokens, 0, sizeof(last_tokens));
+
     GOV_LOG("Starting generation with max_tokens=%d", max_tokens);
 
     while (generated_count < max_tokens) {
@@ -2146,6 +2152,65 @@ ethervox_governor_status_t ethervox_governor_execute(
           llama_token_to_piece(vocab, next_token, token_text, sizeof(token_text), 0, false);
       if (n_chars > 0 && n_chars < (int)sizeof(token_text)) {
         token_text[n_chars] = '\0';
+
+        // CRITICAL FIX: Check if THIS token contains a stop sequence BEFORE adding to buffer/context
+        // This prevents the infinite loop bug where stop sequences get fed back into the model's context
+        bool token_has_stop = false;
+        if (governor->chat_template->stop_sequences != NULL) {
+          for (int i = 0; governor->chat_template->stop_sequences[i] != NULL; i++) {
+            if (strstr(token_text, governor->chat_template->stop_sequences[i])) {
+              token_has_stop = true;
+              GOV_LOG("Stop sequence '%s' detected in token, ending generation immediately",
+                      governor->chat_template->stop_sequences[i]);
+              break;
+            }
+          }
+        }
+        
+        // Also check for common stop patterns that might not be in the template
+        if (!token_has_stop && (strstr(token_text, "<|end_of_role|>") ||
+                                 strstr(token_text, "<|end_of_text|>") ||
+                                 strstr(token_text, "<|im_end|>"))) {
+          token_has_stop = true;
+          GOV_LOG("Common stop pattern detected in token, ending generation immediately");
+        }
+        
+        // If token contains stop sequence, don't add to buffer or context - just stop
+        if (token_has_stop) {
+          break;
+        }
+
+        // Add token to repetition detection buffer
+        strncpy(last_tokens[token_ring_buffer_pos], token_text, sizeof(last_tokens[0]) - 1);
+        last_tokens[token_ring_buffer_pos][sizeof(last_tokens[0]) - 1] = '\0';
+        token_ring_buffer_pos = (token_ring_buffer_pos + 1) % REPETITION_WINDOW;
+
+        // Check for repetition loops every 50 tokens (after buffer is filled)
+        if (generated_count > 0 && generated_count % 50 == 0 && generated_count >= REPETITION_WINDOW) {
+          int repetition_count = 0;
+          int identical_consecutive = 0;
+          
+          // Count identical consecutive tokens
+          for (int i = 0; i < REPETITION_WINDOW - 1; i++) {
+            int curr_idx = (token_ring_buffer_pos + i) % REPETITION_WINDOW;
+            int next_idx = (token_ring_buffer_pos + i + 1) % REPETITION_WINDOW;
+            if (last_tokens[curr_idx][0] != '\0' && last_tokens[next_idx][0] != '\0' &&
+                strcmp(last_tokens[curr_idx], last_tokens[next_idx]) == 0) {
+              repetition_count++;
+              identical_consecutive++;
+            } else {
+              identical_consecutive = 0;
+            }
+          }
+          
+          // If 80% of the window is repetitive OR we have 10+ identical consecutive tokens, stop
+          float repetition_ratio = (float)repetition_count / (REPETITION_WINDOW - 1);
+          if (repetition_ratio > 0.8f || identical_consecutive > 10) {
+            GOV_ERROR("Repetition loop detected (ratio=%.2f, consecutive=%d), terminating generation",
+                      repetition_ratio, identical_consecutive);
+            break;
+          }
+        }
 
         // Add to buffer first
         strncat(llm_response_buffer, token_text,
@@ -2240,10 +2305,26 @@ ethervox_governor_status_t ethervox_governor_execute(
           bool is_stop_fragment =
               chat_template_has_stop_sequence(governor->chat_template, token_text);
 
-          // Only stream if we're sure it's not a tool call, no STOP sequences, and not a stop
-          // fragment
+          // Check for hallucination markers (role markers, tool results, etc.)
+          // This prevents streaming hallucinated content from system prompts
+          bool has_hallucination = false;
+          if (strstr(llm_response_buffer, governor->chat_template->user_start) ||
+              strstr(llm_response_buffer, governor->chat_template->system_start) ||
+              strstr(llm_response_buffer, "<tool_result") ||
+              strstr(llm_response_buffer, "<|start_of_role|>") ||
+              strstr(llm_response_buffer, "<|end_of_role|>") ||
+              strstr(llm_response_buffer, "<|im_start|>") ||
+              strstr(llm_response_buffer, "<|im_end|>") ||
+              strstr(llm_response_buffer, "<|end_of_text|>")) {
+            has_hallucination = true;
+            GOV_LOG("Hallucination detected during streaming, blocking token");
+          }
+
+          // Only stream if we're sure it's not a tool call, no STOP sequences, not a stop
+          // fragment, and no hallucination markers
           should_stream =
-              !might_be_tool_start && !is_stop_fragment && !strstr(llm_response_buffer, "STOP") &&
+              !might_be_tool_start && !is_stop_fragment && !has_hallucination &&
+              !strstr(llm_response_buffer, "STOP") &&
               !chat_template_has_stop_sequence(governor->chat_template, llm_response_buffer);
         }
 
