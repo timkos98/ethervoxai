@@ -940,9 +940,8 @@ JNIEXPORT jint JNICALL Java_com_droid_ethervox_1core_NativeLib_platformInitGover
       LOGI("Unloading existing Governor model");
       ethervox_governor_unload_model(g_governor);
     }
-    // Clean up and free the Governor instance
+    // Clean up and free the Governor instance (cleanup already calls free)
     ethervox_governor_cleanup(g_governor);
-    free(g_governor);
     g_governor = NULL;
     LOGI("Governor cleaned up, ready to reinitialize");
   }
@@ -999,8 +998,7 @@ JNIEXPORT void JNICALL Java_com_droid_ethervox_1core_NativeLib_platformCleanup(J
   }
 
   if (g_governor) {
-    ethervox_governor_cleanup(g_governor);
-    free(g_governor);
+    ethervox_governor_cleanup(g_governor);  // cleanup already frees governor
     g_governor = NULL;
     LOGI("Governor cleaned up");
   }
