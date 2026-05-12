@@ -1524,7 +1524,7 @@ ethervox_result_t ethervox_governor_init(ethervox_governor_t** governor,
     gov->config.max_iterations = ETHERVOX_GOVERNOR_MAX_ITERATIONS;
     gov->config.max_tool_calls_per_iteration = 10;
     gov->config.timeout_seconds = ETHERVOX_GOVERNOR_TIMEOUT_SECONDS;
-    gov->config.max_tokens_per_response = 2048;  // Default limit for response generation
+    gov->config.max_tokens_per_response = 192;  // Conservative limit for voice responses (was 2048 - too verbose)
   }
 
   gov->tool_registry = tool_registry;
@@ -2394,18 +2394,10 @@ ethervox_governor_status_t ethervox_governor_execute(
       }
       
       // Check for EOG token (proper way)
-      // NOTE: For Granite models, <|end_of_text|> (token 100257) is incorrectly marked as EOG
-      // in the GGUF file. It's actually a role separator, not a true EOG. We rely on stop
-      // sequence detection instead for Granite.
+      // For Granite models, <|end_of_text|> IS the correct stop token - respect it!
       bool is_eog = llama_vocab_is_eog(vocab_safe, next_token);
-      bool ignore_eog = false;
-      // CRITICAL: Validate chat_template before accessing type field
-      if (governor->chat_template && (uintptr_t)governor->chat_template > 0x1000 &&
-          !((uintptr_t)governor->chat_template >= 0x100000000 && (uintptr_t)governor->chat_template < 0x100001000)) {
-        ignore_eog = (governor->chat_template->type == CHAT_TEMPLATE_GRANITE && is_eog);
-      }
 
-      if (is_eog && !ignore_eog) {
+      if (is_eog) {
         if (generated_count == 0) {
           GOV_LOG(
               "WARNING: Model immediately generated EOG token (id=%d) - this suggests "

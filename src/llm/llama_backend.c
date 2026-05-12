@@ -540,11 +540,12 @@ static ethervox_result_t llama_backend_generate(ethervox_llm_backend_t* backend,
     return ETHERVOX_ERROR_FAILED;
   }
   
-  // Add sampling strategies to the chain
+  // Add sampling strategies to the chain (same as streaming for consistency)
   llama_sampler_chain_add(sampler, llama_sampler_init_top_k(40));
-  llama_sampler_chain_add(sampler, llama_sampler_init_top_p(0.9f, 1));
+  llama_sampler_chain_add(sampler, llama_sampler_init_top_p(ctx->top_p, 1));
+  llama_sampler_chain_add(sampler, llama_sampler_init_penalties(128, 1.2f, 0.0f, 0.0f));  // Stronger repeat penalty (128 lookback, 1.2 strength)
   llama_sampler_chain_add(sampler, llama_sampler_init_temp(ctx->temperature));
-  llama_sampler_chain_add(sampler, llama_sampler_init_dist(0)); // seed=0 for deterministic sampling
+  llama_sampler_chain_add(sampler, llama_sampler_init_dist(0));
   LLAMA_LOG("Sampler chain created, starting token generation (max %d tokens)", ctx->n_predict);
   
   // Generate tokens
@@ -781,11 +782,31 @@ static ethervox_result_t llama_backend_generate_stream(ethervox_llm_backend_t* b
   LLAMA_LOG("Prompt evaluated successfully in %u ms (%.1f tokens/sec)", 
             prompt_eval_time, (float)n_prompt_tokens / (prompt_eval_time / 1000.0f));
 
-  // Create sampler chain - simplified for speed
+  // Create sampler chain with proper controls to prevent wild/repetitive outputs
   struct llama_sampler* sampler = llama_sampler_chain_init(llama_sampler_chain_default_params());
+  
+  // Add sampling strategies in order:
+  // 1. top_k - limit to top 40 most probable tokens (prevents unlikely/random tokens)
+  llama_sampler_chain_add(sampler, llama_sampler_init_top_k(40));
+  
+  // 2. top_p - nucleus sampling with configured threshold (prevents low-probability tangents)
+  llama_sampler_chain_add(sampler, llama_sampler_init_top_p(ctx->top_p, 1));
+  
+  // 3. repetition penalty - discourage repeating patterns (prevents training-data-style repetition)
+  llama_sampler_chain_add(sampler, llama_sampler_init_penalties(
+    128,    // penalty_last_n: look back 128 tokens (wider context)
+    1.2f,   // penalty_repeat: stronger penalty to break training patterns
+    0.0f,   // penalty_freq: no frequency penalty
+    0.0f    // penalty_present: no presence penalty
+  ));
+  
+  // 4. temperature - controls randomness/creativity
   llama_sampler_chain_add(sampler, llama_sampler_init_temp(ctx->temperature));
+  
+  // 5. dist - final sampling from the filtered distribution
   llama_sampler_chain_add(sampler, llama_sampler_init_dist(0));
-  LLAMA_LOG("Sampler chain created (temp=%.2f, top_p=%.2f), starting streaming token generation (max %u tokens)", 
+  
+  LLAMA_LOG("Sampler chain created (temp=%.2f, top_p=%.2f, top_k=40, repeat_penalty=1.2), starting streaming token generation (max %u tokens)", 
             (double)ctx->temperature, (double)ctx->top_p, (unsigned int)ctx->n_predict);
 
   // Generate tokens and stream them

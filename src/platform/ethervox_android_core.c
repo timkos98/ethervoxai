@@ -106,6 +106,7 @@ typedef struct {
   int context_size;          // Context window size (default: 8192)
   float temperature;         // Sampling temperature (default: 0.3)
   int threads;               // CPU threads (default: adaptive)
+  int max_tokens_per_response;  // Max tokens to generate per response (default: 2048)
 } governor_runtime_config_t;
 
 static governor_runtime_config_t g_governor_config = {
@@ -113,7 +114,8 @@ static governor_runtime_config_t g_governor_config = {
   .startup_batch_size = ETHERVOX_GOVERNOR_STARTUP_BATCH_SIZE,
   .context_size = ETHERVOX_GOVERNOR_CONTEXT_SIZE,
   .temperature = ETHERVOX_GOVERNOR_TEMPERATURE,
-  .threads = ETHERVOX_GOVERNOR_THREADS
+  .threads = ETHERVOX_GOVERNOR_THREADS,
+  .max_tokens_per_response = 192  // Conservative limit for voice assistant responses (was 2048)
 };
 
 // Getter function for Android files directory (used by manifest system)
@@ -932,8 +934,17 @@ JNIEXPORT jint JNICALL Java_com_droid_ethervox_1core_NativeLib_platformInitGover
   (void)thiz;
 
   if (g_governor) {
-    LOGI("Governor already initialized");
-    return 0;
+    LOGI("Governor already initialized - cleaning up to reinitialize with new mode");
+    // Unload model first if loaded
+    if (ethervox_governor_is_loaded(g_governor)) {
+      LOGI("Unloading existing Governor model");
+      ethervox_governor_unload_model(g_governor);
+    }
+    // Clean up and free the Governor instance
+    ethervox_governor_cleanup(g_governor);
+    free(g_governor);
+    g_governor = NULL;
+    LOGI("Governor cleaned up, ready to reinitialize");
   }
 
   if (!g_platform || !g_registry) {
@@ -944,6 +955,12 @@ JNIEXPORT jint JNICALL Java_com_droid_ethervox_1core_NativeLib_platformInitGover
   // Initialize Governor with chosen config (minimal or full)
   ethervox_governor_config_t gov_config = ethervox_governor_default_config();
 
+  // Apply runtime configuration from g_governor_config
+  gov_config.context_size = g_governor_config.context_size;
+  gov_config.temperature = g_governor_config.temperature;
+  gov_config.n_threads = g_governor_config.threads;
+  gov_config.max_tokens_per_response = g_governor_config.max_tokens_per_response;
+
   if (minimal_mode) {
     gov_config.system_prompt_mode = ETHERVOX_GOVERNOR_MODE_MINIMAL;
     LOGI("Initializing Governor in MINIMAL MODE (fast loading, tools disabled)");
@@ -951,6 +968,10 @@ JNIEXPORT jint JNICALL Java_com_droid_ethervox_1core_NativeLib_platformInitGover
     gov_config.system_prompt_mode = ETHERVOX_GOVERNOR_MODE_FULL;
     LOGI("Initializing Governor in FULL MODE (all tools available)");
   }
+
+  LOGI("Governor config: ctx=%d, temp=%.2f, threads=%d, max_tokens=%d",
+       gov_config.context_size, gov_config.temperature, gov_config.n_threads,
+       gov_config.max_tokens_per_response);
 
   ethervox_result_t gov_result = ethervox_governor_init(&g_governor, &gov_config, g_registry);
   if (ethervox_is_error(gov_result)) {
@@ -1303,6 +1324,19 @@ JNIEXPORT jstring JNICALL Java_com_droid_ethervox_1core_NativeLib_processDialogu
 
   LOGI("Processing dialogue (legacy): '%s'", text);
 
+  // Store user message to memory (before processing)
+  if (g_memory_store) {
+    const char* tags[] = {"conversation"};
+    uint64_t memory_id;
+    ethervox_result_t mem_result =
+        ethervox_memory_store_add(g_memory_store, text, tags, 1, 0.8f, true, &memory_id);
+    if (ethervox_is_error(mem_result)) {
+      LOGW("Failed to store user message to memory: Error %d", mem_result);
+    } else {
+      LOGI("Stored user message to memory (ID: %llu)", (unsigned long long)memory_id);
+    }
+  }
+
   // Process with governor execute API
   char* response = NULL;
   char* error = NULL;
@@ -1319,6 +1353,20 @@ JNIEXPORT jstring JNICALL Java_com_droid_ethervox_1core_NativeLib_processDialogu
     if (error)
       free(error);
     return result;
+  }
+
+  // Store assistant response to memory (after successful processing)
+  if (g_memory_store && response) {
+    const char* tags[] = {"conversation"};
+    uint64_t memory_id;
+    float importance = (status == ETHERVOX_GOVERNOR_SUCCESS) ? 0.8f : 0.7f;
+    ethervox_result_t mem_result =
+        ethervox_memory_store_add(g_memory_store, response, tags, 1, importance, false, &memory_id);
+    if (ethervox_is_error(mem_result)) {
+      LOGW("Failed to store assistant response to memory: Error %d", mem_result);
+    } else {
+      LOGI("Stored assistant response to memory (ID: %llu)", (unsigned long long)memory_id);
+    }
   }
 
   // Format response with confidence placeholder for backwards compatibility
@@ -1510,6 +1558,19 @@ JNIEXPORT void JNICALL Java_com_droid_ethervox_1core_NativeLib_processDialogueSt
 
   LOGI("Processing dialogue (streaming): '%s'", text);
 
+  // Store user message to memory (before processing)
+  if (g_memory_store) {
+    const char* tags[] = {"conversation"};
+    uint64_t memory_id;
+    ethervox_result_t mem_result =
+        ethervox_memory_store_add(g_memory_store, text, tags, 1, 0.8f, true, &memory_id);
+    if (ethervox_is_error(mem_result)) {
+      LOGW("Failed to store user message to memory: Error %d", mem_result);
+    } else {
+      LOGI("Stored user message to memory (ID: %llu)", (unsigned long long)memory_id);
+    }
+  }
+
   // Get callback methods
   jclass callback_class = (*env)->GetObjectClass(env, callback);
   jmethodID on_token = (*env)->GetMethodID(env, callback_class, "onToken", "(Ljava/lang/String;)V");
@@ -1553,6 +1614,21 @@ JNIEXPORT void JNICALL Java_com_droid_ethervox_1core_NativeLib_processDialogueSt
     if (error)
       free(error);
   } else {
+    // Store assistant response to memory (after successful processing)
+    if (g_memory_store && response) {
+      const char* tags[] = {"conversation"};
+      uint64_t memory_id;
+      // Use 0.8f importance for full response, 0.7f if timeout/partial
+      float importance = (status == ETHERVOX_GOVERNOR_SUCCESS) ? 0.8f : 0.7f;
+      ethervox_result_t mem_result =
+          ethervox_memory_store_add(g_memory_store, response, tags, 1, importance, false, &memory_id);
+      if (ethervox_is_error(mem_result)) {
+        LOGW("Failed to store assistant response to memory: Error %d", mem_result);
+      } else {
+        LOGI("Stored assistant response to memory (ID: %llu)", (unsigned long long)memory_id);
+      }
+    }
+
     // NOTE: onComplete is already called via native_governor_progress_callback
     // from inside ethervox_governor_execute when it sends ETHERVOX_GOVERNOR_EVENT_COMPLETE.
     // DO NOT call it again here, as that causes a double-invocation and crashes.
@@ -1719,7 +1795,7 @@ JNIEXPORT jboolean JNICALL
 Java_com_droid_ethervox_1core_NativeLib_updateGovernorParams(
     JNIEnv* env, jobject thiz,
     jint batch_size, jint startup_batch_size, jint context_size,
-    jfloat temperature, jint threads) {
+    jfloat temperature, jint threads, jint max_tokens_per_response) {
   (void)env;
   (void)thiz;
 
@@ -1744,6 +1820,10 @@ Java_com_droid_ethervox_1core_NativeLib_updateGovernorParams(
     LOGE("Invalid threads: %d (must be 1-16)", threads);
     return JNI_FALSE;
   }
+  if (max_tokens_per_response < 20 || max_tokens_per_response > 4096) {
+    LOGE("Invalid max_tokens_per_response: %d (must be 20-4096)", max_tokens_per_response);
+    return JNI_FALSE;
+  }
 
   // Update runtime configuration
   g_governor_config.batch_size = batch_size;
@@ -1751,13 +1831,13 @@ Java_com_droid_ethervox_1core_NativeLib_updateGovernorParams(
   g_governor_config.context_size = context_size;
   g_governor_config.temperature = temperature;
   g_governor_config.threads = threads;
+  g_governor_config.max_tokens_per_response = max_tokens_per_response;
 
-  LOGI("Governor params updated: batch=%d, startup_batch=%d, ctx=%d, temp=%.2f, threads=%d",
-       batch_size, startup_batch_size, context_size, temperature, threads);
+  LOGI("Governor params updated: batch=%d, startup_batch=%d, ctx=%d, temp=%.2f, threads=%d, max_tokens=%d",
+       batch_size, startup_batch_size, context_size, temperature, threads, max_tokens_per_response);
 
-  // NOTE: These parameters will be applied on next model load
-  // Some parameters (like temperature) could be applied immediately if Governor is loaded
-  // but that requires extending the Governor API
+  // NOTE: These parameters will be applied on next model load or Governor re-initialization
+  // Some parameters (like context_size) require model reload to take effect
 
   return JNI_TRUE;
 }
