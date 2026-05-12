@@ -20,6 +20,7 @@
 
 #include "ethervox/chat_template.h"
 #include "ethervox/config.h"
+#include "ethervox/device_profile.h"  // Adaptive hardware configuration
 #include "ethervox/error.h"
 
 #ifdef _WIN32
@@ -36,6 +37,17 @@
 
 #define GOV_LOG(...) ETHERVOX_LOGI(__VA_ARGS__)
 #define GOV_ERROR(...) ETHERVOX_LOGE(__VA_ARGS__)
+
+// External function to get configurable startup batch size (from Android/iOS JNI layer)
+// Falls back to config.h default if not available (desktop/ESP32 builds)
+extern int ethervox_get_startup_batch_size(void) __attribute__((weak));
+
+// Provide default implementation for non-Android platforms
+// This will be overridden by the Android-specific version when building for Android
+__attribute__((weak))
+int ethervox_get_startup_batch_size(void) {
+  return ETHERVOX_GOVERNOR_STARTUP_BATCH_SIZE;
+}
 
 // Global flag to track llama backend initialization (should only happen once per process)
 static bool g_llama_backend_initialized = false;
@@ -95,12 +107,12 @@ static bool governor_load_progress_callback(float progress, void* user_data) {
     callback_context_t* ctx = (callback_context_t*)user_data;
     if (ctx->callback) {
       char msg[128];
-      snprintf(msg, sizeof(msg), "Loading model: %.1f%%", progress * 100.0f);
+      snprintf(msg, sizeof(msg), "Loading model: %d%%", (int)(progress * 100.0f));
       ctx->callback("loading_model", progress, msg, ctx->callback_user_data);
     }
   }
 
-  GOV_LOG("[Governor] Model load progress: %.1f%%", progress * 100.0f);
+  GOV_LOG("[Governor] Model load progress: %d%%", (int)(progress * 100.0f));
   return true;  // Continue loading
 }
 
@@ -944,10 +956,17 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
   g_model_corruption_detected = false;
 
   GOV_LOG("[Governor] Loading model: %s", model_path);
+  
+  // Initialize device profiling for adaptive configuration
+  ethervox_device_profile_init();
 
   // Auto-detect chat template from model path
   governor->chat_template = chat_template_get(CHAT_TEMPLATE_AUTO, model_path);
-  GOV_LOG("[Governor] Detected chat template type: %d", governor->chat_template->type);
+  if (!governor->chat_template) {
+    GOV_LOG("ERROR: Failed to get chat template");
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
+  }
+  GOV_LOG("[Governor] chat_template assigned: %p (type: %d)", (void*)governor->chat_template, governor->chat_template->type);
 
   // Initialize llama.cpp backend (only once per process)
   if (!g_llama_backend_initialized) {
@@ -1080,7 +1099,7 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
   extern void ethervox_memory_set_privacy_mode(bool disable_logging);
   ethervox_memory_set_privacy_mode(governor->config.disable_memory_logging);
 
-  // Context params - Use runtime config (with config.h fallbacks)
+  // Context params - Use runtime config with adaptive hardware detection
   struct llama_context_params ctx_params = llama_context_default_params();
 
   // DEBUG: Log the context size that's about to be used
@@ -1088,13 +1107,39 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
   ctx_params.n_ctx = governor->config.context_size;
   GOV_LOG("[Governor] ctx_params.n_ctx set to = %d", ctx_params.n_ctx);
 
-  ctx_params.n_batch = ETHERVOX_GOVERNOR_BATCH_SIZE;
-  ctx_params.n_threads = governor->config.n_threads;
-  ctx_params.n_threads_batch = governor->config.n_threads;
-  ctx_params.flash_attn_type =
-      ETHERVOX_GOVERNOR_FLASH_ATTN_TYPE;  // Enable flash attention for speed and quantized KV cache
-  ctx_params.type_k = ETHERVOX_GOVERNOR_KV_CACHE_TYPE;
-  ctx_params.type_v = ETHERVOX_GOVERNOR_KV_CACHE_TYPE;
+  // Adaptive batch size based on device tier
+  int optimal_batch_size = ethervox_device_profile_get_optimal_batch_size();
+  ctx_params.n_batch = optimal_batch_size;
+  GOV_LOG("[Governor] Using adaptive batch size: %d (was %d)", optimal_batch_size, ETHERVOX_GOVERNOR_BATCH_SIZE);
+  
+  // CRITICAL: Set n_ubatch for generation (micro-batch size)
+  // Lower values = faster generation on mobile (less memory bandwidth)
+  // For 3B models on 4GB RAM: 64 is optimal (512 default is too high)
+  ctx_params.n_ubatch = 64;
+  GOV_LOG("[Governor] Using n_ubatch: %d (generation micro-batch)", ctx_params.n_ubatch);
+  
+  // Adaptive thread count based on CPU cores
+  int optimal_threads = ethervox_device_profile_get_optimal_threads();
+  ctx_params.n_threads = optimal_threads;
+  ctx_params.n_threads_batch = optimal_threads;
+  GOV_LOG("[Governor] Using adaptive threads: %d (CPU cores: %d)", 
+          optimal_threads, ethervox_device_profile_get_cpu_cores());
+  
+  // Adaptive flash attention based on device capability
+  bool use_flash = ethervox_device_profile_should_use_flash_attention();
+  ctx_params.flash_attn_type = use_flash ? 1 : 0;  // 1=ENABLED, 0=DISABLED
+  GOV_LOG("[Governor] Flash attention: %s (device tier: %d)", 
+          use_flash ? "ENABLED" : "DISABLED", ethervox_device_profile_get_tier());
+  
+  // Adaptive KV cache type based on available memory
+  int optimal_kv_type = ethervox_device_profile_get_optimal_kv_cache_type();
+  const char* kv_type_names[] = {"F32", "F16", "Q8_0", "Q4_0"};
+  int kv_name_idx = (optimal_kv_type == 1) ? 1 : (optimal_kv_type == 7) ? 2 : 3;
+  ctx_params.type_k = optimal_kv_type;
+  ctx_params.type_v = optimal_kv_type;
+  GOV_LOG("[Governor] Using adaptive KV cache: %s (available RAM: %ld MB)", 
+          kv_type_names[kv_name_idx], ethervox_device_profile_get_total_ram_mb());
+  
   ctx_params.no_perf = false;  // Enable performance tracking for metrics
 
   // Create context
@@ -1141,11 +1186,13 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
     // Full mode: complete system prompt with all tools and capabilities
     GOV_LOG("Building FULL system prompt (all tools available)");
 
-    if (ethervox_tool_registry_build_system_prompt(
+    ethervox_result_t build_result = ethervox_tool_registry_build_system_prompt(
             governor->tool_registry, governor->chat_template, system_prompt, sizeof(system_prompt),
             NULL,  // TODO: Wire memory_store for adaptive learning
-            governor->model_path) != 0) {
-      GOV_ERROR("Failed to build system prompt");
+            governor->model_path);
+    
+    if (build_result != 0) {
+      GOV_ERROR("Failed to build system prompt (error code: %d)", build_result);
       llama_free(governor->llm_ctx);
       llama_model_free(governor->llm_model);
       governor->llm_ctx = NULL;
@@ -1153,13 +1200,30 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
       return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
 
-    GOV_LOG("Full system prompt built (%zu chars)", strlen(system_prompt));
+    size_t prompt_length = strlen(system_prompt);
+    GOV_LOG("Full system prompt built (%zu chars, buffer size: %zu)", prompt_length, sizeof(system_prompt));
 
     // Mark tools as available in governor state
     governor->tools_available = true;
   }
 
-  GOV_LOG("System prompt (%zu chars):\n%s", strlen(system_prompt), system_prompt);
+  // Log system prompt in chunks to avoid logcat truncation (Android limit ~1KB per line)
+  size_t prompt_len = strlen(system_prompt);
+  GOV_LOG("===== SYSTEM PROMPT (%zu chars) =====", prompt_len);
+  
+  const size_t log_chunk_size = 250;  // Log in 250-char chunks to fit within logcat line limit
+  for (size_t i = 0; i < prompt_len; i += log_chunk_size) {
+    size_t remaining = prompt_len - i;
+    size_t current_chunk = remaining < log_chunk_size ? remaining : log_chunk_size;
+    
+    // Create null-terminated chunk
+    char chunk[log_chunk_size + 1];
+    strncpy(chunk, system_prompt + i, current_chunk);
+    chunk[current_chunk] = '\0';
+    
+    GOV_LOG("PROMPT[%zu-%zu]: %s", i, i + current_chunk - 1, chunk);
+  }
+  GOV_LOG("===== END SYSTEM PROMPT =====");
 
   // Tokenize system prompt
   const struct llama_vocab* vocab = llama_model_get_vocab(governor->llm_model);
@@ -1203,14 +1267,20 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
     progress_callback("processing_prompt", 0.0f, "Processing system prompt...", user_data);
   }
 
-  // Process in smaller chunks to provide granular progress updates
-  int chunk_size = 256;  // Reduced from 1024 for better progress reporting
+  // Use SMALL batches for startup prompt to reduce time-to-first-token (TTFT)
+  // This significantly improves perceived responsiveness during model loading
+  // Android/iOS can override via JNI, desktop/ESP32 use config.h default
+  int chunk_size = ethervox_get_startup_batch_size();
+  GOV_LOG("Using startup batch size: %d tokens per batch (optimized for fast loading)", chunk_size);
+  
+  // Allocate batch once outside loop for maximum efficiency
+  llama_batch batch = llama_batch_init(chunk_size, 0, 1);
+  
   for (int i = 0; i < n_tokens; i += chunk_size) {
     int chunk_len = (i + chunk_size > n_tokens) ? (n_tokens - i) : chunk_size;
     bool is_final_chunk = (i + chunk_size >= n_tokens);
 
-    // Create batch with explicit positions and sequence ID
-    llama_batch batch = llama_batch_init(chunk_len, 0, 1);
+    // Reuse the batch, just update the token count and contents
     batch.n_tokens = chunk_len;
     for (int j = 0; j < chunk_len; j++) {
       batch.token[j] = tokens[i + j];
@@ -1234,8 +1304,6 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
       governor->llm_model = NULL;
       return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
-
-    llama_batch_free(batch);
 
     // Report progress after each chunk
     int tokens_processed = i + chunk_len;
@@ -1262,6 +1330,9 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
       }
     }
   }
+  
+  // Free the batch after all chunks processed
+  llama_batch_free(batch);
 
   free(tokens);
 
@@ -1275,6 +1346,12 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
   governor->model_path = strdup(model_path);
 
   // Pre-tokenize static tool result wrappers for speed
+  // Validate chat_template before accessing members
+  if (!governor->chat_template) {
+    GOV_LOG("ERROR: chat_template is NULL during tool result tokenization");
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
+  }
+  
   const char* prefix = governor->chat_template->tool_result_start;
   const char* suffix = governor->chat_template->tool_result_end;
 
@@ -1567,6 +1644,55 @@ ethervox_governor_status_t ethervox_governor_execute_with_context(
   // Execute with enhanced query
   return ethervox_governor_execute(governor, enhanced_query, response, error, metrics,
                                    progress_callback, token_callback, user_data);
+}
+
+// ============================================================================
+// Helper Functions for Token Streaming and Loop Detection
+// ============================================================================
+
+/**
+ * Check if text ends with a prefix of any stop sequence
+ * Used by lookahead buffer to detect potential stop sequence formation
+ */
+static bool is_potential_stop_prefix_check(const chat_template_t* template, const char* text) {
+  if (!template || !text) return false;
+  
+  size_t text_len = strlen(text);
+  if (text_len == 0) return false;
+  
+  // Use template's stop sequences (centralized, consistent with all other checks)
+  const char** stop_sequences = (const char**)template->stop_sequences;
+  int stop_count = template->stop_sequence_count;
+  
+  for (int i = 0; i < stop_count && stop_sequences[i] != NULL; i++) {
+    const char* stop_seq = stop_sequences[i];
+    size_t stop_len = strlen(stop_seq);
+    
+    // Check if text could be building up to this stop sequence
+    for (size_t prefix_len = 1; prefix_len < stop_len && prefix_len <= text_len; prefix_len++) {
+      const char* text_suffix = text + (text_len - prefix_len);
+      if (strncmp(text_suffix, stop_seq, prefix_len) == 0) {
+        return true;  // Text ends with a prefix of a stop sequence
+      }
+    }
+  }
+  
+  return false;
+}
+
+/**
+ * Simple hash function for n-gram loop detection
+ * Uses DJB2 algorithm for fast, reasonable distribution
+ */
+static uint32_t compute_ngram_hash_djb2(const char* tokens[], int n) {
+  uint32_t hash = 5381;  // DJB2 hash initial value
+  for (int i = 0; i < n; i++) {
+    const char* s = tokens[i];
+    while (*s) {
+      hash = ((hash << 5) + hash) + (unsigned char)(*s++);
+    }
+  }
+  return hash;
 }
 
 /**
@@ -1898,6 +2024,13 @@ ethervox_governor_status_t ethervox_governor_execute(
   // The memory is better used explicitly via memory_search tool when needed
 
   // Add current user query using chat template
+  // CRITICAL: Validate chat_template before dereferencing
+  if (!governor->chat_template || (uintptr_t)governor->chat_template < 0x1000 ||
+      ((uintptr_t)governor->chat_template >= 0x100000000 && (uintptr_t)governor->chat_template < 0x100001000)) {
+    GOV_LOG("CRITICAL: chat_template corrupted (%p) during conversation formatting", (void*)governor->chat_template);
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
+  }
+  
   conv_pos += snprintf(conversation + conv_pos, sizeof(conversation) - conv_pos, "%s%s%s%s",
                        governor->chat_template->user_start, user_query,
                        governor->chat_template->user_end, governor->chat_template->assistant_start);
@@ -1932,8 +2065,13 @@ ethervox_governor_status_t ethervox_governor_execute(
     }
 
     // Generate LLM response
-    // Increased to 64KB to accommodate large tool calls (e.g., file_write with substantial content)
-    char llm_response_buffer[65536] = {0};
+    // CRITICAL: Use heap allocation instead of stack for large buffer (64KB) to prevent stack overflow
+    // Stack overflow can cause pointer corruption and SIGSEGV
+    char* llm_response_buffer = (char*)calloc(65536, 1);
+    if (!llm_response_buffer) {
+      GOV_ERROR("Failed to allocate response buffer");
+      return ETHERVOX_ERROR_OUT_OF_MEMORY;
+    }
 
     // Only tokenize and decode the NEW part of the conversation (what hasn't been processed yet)
     const char* new_content = conversation + processed_length;
@@ -1943,6 +2081,7 @@ ethervox_governor_status_t ethervox_governor_execute(
         "KV cache status: processed_length=%zu, conversation_length=%zu, new_content_length=%zu",
         processed_length, strlen(conversation), new_content_len);
     GOV_LOG("New content to process: '%s'", new_content_len > 0 ? new_content : "(none)");
+    GOV_LOG("Full conversation buffer: '%s'", conversation);
 
     if (new_content_len > 0) {
       // Tokenize only the new content
@@ -1951,6 +2090,7 @@ ethervox_governor_status_t ethervox_governor_execute(
       if (n_tokens <= 0) {
         if (error)
           *error = strdup("Failed to tokenize conversation");
+        free(llm_response_buffer);
         return ETHERVOX_GOVERNOR_ERROR;
       }
 
@@ -1958,10 +2098,26 @@ ethervox_governor_status_t ethervox_governor_execute(
       if (!tokens) {
         if (error)
           *error = strdup("Memory allocation failed");
+        free(llm_response_buffer);
         return ETHERVOX_GOVERNOR_ERROR;
       }
 
       llama_tokenize(vocab, new_content, new_content_len, tokens, n_tokens, false, false);
+
+      // DEBUG: Decode tokens back to text to verify tokenization is correct
+      GOV_LOG("[DEBUG-TOKENIZE] Decoding %d tokens to verify input:", n_tokens);
+      char decoded_preview[512] = {0};
+      int preview_chars = 0;
+      for (int i = 0; i < (n_tokens < 10 ? n_tokens : 10); i++) {
+        char token_str[128];
+        int n = llama_token_to_piece(vocab, tokens[i], token_str, sizeof(token_str), 0, false);
+        if (n > 0 && preview_chars + n < sizeof(decoded_preview) - 1) {
+          memcpy(decoded_preview + preview_chars, token_str, n);
+          preview_chars += n;
+        }
+      }
+      decoded_preview[preview_chars] = '\0';
+      GOV_LOG("[DEBUG-TOKENIZE] First 10 tokens decode to: '%s...'", decoded_preview);
 
       // ========================================================================
       // Context Health Monitoring - Check before decoding new tokens
@@ -2037,6 +2193,7 @@ ethervox_governor_status_t ethervox_governor_execute(
                    governor->current_kv_pos, n_tokens, n_ctx);
           *error = strdup(err_msg);
         }
+        free(llm_response_buffer);
         return ETHERVOX_GOVERNOR_ERROR;
       }
 
@@ -2064,6 +2221,7 @@ ethervox_governor_status_t ethervox_governor_execute(
         free(tokens);
         if (error)
           *error = strdup("Failed to decode conversation");
+        free(llm_response_buffer);
         return ETHERVOX_GOVERNOR_ERROR;
       }
 
@@ -2099,6 +2257,31 @@ ethervox_governor_status_t ethervox_governor_execute(
       processed_length = strlen(conversation);
     }
 
+    // ========================================================================
+    // Token Lookahead Buffer and Loop Detection Structures
+    // ========================================================================
+    // Increased from 8 to 16 for robust stop sequence detection (stop sequences
+    // can span multiple tokens when tokenized, especially with special tokens)
+    #define LOOKAHEAD_SIZE 16  // Buffer up to 16 tokens for stop sequence detection
+    #define MAX_NGRAM_HISTORY 100
+    #define NGRAM_SIZE 4
+    
+    typedef struct {
+      char tokens[LOOKAHEAD_SIZE][128];
+      int count;
+    } token_lookahead_t;
+    
+    typedef struct {
+      uint32_t hashes[MAX_NGRAM_HISTORY];
+      char last_tokens[NGRAM_SIZE][128];
+      int history_count;
+      int token_count;
+    } ngram_detector_t;
+
+    // Track what we've STREAMED to the UI (not just generated)
+    // Doubled size from 8192 to 16384 for safety margin
+    char streamed_output_buffer[16384] = {0};  // Accumulates streamed tokens
+
     // Generate response tokens - Use config.h defaults
     struct llama_sampler* sampler = llama_sampler_chain_init(llama_sampler_chain_default_params());
 
@@ -2108,30 +2291,119 @@ ethervox_governor_status_t ethervox_governor_execute(
                      ETHERVOX_GOVERNOR_PENALTY_LAST_N, ETHERVOX_GOVERNOR_REPETITION_PENALTY,
                      ETHERVOX_GOVERNOR_FREQUENCY_PENALTY, ETHERVOX_GOVERNOR_PRESENCE_PENALTY));
 
-    llama_sampler_chain_add(sampler, llama_sampler_init_temp(governor->config.temperature));
+    // Use low temperature for deterministic, focused tool-oriented responses
+    // 0.3 keeps model grounded and prevents hallucination/rambling
+    // Allows longer answers when needed, but stays on-task
+    float temperature = (governor->config.temperature > 0.0f) ? governor->config.temperature : 0.3f;
+    GOV_LOG("Using temperature: %.2f (config: %.2f)", temperature, governor->config.temperature);
+    llama_sampler_chain_add(sampler, llama_sampler_init_temp(temperature));
     llama_sampler_chain_add(sampler, llama_sampler_init_dist(0));
 
     int generated_count = 0;
     const int max_tokens = governor->config.max_tokens_per_response;  // Use configured limit
     bool inside_tool_call = false;  // Track if we're inside a tool call
-
-    // Repetition detection circuit breaker
-    #define REPETITION_WINDOW 50
-    char last_tokens[REPETITION_WINDOW][128];
-    int token_ring_buffer_pos = 0;
-    memset(last_tokens, 0, sizeof(last_tokens));
+    
+    // Initialize lookahead buffer and loop detection
+    token_lookahead_t lookahead = {0};
+    ngram_detector_t ngram_detector = {0};
+    // CRITICAL FIX: Add safety margin for null terminator to prevent buffer overflow
+    // Each token can be up to 128 bytes, so LOOKAHEAD_SIZE tokens = 16*128 = 2048 bytes
+    // Plus 128 bytes safety margin for null terminator and edge cases
+    char combined_lookahead[LOOKAHEAD_SIZE * 128 + 128];
 
     GOV_LOG("Starting generation with max_tokens=%d", max_tokens);
+    GOV_LOG("[DEBUG] chat_template at generation start: %p", (void*)governor->chat_template);
+    
+    // ========================================================================
+    // Stop Sequence Configuration - Use template's sequences for consistency
+    // ========================================================================
+    // Get stop sequences from chat template to ensure consistency across all checks
+    const char** stop_sequences_ptr = (const char**)governor->chat_template->stop_sequences;
+    int stop_sequence_count = governor->chat_template->stop_sequence_count;
+    
+    GOV_LOG("Using %d stop sequences from chat template:", stop_sequence_count);
+    for (int i = 0; i < stop_sequence_count && stop_sequences_ptr[i] != NULL; i++) {
+      GOV_LOG("  [%d] '%s'", i, stop_sequences_ptr[i]);
+    }
+    
+    // DEBUG: Decode last 20 tokens in KV cache to see what context the model has
+    if (governor->current_kv_pos > 20) {
+      GOV_LOG("[DEBUG-KV] Decoding last 20 tokens in KV cache (positions %d-%d):",
+              governor->current_kv_pos - 20, governor->current_kv_pos - 1);
+      char kv_preview[1024] = {0};
+      for (int i = governor->current_kv_pos - 20; i < governor->current_kv_pos; i++) {
+        // Note: We can't directly access KV cache tokens, but we can log the position
+        // The actual token decoding would require storing tokens during batch processing
+      }
+      GOV_LOG("[DEBUG-KV] Current KV position: %d (context filled to this point)", 
+              governor->current_kv_pos);
+    }
 
     while (generated_count < max_tokens) {
+      // ========================================================================
+      // Governor Pointer Validation - Detect corruption early
+      // ========================================================================
+      // Check for NULL, very low addresses, and corrupted range (0x100000000-0x100001000)
+      if (!governor || (uintptr_t)governor < 0x1000 || 
+          ((uintptr_t)governor >= 0x100000000 && (uintptr_t)governor < 0x100001000)) {
+        GOV_LOG("CRITICAL: governor pointer corrupted (%p), aborting generation", (void*)governor);
+        free(llm_response_buffer);
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
+      }
+      
+      // ========================================================================
+      // Cancellation Check - Check BEFORE expensive operations
+      // ========================================================================
+      if (governor->interrupt_requested) {
+        GOV_LOG("Generation cancelled by user after %d tokens", generated_count);
+        break;
+      }
+      
+      // ========================================================================
+      // Progress Update - Every 10 tokens to show generation progress
+      // ========================================================================
+      if (progress_callback && (generated_count % 10 == 0)) {
+        char progress_msg[128];
+        float progress = (float)generated_count / (float)max_tokens;
+        snprintf(progress_msg, sizeof(progress_msg), "Generating response... (%d tokens)", generated_count);
+        progress_callback(ETHERVOX_GOVERNOR_EVENT_THINKING, progress_msg, user_data);
+      }
+      
       llama_token next_token = llama_sampler_sample(sampler, governor->llm_ctx, -1);
 
+      // CRITICAL FIX: Validate llm_model pointer before using it
+      if (!governor->llm_model || (uintptr_t)governor->llm_model < 0x1000 ||
+          ((uintptr_t)governor->llm_model >= 0x100000000 && (uintptr_t)governor->llm_model < 0x100001000)) {
+        GOV_LOG("CRITICAL: llm_model pointer corrupted (%p), aborting generation", (void*)governor->llm_model);
+        break;
+      }
+
+      // CRITICAL FIX: Re-acquire vocab pointer to prevent corruption issues
+      // The vocab pointer can become corrupted during the generation loop,
+      // causing SIGSEGV at fault address 0x100000008 when dereferencing vocab fields.
+      // Re-acquiring it here ensures we always have a valid pointer.
+      const struct llama_vocab* vocab_safe = llama_model_get_vocab(governor->llm_model);
+      
+      // CRITICAL: Validate vocab pointer before use
+      // Fault address 0x100000008 indicates vocab pointer corruption to 0x100000000
+      if (!vocab_safe || (uintptr_t)vocab_safe < 0x1000 ||
+          ((uintptr_t)vocab_safe >= 0x100000000 && (uintptr_t)vocab_safe < 0x100001000)) {
+        GOV_LOG("CRITICAL: vocab pointer corrupted (%p) from model %p, aborting generation", 
+                (void*)vocab_safe, (void*)governor->llm_model);
+        break;
+      }
+      
       // Check for EOG token (proper way)
       // NOTE: For Granite models, <|end_of_text|> (token 100257) is incorrectly marked as EOG
       // in the GGUF file. It's actually a role separator, not a true EOG. We rely on stop
       // sequence detection instead for Granite.
-      bool is_eog = llama_vocab_is_eog(vocab, next_token);
-      bool ignore_eog = (governor->chat_template->type == CHAT_TEMPLATE_GRANITE && is_eog);
+      bool is_eog = llama_vocab_is_eog(vocab_safe, next_token);
+      bool ignore_eog = false;
+      // CRITICAL: Validate chat_template before accessing type field
+      if (governor->chat_template && (uintptr_t)governor->chat_template > 0x1000 &&
+          !((uintptr_t)governor->chat_template >= 0x100000000 && (uintptr_t)governor->chat_template < 0x100001000)) {
+        ignore_eog = (governor->chat_template->type == CHAT_TEMPLATE_GRANITE && is_eog);
+      }
 
       if (is_eog && !ignore_eog) {
         if (generated_count == 0) {
@@ -2149,205 +2421,305 @@ ethervox_governor_status_t ethervox_governor_execute(
       // Decode token to text
       char token_text[128];
       int n_chars =
-          llama_token_to_piece(vocab, next_token, token_text, sizeof(token_text), 0, false);
+          llama_token_to_piece(vocab_safe, next_token, token_text, sizeof(token_text), 0, false);
       if (n_chars > 0 && n_chars < (int)sizeof(token_text)) {
         token_text[n_chars] = '\0';
-
-        // CRITICAL FIX: Check if THIS token contains a stop sequence BEFORE adding to buffer/context
-        // This prevents the infinite loop bug where stop sequences get fed back into the model's context
-        bool token_has_stop = false;
-        if (governor->chat_template->stop_sequences != NULL) {
-          for (int i = 0; governor->chat_template->stop_sequences[i] != NULL; i++) {
-            if (strstr(token_text, governor->chat_template->stop_sequences[i])) {
-              token_has_stop = true;
-              GOV_LOG("Stop sequence '%s' detected in token, ending generation immediately",
-                      governor->chat_template->stop_sequences[i]);
-              break;
+        
+        // Log the raw token for debugging (show hex for special characters)
+        char token_hex[512] = {0};
+        int hex_pos = 0;
+        for (int i = 0; i < n_chars && i < 20; i++) {
+          hex_pos += snprintf(token_hex + hex_pos, sizeof(token_hex) - hex_pos, 
+                             "%02X ", (unsigned char)token_text[i]);
+        }
+        GOV_LOG("[TOKEN] id=%d, chars=%d, text='%s', hex=[%s]", next_token, n_chars, token_text, token_hex);
+        
+        // Filter out invalid UTF-8 replacement characters only
+        // U+FFFD (replacement character) appears as ��� (0xEF 0xBF 0xBD)
+        // NOTE: Emoji filtering removed for granite-4.1-3b - model should not hallucinate
+        bool has_invalid_content = false;
+        char original_token[128];
+        strncpy(original_token, token_text, sizeof(original_token) - 1);
+        
+        for (int i = 0; i < n_chars; ) {
+          // Check for UTF-8 replacement character (0xEF 0xBF 0xBD)
+          if (i + 2 < n_chars &&
+              (unsigned char)token_text[i] == 0xEF &&
+              (unsigned char)token_text[i+1] == 0xBF &&
+              (unsigned char)token_text[i+2] == 0xBD) {
+            GOV_LOG("Found UTF-8 replacement character at position %d", i);
+            has_invalid_content = true;
+            memmove(&token_text[i], &token_text[i+3], n_chars - i - 2);
+            n_chars -= 3;
+            token_text[n_chars] = '\0';
+            continue;  // Recheck same position
+          }
+          i++;
+        }
+        if (has_invalid_content) {
+          GOV_LOG("Filtered invalid UTF-8 from token '%s', remaining: '%s'", original_token, token_text);
+        }
+        
+        // CRITICAL: Check if this token would create a stop sequence BEFORE adding to buffer
+        // Build what the buffer would look like with this token
+        char test_buffer[65536];
+        size_t current_len = strlen(llm_response_buffer);
+        snprintf(test_buffer, sizeof(test_buffer), "%s%s", llm_response_buffer, token_text);
+        
+        // Check for stop sequences in the test buffer (use template's sequences)
+        bool would_create_stop = false;
+        for (int i = 0; i < stop_sequence_count && stop_sequences_ptr[i] != NULL; i++) {
+          const char* stop_marker = stop_sequences_ptr[i];
+          if (strstr(test_buffer, stop_marker) != NULL) {
+            // This token would create a stop sequence
+            // Truncate the token to exclude the stop sequence
+            char* stop_in_test = strstr(test_buffer, stop_marker);
+            size_t safe_len = stop_in_test - test_buffer;
+            if (safe_len > current_len) {
+              // Partial token is safe
+              size_t safe_token_len = safe_len - current_len;
+              token_text[safe_token_len] = '\0';
+            } else {
+              // Don't add this token at all
+              token_text[0] = '\0';
             }
+            would_create_stop = true;
+            GOV_LOG("Token would create stop sequence '%s' - truncated token to: '%s'", 
+                    stop_marker, token_text);
+            break;
           }
         }
         
-        // Also check for common stop patterns that might not be in the template
-        if (!token_has_stop && (strstr(token_text, "<|end_of_role|>") ||
-                                 strstr(token_text, "<|end_of_text|>") ||
-                                 strstr(token_text, "<|im_end|>"))) {
-          token_has_stop = true;
-          GOV_LOG("Common stop pattern detected in token, ending generation immediately");
+        // Skip empty tokens
+        if (token_text[0] == '\0') {
+          GOV_LOG("Skipping empty token (stop sequence filtered)");
+          break;  // Stop generation
         }
         
-        // If token contains stop sequence, don't add to buffer or context - just stop
-        if (token_has_stop) {
+        // If we truncated the token, this is the last token - add it and stop
+        if (would_create_stop) {
+          // Add the truncated token to response buffer (reuse current_len from above)
+          size_t buffer_size = 65536;
+          size_t available = buffer_size - current_len - 1;
+          strncat(llm_response_buffer, token_text, available);
+          
+          // Stream it immediately if callback exists
+          if (token_callback) {
+            token_callback(token_text, user_data);
+          }
+          
+          GOV_LOG("Stop sequence detected - ending generation after truncated token");
+          break;  // Stop generation immediately
+        }
+
+        // Add to response buffer for final output (reuse variables from above)
+        // CRITICAL: llm_response_buffer is a POINTER (heap-allocated), so sizeof() returns 8!
+        // Must use the actual buffer size (65536) instead
+        size_t buffer_size = 65536;
+        size_t available = buffer_size - current_len - 1;
+        strncat(llm_response_buffer, token_text, available);
+
+        // ========================================================================
+        // Tool Call Detection (before lookahead streaming decision)
+        // ========================================================================
+        // CRITICAL: Validate governor pointer FIRST before accessing any fields
+        if (!governor || (uintptr_t)governor < 0x1000 || 
+            ((uintptr_t)governor >= 0x100000000 && (uintptr_t)governor < 0x100001000)) {
+          GOV_LOG("CRITICAL: governor pointer corrupted (%p) during tool detection", (void*)governor);
           break;
         }
-
-        // Add token to repetition detection buffer
-        strncpy(last_tokens[token_ring_buffer_pos], token_text, sizeof(last_tokens[0]) - 1);
-        last_tokens[token_ring_buffer_pos][sizeof(last_tokens[0]) - 1] = '\0';
-        token_ring_buffer_pos = (token_ring_buffer_pos + 1) % REPETITION_WINDOW;
-
-        // Check for repetition loops every 50 tokens (after buffer is filled)
-        if (generated_count > 0 && generated_count % 50 == 0 && generated_count >= REPETITION_WINDOW) {
-          int repetition_count = 0;
-          int identical_consecutive = 0;
-          
-          // Count identical consecutive tokens
-          for (int i = 0; i < REPETITION_WINDOW - 1; i++) {
-            int curr_idx = (token_ring_buffer_pos + i) % REPETITION_WINDOW;
-            int next_idx = (token_ring_buffer_pos + i + 1) % REPETITION_WINDOW;
-            if (last_tokens[curr_idx][0] != '\0' && last_tokens[next_idx][0] != '\0' &&
-                strcmp(last_tokens[curr_idx], last_tokens[next_idx]) == 0) {
-              repetition_count++;
-              identical_consecutive++;
-            } else {
-              identical_consecutive = 0;
-            }
-          }
-          
-          // If 80% of the window is repetitive OR we have 10+ identical consecutive tokens, stop
-          float repetition_ratio = (float)repetition_count / (REPETITION_WINDOW - 1);
-          if (repetition_ratio > 0.8f || identical_consecutive > 10) {
-            GOV_ERROR("Repetition loop detected (ratio=%.2f, consecutive=%d), terminating generation",
-                      repetition_ratio, identical_consecutive);
-            break;
-          }
+        
+        // Validate chat_template before use (could be corrupted)
+        if (!governor->chat_template || (uintptr_t)governor->chat_template < 0x1000 || 
+            ((uintptr_t)governor->chat_template >= 0x100000000 && (uintptr_t)governor->chat_template < 0x100001000)) {
+          GOV_LOG("WARNING: chat_template corrupted (%p), disabling tool detection", (void*)governor->chat_template);
+          break;
         }
-
-        // Add to buffer first
-        strncat(llm_response_buffer, token_text,
-                sizeof(llm_response_buffer) - strlen(llm_response_buffer) - 1);
-
-        // Check for actual stop sequences (not just <| prefix)
-        // Only stop if we see a complete stop sequence pattern
-        size_t buf_len = strlen(llm_response_buffer);
-        bool found_stop = false;
-
-        // Check for common stop sequence starts (but need more than just <|)
-        // Granite: <|end_of_text|>, <|start_of_role|>, <|end_of_role|>
-        // Qwen/LFM: <|im_end|>, <|im_start|>
-        if (buf_len >= 10) {
-          // Check for complete or near-complete stop sequences
-          if (strstr(llm_response_buffer + (buf_len >= 20 ? buf_len - 20 : 0), "<|end_of_text|>") ||
-              strstr(llm_response_buffer + (buf_len >= 20 ? buf_len - 20 : 0),
-                     "<|start_of_role|>") ||
-              strstr(llm_response_buffer + (buf_len >= 20 ? buf_len - 20 : 0), "<|end_of_role|>") ||
-              strstr(llm_response_buffer + (buf_len >= 20 ? buf_len - 20 : 0), "<|im_end|>") ||
-              strstr(llm_response_buffer + (buf_len >= 20 ? buf_len - 20 : 0), "<|im_start|>")) {
-            found_stop = true;
-
-            // Find where the stop sequence starts and truncate there
-            char* stop_pos = strstr(llm_response_buffer, "<|end_of_text|>");
-            if (!stop_pos)
-              stop_pos = strstr(llm_response_buffer, "<|start_of_role|>");
-            if (!stop_pos)
-              stop_pos = strstr(llm_response_buffer, "<|end_of_role|>");
-            if (!stop_pos)
-              stop_pos = strstr(llm_response_buffer, "<|im_end|>");
-            if (!stop_pos)
-              stop_pos = strstr(llm_response_buffer, "<|im_start|>");
-
-            if (stop_pos) {
-              *stop_pos = '\0';
-              GOV_LOG("Stop sequence detected, ending generation");
-            }
-            break;
-          }
-        }
-
-        // Check if we're entering or exiting a tool call (format-aware)
         tool_format_type_t tool_format = chat_template_get_tool_format(governor->chat_template);
-
+        
         if (!inside_tool_call && strstr(llm_response_buffer, "<tool_call")) {
           inside_tool_call = true;
         }
-
-        // Determine if we should stream this token
-        bool should_stream = false;
+        
         if (inside_tool_call) {
-          // Inside tool call - check if we're exiting (format-specific)
+          // Check if exiting tool call
           if (tool_format == TOOL_FORMAT_JSON_IN_XML) {
-            // JSON format: wait for </tool_call>
             if (strstr(llm_response_buffer, "</tool_call>")) {
               inside_tool_call = false;
             }
           } else {
-            // XML attribute format: wait for />
             if (strstr(llm_response_buffer, "/>")) {
               inside_tool_call = false;
             }
           }
-          // Don't stream anything while inside tool call
-          should_stream = false;
-        } else {
-          // Not inside tool call - check if we might be starting one
-          size_t buf_len = strlen(llm_response_buffer);
-          const char* buf_end = llm_response_buffer + buf_len;
-
-          // Check if buffer ends with potential tool call start patterns
-          // Be more specific - only hold back if we're building "<tool_call"
+        }
+        
+        // ========================================================================
+        // Lookahead Buffer: Stream old token first, then add new token
+        // ========================================================================
+        
+        // If buffer is full, decide whether to stream the OLDEST token before adding new one
+        if (lookahead.count == LOOKAHEAD_SIZE) {
+          // We have a full buffer - check if oldest token is safe to stream
+          
+          // Build combined text from lookahead buffer
+          combined_lookahead[0] = '\0';
+          for (int i = 0; i < lookahead.count; i++) {
+            // SAFETY: Check available space before concatenation
+            size_t current_len = strlen(combined_lookahead);
+            size_t available = sizeof(combined_lookahead) - current_len - 1;
+            if (available > 0) {
+              strncat(combined_lookahead, lookahead.tokens[i], available);
+            } else {
+              GOV_LOG("WARNING: combined_lookahead buffer full, stopping concatenation");
+              break;
+            }
+          }
+          
+          // Check if lookahead might be building a tool call
           bool might_be_tool_start = false;
-          if (buf_len >= 1 && buf_end[-1] == '<' && token_text[0] == 't') {
-            might_be_tool_start = true;  // '<' followed by 't' - might be '<tool_call'
-          } else if (buf_len >= 2 && strncmp(buf_end - 2, "<t", 2) == 0) {
-            might_be_tool_start = true;  // Building '<t'
-          } else if (buf_len >= 3 && strncmp(buf_end - 3, "<to", 3) == 0) {
-            might_be_tool_start = true;  // Building '<to'
-          } else if (buf_len >= 4 && strncmp(buf_end - 4, "<too", 4) == 0) {
-            might_be_tool_start = true;  // Building '<too'
-          } else if (buf_len >= 5 && strncmp(buf_end - 5, "<tool", 5) == 0) {
-            might_be_tool_start = true;  // Building '<tool'
-          } else if (buf_len >= 6 && strncmp(buf_end - 6, "<tool_", 6) == 0) {
-            might_be_tool_start = true;  // Building '<tool_'
-          } else if (buf_len >= 10 && strncmp(buf_end - 10, "<tool_call", 10) == 0) {
-            might_be_tool_start = true;  // Building full '<tool_call'
+          size_t buf_len = strlen(combined_lookahead);
+          if (buf_len > 0 && buf_len < 11) {
+            const char* tool_prefixes[] = {"<", "<t", "<to", "<too", "<tool", "<tool_", 
+                                           "<tool_c", "<tool_ca", "<tool_cal", "<tool_call"};
+            for (size_t i = 0; i < sizeof(tool_prefixes) / sizeof(tool_prefixes[0]); i++) {
+              if (strcmp(combined_lookahead, tool_prefixes[i]) == 0) {
+                might_be_tool_start = true;
+                break;
+              }
+            }
           }
-
-          // Check if token itself contains stop sequence fragments
-          bool is_stop_fragment =
-              chat_template_has_stop_sequence(governor->chat_template, token_text);
-
-          // Check for hallucination markers (role markers, tool results, etc.)
-          // This prevents streaming hallucinated content from system prompts
-          bool has_hallucination = false;
-          if (strstr(llm_response_buffer, governor->chat_template->user_start) ||
-              strstr(llm_response_buffer, governor->chat_template->system_start) ||
-              strstr(llm_response_buffer, "<tool_result") ||
-              strstr(llm_response_buffer, "<|start_of_role|>") ||
-              strstr(llm_response_buffer, "<|end_of_role|>") ||
-              strstr(llm_response_buffer, "<|im_start|>") ||
-              strstr(llm_response_buffer, "<|im_end|>") ||
-              strstr(llm_response_buffer, "<|end_of_text|>")) {
-            has_hallucination = true;
-            GOV_LOG("Hallucination detected during streaming, blocking token");
+          
+          // Critical checks before streaming oldest token
+          // Check if what we've STREAMED SO FAR + lookahead buffer contains stop sequences
+          // This catches stop sequences that span across the streaming boundary
+          // Doubled size from 16384 to 32768 for safety (16KB streamed + 2KB lookahead + margin)
+          char streamed_plus_lookahead[32768];
+          // SAFETY: Use bounds-checked snprintf
+          int written = snprintf(streamed_plus_lookahead, sizeof(streamed_plus_lookahead), "%s%s", 
+                                 streamed_output_buffer, combined_lookahead);
+          if (written >= (int)sizeof(streamed_plus_lookahead)) {
+            GOV_LOG("WARNING: streamed_plus_lookahead buffer truncated (%d >= %zu)",
+                    written, sizeof(streamed_plus_lookahead));
           }
-
-          // Only stream if we're sure it's not a tool call, no STOP sequences, not a stop
-          // fragment, and no hallucination markers
-          should_stream =
-              !might_be_tool_start && !is_stop_fragment && !has_hallucination &&
-              !strstr(llm_response_buffer, "STOP") &&
-              !chat_template_has_stop_sequence(governor->chat_template, llm_response_buffer);
+          
+          bool streamed_has_stop = chat_template_has_stop_sequence(
+              governor->chat_template, streamed_plus_lookahead);
+          bool lookahead_building_stop = is_potential_stop_prefix_check(
+              governor->chat_template, combined_lookahead);
+          bool oldest_could_be_stop = is_potential_stop_prefix_check(
+              governor->chat_template, lookahead.tokens[0]);
+          
+          // Stream oldest token ONLY if all checks pass
+          bool should_stream_oldest = !inside_tool_call && 
+                                      !might_be_tool_start &&
+                                      !streamed_has_stop &&
+                                      !lookahead_building_stop && 
+                                      !oldest_could_be_stop;
+          
+          if (should_stream_oldest && token_callback) {
+            token_callback(lookahead.tokens[0], user_data);
+            // Track what we've streamed to UI with bounds checking
+            size_t streamed_len = strlen(streamed_output_buffer);
+            size_t available = sizeof(streamed_output_buffer) - streamed_len - 1;
+            if (available > 0) {
+              strncat(streamed_output_buffer, lookahead.tokens[0], available);
+            } else {
+              GOV_LOG("WARNING: streamed_output_buffer full, cannot track more tokens");
+            }
+          } else if (!should_stream_oldest) {
+            GOV_LOG("Held back token: %s", lookahead.tokens[0]);
+          }
+          
+          // Shift buffer left to make room for new token
+          for (int i = 0; i < LOOKAHEAD_SIZE - 1; i++) {
+            strncpy(lookahead.tokens[i], lookahead.tokens[i + 1], 127);
+          }
+          lookahead.count--; // Now LOOKAHEAD_SIZE - 1
+        }
+        
+        // Add new token to buffer
+        strncpy(lookahead.tokens[lookahead.count], token_text, 127);
+        lookahead.tokens[lookahead.count][127] = '\0';
+        lookahead.count++;
+        
+        // Rebuild combined lookahead after adding new token (for next iteration's checks)
+        combined_lookahead[0] = '\0';
+        for (int i = 0; i < lookahead.count; i++) {
+          // SAFETY: Check available space before concatenation
+          size_t current_len = strlen(combined_lookahead);
+          size_t available = sizeof(combined_lookahead) - current_len - 1;
+          if (available > 0) {
+            strncat(combined_lookahead, lookahead.tokens[i], available);
+          } else {
+            GOV_LOG("WARNING: combined_lookahead buffer full during rebuild");
+            break;
+          }
         }
 
-        if (should_stream && token_callback) {
-          token_callback(token_text, user_data);
+        // ========================================================================
+        // Stop Sequence Detection (final check before breaking loop)
+        // ========================================================================
+        // Check for stop sequences using template's sequences
+        bool found_complete_stop = false;
+        char* stop_pos = NULL;
+        
+        for (int i = 0; i < stop_sequence_count && stop_sequences_ptr[i] != NULL; i++) {
+          stop_pos = strstr(llm_response_buffer, stop_sequences_ptr[i]);
+          if (stop_pos) {
+            found_complete_stop = true;
+            *stop_pos = '\0';  // Truncate at stop sequence
+            GOV_LOG("Stop sequence detected: '%s', ending generation", stop_sequences_ptr[i]);
+            break;
+          }
         }
-      }
+        
+        if (found_complete_stop) {
+          break;
+        }
 
-      // Check for stop sequences in the accumulated response
-      if (chat_template_has_stop_sequence(governor->chat_template, llm_response_buffer) ||
-          strstr(llm_response_buffer, "STOP")) {
-        // Remove the stop sequence from output
-        for (int i = 0; governor->chat_template->stop_sequences[i] != NULL; i++) {
-          char* stop_pos = strstr(llm_response_buffer, governor->chat_template->stop_sequences[i]);
-          if (stop_pos)
-            *stop_pos = '\0';
+        // ========================================================================
+        // N-gram Loop Detection
+        // ========================================================================
+        if (ngram_detector.token_count < NGRAM_SIZE) {
+          // Build up n-gram history
+          strncpy(ngram_detector.last_tokens[ngram_detector.token_count], token_text, 127);
+          ngram_detector.last_tokens[ngram_detector.token_count][127] = '\0';
+          ngram_detector.token_count++;
+        } else {
+          // Shift and add new token
+          for (int i = 0; i < NGRAM_SIZE - 1; i++) {
+            strncpy(ngram_detector.last_tokens[i], ngram_detector.last_tokens[i + 1], 127);
+          }
+          strncpy(ngram_detector.last_tokens[NGRAM_SIZE - 1], token_text, 127);
+          
+          // Compute hash of current n-gram
+          const char* ngram_ptrs[NGRAM_SIZE];
+          for (int i = 0; i < NGRAM_SIZE; i++) {
+            ngram_ptrs[i] = ngram_detector.last_tokens[i];
+          }
+          uint32_t current_hash = compute_ngram_hash_djb2(ngram_ptrs, NGRAM_SIZE);
+          
+          // Check if we've seen this n-gram before
+          int repeat_count = 0;
+          for (int i = 0; i < ngram_detector.history_count; i++) {
+            if (ngram_detector.hashes[i] == current_hash) {
+              repeat_count++;
+            }
+          }
+          
+          if (repeat_count >= 2) {
+            GOV_LOG("Loop detected: %d-gram repeated %d times, stopping generation", 
+                    NGRAM_SIZE, repeat_count + 1);
+            break;
+          }
+          
+          // Add to history
+          if (ngram_detector.history_count < MAX_NGRAM_HISTORY) {
+            ngram_detector.hashes[ngram_detector.history_count++] = current_hash;
+          }
         }
-        char* stop_pos = strstr(llm_response_buffer, "STOP");
-        if (stop_pos)
-          *stop_pos = '\0';
-        GOV_LOG("Stop sequence detected, ending generation");
-        break;
-      }
+      }  // End of token_text processing
 
       // Feed token back to context for next prediction with explicit position
       // Check if we're about to exceed context window
@@ -2383,23 +2755,134 @@ ethervox_governor_status_t ethervox_governor_execute(
         break;  // Tool call complete, stop immediately
       }
 
-      // 2. Stop if we see role markers or <tool_result> (model is hallucinating examples from
-      // system prompt)
-      if (strstr(llm_response_buffer, governor->chat_template->user_start) ||
-          strstr(llm_response_buffer, governor->chat_template->system_start) ||
-          strstr(llm_response_buffer, "<tool_result")) {
-        // Truncate the buffer to remove the hallucinated content
-        char* hallucination_start =
-            strstr(llm_response_buffer, governor->chat_template->user_start);
-        if (!hallucination_start)
-          hallucination_start = strstr(llm_response_buffer, governor->chat_template->system_start);
-        if (!hallucination_start)
-          hallucination_start = strstr(llm_response_buffer, "<tool_result");
-        if (hallucination_start)
-          *hallucination_start = '\0';
+      // 2. Check for stop sequences DURING streaming (early detection)
+      // Use template's sequences for consistency
+      bool found_early_stop = false;
+      for (int i = 0; i < stop_sequence_count && stop_sequences_ptr[i] != NULL; i++) {
+        if (strstr(llm_response_buffer, stop_sequences_ptr[i])) {
+          char* stop_pos = strstr(llm_response_buffer, stop_sequences_ptr[i]);
+          if (stop_pos) {
+            *stop_pos = '\0';
+            GOV_LOG("Early stop: '%s' detected and truncated at %d tokens", 
+                    stop_sequences_ptr[i], generated_count);
+            found_early_stop = true;
+            break;
+          }
+        }
+      }
+      
+      if (found_early_stop) {
+        break;  // Exit token generation loop
+      }
+    }
 
-        GOV_LOG("Early stop: Hallucination detected and truncated (%d tokens)", generated_count);
-        break;
+    // ========================================================================
+    // Flush Remaining Lookahead Buffer
+    // ========================================================================
+    // After generation ends, stream any remaining buffered tokens that are safe
+    if (token_callback && lookahead.count > 0) {
+      // IMPROVED ALGORITHM: Check FULL combined output first, then work backwards
+      // This properly catches multi-token stop sequences like <|start_of_role|
+      
+      // Build complete combined buffer text
+      combined_lookahead[0] = '\0';
+      for (int i = 0; i < lookahead.count; i++) {
+        strncat(combined_lookahead, lookahead.tokens[i], 
+                sizeof(combined_lookahead) - strlen(combined_lookahead) - 1);
+      }
+      
+      GOV_LOG("Lookahead buffer contains: '%s'", combined_lookahead);
+      
+      // Check for stop sequences in the FULL combined output first
+      char* earliest_stop = NULL;
+      const char* found_sequence = NULL;
+      
+      // Check all template stop sequences
+      for (int i = 0; i < stop_sequence_count && stop_sequences_ptr[i] != NULL; i++) {
+        char* stop_pos = strstr(combined_lookahead, stop_sequences_ptr[i]);
+        if (stop_pos && (!earliest_stop || stop_pos < earliest_stop)) {
+          earliest_stop = stop_pos;
+          found_sequence = stop_sequences_ptr[i];
+        }
+      }
+      
+      // Also check for incomplete tool calls
+      char* tool_call_pos = strstr(combined_lookahead, "<tool_call");
+      if (tool_call_pos && (!earliest_stop || tool_call_pos < earliest_stop)) {
+        earliest_stop = tool_call_pos;
+        found_sequence = "<tool_call";
+      }
+      
+      // CRITICAL: Also check if buffer ENDS WITH a prefix of any stop sequence
+      // This catches cases like "<|start_of_role" (incomplete, missing final |)
+      if (!earliest_stop) {
+        size_t buf_len = strlen(combined_lookahead);
+        for (int i = 0; i < stop_sequence_count && stop_sequences_ptr[i] != NULL; i++) {
+          const char* stop_seq = stop_sequences_ptr[i];
+          size_t stop_len = strlen(stop_seq);
+          
+          // Check all possible prefix lengths (from 1 to stop_len-1)
+          for (size_t prefix_len = 1; prefix_len < stop_len; prefix_len++) {
+            if (buf_len >= prefix_len) {
+              const char* buf_suffix = combined_lookahead + (buf_len - prefix_len);
+              if (strncmp(buf_suffix, stop_seq, prefix_len) == 0) {
+                // Buffer ends with prefix of stop sequence - truncate it
+                earliest_stop = combined_lookahead + (buf_len - prefix_len);
+                found_sequence = stop_seq;
+                GOV_LOG("Buffer ends with %zu-char prefix of stop sequence '%s'", 
+                        prefix_len, stop_seq);
+                break;
+              }
+            }
+          }
+          if (earliest_stop) break;  // Found a prefix match
+        }
+      }
+      
+      // Determine how many characters are safe to output
+      size_t safe_char_count;
+      if (earliest_stop) {
+        safe_char_count = earliest_stop - combined_lookahead;
+        GOV_LOG("Found stop sequence '%s' at position %zu in lookahead buffer", 
+                found_sequence, safe_char_count);
+      } else {
+        safe_char_count = strlen(combined_lookahead);
+      }
+      
+      // Flush tokens character-by-character until we reach the safe limit
+      if (safe_char_count > 0) {
+        size_t chars_output = 0;
+        for (int i = 0; i < lookahead.count && chars_output < safe_char_count; i++) {
+          size_t token_len = strlen(lookahead.tokens[i]);
+          
+          if (chars_output + token_len <= safe_char_count) {
+            // Full token fits within safe zone
+            token_callback(lookahead.tokens[i], user_data);
+            chars_output += token_len;
+          } else {
+            // Partial token - only output the safe portion
+            size_t partial_len = safe_char_count - chars_output;
+            if (partial_len > 0) {
+              char partial[128];
+              strncpy(partial, lookahead.tokens[i], partial_len);
+              partial[partial_len] = '\0';
+              token_callback(partial, user_data);
+              chars_output += partial_len;
+            }
+            break;
+          }
+        }
+        
+        if (earliest_stop) {
+          GOV_LOG("Flushed %zu chars from lookahead (stopped at '%s')", 
+                  chars_output, found_sequence);
+        } else {
+          GOV_LOG("Flushed %d tokens (%zu chars) from lookahead buffer", 
+                  lookahead.count, chars_output);
+        }
+      } else {
+        GOV_LOG("Discarded entire lookahead buffer (starts with stop sequence '%s')", 
+                found_sequence);
       }
     }
 
@@ -2431,29 +2914,24 @@ ethervox_governor_status_t ethervox_governor_execute(
     append_turn(&governor->conversation_history, &assistant_turn);
 
     // Clean up any stop tokens that made it into the output
-    // Check for all possible partial versions and template markers
+    // Check for all possible partial versions starting with <|im
+    char* stop_marker = strstr(llm_response_buffer, " <|im");
+    if (!stop_marker)
+      stop_marker = strstr(llm_response_buffer, "<|im");
+    if (stop_marker) {
+      *stop_marker = '\0';
+    }
     
-    // Common template markers to clean (both complete and partial)
-    const char* markers_to_clean[] = {
-        " <|im",          // Qwen partial
-        "<|im",           // Qwen partial
-        "<|start_of_",    // Any Llama/Granite start marker
-        "<|end_of_",      // Any end marker
-        "<|begin_of_",    // Llama BOS marker
-        " <|start",       // Granite partial with space
-        "<|start",        // Granite partial
-        " <|end",         // End marker partial with space
-        "<|end",          // End marker partial
-        NULL
-    };
-    
-    for (int i = 0; markers_to_clean[i] != NULL; i++) {
-        char* marker_pos = strstr(llm_response_buffer, markers_to_clean[i]);
-        if (marker_pos) {
-            *marker_pos = '\0';
-            GOV_LOG("Cleaned up leaked template marker: %s", markers_to_clean[i]);
-            break;  // Stop after first match to avoid over-trimming
-        }
+    // FINAL SAFETY CHECK: Remove ALL stop sequences from response buffer
+    // This catches any that slipped through during streaming
+    // Use template's sequences for consistency
+    for (int i = 0; i < stop_sequence_count && stop_sequences_ptr[i] != NULL; i++) {
+      char* stop_pos = strstr(llm_response_buffer, stop_sequences_ptr[i]);
+      if (stop_pos) {
+        *stop_pos = '\0';
+        GOV_LOG("Truncated response at stop sequence: '%s'", stop_sequences_ptr[i]);
+        break;  // Truncate at first occurrence
+      }
     }
 
     const char* llm_response = llm_response_buffer;
@@ -2688,6 +3166,13 @@ ethervox_governor_status_t ethervox_governor_execute(
 
           // Add error tokens to LLM context using same approach as tool_result
           // Decode prefix (error is treated like a tool_result for format purposes)
+          // CRITICAL: Validate chat_template before accessing members
+          if (!governor->chat_template || (uintptr_t)governor->chat_template < 0x1000 ||
+              ((uintptr_t)governor->chat_template >= 0x100000000 && (uintptr_t)governor->chat_template < 0x100001000)) {
+            GOV_LOG("WARNING: chat_template corrupted (%p), skipping error formatting", (void*)governor->chat_template);
+            continue;  // Skip to next iteration
+          }
+          
           const char* error_prefix = governor->chat_template->user_start;
           int prefix_n_tokens =
               -llama_tokenize(vocab, error_prefix, strlen(error_prefix), NULL, 0, false, false);
@@ -2773,6 +3258,13 @@ ethervox_governor_status_t ethervox_governor_execute(
           }
 
           // Add suffix to return to assistant context
+          // CRITICAL: Validate chat_template before accessing members
+          if (!governor->chat_template || (uintptr_t)governor->chat_template < 0x1000 ||
+              ((uintptr_t)governor->chat_template >= 0x100000000 && (uintptr_t)governor->chat_template < 0x100001000)) {
+            GOV_LOG("WARNING: chat_template corrupted (%p) during suffix", (void*)governor->chat_template);
+            break;  // Exit tool error handling
+          }
+          
           const char* error_suffix = governor->chat_template->assistant_start;
           int suffix_n_tokens =
               -llama_tokenize(vocab, error_suffix, strlen(error_suffix), NULL, 0, false, false);
@@ -2894,6 +3386,7 @@ ethervox_governor_status_t ethervox_governor_execute(
         progress_callback(ETHERVOX_GOVERNOR_EVENT_COMPLETE, "Answer ready", user_data);
       }
 
+      free(llm_response_buffer);
       return ETHERVOX_GOVERNOR_SUCCESS;
     }
   }

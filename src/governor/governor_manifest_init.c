@@ -238,7 +238,8 @@ ethervox_result_t ethervox_governor_build_system_prompt_with_manifest(
     // Base system message
     offset = snprintf(output, output_size,
         "You are a helpful AI assistant.\n"
-        "Respond naturally and conversationally to the user.\n\n");
+        "CRITICAL: Only generate YOUR response. Stop immediately after answering.\n"
+        "DO NOT generate the user's next message. DO NOT continue the conversation.\n\n");
     
     if (offset < 0 || (size_t)offset >= output_size) {
         return ETHERVOX_ERROR_INVALID_ARGUMENT;

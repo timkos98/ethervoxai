@@ -82,41 +82,10 @@ add_definitions(-DETHERVOX_GIT_COMMIT="${GIT_COMMIT_HASH}")
 # To create a token: https://github.com/settings/tokens
 # Required permission: issues:write for timkos98/ethervoxai
 #
-# To disable validation (e.g., for development):
-#   cmake -DSKIP_GITHUB_TOKEN_VALIDATION=ON
-#   OR set environment variable: export SKIP_GITHUB_TOKEN_VALIDATION=1
-
-# Check environment variable first, then CMake option
-if(DEFINED ENV{SKIP_GITHUB_TOKEN_VALIDATION} AND NOT "$ENV{SKIP_GITHUB_TOKEN_VALIDATION}" STREQUAL "")
-    set(SKIP_GITHUB_TOKEN_VALIDATION ON)
-endif()
-
-option(SKIP_GITHUB_TOKEN_VALIDATION "Skip GitHub token validation (disables bug reporter)" OFF)
-
-if(DEFINED ENV{ETHERVOX_GITHUB_TOKEN_DESKTOP} AND NOT "$ENV{ETHERVOX_GITHUB_TOKEN_DESKTOP}" STREQUAL "")
-    set(ETHERVOX_GITHUB_TOKEN "$ENV{ETHERVOX_GITHUB_TOKEN_DESKTOP}")
-    message(STATUS "GitHub token: Using ETHERVOX_GITHUB_TOKEN_DESKTOP")
-elseif(DEFINED ENV{ETHERVOX_GITHUB_TOKEN} AND NOT "$ENV{ETHERVOX_GITHUB_TOKEN}" STREQUAL "")
-    set(ETHERVOX_GITHUB_TOKEN "$ENV{ETHERVOX_GITHUB_TOKEN}")
-    message(STATUS "GitHub token: Using ETHERVOX_GITHUB_TOKEN")
-else()
-    set(ETHERVOX_GITHUB_TOKEN "")
-endif()
-
-# Validate the GitHub token using our validation script
-# This will cause CMake configuration to FAIL if:
-# - Token is not set
-# - Token is invalid or expired
-# - Token doesn't have required permissions
-if(NOT SKIP_GITHUB_TOKEN_VALIDATION)
-    set(GITHUB_TOKEN "${ETHERVOX_GITHUB_TOKEN}")
-    include(cmake/validate_github_token.cmake)
-else()
-    message(WARNING "GitHub token validation SKIPPED - bug reporter will be disabled")
-    set(ETHERVOX_GITHUB_TOKEN "")
-endif()
-
-add_definitions(-DETHERVOX_GITHUB_TOKEN="${ETHERVOX_GITHUB_TOKEN}")
+# GitHub token support removed - bug reporter feature is deprecated
+# The ETHERVOX_GITHUB_TOKEN definition is kept for backwards compatibility
+set(ETHERVOX_GITHUB_TOKEN "")
+add_definitions(-DETHERVOX_GITHUB_TOKEN="")
 
 # Parse version components (MAJOR.MINOR.PATCH) only if we have a proper tag
 if(GIT_TAG_RESULT EQUAL 0 AND GIT_VERSION_TAG AND ETHERVOX_BACKEND_VERSION MATCHES "^([0-9]+)\\.([0-9]+)\\.([0-9]+)")
@@ -760,18 +729,21 @@ elseif(WIN32 OR TARGET_PLATFORM STREQUAL "WINDOWS")
         src/audio/platform_windows.c
         src/platform/desktop_hal.c
         src/platform/windows_stubs.c  # Stubs for excluded features
+        src/platform/device_profile.c  # Hardware detection and adaptive configuration (needed for governor)
     )
 elseif(APPLE OR TARGET_PLATFORM STREQUAL "MACOS")
     message(STATUS "Building for macOS - using macOS platform sources")
     set(PLATFORM_SOURCES
         src/audio/platform_macos.c
         src/platform/desktop_hal.c
+        src/platform/device_profile.c  # Hardware detection and adaptive configuration (needed for governor)
     )
 elseif(ANDROID OR TARGET_PLATFORM STREQUAL "ANDROID")
     message(STATUS "Building for Android - using Android platform sources")
     set(PLATFORM_SOURCES
         src/audio/platform_android.c
         src/platform/android_hal.c
+        src/platform/device_profile.c  # Hardware detection and adaptive configuration
     )
 else()
     message(STATUS "Building for Linux - using Linux platform sources")
@@ -779,6 +751,7 @@ else()
     set(PLATFORM_SOURCES
         src/audio/platform_linux.c
         src/platform/desktop_hal.c
+        src/platform/device_profile.c  # Hardware detection and adaptive configuration (needed for governor)
     )
 endif()
 

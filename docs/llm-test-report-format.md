@@ -17,7 +17,7 @@ EthervoxAI LLM Tool Usage Test Report
 ======================================
 
 Timestamp: Mon Jan 1 12:00:00 2024
-Model Path: models/granite-4.0-h-tiny-Q4_K_M.gguf
+Model Path: models/granite-4.1-3b-Q6_K.gguf
 ```
 
 ### Test Sections
@@ -128,7 +128,7 @@ EthervoxAI LLM Tool Usage Test Report
 ======================================
 
 Timestamp: Mon Jan 1 12:00:00 2024
-Model Path: models/granite-4.0-h-tiny-Q4_K_M.gguf
+Model Path: models/granite-4.1-3b-Q6_K.gguf
 
 === Initialization ===
 ℹ Using auto-loaded model
@@ -172,7 +172,7 @@ Query: "Calculate 150 + 75 and remember the result as 'total cost'"
 
 === Test 7: Model Load/Unload Lifecycle ===
 ✓ Governor created
-✓ Model loaded: models/granite-4.0-h-tiny-Q4_K_M.gguf
+✓ Model loaded: models/granite-4.1-3b-Q6_K.gguf
 ✓ Inference successful
 ✓ Model unloaded
 ✓ Governor cleaned up

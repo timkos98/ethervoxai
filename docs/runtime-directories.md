@@ -20,8 +20,8 @@ EthervoxAI uses a standardized directory structure at `~/.ethervox/` for all run
 
 **Usage**:
 - Store your downloaded GGUF models here
-- Example: `~/.ethervox/models/granite-4.0-h-tiny-Q4_K_M.gguf`
-- Load with: `--model ~/.ethervox/models/granite-4.0-h-tiny-Q4_K_M.gguf`
+- Example: `~/.ethervox/models/granite-4.1-3b-Q6_K.gguf`
+- Load with: `--model ~/.ethervox/models/granite-4.1-3b-Q6_K.gguf`
 
 ### `~/.ethervox/memory/`
 **Purpose**: Persistent conversation memory storage
@@ -71,7 +71,7 @@ Please greet me. Check what time and date it is. Search your memory for any remi
 **Contents**:
 ```json
 {
-  "model_path": "~/.ethervox/models/granite-4.0-h-tiny-Q4_K_M.gguf",
+  "model_path": "~/.ethervox/models/granite-4.1-3b-Q6_K.gguf",
   "generated_at": 1733201234,
   "preferences": "Model's preferred instruction style...",
   "tools": [

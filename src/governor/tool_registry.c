@@ -410,25 +410,13 @@ ethervox_result_t ethervox_tool_registry_build_system_prompt(
     
     // Format differs significantly between XML and JSON tool formats
     if (tool_format == TOOL_FORMAT_JSON_IN_XML) {
-        // Granite 4.0 format: system prompt with JSON tools in <tools></tools>
-        // Add optimization warning first if prompts not customized
-        // TODO: Move into the optimizer backend s.t. the prompts get the right format
-        const char* optimization_warning = has_custom_prompts ? "" :
-            "⚠️ WARNING: Tools are NOT optimized for this model!\n"
-            "This means:\n"
-            "- Tool calls may be SLOW and use EXCESSIVE tokens\n"
-            "- You MUST be VERY SELECTIVE about tool usage\n"
-            "- ONLY call tools when absolutely necessary\n"
-            "- For simple questions, answer directly WITHOUT tools\n"
-            "- DO NOT call get_tool_info unless the user explicitly asks about a tool\n"
-            "- DO NOT chain multiple tool calls unless critical\n"
-            "- MINIMIZE tool usage to avoid performance issues\n\n";
-        
+        // Granite format: system prompt with JSON tools in <tools></tools>
         written = snprintf(ptr, remaining,
-            "%s%sYou are a helpful assistant with access to the following tools. "
+            "%sYou are a helpful assistant with access to tools. "
+            "CRITICAL: Only generate YOUR response, then STOP. "
+            "DO NOT generate the user's next message or continue the conversation. "
             "You are provided with function signatures within <tools></tools> XML tags:\n<tools>\n",
-            chat_template->system_start,
-            optimization_warning);
+            chat_template->system_start);
         
         if (written < 0 || (size_t)written >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;
         ptr += written;
@@ -443,10 +431,18 @@ ethervox_result_t ethervox_tool_registry_build_system_prompt(
             
             char json_tool[1024];
             int json_len = build_json_tool_definition(tool, json_tool, sizeof(json_tool));
-            if (json_len < 0 || json_len >= (int)sizeof(json_tool)) continue;
+            if (json_len < 0 || json_len >= (int)sizeof(json_tool)) {
+                ETHERVOX_LOG_WARN("Tool %s JSON too large (%d bytes), skipping from fast-path", 
+                                 tool->name, json_len);
+                continue;
+            }
             
             int tool_written = snprintf(ptr, remaining, "%s\n", json_tool);
-            if (tool_written < 0 || (size_t)tool_written >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;
+            if (tool_written < 0 || (size_t)tool_written >= remaining) {
+                ETHERVOX_LOG_ERROR("Buffer overflow adding tool %s (needed %d, have %zu)", 
+                                  tool->name, tool_written, remaining);
+                return ETHERVOX_ERROR_INVALID_ARGUMENT;
+            }
             ptr += tool_written;
             remaining -= tool_written;
         }
@@ -506,24 +502,11 @@ ethervox_result_t ethervox_tool_registry_build_system_prompt(
               "NEVER calculate mentally or guess - ALWAYS call the appropriate tool.\n"
               "Tool call format: <tool_call name=\"tool_name\" param=\"value\" />\n");
         
-        // Add critical warning about non-optimized tools to prevent loops
-        const char* optimization_warning = has_custom_prompts ? "" :
-            "\n⚠️ WARNING: Tools are NOT optimized for this model!\n"
-            "This means:\n"
-            "- Tool calls may be SLOW and use EXCESSIVE tokens\n"
-            "- You MUST be VERY SELECTIVE about tool usage\n"
-            "- ONLY call tools when absolutely necessary\n"
-            "- For simple questions, answer directly WITHOUT tools\n"
-            "- DO NOT call get_tool_info unless the user explicitly asks about a tool\n"
-            "- DO NOT chain multiple tool calls unless critical\n"
-            "- MINIMIZE tool usage to avoid performance issues\n\n";
-        
         written = snprintf(ptr, remaining,
             "%s"
-            "%s%s\n",
+            "%s\n",
             chat_template->system_start,
-            platform_context,
-            optimization_warning
+            platform_context
         );
         
         if (written < 0 || (size_t)written >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;
@@ -599,6 +582,19 @@ ethervox_result_t ethervox_tool_registry_build_system_prompt(
         
         int instr_written = snprintf(ptr, remaining, "%s", usage_section);
         if (instr_written < 0 || (size_t)instr_written >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
+    
+    // Validate final buffer integrity
+    size_t final_length = strlen(buffer);
+    size_t expected_written = buffer_size - remaining;
+    
+    ETHERVOX_LOG_DEBUG("System prompt built: %zu chars written, %zu bytes remaining of %zu total", 
+                       final_length, remaining, buffer_size);
+    
+    if (final_length > buffer_size - 1) {
+        ETHERVOX_LOG_ERROR("Buffer overflow detected! Length %zu exceeds buffer size %zu", 
+                          final_length, buffer_size);
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Debug: Print system prompt for verification (first 500 chars)

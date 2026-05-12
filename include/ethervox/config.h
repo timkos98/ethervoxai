@@ -313,11 +313,15 @@ extern "C" {
 #endif
 
 #ifndef ETHERVOX_GOVERNOR_BATCH_SIZE
-#define ETHERVOX_GOVERNOR_BATCH_SIZE 1024  // Larger batch for faster inference
+#define ETHERVOX_GOVERNOR_BATCH_SIZE 1024  // ADAPTIVE: 256 (LOW), 512 (MEDIUM), 1024 (HIGH/ULTRA) - See device_profile.h
+#endif
+
+#ifndef ETHERVOX_GOVERNOR_STARTUP_BATCH_SIZE
+#define ETHERVOX_GOVERNOR_STARTUP_BATCH_SIZE 128  // Smaller batches for faster startup (reduces time-to-first-token)
 #endif
 
 #ifndef ETHERVOX_GOVERNOR_THREADS
-#define ETHERVOX_GOVERNOR_THREADS 8  // More threads for small model
+#define ETHERVOX_GOVERNOR_THREADS 4  // ADAPTIVE: 2 (LOW), 4 (MEDIUM/HIGH), 6 (ULTRA) - See device_profile.h
 #endif
 
 #ifndef ETHERVOX_GOVERNOR_TEMPERATURE
@@ -325,7 +329,7 @@ extern "C" {
 #endif
 
 #ifndef ETHERVOX_GOVERNOR_MAX_TOKENS_PER_ITERATION
-#define ETHERVOX_GOVERNOR_MAX_TOKENS_PER_ITERATION 512
+#define ETHERVOX_GOVERNOR_MAX_TOKENS_PER_ITERATION 200  // Flexible for both tool calls and longer answers
 #endif
 
 #ifndef ETHERVOX_GOVERNOR_USE_MMAP
@@ -337,27 +341,27 @@ extern "C" {
 #endif
 
 #ifndef ETHERVOX_GOVERNOR_KV_CACHE_TYPE
-#define ETHERVOX_GOVERNOR_KV_CACHE_TYPE GGML_TYPE_Q8_0  // Q8_0 quantized for memory savings (requires flash attention)
+#define ETHERVOX_GOVERNOR_KV_CACHE_TYPE GGML_TYPE_F16  // ADAPTIVE: Q4_0 (<1.5GB), Q8_0 (1.5-3GB), F16 (>3GB avail RAM) - See device_profile.h
 #endif
 
 #ifndef ETHERVOX_GOVERNOR_FLASH_ATTN_TYPE
-#define ETHERVOX_GOVERNOR_FLASH_ATTN_TYPE -1  // -1=AUTO, 0=DISABLED, 1=ENABLED (required for quantized V cache)
+#define ETHERVOX_GOVERNOR_FLASH_ATTN_TYPE 1  // ADAPTIVE: 0 (LOW tier), 1 (MEDIUM+ tier) - See device_profile.h
 #endif
 
 #ifndef ETHERVOX_GOVERNOR_REPETITION_PENALTY
-#define ETHERVOX_GOVERNOR_REPETITION_PENALTY 1.3f  // Penalty for repeating tokens (1.0 = no penalty) - increased to prevent infinite loops
+#define ETHERVOX_GOVERNOR_REPETITION_PENALTY 1.1f  // Gentle penalty - original working value
 #endif
 
 #ifndef ETHERVOX_GOVERNOR_FREQUENCY_PENALTY
-#define ETHERVOX_GOVERNOR_FREQUENCY_PENALTY 0.2f  // Penalty based on token frequency - helps prevent repetition
+#define ETHERVOX_GOVERNOR_FREQUENCY_PENALTY 0.0f  // Disabled - not needed for tool-oriented responses
 #endif
 
 #ifndef ETHERVOX_GOVERNOR_PRESENCE_PENALTY
-#define ETHERVOX_GOVERNOR_PRESENCE_PENALTY 0.6f  // Penalty for tokens already present - encourages diversity
+#define ETHERVOX_GOVERNOR_PRESENCE_PENALTY 0.0f  // Disabled - not needed for tool-oriented responses
 #endif
 
 #ifndef ETHERVOX_GOVERNOR_PENALTY_LAST_N
-#define ETHERVOX_GOVERNOR_PENALTY_LAST_N 64  // Apply penalties to last N tokens
+#define ETHERVOX_GOVERNOR_PENALTY_LAST_N 128  // Apply penalties to last N tokens (increased from 64)
 #endif
 
 // Debug configuration

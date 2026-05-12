@@ -27,10 +27,16 @@
 #include <sys/types.h>
 #endif
 
+// Android-specific function to get files directory (set via JNI)
+#ifdef __ANDROID__
+extern const char* ethervox_get_android_files_dir(void);
+#endif
+
 #define OPT_LOG(...) ETHERVOX_LOGI(__VA_ARGS__)
 #define OPT_ERROR(...) ETHERVOX_LOGE(__VA_ARGS__)
 
-// Extract model name from path (e.g., "granite-4.0-h-tiny-Q4_K_M.gguf" -> "granite")
+// Extract model name from path (e.g., "granite-4.0-h-1b-Q4_K_M.gguf" -> "granite-4.0-h-1b")
+// Extracts everything before the quantization marker (first "-Q" or "-q")
 static void extract_model_family(const char* model_path, char* family_name, size_t max_len) {
     if (!model_path || !family_name || max_len == 0) return;
     
@@ -39,25 +45,40 @@ static void extract_model_family(const char* model_path, char* family_name, size
     if (!filename) filename = model_path;
     else filename++; // Skip the '/'
     
-    // Extract first part before dash or dot
+    // Extract model name up to the quantization marker or .gguf
     size_t i = 0;
-    while (i < max_len - 1 && filename[i] && filename[i] != '-' && filename[i] != '.') {
-        family_name[i] = tolower(filename[i]);
+    while (i < max_len - 1 && filename[i] && filename[i] != '.') {
+        // Stop at quantization marker (e.g., "-Q4_K_M" or "-q4_k_m")
+        if (i > 0 && filename[i-1] == '-' && (filename[i] == 'Q' || filename[i] == 'q')) {
+            i--; // Back up to remove the dash before Q
+            break;
+        }
+        family_name[i] = filename[i];
         i++;
     }
     family_name[i] = '\0';
 }
 
-// Generate filepath for model-specific prompts in ~/.ethervox/
+// Generate filepath for model-specific prompts in Android files directory or ~/.ethervox/
 static void get_prompt_file_path(const char* model_path, char* output, size_t max_len) {
-    char family[64];
+    char family[128];
     extract_model_family(model_path, family, sizeof(family));
     
+#ifdef __ANDROID__
+    // Android: Try files directory (set via setAndroidFilesDir JNI call)
+    const char* android_files = ethervox_get_android_files_dir();
+    if (android_files && android_files[0] != '\0') {
+        snprintf(output, max_len, "%s/tools/optimized/%s.json", android_files, family);
+        return;
+    }
+#endif
+    
+    // Fallback to HOME directory for desktop/Mac/Linux
     const char* home = getenv("HOME");
     if (home) {
-        snprintf(output, max_len, "%s/.ethervox/tool_prompts_%s.json", home, family);
+        snprintf(output, max_len, "%s/.ethervox/tools/optimized/%s.json", home, family);
     } else {
-        snprintf(output, max_len, "./.ethervox/tool_prompts_%s.json", family);
+        snprintf(output, max_len, "./tools/optimized/%s.json", family);
     }
 }
 
@@ -97,17 +118,43 @@ ethervox_result_t ethervox_optimize_tool_prompts(ethervox_governor_t* governor, 
     char prompt_file[512];
     get_prompt_file_path(model_path, prompt_file, sizeof(prompt_file));
     
-    // Ensure ~/.ethervox directory exists
+    // Ensure output directory exists
+#ifdef __ANDROID__
+    const char* android_files = ethervox_get_android_files_dir();
+    if (android_files && android_files[0] != '\0') {
+        // Android: create {filesDir}/tools/optimized/
+        char tools_dir[512];
+        char optimized_dir[512];
+        snprintf(tools_dir, sizeof(tools_dir), "%s/tools", android_files);
+        snprintf(optimized_dir, sizeof(optimized_dir), "%s/tools/optimized", android_files);
+        
+        mkdir(tools_dir, 0755);
+        mkdir(optimized_dir, 0755);
+        
+        OPT_LOG("Created optimized directory: %s", optimized_dir);
+    }
+#else
+    // Desktop/Mac/Linux/Windows: create ~/.ethervox/tools/optimized/
     const char* home = getenv("HOME");
     if (home) {
         char ethervox_dir[512];
+        char tools_dir[512];
+        char optimized_dir[512];
         snprintf(ethervox_dir, sizeof(ethervox_dir), "%s/.ethervox", home);
+        snprintf(tools_dir, sizeof(tools_dir), "%s/.ethervox/tools", home);
+        snprintf(optimized_dir, sizeof(optimized_dir), "%s/.ethervox/tools/optimized", home);
+        
         #ifdef _WIN32
         _mkdir(ethervox_dir);
+        _mkdir(tools_dir);
+        _mkdir(optimized_dir);
         #else
         mkdir(ethervox_dir, 0755);
+        mkdir(tools_dir, 0755);
+        mkdir(optimized_dir, 0755);
         #endif
     }
+#endif
     
     printf("\n");
     printf("╔═══════════════════════════════════════════════════════════════╗\n");

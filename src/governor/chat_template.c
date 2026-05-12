@@ -39,7 +39,7 @@ static const chat_template_t qwen_template = {
     .tool_format = TOOL_FORMAT_XML_ATTR  // Uses XML with attributes
 };
 
-// IBM Granite 4.0 template  
+// IBM Granite 4.1 template (also compatible with 4.0)
 static const chat_template_t granite_template = {
     .type = CHAT_TEMPLATE_GRANITE,
     .system_start = "<|start_of_role|>system<|end_of_role|>",
@@ -51,15 +51,15 @@ static const chat_template_t granite_template = {
     .tool_result_start = "<|start_of_role|>user<|end_of_role|><tool_result>",
     .tool_result_end = "</tool_result><|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>",
     .stop_sequences = {
-        "<|end_of_text|>",
-        "<|start_of_role|>",
-        "<|end_of_role|>",
-        "<|start_of_text|>",  // Add this to filter hallucinated Llama-style tokens
-        "<|begin_of_text|>",  // Also filter Llama 3's BOS token
+        "<|end_of_text|>",              // Official Granite stop token
+        "<|start_of_role|>",            // Catch complete role markers
+        "<|start_of_role|",             // Catch incomplete role markers (without >)
+        "<|end_of_role|>",              // Catch role end markers
+        "<tool_result",                 // Prevent fake tool results
         NULL
     },
-    .stop_sequence_count = 5,  // Updated from 3 to 5
-    .tool_format = TOOL_FORMAT_JSON_IN_XML  // Granite 4.0 uses JSON inside <tool_call> tags
+    .stop_sequence_count = 5,
+    .tool_format = TOOL_FORMAT_JSON_IN_XML  // Granite uses JSON inside <tool_call> tags
 };
 
 // Microsoft Phi template
@@ -260,7 +260,8 @@ bool chat_template_has_stop_sequence(
 ) {
     if (!template || !text) return false;
     
-    for (int i = 0; i < template->stop_sequence_count && template->stop_sequences[i]; i++) {
+    // Use the template's stop sequences directly
+    for (int i = 0; i < template->stop_sequence_count && template->stop_sequences[i] != NULL; i++) {
         if (strstr(text, template->stop_sequences[i])) {
             return true;
         }

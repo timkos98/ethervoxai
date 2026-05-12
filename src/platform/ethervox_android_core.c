@@ -24,6 +24,7 @@
 // NOTE: dialogue.h removed - using direct governor/registry architecture
 #include "ethervox/compute_tools.h"
 #include "ethervox/config.h"
+#include "ethervox/device_profile.h"
 #include "ethervox/governor.h"
 #include "ethervox/integration_tests.h"
 #include "ethervox/llm_tool_tests.h"
@@ -98,9 +99,31 @@ static ethervox_memory_store_t* g_memory_store = NULL;
 // Android-specific files directory
 static char g_android_files_dir[512] = {0};
 
+// Governor runtime configuration (tunable from Java settings)
+typedef struct {
+  int batch_size;            // Main batch size for conversation (default: adaptive)
+  int startup_batch_size;    // Startup batch size for faster TTFT (default: 128)
+  int context_size;          // Context window size (default: 8192)
+  float temperature;         // Sampling temperature (default: 0.3)
+  int threads;               // CPU threads (default: adaptive)
+} governor_runtime_config_t;
+
+static governor_runtime_config_t g_governor_config = {
+  .batch_size = ETHERVOX_GOVERNOR_BATCH_SIZE,
+  .startup_batch_size = ETHERVOX_GOVERNOR_STARTUP_BATCH_SIZE,
+  .context_size = ETHERVOX_GOVERNOR_CONTEXT_SIZE,
+  .temperature = ETHERVOX_GOVERNOR_TEMPERATURE,
+  .threads = ETHERVOX_GOVERNOR_THREADS
+};
+
 // Getter function for Android files directory (used by manifest system)
 const char* ethervox_android_get_files_dir(void) {
   return g_android_files_dir;
+}
+
+// Getter function for startup batch size (used by governor.c)
+int ethervox_get_startup_batch_size(void) {
+  return g_governor_config.startup_batch_size;
 }
 
 // ===========================================================================
@@ -219,8 +242,42 @@ static jstring create_jstring(JNIEnv* env, const char* str) {
 // Track last load error code for corruption detection
 static int g_last_governor_load_error = 0;
 
+// Context for model loading progress callback
+typedef struct {
+  JNIEnv* env;
+  jobject callback_obj;
+  jmethodID on_governor_progress_method;
+} jni_load_context_t;
+
+// Native callback wrapper for model loading progress
+static bool native_load_progress_callback(const char* stage, float progress,
+                                         const char* message, void* user_data) {
+  jni_load_context_t* ctx = (jni_load_context_t*)user_data;
+  if (!ctx || !ctx->env || !ctx->callback_obj || !ctx->on_governor_progress_method) {
+    LOGW("native_load_progress_callback: No callback configured (ctx=%p, env=%p, obj=%p, method=%p)", 
+         ctx, ctx ? ctx->env : NULL, ctx ? ctx->callback_obj : NULL, 
+         ctx ? (void*)ctx->on_governor_progress_method : NULL);
+    return true;  // No callback configured, continue loading
+  }
+  
+  LOGI("native_load_progress_callback: stage='%s', progress=%.1f%%, message='%s'", 
+       stage ? stage : "NULL", progress * 100.0f, message ? message : "NULL");
+  
+  // Call onGovernorProgress callback with stage as event type and message
+  jstring j_stage = create_jstring(ctx->env, stage ? stage : "loading");
+  jstring j_message = create_jstring(ctx->env, message ? message : "");
+  (*ctx->env)->CallVoidMethod(ctx->env, ctx->callback_obj, ctx->on_governor_progress_method,
+                              j_stage, j_message);
+  (*ctx->env)->DeleteLocalRef(ctx->env, j_stage);
+  (*ctx->env)->DeleteLocalRef(ctx->env, j_message);
+  
+  LOGI("native_load_progress_callback: Java callback invoked successfully");
+  
+  return true;  // Continue loading
+}
+
 JNIEXPORT jboolean JNICALL Java_com_droid_ethervox_1core_NativeLib_loadGovernorModel(
-    JNIEnv* env, jobject thiz, jstring modelPath) {
+    JNIEnv* env, jobject thiz, jstring modelPath, jobject callback) {
   (void)thiz;
 
   if (!g_governor) {
@@ -233,7 +290,25 @@ JNIEXPORT jboolean JNICALL Java_com_droid_ethervox_1core_NativeLib_loadGovernorM
 
   LOGI("[JNI] Loading Governor model from: %s", path);
 
-  ethervox_result_t result = ethervox_governor_load_model(g_governor, path, NULL, NULL);
+  // Setup progress callback if provided
+  jni_load_context_t load_ctx = {0};
+  ethervox_load_progress_callback progress_callback = NULL;
+  void* progress_user_data = NULL;
+  
+  if (callback) {
+    jclass callback_class = (*env)->GetObjectClass(env, callback);
+    jmethodID on_governor_progress = (*env)->GetMethodID(env, callback_class, "onGovernorProgress",
+                                                        "(Ljava/lang/String;Ljava/lang/String;)V");
+    if (on_governor_progress) {
+      load_ctx.env = env;
+      load_ctx.callback_obj = callback;
+      load_ctx.on_governor_progress_method = on_governor_progress;
+      progress_callback = native_load_progress_callback;
+      progress_user_data = &load_ctx;
+    }
+  }
+
+  ethervox_result_t result = ethervox_governor_load_model(g_governor, path, progress_callback, progress_user_data);
 
   (*env)->ReleaseStringUTFChars(env, modelPath, path);
 
@@ -618,8 +693,7 @@ JNIEXPORT jboolean JNICALL Java_com_droid_ethervox_1core_NativeLib_optimizationF
     return JNI_FALSE;
   }
 
-  // Extract model name from path (e.g., /path/to/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf ->
-  // Qwen2.5-0.5B-Instruct-Q4_K_M)
+  // Extract model name from path (e.g., /path/to/granite-4.0-h-1b-Q4_K_M.gguf -> granite-4.0-h-1b)
   const char* filename = strrchr(model_path_str, '/');
   if (!filename) {
     filename = model_path_str;
@@ -627,18 +701,37 @@ JNIEXPORT jboolean JNICALL Java_com_droid_ethervox_1core_NativeLib_optimizationF
     filename++;  // Skip the '/'
   }
 
-  // Remove .gguf extension
+  // Copy filename and remove .gguf extension if present
   char model_name[256];
-  size_t i = 0;
-  while (filename[i] && filename[i] != '.' && i < sizeof(model_name) - 1) {
-    model_name[i] = filename[i];
-    i++;
+  size_t len = strlen(filename);
+  
+  // Check if filename ends with .gguf and calculate length without extension
+  size_t copy_len = len;
+  if (len > 5 && strcmp(filename + len - 5, ".gguf") == 0) {
+    copy_len = len - 5;
   }
-  model_name[i] = '\0';
+  
+  // Copy the filename without .gguf extension
+  if (copy_len >= sizeof(model_name)) {
+    copy_len = sizeof(model_name) - 1;
+  }
+  memcpy(model_name, filename, copy_len);
+  model_name[copy_len] = '\0';
+  
+  // Remove quantization suffix (e.g., -Q4_K_M, -Q6_K, etc.)
+  // Look for pattern like -Q followed by digits and optional _K or _M suffix
+  char* q_pos = strstr(model_name, "-Q");
+  if (q_pos) {
+    // Verify it looks like a quantization suffix (Q followed by digit)
+    if (q_pos[2] >= '0' && q_pos[2] <= '9') {
+      *q_pos = '\0';  // Truncate at the Q
+      copy_len = q_pos - model_name;
+    }
+  }
 
   // Remove trailing dash if present
-  if (i > 0 && model_name[i - 1] == '-') {
-    model_name[i - 1] = '\0';
+  if (copy_len > 0 && model_name[copy_len - 1] == '-') {
+    model_name[copy_len - 1] = '\0';
   }
 
   (*env)->ReleaseStringUTFChars(env, modelPath, model_path_str);
@@ -1472,15 +1565,22 @@ JNIEXPORT void JNICALL Java_com_droid_ethervox_1core_NativeLib_processDialogueSt
   LOGI("Streaming dialogue complete");
 }
 
-// DEPRECATED: Old dialogue engine API - cancellation not yet implemented for governor
-// TODO: Add governor cancellation support using llama_cancel flag
+/**
+ * Cancel ongoing LLM processing
+ * Sets interrupt flag that will be checked during token generation
+ */
 JNIEXPORT void JNICALL Java_com_droid_ethervox_1core_NativeLib_cancelProcessing(JNIEnv* env,
                                                                                 jobject thiz) {
   (void)env;
   (void)thiz;
 
-  LOGW("cancelProcessing() deprecated - governor cancellation not yet implemented");
-  LOGW("TODO: Add governor-level cancellation support");
+  if (!g_governor) {
+    LOGW("cancelProcessing: No active governor to cancel");
+    return;
+  }
+
+  ethervox_governor_request_interrupt(g_governor);
+  LOGI("cancelProcessing: Interrupt requested");
 }
 
 // DEPRECATED: Language handling is now done by the governor's language detection
@@ -1578,6 +1678,88 @@ JNIEXPORT jstring JNICALL
 Java_com_droid_ethervox_1core_NativeLib_getDefaultStartupPrompt(JNIEnv* env, jobject thiz) {
   (void)thiz;
   return (*env)->NewStringUTF(env, DEFAULT_STARTUP_PROMPT);
+}
+
+JNIEXPORT jobject JNICALL
+Java_com_droid_ethervox_1core_NativeLib_getDefaultGovernorConfig(JNIEnv* env, jobject thiz) {
+  (void)thiz;
+
+  // Get adaptive defaults from device profiling
+  int optimal_batch = ethervox_device_profile_get_optimal_batch_size();
+  int optimal_threads = ethervox_device_profile_get_optimal_threads();
+
+  // Find the GovernorConfig class
+  jclass configClass = (*env)->FindClass(env, "com/droid/ethervox_core/GovernorConfig");
+  if (configClass == NULL) {
+    return NULL;
+  }
+
+  // Get the constructor (Int, Int, Int, Float, Int)
+  jmethodID constructor = (*env)->GetMethodID(env, configClass, "<init>", "(IIIFI)V");
+  if (constructor == NULL) {
+    (*env)->DeleteLocalRef(env, configClass);
+    return NULL;
+  }
+
+  // Create the config object with current runtime values
+  jobject configObj = (*env)->NewObject(
+      env, configClass, constructor,
+      (jint)optimal_batch,                           // batchSize (adaptive)
+      (jint)ETHERVOX_GOVERNOR_STARTUP_BATCH_SIZE,   // startupBatchSize
+      (jint)ETHERVOX_GOVERNOR_CONTEXT_SIZE,         // contextSize
+      (jfloat)ETHERVOX_GOVERNOR_TEMPERATURE,        // temperature
+      (jint)optimal_threads                          // threads (adaptive)
+  );
+
+  (*env)->DeleteLocalRef(env, configClass);
+  return configObj;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_droid_ethervox_1core_NativeLib_updateGovernorParams(
+    JNIEnv* env, jobject thiz,
+    jint batch_size, jint startup_batch_size, jint context_size,
+    jfloat temperature, jint threads) {
+  (void)env;
+  (void)thiz;
+
+  // Validate parameters
+  if (batch_size < 64 || batch_size > 2048) {
+    LOGE("Invalid batch_size: %d (must be 64-2048)", batch_size);
+    return JNI_FALSE;
+  }
+  if (startup_batch_size < 32 || startup_batch_size > 512) {
+    LOGE("Invalid startup_batch_size: %d (must be 32-512)", startup_batch_size);
+    return JNI_FALSE;
+  }
+  if (context_size < 2048 || context_size > 32768) {
+    LOGE("Invalid context_size: %d (must be 2048-32768)", context_size);
+    return JNI_FALSE;
+  }
+  if (temperature < 0.0f || temperature > 2.0f) {
+    LOGE("Invalid temperature: %.2f (must be 0.0-2.0)", temperature);
+    return JNI_FALSE;
+  }
+  if (threads < 1 || threads > 16) {
+    LOGE("Invalid threads: %d (must be 1-16)", threads);
+    return JNI_FALSE;
+  }
+
+  // Update runtime configuration
+  g_governor_config.batch_size = batch_size;
+  g_governor_config.startup_batch_size = startup_batch_size;
+  g_governor_config.context_size = context_size;
+  g_governor_config.temperature = temperature;
+  g_governor_config.threads = threads;
+
+  LOGI("Governor params updated: batch=%d, startup_batch=%d, ctx=%d, temp=%.2f, threads=%d",
+       batch_size, startup_batch_size, context_size, temperature, threads);
+
+  // NOTE: These parameters will be applied on next model load
+  // Some parameters (like temperature) could be applied immediately if Governor is loaded
+  // but that requires extending the Governor API
+
+  return JNI_TRUE;
 }
 
 JNIEXPORT jobjectArray JNICALL
@@ -2078,7 +2260,7 @@ JNIEXPORT jboolean JNICALL Java_com_droid_ethervox_1core_NativeLib_getPrivacyMod
 }
 
 JNIEXPORT jboolean JNICALL Java_com_droid_ethervox_1core_NativeLib_loadGovernorModelMinimal(
-    JNIEnv* env, jobject thiz, jstring modelPath) {
+    JNIEnv* env, jobject thiz, jstring modelPath, jobject callback) {
   (void)thiz;
 
   if (!g_governor) {
@@ -2096,7 +2278,25 @@ JNIEXPORT jboolean JNICALL Java_com_droid_ethervox_1core_NativeLib_loadGovernorM
   // This function is now equivalent to loadGovernorModel
   // TODO: Add proper API to change governor mode at runtime
 
-  ethervox_result_t result = ethervox_governor_load_model(g_governor, path, NULL, NULL);
+  // Setup progress callback if provided
+  jni_load_context_t load_ctx = {0};
+  ethervox_load_progress_callback progress_callback = NULL;
+  void* progress_user_data = NULL;
+  
+  if (callback) {
+    jclass callback_class = (*env)->GetObjectClass(env, callback);
+    jmethodID on_governor_progress = (*env)->GetMethodID(env, callback_class, "onGovernorProgress",
+                                                        "(Ljava/lang/String;Ljava/lang/String;)V");
+    if (on_governor_progress) {
+      load_ctx.env = env;
+      load_ctx.callback_obj = callback;
+      load_ctx.on_governor_progress_method = on_governor_progress;
+      progress_callback = native_load_progress_callback;
+      progress_user_data = &load_ctx;
+    }
+  }
+
+  ethervox_result_t result = ethervox_governor_load_model(g_governor, path, progress_callback, progress_user_data);
 
   (*env)->ReleaseStringUTFChars(env, modelPath, path);
 

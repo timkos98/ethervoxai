@@ -51,7 +51,7 @@ Tests now verify an LLM model is loaded before running any tests.
 ```
 ❌ No LLM model is loaded
 ℹ Please load a model first using /load command
-ℹ Example: /load models/granite-4.0-h-tiny-Q4_K_M.gguf
+ℹ Example: /load models/granite-4.1-3b-Q6_K.gguf
 ℹ Skipping all LLM-dependent tests
 
 Test Summary:
@@ -63,7 +63,7 @@ Tests Skipped: 8
 **Model Loaded:**
 ```
 ✓ LLM model is loaded and responsive
-ℹ Model path: models/granite-4.0-h-tiny-Q4_K_M.gguf
+ℹ Model path: models/granite-4.1-3b-Q6_K.gguf
 ```
 
 ### 3. Individual Test Guards
@@ -184,7 +184,7 @@ Crash detection enabled
 === Checking LLM Availability ===
 ❌ No LLM model is loaded
 ℹ Please load a model first using /load command
-ℹ Example: /load models/granite-4.0-h-tiny-Q4_K_M.gguf
+ℹ Example: /load models/granite-4.1-3b-Q6_K.gguf
 ℹ Skipping all LLM-dependent tests
 
 ═══════════════════════════════════════════════════════════════
@@ -203,7 +203,7 @@ Crash detection enabled
 
 ```bash
 $ ./build/ethervoxai
-EthervoxAI> /load models/granite-4.0-h-tiny-Q4_K_M.gguf
+EthervoxAI> /load models/granite-4.1-3b-Q6_K.gguf
 EthervoxAI> /testllm
 
 ... Tests 1-7 run normally ...
@@ -251,7 +251,7 @@ EthervoxAI LLM Tool Usage Test Report
 ======================================
 
 Timestamp: Mon Dec 2 12:34:56 2024
-Model Path: models/granite-4.0-h-tiny-Q4_K_M.gguf
+Model Path: models/granite-4.1-3b-Q6_K.gguf
 
 === Initialization ===
 ℹ LLM model available
