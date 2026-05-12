@@ -128,7 +128,7 @@ ethervox_result_t ethervox_governor_init_with_manifest(
     ETHERVOX_LOGI("[OK] Tools detected: %u tools in manifest", runtime_registry->tool_count);
     
     // === STEP 3: Detect model name ===
-    // Extract model name from path (e.g., "granite-4.0-Q4_K_M.gguf" -> "granite-4.0")
+    // Extract model name from path (e.g., "granite-4.0-h-1b-Q4_K_M.gguf" -> "granite-4.0-h-1b")
     const char* filename = strrchr(model_path, '/');
     if (!filename) filename = model_path;
     else filename++;
@@ -137,9 +137,8 @@ ethervox_result_t ethervox_governor_init_with_manifest(
     size_t i = 0;
     while (i < sizeof(model_name) - 1 && filename[i]) {
         if (filename[i] == '.' && strncmp(&filename[i], ".gguf", 5) == 0) break;
+        // Stop at quantization markers like -Q4, -Q5, -Q6, -Q8
         if (filename[i] == '-' && i + 1 < strlen(filename) && filename[i+1] == 'Q') break;
-        if (filename[i] == '-' && i + 2 < strlen(filename) && 
-            filename[i+1] == 'h' && filename[i+2] == '-') break;
         
         model_name[i] = filename[i];
         i++;
