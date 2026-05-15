@@ -11,6 +11,7 @@
  */
 
 #include "ethervox/governor.h"
+#include "governor_helpers.h"  // Clean, testable helper functions
 
 #include <errno.h>
 #include <stdio.h>
@@ -72,9 +73,11 @@ static void governor_ggml_log_callback(enum ggml_log_level level, const char* te
   // Remove trailing newline if present
   size_t len = strlen(text);
   char* clean_text = (char*)alloca(len + 1);
-  // Security fix: Use strncpy instead of strcpy to prevent buffer overflow
-  strncpy(clean_text, text, len);
-  clean_text[len] = '\0';  // Ensure null termination
+  // Use safe string copy (from helpers)
+  if (len < len + 1) {
+    memcpy(clean_text, text, len);
+    clean_text[len] = '\0';
+  }
   if (len > 0 && clean_text[len - 1] == '\n') {
     clean_text[len - 1] = '\0';
   }
@@ -339,7 +342,13 @@ static int load_conversation_summary(struct ethervox_governor* governor,
                : "Continue conversation naturally based on this context.");
 
   // Tokenize
-  llama_token* restore_tokens = (llama_token*)malloc(2048 * sizeof(llama_token));
+  // Use safe_malloc for error-checked allocation
+  error_context_t alloc_error = {0};
+  llama_token* restore_tokens = (llama_token*)safe_malloc(2048 * sizeof(llama_token), &alloc_error);
+  if (!restore_tokens) {
+    GOV_ERROR("Failed to allocate restore_tokens: %s", error_context_get_message(&alloc_error));
+    return false;
+  }
   if (!restore_tokens) {
     GOV_ERROR("%s: Failed to allocate token buffer", log_prefix);
     return ETHERVOX_ERROR_INVALID_ARGUMENT;
@@ -419,7 +428,12 @@ static int extract_tool_calls(const char* response, char** tool_calls, int max_c
 
     // Extract full tag
     size_t tag_len = end - start;
-    tool_calls[count] = malloc(tag_len + 1);
+    error_context_t tool_error = {0};
+    tool_calls[count] = (char*)safe_malloc(tag_len + 1, &tool_error);
+    if (!tool_calls[count]) {
+      GOV_ERROR("Failed to allocate tool_call: %s", error_context_get_message(&tool_error));
+      continue;
+    }
     if (!tool_calls[count])
       break;
 
@@ -475,7 +489,12 @@ static int extract_tool_calls_json(const char* response, char** tool_calls, int 
     // Extract JSON content
     size_t json_len = json_end - json_start;
     if (json_len > 0) {
-      tool_calls[count] = malloc(json_len + 1);
+      error_context_t tool_error = {0};
+      tool_calls[count] = (char*)safe_malloc(json_len + 1, &tool_error);
+      if (!tool_calls[count]) {
+        GOV_ERROR("Failed to allocate JSON tool_call: %s", error_context_get_message(&tool_error));
+        continue;
+      }
       if (!tool_calls[count])
         break;
 
@@ -520,9 +539,12 @@ static context_health_t check_context_health(ethervox_governor_t* gov) {
  * Initialize conversation history
  */
 static int init_conversation_history(conversation_history_t* history, uint32_t initial_capacity) {
-  history->turns = malloc(initial_capacity * sizeof(conversation_turn_t));
-  if (!history->turns)
-    return ETHERVOX_ERROR_INVALID_ARGUMENT;
+  error_context_t hist_error = {0};
+  history->turns = (conversation_turn_t*)safe_malloc(initial_capacity * sizeof(conversation_turn_t), &hist_error);
+  if (!history->turns) {
+    GOV_ERROR("Failed to allocate conversation history: %s", error_context_get_message(&hist_error));
+    return ETHERVOX_ERROR_OUT_OF_MEMORY;
+  }
 
   history->turn_count = 0;
   history->capacity = initial_capacity;
@@ -533,13 +555,16 @@ static int init_conversation_history(conversation_history_t* history, uint32_t i
  * Append a turn to conversation history
  */
 static int append_turn(conversation_history_t* history, const conversation_turn_t* turn) {
+  error_context_t hist_error = {0};
   // Resize if needed
   if (history->turn_count >= history->capacity) {
     uint32_t new_capacity = history->capacity * 2;
     conversation_turn_t* new_turns =
-        realloc(history->turns, new_capacity * sizeof(conversation_turn_t));
-    if (!new_turns)
-      return ETHERVOX_ERROR_INVALID_ARGUMENT;
+        (conversation_turn_t*)safe_realloc(history->turns, new_capacity * sizeof(conversation_turn_t), &hist_error);
+    if (!new_turns && new_capacity > 0) {
+      GOV_ERROR("Failed to expand conversation history: %s", error_context_get_message(&hist_error));
+      return ETHERVOX_ERROR_OUT_OF_MEMORY;
+    }
 
     history->turns = new_turns;
     history->capacity = new_capacity;
@@ -584,7 +609,12 @@ static char* parse_attribute(const char* tag, const char* attr_name) {
     return NULL;
 
   size_t len = end - start;
-  char* value = malloc(len + 1);
+  error_context_t val_error = {0};
+  char* value = (char*)safe_malloc(len + 1, &val_error);
+  if (!value) {
+    GOV_ERROR("Failed to allocate value: %s", error_context_get_message(&val_error));
+    return NULL;
+  }
   if (!value)
     return NULL;
 
@@ -1504,6 +1534,27 @@ bool ethervox_governor_is_loaded(ethervox_governor_t* governor) {
 }
 
 /**
+ * Get KV cache usage information
+ */
+float ethervox_governor_get_kv_cache_usage(ethervox_governor_t* governor, int32_t* current_pos, int32_t* context_size) {
+  if (!governor || !governor->llm_loaded) {
+    return -1.0f;
+  }
+
+  int32_t n_ctx = llama_n_ctx(governor->llm_ctx);
+  int32_t pos = governor->current_kv_pos;
+
+  if (current_pos) {
+    *current_pos = pos;
+  }
+  if (context_size) {
+    *context_size = n_ctx;
+  }
+
+  return (float)pos / (float)n_ctx;
+}
+
+/**
  * Initialize Governor with configuration
  */
 ethervox_result_t ethervox_governor_init(ethervox_governor_t** governor,
@@ -1512,7 +1563,12 @@ ethervox_result_t ethervox_governor_init(ethervox_governor_t** governor,
   if (!governor || !tool_registry)
     return ETHERVOX_ERROR_INVALID_ARGUMENT;
 
-  ethervox_governor_t* gov = calloc(1, sizeof(ethervox_governor_t));
+  error_context_t gov_error = {0};
+  ethervox_governor_t* gov = (ethervox_governor_t*)safe_calloc(1, sizeof(ethervox_governor_t), &gov_error);
+  if (!gov) {
+    GOV_ERROR("Failed to allocate governor: %s", error_context_get_message(&gov_error));
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
+  }
   if (!gov)
     return ETHERVOX_ERROR_INVALID_ARGUMENT;
 
@@ -1905,7 +1961,10 @@ ethervox_governor_status_t ethervox_governor_execute(
                 governor->system_prompt_tokens_len);
 
         // Reprocess system prompt in chunks (same as initial load)
-        int chunk_size = 1024;
+        // CRITICAL: Use actual n_batch from context (not hardcoded 1024)
+        int actual_n_batch = llama_n_batch(governor->llm_ctx);
+        int chunk_size = (actual_n_batch > 0) ? actual_n_batch : 512;
+        GOV_LOG("Using chunk_size=%d (llama_n_batch=%d)", chunk_size, actual_n_batch);
         bool relight_successful = true;
 
         for (int i = 0; i < governor->system_prompt_tokens_len; i += chunk_size) {
@@ -2041,6 +2100,11 @@ ethervox_governor_status_t ethervox_governor_execute(
   for (uint32_t iteration = 0; iteration < governor->config.max_iterations; iteration++) {
     governor->last_iteration_count = iteration + 1;
 
+    // Initialize statistics for this iteration
+    generation_stats_t gen_stats;
+    stats_init(&gen_stats);
+    double iteration_start_time = (double)clock() / CLOCKS_PER_SEC;
+
     // Check for interrupt request
     if (governor->interrupt_requested) {
       GOV_LOG("Governor interrupted at iteration %d", iteration + 1);
@@ -2067,11 +2131,15 @@ ethervox_governor_status_t ethervox_governor_execute(
     // Generate LLM response
     // CRITICAL: Use heap allocation instead of stack for large buffer (64KB) to prevent stack overflow
     // Stack overflow can cause pointer corruption and SIGSEGV
-    char* llm_response_buffer = (char*)calloc(65536, 1);
+    // Use safe_calloc for response buffer with error checking
+    error_context_t buf_error = {0};
+    char* llm_response_buffer = (char*)safe_calloc(65536, 1, &buf_error);
     if (!llm_response_buffer) {
-      GOV_ERROR("Failed to allocate response buffer");
-      return ETHERVOX_ERROR_OUT_OF_MEMORY;
+      GOV_ERROR("Failed to allocate response buffer: %s", error_context_get_message(&buf_error));
+      if (error) *error = strdup("Memory allocation failed");
+      return ETHERVOX_GOVERNOR_ERROR;
     }
+    bool inside_tool_call = false;
 
     // Only tokenize and decode the NEW part of the conversation (what hasn't been processed yet)
     const char* new_content = conversation + processed_length;
@@ -2094,7 +2162,14 @@ ethervox_governor_status_t ethervox_governor_execute(
         return ETHERVOX_GOVERNOR_ERROR;
       }
 
-      llama_token* tokens = malloc(n_tokens * sizeof(llama_token));
+      error_context_t tok_error = {0};
+      llama_token* tokens = (llama_token*)safe_malloc(n_tokens * sizeof(llama_token), &tok_error);
+      if (!tokens) {
+        GOV_ERROR("Failed to allocate prompt tokens: %s", error_context_get_message(&tok_error));
+        free(llm_response_buffer);
+        if (error) *error = strdup("Memory allocation failed");
+        return ETHERVOX_GOVERNOR_ERROR;
+      }
       if (!tokens) {
         if (error)
           *error = strdup("Memory allocation failed");
@@ -2301,7 +2376,7 @@ ethervox_governor_status_t ethervox_governor_execute(
 
     int generated_count = 0;
     const int max_tokens = governor->config.max_tokens_per_response;  // Use configured limit
-    bool inside_tool_call = false;  // Track if we're inside a tool call
+    inside_tool_call = false;  // Track if we're inside a tool call
     
     // Initialize lookahead buffer and loop detection
     token_lookahead_t lookahead = {0};
@@ -2486,20 +2561,24 @@ ethervox_governor_status_t ethervox_governor_execute(
           const char* stop_marker = stop_sequences_ptr[i];
           if (strstr(test_buffer, stop_marker) != NULL) {
             // This token would create a stop sequence
-            // Truncate the token to exclude the stop sequence
+            // Find where stop sequence starts in test_buffer
             char* stop_in_test = strstr(test_buffer, stop_marker);
             size_t safe_len = stop_in_test - test_buffer;
-            if (safe_len > current_len) {
-              // Partial token is safe
-              size_t safe_token_len = safe_len - current_len;
-              token_text[safe_token_len] = '\0';
-            } else {
-              // Don't add this token at all
-              token_text[0] = '\0';
+            
+            // CRITICAL: Truncate llm_response_buffer to position right before stop sequence
+            // The stop sequence is being built incrementally, so it may be partially in
+            // llm_response_buffer already. Truncate to the safe length.
+            if (safe_len < current_len) {
+              // Stop sequence starts within existing buffer - truncate it
+              llm_response_buffer[safe_len] = '\0';
+              GOV_LOG("Truncated llm_response_buffer to %zu chars (removed partial stop sequence '%s')", 
+                      safe_len, stop_marker);
             }
+            
+            // Don't add the current token
+            token_text[0] = '\0';
             would_create_stop = true;
-            GOV_LOG("Token would create stop sequence '%s' - truncated token to: '%s'", 
-                    stop_marker, token_text);
+            GOV_LOG("Token would create stop sequence '%s' - stopping generation", stop_marker);
             break;
           }
         }
@@ -3137,7 +3216,8 @@ ethervox_governor_status_t ethervox_governor_execute(
                              false);
 
               // Process in chunks to respect batch size limit
-              const int n_batch = 1024;
+              // CRITICAL: Use actual n_batch from context
+              const int n_batch = llama_n_batch(governor->llm_ctx);
               int tokens_processed = 0;
 
               while (tokens_processed < result_n_tokens) {
@@ -3280,7 +3360,8 @@ ethervox_governor_status_t ethervox_governor_execute(
               llama_tokenize(vocab, error_msg, strlen(error_msg), error_tokens, error_n_tokens,
                              false, false);
 
-              const int n_batch = 1024;
+              // CRITICAL: Use actual n_batch from context
+              const int n_batch = llama_n_batch(governor->llm_ctx);
               int tokens_processed = 0;
               while (tokens_processed < error_n_tokens) {
                 int batch_size = (error_n_tokens - tokens_processed > n_batch)
@@ -3547,7 +3628,11 @@ ethervox_result_t ethervox_governor_reset_conversation(ethervox_governor_t* gove
           governor->system_prompt_tokens_len);
 
   // Reprocess system prompt in chunks (same as initial load)
-  int chunk_size = 1024;
+  // CRITICAL: Use actual n_batch from context (not hardcoded 1024)
+  // Small models may have n_batch=512 or even 256
+  int actual_n_batch = llama_n_batch(governor->llm_ctx);
+  int chunk_size = (actual_n_batch > 0) ? actual_n_batch : 512;
+  GOV_LOG("Using chunk_size=%d (llama_n_batch=%d)", chunk_size, actual_n_batch);
   bool relight_successful = true;
 
   for (int i = 0; i < governor->system_prompt_tokens_len; i += chunk_size) {

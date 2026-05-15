@@ -725,14 +725,37 @@ ethervox_result_t ethervox_dialogue_init(ethervox_dialogue_engine_t* engine,
     
 #if HAVE_LIBCURL
     // Register weather forecast tool (requires libcurl)
-    if (ethervox_weather_tools_register(registry) == 0) {
+#ifdef ETHERVOX_PLATFORM_ANDROID
+    ETHERVOX_LOGI("Attempting to register weather tools...");
+#else
+    printf("Attempting to register weather tools...\n");
+#endif
+    ethervox_result_t weather_result = ethervox_weather_tools_register(registry);
+#ifdef ETHERVOX_PLATFORM_ANDROID
+    ETHERVOX_LOGI("Weather registration returned: %d", weather_result);
+#else
+    printf("Weather registration returned: %d\n", weather_result);
+#endif
+    if (weather_result == 0) {
       tool_count++;
 #ifdef ETHERVOX_PLATFORM_ANDROID
       ETHERVOX_LOGI("Registered weather forecast tool with Governor");
 #else
       printf("Registered weather forecast tool with Governor\n");
 #endif
+    } else {
+#ifdef ETHERVOX_PLATFORM_ANDROID
+      ETHERVOX_LOGE("Failed to register weather tool, error: %d", weather_result);
+#else
+      printf("Failed to register weather tool, error: %d\n", weather_result);
+#endif
     }
+#else
+#ifdef ETHERVOX_PLATFORM_ANDROID
+    ETHERVOX_LOGW("HAVE_LIBCURL not defined - weather tools skipped");
+#else
+    printf("HAVE_LIBCURL not defined - weather tools skipped\n");
+#endif
 #endif
     
     // Register conversation tools (speak, listen for LLM-controlled voice interaction)

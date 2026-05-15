@@ -452,12 +452,25 @@ ethervox_result_t ethervox_tool_registry_build_system_prompt(
             "<tool_call>\n"
             "{\"name\": <function-name>, \"arguments\": <args-json-object>}\n"
             "</tool_call>\n\n"
+            "TOOL EXECUTION FLOW:\n"
+            "1. When you generate </tool_call>, token generation PAUSES immediately\n"
+            "2. The system executes the tool and gets REAL data (not examples)\n"
+            "3. Tool results are added to conversation context automatically\n"
+            "4. Generation resumes - you then provide a BRIEF, natural language response using the tool results\n"
+            "5. DO NOT generate explanations, code, or examples after the tool call - just the tool call itself\n\n"
+            "RESPONSE GUIDELINES (after tool execution):\n"
+            "- Answer the user's question directly and concisely\n"
+            "- Use the tool results from your context (they appear as <tool_result>...</tool_result>)\n"
+            "- Keep responses brief (1-2 sentences for simple queries)\n"
+            "- DO NOT explain how the tool works or generate code examples\n"
+            "- DO NOT repeat the tool result verbatim - format it naturally\n\n"
             "CRITICAL RULES:\n"
             "1. For ALL math/calculations, you MUST call calculator_compute - never calculate mentally\n"
             "2. For time/date queries, you MUST use get_date or get_time\n"
             "3. For tools in the <tools> section above, call them directly with their parameters\n"
             "4. For other tools listed, call get_tool_info first to learn their parameters, then call the tool\n"
-            "5. Always call tools before answering - do not guess or answer from memory\n\n"
+            "5. Always call tools before answering - do not guess or answer from memory\n"
+            "6. After </tool_call>, STOP generating immediately - wait for tool results\n\n"
             "TOOL CALL FORMAT EXAMPLES (these are examples only, not conversation history):\n\n"
             "Example 1 - Math calculation:\n"
             "<tool_call>\n{\"name\": \"calculator_compute\", \"arguments\": {\"expression\": \"17*23\"}}\n</tool_call>\n\n"
@@ -467,7 +480,10 @@ ethervox_result_t ethervox_tool_registry_build_system_prompt(
             "<tool_call>\n{\"name\": \"speak\", \"arguments\": {\"text\": \"Hello! How can I help you?\"}}\n</tool_call>\n\n"
             "Example 4 - Learn about a tool:\n"
             "<tool_call>\n{\"name\": \"get_tool_info\", \"arguments\": {\"tool_name\": \"startup_prompt_get_current\"}}\n</tool_call>\n\n"
-            "Remember: These are FORMAT examples. When responding to the ACTUAL user query below, generate your OWN tool call based on THEIR request.\n\n");
+            "IMPORTANT: These are FORMAT examples only. In actual use:\n"
+            "- When you need data: Generate ONLY <tool_call>...</tool_call> and STOP\n"
+            "- After tool executes: Respond briefly using the results (e.g., 'It's 9:50 PM' for time query)\n"
+            "- DO NOT generate code, explanations, or repeat tool format after getting results\n\n");
             
         // NOTE: Do NOT append system_end marker - tokenizer handles it automatically
             

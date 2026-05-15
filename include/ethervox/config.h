@@ -179,12 +179,15 @@ extern "C" {
 
 // Android-specific LLM configuration
 // These get overriden if the Model file contains the relevant info. See device_profile.h 
-#ifdef ETHERVOX_PLATFORM_ANDROID
+#ifdef __ANDROID__
 #ifndef ETHERVOX_LLM_MAX_TOKENS_ANDROID
 #define ETHERVOX_LLM_MAX_TOKENS_ANDROID 800  // Longer responses for voice
 #endif
 #ifndef ETHERVOX_LLM_CONTEXT_LENGTH_ANDROID
 #define ETHERVOX_LLM_CONTEXT_LENGTH_ANDROID 2048U  // Balance context vs memory
+#endif
+#ifndef ETHERVOX_LLM_TEMPERATURE_ANDROID
+#define ETHERVOX_LLM_TEMPERATURE_ANDROID 0.3f  // Low temperature for deterministic tool calling
 #endif
 #ifndef ETHERVOX_LLM_GPU_LAYERS_ANDROID
 #define ETHERVOX_LLM_GPU_LAYERS_ANDROID 99U  // Offload everything to GPU
@@ -321,7 +324,11 @@ extern "C" {
 #endif
 
 #ifndef ETHERVOX_GOVERNOR_TEMPERATURE
+#ifdef __ANDROID__
+#define ETHERVOX_GOVERNOR_TEMPERATURE ETHERVOX_LLM_TEMPERATURE_ANDROID  // Use Android-specific temperature
+#else
 #define ETHERVOX_GOVERNOR_TEMPERATURE 0.3f  // Low temperature for deterministic tool use
+#endif
 #endif
 
 #ifndef ETHERVOX_GOVERNOR_MAX_TOKENS_PER_ITERATION

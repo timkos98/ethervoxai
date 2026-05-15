@@ -421,6 +421,148 @@ JNIEXPORT jboolean JNICALL Java_com_droid_ethervox_1core_NativeLib_isGovernorLoa
   return ethervox_governor_is_loaded(g_governor) ? JNI_TRUE : JNI_FALSE;
 }
 
+JNIEXPORT jobject JNICALL Java_com_droid_ethervox_1core_NativeLib_getKvCacheStatus(JNIEnv* env,
+                                                                                     jobject thiz) {
+  (void)thiz;
+
+  if (!g_governor || !ethervox_governor_is_loaded(g_governor)) {
+    return NULL;
+  }
+
+  int32_t current_pos = 0;
+  int32_t context_size = 0;
+  float usage = ethervox_governor_get_kv_cache_usage(g_governor, &current_pos, &context_size);
+
+  if (usage < 0.0f) {
+    return NULL;
+  }
+
+  // Find KvCacheStatus class
+  jclass kvCacheClass = (*env)->FindClass(env, "com/droid/ethervox_core/KvCacheStatus");
+  if (!kvCacheClass) {
+    ETHERVOX_LOGE("Failed to find KvCacheStatus class");
+    return NULL;
+  }
+
+  // Get constructor: KvCacheStatus(currentPosition: Int, contextSize: Int, usagePercent: Float)
+  jmethodID constructor = (*env)->GetMethodID(env, kvCacheClass, "<init>", "(IIF)V");
+  if (!constructor) {
+    ETHERVOX_LOGE("Failed to find KvCacheStatus constructor");
+    return NULL;
+  }
+
+  // Create and return KvCacheStatus object
+  jobject result = (*env)->NewObject(env, kvCacheClass, constructor, 
+                                      (jint)current_pos, 
+                                      (jint)context_size, 
+                                      (jfloat)usage);
+  
+  return result;
+}
+
+JNIEXPORT jobjectArray JNICALL
+Java_com_droid_ethervox_1core_NativeLib_getConversationHistory(JNIEnv* env, jobject thiz) {
+  (void)thiz;
+
+  if (!g_memory_store || !g_memory_store->is_initialized) {
+    // Return empty array if memory not initialized
+    jclass memoryClass = (*env)->FindClass(env, "com/droid/ethervox_core/ConversationMemory");
+    return (*env)->NewObjectArray(env, 0, memoryClass, NULL);
+  }
+
+  // Count non-summary entries (filter out context_summary tags)
+  uint32_t conversationCount = 0;
+  for (uint32_t i = 0; i < g_memory_store->entry_count; i++) {
+    ethervox_memory_entry_t* entry = &g_memory_store->entries[i];
+    
+    // Skip entries with "context_summary" tag (these are model-only context)
+    bool isSummary = false;
+    for (uint32_t j = 0; j < entry->tag_count; j++) {
+      if (strcmp(entry->tags[j], "context_summary") == 0) {
+        isSummary = true;
+        break;
+      }
+    }
+    
+    if (!isSummary) {
+      conversationCount++;
+    }
+  }
+
+  // Find ConversationMemory class
+  jclass memoryClass = (*env)->FindClass(env, "com/droid/ethervox_core/ConversationMemory");
+  if (!memoryClass) {
+    ETHERVOX_LOGE("Failed to find ConversationMemory class");
+    return (*env)->NewObjectArray(env, 0, memoryClass, NULL);
+  }
+
+  // Get constructor: ConversationMemory(memoryId: Long, turnId: Long, timestamp: Long, 
+  //                                      text: String, isUser: Boolean, importance: Float, toolsUsed: Array<String>)
+  jmethodID constructor = (*env)->GetMethodID(env, memoryClass, "<init>", "(JJJLjava/lang/String;ZF[Ljava/lang/String;)V");
+  if (!constructor) {
+    ETHERVOX_LOGE("Failed to find ConversationMemory constructor");
+    return (*env)->NewObjectArray(env, 0, memoryClass, NULL);
+  }
+
+  // Create array
+  jobjectArray result = (*env)->NewObjectArray(env, (jsize)conversationCount, memoryClass, NULL);
+  if (!result) {
+    ETHERVOX_LOGE("Failed to create ConversationMemory array");
+    return (*env)->NewObjectArray(env, 0, memoryClass, NULL);
+  }
+
+  // Populate array with non-summary entries
+  uint32_t arrayIndex = 0;
+  for (uint32_t i = 0; i < g_memory_store->entry_count; i++) {
+    ethervox_memory_entry_t* entry = &g_memory_store->entries[i];
+    
+    // Skip entries with "context_summary" tag
+    bool isSummary = false;
+    for (uint32_t j = 0; j < entry->tag_count; j++) {
+      if (strcmp(entry->tags[j], "context_summary") == 0) {
+        isSummary = true;
+        break;
+      }
+    }
+    
+    if (isSummary) {
+      continue;
+    }
+
+    // Create tools array
+    jclass stringClass = (*env)->FindClass(env, "java/lang/String");
+    jobjectArray toolsArray = (*env)->NewObjectArray(env, (jsize)entry->tools_called_count, stringClass, NULL);
+    for (uint32_t t = 0; t < entry->tools_called_count; t++) {
+      jstring toolName = (*env)->NewStringUTF(env, entry->tools_called[t]);
+      (*env)->SetObjectArrayElement(env, toolsArray, (jsize)t, toolName);
+      (*env)->DeleteLocalRef(env, toolName);
+    }
+    
+    // Create ConversationMemory object
+    jstring text = (*env)->NewStringUTF(env, entry->text);
+    jobject memoryObj = (*env)->NewObject(
+      env, memoryClass, constructor,
+      (jlong)entry->memory_id,
+      (jlong)entry->turn_id,
+      (jlong)entry->timestamp,
+      text,
+      (jboolean)entry->is_user_message,
+      (jfloat)entry->importance,
+      toolsArray
+    );
+    
+    (*env)->SetObjectArrayElement(env, result, (jsize)arrayIndex, memoryObj);
+    (*env)->DeleteLocalRef(env, text);
+    (*env)->DeleteLocalRef(env, toolsArray);
+    (*env)->DeleteLocalRef(env, memoryObj);
+    
+    arrayIndex++;
+  }
+
+  ETHERVOX_LOGI("Returned %u conversation messages from memory", conversationCount);
+  return result;
+}
+
 JNIEXPORT jobjectArray JNICALL
 Java_com_droid_ethervox_1core_NativeLib_getRegisteredPlugins(JNIEnv* env, jobject thiz) {
   if (!g_registry) {

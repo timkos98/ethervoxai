@@ -408,6 +408,16 @@ ethervox_result_t ethervox_governor_reload_model(ethervox_governor_t* governor);
 bool ethervox_governor_is_loaded(ethervox_governor_t* governor);
 
 /**
+ * Get KV cache usage information
+ *
+ * @param governor Governor instance
+ * @param current_pos Output: Current KV cache position (can be NULL)
+ * @param context_size Output: Total context size (can be NULL)
+ * @return Usage percentage (0.0 to 1.0), or -1.0 if not loaded
+ */
+float ethervox_governor_get_kv_cache_usage(ethervox_governor_t* governor, int32_t* current_pos, int32_t* context_size);
+
+/**
  * Execute user query with tool orchestration
  *
  * @param governor Governor instance

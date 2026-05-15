@@ -78,6 +78,9 @@ static inline int gettimeofday(struct timeval* tp, void* tzp) {
 #include "ethervox/logging.h"
 #include "ethervox/memory_tools.h"
 #include "ethervox/model_downloader.h"
+#if HAVE_LIBCURL
+#include "ethervox/weather_tools.h"
+#endif
 #include "ethervox/platform.h"
 #include "ethervox/settings.h"
 #include "ethervox/settings_menu.h"
@@ -4038,6 +4041,9 @@ file_tools_cleanup:
   tool_reg_result_t tool_registrations[] = {
       {"Path Config", ethervox_path_config_register(&registry, &path_config)},
       {"Unit Conversion", ethervox_unit_conversion_register(&registry)},
+#if HAVE_LIBCURL
+      {"Weather Forecast", ethervox_weather_tools_register(&registry)},
+#endif
       {"Conversation", ethervox_conversation_tools_register(&registry)},
       {"Get Tool Info", ethervox_get_tool_info_register(&registry)},
       {"Startup Prompt", ethervox_startup_prompt_tools_register(&registry)},
