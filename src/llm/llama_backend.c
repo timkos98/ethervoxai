@@ -20,6 +20,8 @@
 #include "ethervox/error.h"
 #include "ethervox/logging.h"
 #include "ethervox/config.h"
+#include "ethervox/device_profile.h"
+#include "ethervox/gguf_config_helper.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -267,6 +269,11 @@ static ethervox_result_t ethervox_llama_backend_init(ethervox_llm_backend_t* bac
   
   ctx->cancel_requested = false;
   
+  // Initialize device profiling for adaptive configuration
+  ETHERVOX_LOG_INFO("[Adaptive Config] Initializing device profile...");
+  ethervox_device_profile_init();
+  ETHERVOX_LOG_INFO("[Adaptive Config] Device profile initialized successfully");
+  
   // Initialize llama backend (global initialization) - only once
   if (!g_llama_backend_initialized) {
     ETHERVOX_LOG_INFO("Initializing llama.cpp backend (first time)");
@@ -387,11 +394,67 @@ static ethervox_result_t llama_backend_load_model(ethervox_llm_backend_t* backen
   
   ETHERVOX_LOG_INFO("Model has %d layers, using %d GPU layers", n_layer, ctx->n_gpu_layers);
   
+  // === ADAPTIVE CONFIGURATION ===
+  // Extract model metadata and calculate optimal settings based on device capabilities
+  ETHERVOX_LOG_INFO("[Adaptive Config] Extracting model metadata...");
+  
+  ethervox_model_metadata_t metadata;
+  bool adaptive_success = ethervox_extract_model_metadata(ctx->model, &metadata);
+  
+  if (adaptive_success) {
+    ETHERVOX_LOG_INFO("[Adaptive Config] Model metadata extracted: context=%u, layers=%u, size=%zu bytes",
+                      metadata.context_length_train, metadata.layer_count, metadata.model_size_bytes);
+    
+    // Calculate optimal configuration
+    ethervox_runtime_config_t optimal;
+    if (ethervox_calculate_optimal_config(&metadata, &optimal)) {
+      ETHERVOX_LOG_INFO("[Adaptive Config] Optimal settings calculated:");
+      ETHERVOX_LOG_INFO("  Context: %u (model trained: %u)", optimal.context_length, metadata.context_length_train);
+      ETHERVOX_LOG_INFO("  Batch size: %u", optimal.batch_size);
+      ETHERVOX_LOG_INFO("  Threads: %u", optimal.threads);
+      ETHERVOX_LOG_INFO("  KV cache type: %d", optimal.kv_cache_type);
+      ETHERVOX_LOG_INFO("  Flash attention: %s", optimal.use_flash_attention ? "enabled" : "disabled");
+      ETHERVOX_LOG_INFO("  GPU layers: %u", optimal.gpu_layers);
+      
+      // Apply adaptive settings
+      ctx->n_ctx = optimal.context_length;
+      ctx->n_threads = optimal.threads;
+      // Note: batch_size and cache_type applied below in ctx_params
+      
+      ETHERVOX_LOG_INFO("[Adaptive Config] ✓ Using adaptive configuration");
+    } else {
+      ETHERVOX_LOG_WARN("[Adaptive Config] Failed to calculate optimal config, using config.h defaults");
+      adaptive_success = false;
+    }
+  } else {
+    ETHERVOX_LOG_WARN("[Adaptive Config] Failed to extract model metadata, using config.h defaults");
+  }
+  
+  // Fallback to config.h if adaptive configuration failed
+  if (!adaptive_success) {
+    ETHERVOX_LOG_INFO("[Adaptive Config] → FALLBACK: Using hardcoded config.h values");
+    ETHERVOX_LOG_INFO("  Context: %u (from LLAMA_DEFAULT_CONTEXT_LENGTH)", ctx->n_ctx);
+    ETHERVOX_LOG_INFO("  Threads: %u (from LLAMA_DEFAULT_THREADS)", ctx->n_threads);
+    ETHERVOX_LOG_INFO("  Batch: %d (from LLAMA_PROMPT_BATCH_SIZE)", LLAMA_PROMPT_BATCH_SIZE);
+  }
+  
   // Initialize context parameters
   ctx->ctx_params = llama_context_default_params();
   ctx->ctx_params.n_ctx = ctx->n_ctx;
   ctx->ctx_params.n_threads = ctx->n_threads;
-  ctx->ctx_params.n_batch = LLAMA_PROMPT_BATCH_SIZE;  // Use larger batch size for prompt processing
+  
+  // Use adaptive batch size if available, otherwise fall back to config.h default
+  if (adaptive_success) {
+    ethervox_runtime_config_t optimal;
+    ethervox_extract_model_metadata(ctx->model, &metadata);
+    ethervox_calculate_optimal_config(&metadata, &optimal);
+    ctx->ctx_params.n_batch = optimal.batch_size;
+    ETHERVOX_LOG_INFO("[Adaptive Config] Using adaptive batch size: %u", optimal.batch_size);
+  } else {
+    ctx->ctx_params.n_batch = LLAMA_PROMPT_BATCH_SIZE;
+    ETHERVOX_LOG_INFO("[Adaptive Config] Using fallback batch size: %d", LLAMA_PROMPT_BATCH_SIZE);
+  }
+  
   ctx->ctx_params.n_threads_batch = ctx->n_threads;  // Use same threads for batch processing
   // Note: seed is now set via llama_sampler, not context params
   

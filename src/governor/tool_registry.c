@@ -385,25 +385,6 @@ ethervox_result_t ethervox_tool_registry_build_system_prompt(
     bool is_mobile = is_mobile_platform();
     tool_format_type_t tool_format = chat_template_get_tool_format(chat_template);
     
-    // Try to load model-specific optimized prompts first
-    char custom_instructions[2048] = {0};
-    char custom_examples[4096] = {0};
-    bool has_custom_prompts = false;
-    
-    if (model_path && ethervox_load_optimized_prompts(
-        model_path,
-        custom_instructions,
-        sizeof(custom_instructions),
-        custom_examples,
-        sizeof(custom_examples)
-    ) == 0) {
-        has_custom_prompts = true;
-        ETHERVOX_LOG_INFO("Using optimized prompts for this model");
-    } else {
-        ETHERVOX_LOG_WARN("No optimized prompts found - tool usage may be inefficient");
-        ETHERVOX_LOG_WARN("Run optimization via Settings to improve performance");
-    }
-    
     int written = 0;
     size_t remaining = buffer_size;
     char* ptr = buffer;
@@ -494,14 +475,13 @@ ethervox_result_t ethervox_tool_registry_build_system_prompt(
         
     } else {
         // XML attribute format (Qwen, Phi, Llama, etc.)
-        const char* platform_context = has_custom_prompts ? custom_instructions :
-            (is_mobile
+        const char* platform_context = is_mobile
             ? "You are Ethervox. ALWAYS use tools - never answer from memory alone.\n"
               "Tool syntax: <tool_call name=\"tool_name\" param=\"value\" />\n"
             : "You are Ethervox, a helpful AI assistant.\n"
               "IMPORTANT: You MUST use tools for all calculations, time queries, and memory operations.\n"
               "NEVER calculate mentally or guess - ALWAYS call the appropriate tool.\n"
-              "Tool call format: <tool_call name=\"tool_name\" param=\"value\" />\n");
+              "Tool call format: <tool_call name=\"tool_name\" param=\"value\" />\n";
         
         // NOTE: Do NOT include system_start marker - tokenizer handles it automatically
         written = snprintf(ptr, remaining,
@@ -558,9 +538,8 @@ ethervox_result_t ethervox_tool_registry_build_system_prompt(
             remaining -= tool_written;
         }
         
-        // Use custom examples if available, otherwise defaults with get_tool_info
-        const char* usage_section = has_custom_prompts ? custom_examples :
-            (is_mobile
+        // Use default examples based on platform
+        const char* usage_section = is_mobile
             ? "\nTOOL FORMAT EXAMPLES (format only, not conversation):\n"
               "Math: <tool_call name=\"calculator_compute\" expression=\"5+5\" />\n"
               "Memory: <tool_call name=\"memory_store\" text=\"Call John\" tags=\"reminder\" />\n"
@@ -578,7 +557,7 @@ ethervox_result_t ethervox_tool_registry_build_system_prompt(
               "<tool_call name=\"get_tool_info\" tool_name=\"memory_store\" />\n"
               "Then: <tool_call name=\"memory_store\" text=\"User's name is Tim\" tags=\"personal\" importance=\"0.9\" />\n\n"
               "CRITICAL: These are FORMAT examples. Respond to the ACTUAL user query with appropriate tool calls.\n\n"
-              "For math, ALWAYS use calculator_compute. For other tools, call get_tool_info first to learn parameters.\n");
+              "For math, ALWAYS use calculator_compute. For other tools, call get_tool_info first to learn parameters.\n";
         
         int instr_written = snprintf(ptr, remaining, "%s", usage_section);
         if (instr_written < 0 || (size_t)instr_written >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;

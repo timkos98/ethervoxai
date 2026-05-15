@@ -44,7 +44,7 @@ ethervox_result_t ethervox_tool_build_minimal_system_prompt(
     if (!registry->tools_available) {
         // Level 2: LLM-only mode - no dynamic tools
         offset = snprintf(output, output_size,
-            "You are a helpful AI assistant. Respond naturally and conversationally.\n\n"
+            "You are a helpful AI assistant. Respond naturally and conversationally.\n\n");
         
         ETHERVOX_LOGI("System prompt: LLM-only mode (%d bytes)", offset);
         ETHERVOX_LOGI("===== FULL SYSTEM PROMPT (LLM-ONLY) =====");

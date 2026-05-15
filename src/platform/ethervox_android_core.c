@@ -571,57 +571,6 @@ JNIEXPORT jint JNICALL Java_com_droid_ethervox_1core_NativeLib_optimizeToolPromp
   return result;
 }
 
-JNIEXPORT jobject JNICALL Java_com_droid_ethervox_1core_NativeLib_loadOptimizedPrompts(
-    JNIEnv* env, jobject thiz, jstring modelPath) {
-  (void)thiz;
-
-  const char* model_path = (*env)->GetStringUTFChars(env, modelPath, NULL);
-  if (!model_path) {
-    LOGE("Failed to get model path string");
-    return NULL;
-  }
-
-  // Allocate buffers for instruction and examples
-  char instruction[4096] = {0};
-  char examples[8192] = {0};
-
-  ethervox_result_t result = ethervox_load_optimized_prompts(
-      model_path, instruction, sizeof(instruction), examples, sizeof(examples));
-
-  (*env)->ReleaseStringUTFChars(env, modelPath, model_path);
-
-  if (ethervox_is_error(result)) {
-    // No optimized prompts found
-    return NULL;
-  }
-
-  // Create OptimizedPrompts object
-  jclass optimizedPromptsClass = (*env)->FindClass(env, "com/droid/ethervox_core/OptimizedPrompts");
-  if (!optimizedPromptsClass) {
-    LOGE("Failed to find OptimizedPrompts class");
-    return NULL;
-  }
-
-  jmethodID constructor = (*env)->GetMethodID(env, optimizedPromptsClass, "<init>",
-                                              "(Ljava/lang/String;Ljava/lang/String;)V");
-  if (!constructor) {
-    LOGE("Failed to find OptimizedPrompts constructor");
-    return NULL;
-  }
-
-  jstring instructionStr = (*env)->NewStringUTF(env, instruction);
-  jstring examplesStr = (*env)->NewStringUTF(env, examples);
-
-  jobject optimizedPrompts =
-      (*env)->NewObject(env, optimizedPromptsClass, constructor, instructionStr, examplesStr);
-
-  (*env)->DeleteLocalRef(env, instructionStr);
-  (*env)->DeleteLocalRef(env, examplesStr);
-  (*env)->DeleteLocalRef(env, optimizedPromptsClass);
-
-  return optimizedPrompts;
-}
-
 /**
  * Get manifest registry information
  * Returns JSON string with current manifest state
@@ -1404,23 +1353,17 @@ static void native_token_callback(const char* token, void* user_data) {
     token = "(null token)";
   }
 
-  // Log each token for debugging streaming issues
-  __android_log_print(ANDROID_LOG_DEBUG, "EthervoxJNI", "Streaming token: '%s'", token);
-
   // Combine buffered incomplete UTF-8 bytes with new token
   size_t token_len = strlen(token);
   size_t combined_len = ctx->utf8_buffer_len + token_len;
   char* combined = malloc(combined_len + 1);
   if (!combined) {
-    __android_log_print(ANDROID_LOG_ERROR, "EthervoxJNI", "Failed to allocate buffer");
     return;
   }
 
   // Copy buffered bytes + new token
   if (ctx->utf8_buffer_len > 0) {
     memcpy(combined, ctx->utf8_buffer, ctx->utf8_buffer_len);
-    __android_log_print(ANDROID_LOG_DEBUG, "EthervoxJNI", "Prepending %d buffered bytes to token",
-                        ctx->utf8_buffer_len);
   }
   memcpy(combined + ctx->utf8_buffer_len, token, token_len);
   combined[combined_len] = '\0';
@@ -1433,8 +1376,6 @@ static void native_token_callback(const char* token, void* user_data) {
     // There are incomplete bytes at the end - buffer them for next token
     ctx->utf8_buffer_len = combined_len - valid_len;
     memcpy(ctx->utf8_buffer, combined + valid_len, ctx->utf8_buffer_len);
-    __android_log_print(ANDROID_LOG_DEBUG, "EthervoxJNI",
-                        "Buffering %d incomplete UTF-8 bytes for next token", ctx->utf8_buffer_len);
   } else {
     // Everything is valid or we used all bytes
     ctx->utf8_buffer_len = 0;

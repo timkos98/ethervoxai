@@ -41,26 +41,6 @@ ethervox_result_t ethervox_optimize_tool_prompts(
     bool optimize_new_only
 );
 
-/**
- * Load previously optimized prompts for a model
- * 
- * Attempts to load model-specific prompts from .ethervox_tool_prompts_<model>.json
- * 
- * @param model_path Path to the model file
- * @param instruction_out Buffer to receive instruction text
- * @param instruction_size Size of instruction buffer
- * @param examples_out Buffer to receive examples text
- * @param examples_size Size of examples buffer
- * @return 0 if loaded successfully, negative if file not found or parse error
- */
-ethervox_result_t ethervox_load_optimized_prompts(
-    const char* model_path,
-    char* instruction_out,
-    size_t instruction_size,
-    char* examples_out,
-    size_t examples_size
-);
-
 #ifdef __cplusplus
 }
 #endif

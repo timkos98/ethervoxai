@@ -1524,7 +1524,7 @@ ethervox_result_t ethervox_governor_init(ethervox_governor_t** governor,
     gov->config.max_iterations = ETHERVOX_GOVERNOR_MAX_ITERATIONS;
     gov->config.max_tool_calls_per_iteration = 10;
     gov->config.timeout_seconds = ETHERVOX_GOVERNOR_TIMEOUT_SECONDS;
-    gov->config.max_tokens_per_response = 192;  // Conservative limit for voice responses (was 2048 - too verbose)
+    gov->config.max_tokens_per_response = 384;  // Balanced limit - allows stories while keeping responses focused
   }
 
   gov->tool_registry = tool_registry;
@@ -2394,7 +2394,9 @@ ethervox_governor_status_t ethervox_governor_execute(
       }
       
       // Check for EOG token (proper way)
-      // For Granite models, <|end_of_text|> IS the correct stop token - respect it!
+      // For Granite models, <|end_of_text|> IS the correct stop token
+      // HOWEVER: For creative tasks (stories, narratives), the model may generate EOG prematurely
+      // Check if the response looks incomplete before respecting EOG
       bool is_eog = llama_vocab_is_eog(vocab_safe, next_token);
 
       if (is_eog) {
@@ -2403,11 +2405,32 @@ ethervox_governor_status_t ethervox_governor_execute(
               "WARNING: Model immediately generated EOG token (id=%d) - this suggests "
               "prompt/context issue",
               next_token);
+          break;
         } else {
-          GOV_LOG("Stopping generation: EOG token detected (id=%d) after %d tokens", next_token,
-                  generated_count);
+          // Check if response ends with incomplete sentence markers
+          bool seems_incomplete = false;
+          size_t resp_len = strlen(llm_response_buffer);
+          if (resp_len > 0) {
+            // Check last few characters for incompleteness
+            const char* tail = llm_response_buffer + (resp_len > 50 ? resp_len - 50 : 0);
+            // If ends with comma, ellipsis, or no punctuation, it's incomplete
+            if (strrchr(tail, ',') && !strrchr(tail, '.') && !strrchr(tail, '!') && !strrchr(tail, '?')) {
+              seems_incomplete = true;
+            } else if (resp_len < 100) {
+              // Very short responses are probably incomplete
+              seems_incomplete = true;
+            }
+          }
+          
+          if (seems_incomplete && generated_count < 150) {
+            GOV_LOG("EOG detected at %d tokens but response seems incomplete, continuing...", generated_count);
+            // Don't break, let it continue generating
+          } else {
+            GOV_LOG("Stopping generation: EOG token detected (id=%d) after %d tokens", next_token,
+                    generated_count);
+            break;
+          }
         }
-        break;
       }
 
       // Decode token to text
@@ -2424,7 +2447,6 @@ ethervox_governor_status_t ethervox_governor_execute(
           hex_pos += snprintf(token_hex + hex_pos, sizeof(token_hex) - hex_pos, 
                              "%02X ", (unsigned char)token_text[i]);
         }
-        GOV_LOG("[TOKEN] id=%d, chars=%d, text='%s', hex=[%s]", next_token, n_chars, token_text, token_hex);
         
         // Filter out invalid UTF-8 replacement characters only
         // U+FFFD (replacement character) appears as ��� (0xEF 0xBF 0xBD)
@@ -2602,10 +2624,18 @@ ethervox_governor_status_t ethervox_governor_execute(
           bool oldest_could_be_stop = is_potential_stop_prefix_check(
               governor->chat_template, lookahead.tokens[0]);
           
+          // CRITICAL FIX: Stop generation immediately when stop sequence detected
+          // Previously, we only stopped streaming but continued generating tokens,
+          // causing the model to hallucinate content after the stop sequence
+          if (streamed_has_stop) {
+            GOV_LOG("Stop sequence detected in streamed+lookahead buffer, ending generation immediately");
+            // Don't add the current token - we already have a stop sequence
+            break;  // Exit the generation loop to prevent hallucination
+          }
+          
           // Stream oldest token ONLY if all checks pass
           bool should_stream_oldest = !inside_tool_call && 
                                       !might_be_tool_start &&
-                                      !streamed_has_stop &&
                                       !lookahead_building_stop && 
                                       !oldest_could_be_stop;
           
@@ -2924,6 +2954,21 @@ ethervox_governor_status_t ethervox_governor_execute(
         GOV_LOG("Truncated response at stop sequence: '%s'", stop_sequences_ptr[i]);
         break;  // Truncate at first occurrence
       }
+    }
+    
+    // Remove template markers that model might generate as visible text
+    // These are training artifacts the model learned to output
+    char* marker;
+    while ((marker = strstr(llm_response_buffer, "<|start_of_text|>")) != NULL) {
+      // Shift text left to remove the marker
+      size_t marker_len = strlen("<|start_of_text|>");
+      memmove(marker, marker + marker_len, strlen(marker + marker_len) + 1);
+      GOV_LOG("Removed <|start_of_text|> marker from response");
+    }
+    while ((marker = strstr(llm_response_buffer, "<|end_of_text|>")) != NULL) {
+      size_t marker_len = strlen("<|end_of_text|>");
+      memmove(marker, marker + marker_len, strlen(marker + marker_len) + 1);
+      GOV_LOG("Removed <|end_of_text|> marker from response");
     }
 
     const char* llm_response = llm_response_buffer;
