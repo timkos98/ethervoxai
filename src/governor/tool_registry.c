@@ -411,12 +411,13 @@ ethervox_result_t ethervox_tool_registry_build_system_prompt(
     // Format differs significantly between XML and JSON tool formats
     if (tool_format == TOOL_FORMAT_JSON_IN_XML) {
         // Granite format: system prompt with JSON tools in <tools></tools>
+        // NOTE: Do NOT include chat template markers (system_start/end) as visible text!
+        // The tokenizer handles these automatically as special tokens.
         written = snprintf(ptr, remaining,
-            "%sYou are a helpful assistant with access to tools. "
-            "CRITICAL: Only generate YOUR response, then STOP. "
-            "DO NOT generate the user's next message or continue the conversation. "
-            "You are provided with function signatures within <tools></tools> XML tags:\n<tools>\n",
-            chat_template->system_start);
+            "You are a helpful assistant with access to tools. "
+            "When generating stories or creative content, write complete narratives with proper endings. "
+            "For conversations: Only generate YOUR response, then STOP. DO NOT generate the user's next message. "
+            "You are provided with function signatures within <tools></tools> XML tags:\n<tools>\n");
         
         if (written < 0 || (size_t)written >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;
         ptr += written;
@@ -485,9 +486,9 @@ ethervox_result_t ethervox_tool_registry_build_system_prompt(
             "<tool_call>\n{\"name\": \"speak\", \"arguments\": {\"text\": \"Hello! How can I help you?\"}}\n</tool_call>\n\n"
             "Example 4 - Learn about a tool:\n"
             "<tool_call>\n{\"name\": \"get_tool_info\", \"arguments\": {\"tool_name\": \"startup_prompt_get_current\"}}\n</tool_call>\n\n"
-            "Remember: These are FORMAT examples. When responding to the ACTUAL user query below, generate your OWN tool call based on THEIR request.\n\n"
-            "%s",
-            chat_template->system_end);
+            "Remember: These are FORMAT examples. When responding to the ACTUAL user query below, generate your OWN tool call based on THEIR request.\n\n");
+            
+        // NOTE: Do NOT append system_end marker - tokenizer handles it automatically
             
         if (instr_written < 0 || (size_t)instr_written >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;
         
@@ -502,10 +503,9 @@ ethervox_result_t ethervox_tool_registry_build_system_prompt(
               "NEVER calculate mentally or guess - ALWAYS call the appropriate tool.\n"
               "Tool call format: <tool_call name=\"tool_name\" param=\"value\" />\n");
         
+        // NOTE: Do NOT include system_start marker - tokenizer handles it automatically
         written = snprintf(ptr, remaining,
-            "%s"
             "%s\n",
-            chat_template->system_start,
             platform_context
         );
         

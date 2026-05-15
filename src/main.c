@@ -2786,8 +2786,8 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
     // Step 2: Run optimizer v2 (JSON output, batch processing)
     printf("\nStep 2: Running optimization (this may take 30-60 seconds)...\n");
     ethervox_result_t ret =
-        ethervox_optimize_tool_prompts_v2(g_governor, g_loaded_model_path, &g_manifest_registry,
-                                          true);  // optimize_new_only = true (incremental)
+        ethervox_optimize_tool_prompts(g_governor, g_loaded_model_path, &g_manifest_registry,
+                                       true);  // optimize_new_only = true (incremental)
 
     if (ethervox_is_success(ret)) {
       printf("\n[OK] Optimization complete!\n");
@@ -4435,8 +4435,8 @@ file_tools_cleanup:
     // Step 2: Run optimizer
     printf("\nStep 2: Running optimization (this may take 30-60 seconds)...\n");
     ethervox_result_t ret =
-        ethervox_optimize_tool_prompts_v2(g_governor, g_loaded_model_path, &g_manifest_registry,
-                                          true);  // optimize_new_only = true (incremental)
+        ethervox_optimize_tool_prompts(g_governor, g_loaded_model_path, &g_manifest_registry,
+                                       true);  // optimize_new_only = true (incremental)
 
     if (ethervox_is_success(ret)) {
       printf("\n[OK] Optimization complete!\n");

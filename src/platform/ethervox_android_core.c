@@ -462,8 +462,8 @@ static void* optimization_thread_func(void* arg) {
 
   LOGI("Optimization thread started for model: %s", data->model_path);
 
-  // Run V2 optimizer (this can take 30-60 seconds)
-  ethervox_result_t result = ethervox_optimize_tool_prompts_v2(
+  // Run optimizer (this can take 30-60 seconds)
+  ethervox_result_t result = ethervox_optimize_tool_prompts(
       data->governor, data->model_path, data->manifest_registry, data->optimize_new_only);
 
   // Update result atomically

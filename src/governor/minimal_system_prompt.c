@@ -44,9 +44,7 @@ ethervox_result_t ethervox_tool_build_minimal_system_prompt(
     if (!registry->tools_available) {
         // Level 2: LLM-only mode - no dynamic tools
         offset = snprintf(output, output_size,
-            "You are a helpful AI assistant.\n"
-            "CRITICAL: Only generate YOUR response. Stop immediately after answering.\n"
-            "DO NOT generate the user's next message. DO NOT continue the conversation.\n");
+            "You are a helpful AI assistant. Respond naturally and conversationally.\n\n"
         
         ETHERVOX_LOGI("System prompt: LLM-only mode (%d bytes)", offset);
         ETHERVOX_LOGI("===== FULL SYSTEM PROMPT (LLM-ONLY) =====");
@@ -69,8 +67,6 @@ ethervox_result_t ethervox_tool_build_minimal_system_prompt(
     // Header
     offset = snprintf(output, output_size,
         "You are a helpful AI assistant with access to tools.\n"
-        "CRITICAL: Only generate YOUR response. Stop immediately after answering.\n"
-        "DO NOT generate the user's next message. DO NOT continue the conversation.\n\n"
         "IMPORTANT: Use tools for calculations, time queries, memory operations, and file access.\n"
         "NEVER calculate mentally or guess - ALWAYS call the appropriate tool.\n\n"
         "Available tools:\n\n");

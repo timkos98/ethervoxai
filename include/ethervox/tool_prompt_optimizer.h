@@ -22,20 +22,7 @@ typedef struct ethervox_governor ethervox_governor_t;
 struct tool_manifest_registry;
 
 /**
- * Run the tool prompt optimization routine
- * 
- * This asks the LLM to write its own tool usage instructions and examples.
- * The generated prompts are saved to .ethervox_tool_prompts_<model>.json
- * and will be auto-loaded on next startup.
- * 
- * @param governor Governor instance with loaded model
- * @param model_path Path to the model file (used for naming output file)
- * @return 0 on success, negative on error
- */
-ethervox_result_t ethervox_optimize_tool_prompts(ethervox_governor_t* governor, const char* model_path);
-
-/**
- * Optimize tool prompts with JSON output and batch processing (V2)
+ * Optimize tool prompts with JSON output and batch processing
  * 
  * Generates model-specific optimized prompts in JSON format.
  * Processes tools in batches (5 at a time) to avoid KV cache overflow.
@@ -47,7 +34,7 @@ ethervox_result_t ethervox_optimize_tool_prompts(ethervox_governor_t* governor, 
  * @param optimize_new_only If true, only optimize tools not already in the JSON file
  * @return 0 on success, negative on error
  */
-ethervox_result_t ethervox_optimize_tool_prompts_v2(
+ethervox_result_t ethervox_optimize_tool_prompts(
     ethervox_governor_t* governor,
     const char* model_path,
     struct tool_manifest_registry* manifest_registry,
