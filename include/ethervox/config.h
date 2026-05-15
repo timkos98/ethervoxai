@@ -177,11 +177,11 @@ extern "C" {
 #endif
 #endif
 
-// Android-specific LLM configuration (high performance mobile)
-// TODO Let these settings set themselves upon loading based on the model details extracted from the GGUF file.
+// Android-specific LLM configuration
+// These get overriden if the Model file contains the relevant info. See device_profile.h 
 #ifdef ETHERVOX_PLATFORM_ANDROID
 #ifndef ETHERVOX_LLM_MAX_TOKENS_ANDROID
-#define ETHERVOX_LLM_MAX_TOKENS_ANDROID 200  // Longer responses for voice
+#define ETHERVOX_LLM_MAX_TOKENS_ANDROID 800  // Longer responses for voice
 #endif
 #ifndef ETHERVOX_LLM_CONTEXT_LENGTH_ANDROID
 #define ETHERVOX_LLM_CONTEXT_LENGTH_ANDROID 2048U  // Balance context vs memory
@@ -190,7 +190,7 @@ extern "C" {
 #define ETHERVOX_LLM_GPU_LAYERS_ANDROID 99U  // Offload everything to GPU
 #endif
 #ifndef ETHERVOX_LLM_BATCH_SIZE_ANDROID
-#define ETHERVOX_LLM_BATCH_SIZE_ANDROID 512U  // Batch size for generation (reduced for lower latency)
+#define ETHERVOX_LLM_BATCH_SIZE_ANDROID 64U  // Batch size for generation (reduced for lower latency)
 #endif
 #ifndef ETHERVOX_LLM_PROMPT_BATCH_SIZE_ANDROID
 #define ETHERVOX_LLM_PROMPT_BATCH_SIZE_ANDROID 64U  // Small batches for low latency (voice queries are short)
@@ -199,10 +199,6 @@ extern "C" {
 #define ETHERVOX_LLM_MAX_RESPONSE_LENGTH_ANDROID 4096U  // Maximum response buffer
 #endif
 #endif
-
-// ===========================================================================
-// Governor (Qwen2.5-3B-Instruct Quantized Tool Orchestration) Configuration
-// ===========================================================================
 
 #ifndef ETHERVOX_GOVERNOR_CONFIDENCE_THRESHOLD
 #define ETHERVOX_GOVERNOR_CONFIDENCE_THRESHOLD 0.85f  // 85% confidence required
