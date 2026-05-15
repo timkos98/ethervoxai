@@ -29,6 +29,9 @@
 #include "ethervox/timer_tools.h"    // Timer tools
 #include "ethervox/memory_tools.h"   // Memory tools
 #include "ethervox/unit_conversion.h" // Unit conversion tools
+#if HAVE_LIBCURL
+#include "ethervox/weather_tools.h"  // Weather forecast tools (requires libcurl)
+#endif
 #include "ethervox/conversation_tools.h" // Conversation tools (speak, listen)
 #include "ethervox/config.h"         // For version information
 #include "ethervox/dialogue.h"
@@ -719,6 +722,18 @@ ethervox_result_t ethervox_dialogue_init(ethervox_dialogue_engine_t* engine,
       printf("Registered unit conversion tool with Governor\n");
 #endif
     }
+    
+#if HAVE_LIBCURL
+    // Register weather forecast tool (requires libcurl)
+    if (ethervox_weather_tools_register(registry) == 0) {
+      tool_count++;
+#ifdef ETHERVOX_PLATFORM_ANDROID
+      ETHERVOX_LOGI("Registered weather forecast tool with Governor");
+#else
+      printf("Registered weather forecast tool with Governor\n");
+#endif
+    }
+#endif
     
     // Register conversation tools (speak, listen for LLM-controlled voice interaction)
     ethervox_result_t conv_tools_result = ethervox_conversation_tools_register(registry);

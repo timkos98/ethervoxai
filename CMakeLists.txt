@@ -700,6 +700,23 @@ file(GLOB WORKSPACE_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/works
 list(APPEND ETHERVOXAI_CORE_SOURCES ${WORKSPACE_TOOLS_SOURCES})
 message(STATUS "Workspace tools plugin sources included")
 
+# Check for libcurl availability (needed for weather tools)
+if(NOT ANDROID)
+    find_package(CURL QUIET)
+    if(CURL_FOUND)
+        set(HAVE_LIBCURL TRUE)
+    endif()
+endif()
+
+# Add weather tools plugin sources (Open-Meteo API integration - requires libcurl)
+if(HAVE_LIBCURL OR CURL_FOUND)
+    file(GLOB WEATHER_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/weather_tools/*.c")
+    list(APPEND ETHERVOXAI_CORE_SOURCES ${WEATHER_TOOLS_SOURCES})
+    message(STATUS "Weather tools plugin sources included (libcurl available)")
+else()
+    message(STATUS "Weather tools plugin SKIPPED (libcurl not available)")
+endif()
+
 # Note: Dialogue sources already added via initial GLOB (lines 596-603)
 # and filtered for Windows compatibility above
 
