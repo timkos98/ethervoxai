@@ -14,6 +14,7 @@
 #define ETHERVOX_GGUF_CONFIG_HELPER_H
 
 #include <stdint.h>
+#include <stddef.h>
 #include <stdbool.h>
 #include "ethervox/device_profile.h"
 

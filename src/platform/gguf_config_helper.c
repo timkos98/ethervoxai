@@ -2,8 +2,7 @@
  * @file gguf_config_helper.c
  * @brief Helper functions for extracting optimal config from GGUF metadata
  * 
- * FUTURE ENHANCEMENT - Stub implementation
- * Shows how GGUF metadata extraction would work when implemented.
+ * Real implementation using llama.cpp APIs
  * 
  * Copyright (c) 2024-2025 EthervoxAI Team
  * SPDX-License-Identifier: CC-BY-NC-SA-4.0
@@ -15,15 +14,12 @@
 #include <string.h>
 #include <stdlib.h>
 
-// Forward declare llama.cpp functions (avoid direct dependency)
-// These would be properly included via llama.h when implemented
-#ifdef LLAMA_CPP_AVAILABLE
-extern int llama_n_ctx_train(void* model);
-extern int llama_n_layer(void* model);
-extern int llama_n_embd(void* model);
-extern int llama_n_vocab(void* model);
-extern size_t llama_model_size(void* model);
-extern const char* llama_model_meta_val_str(void* model, const char* key);
+// Include llama.cpp headers when available
+#if defined(ETHERVOX_WITH_LLAMA) && defined(LLAMA_CPP_AVAILABLE) && LLAMA_CPP_AVAILABLE
+#include <llama.h>
+#define LLAMA_HEADER_AVAILABLE 1
+#else
+#define LLAMA_HEADER_AVAILABLE 0
 #endif
 
 /**
@@ -34,18 +30,28 @@ int ethervox_extract_model_metadata(void* model, ethervox_model_metadata_t* meta
         return -1;
     }
     
-#ifdef LLAMA_CPP_AVAILABLE
-    // Extract metadata using llama.cpp API
-    metadata->context_length_train = llama_n_ctx_train(model);
-    metadata->layer_count = llama_n_layer(model);
-    metadata->embedding_dims = llama_n_embd(model);
-    metadata->vocab_size = llama_n_vocab(model);
-    metadata->model_size_bytes = llama_model_size(model);
+#if LLAMA_HEADER_AVAILABLE
+    // Extract metadata using llama.cpp API (current API as of 2026)
+    struct llama_model* llama_model = (struct llama_model*)model;
+    
+    metadata->context_length_train = llama_model_n_ctx_train(llama_model);
+    metadata->layer_count = llama_model_n_layer(llama_model);
+    metadata->embedding_dims = llama_model_n_embd(llama_model);
+    metadata->model_size_bytes = llama_model_size(llama_model);
+    
+    // Get vocabulary size via vocab API
+    const struct llama_vocab* vocab = llama_model_get_vocab(llama_model);
+    if (vocab) {
+        metadata->vocab_size = llama_vocab_n_tokens(vocab);
+    } else {
+        metadata->vocab_size = 0;
+    }
     
     // Try to get architecture name
-    const char* arch = llama_model_meta_val_str(model, "general.architecture");
-    if (arch) {
-        snprintf(metadata->architecture, sizeof(metadata->architecture), "%s", arch);
+    char arch_buf[256] = {0};
+    int arch_len = llama_model_meta_val_str(llama_model, "general.architecture", arch_buf, sizeof(arch_buf));
+    if (arch_len > 0) {
+        snprintf(metadata->architecture, sizeof(metadata->architecture), "%s", arch_buf);
     } else {
         snprintf(metadata->architecture, sizeof(metadata->architecture), "unknown");
     }
@@ -55,12 +61,13 @@ int ethervox_extract_model_metadata(void* model, ethervox_model_metadata_t* meta
     ETHERVOX_LOG_INFO("  Context (trained): %d", metadata->context_length_train);
     ETHERVOX_LOG_INFO("  Layers: %d", metadata->layer_count);
     ETHERVOX_LOG_INFO("  Embedding dims: %d", metadata->embedding_dims);
+    ETHERVOX_LOG_INFO("  Vocab size: %d", metadata->vocab_size);
     ETHERVOX_LOG_INFO("  Model size: %.2f GB", metadata->model_size_bytes / (1024.0*1024.0*1024.0));
     
     return 0;
 #else
     // Stub: Return safe defaults when llama.cpp not available
-    ETHERVOX_LOG_WARN("[GGUF Metadata] llama.cpp not available, using defaults");
+    ETHERVOX_LOG_WARN("[GGUF Metadata] llama.cpp not available, using safe defaults");
     metadata->context_length_train = 2048;
     metadata->layer_count = 32;
     metadata->embedding_dims = 3072;
@@ -161,8 +168,9 @@ int ethervox_calculate_optimal_config(
     config->kv_cache_type = ethervox_device_profile_get_optimal_kv_cache_type();
     config->use_flash_attention = ethervox_device_profile_should_use_flash_attention();
     
-    // GPU layers (all if available, device profile doesn't detect GPU yet)
-    config->gpu_layers = 99;  // Offload all to GPU if available
+    // GPU layers: Use actual layer count from model (llama.cpp auto-adjusts if GPU unavailable)
+    // If we have the layer count, use it. Otherwise default to 99 (will be clamped by llama.cpp)
+    config->gpu_layers = (metadata->layer_count > 0) ? metadata->layer_count : 99;
     
     ETHERVOX_LOG_INFO("[Adaptive Config] Final settings:");
     ETHERVOX_LOG_INFO("  Context: %d", config->context_length);

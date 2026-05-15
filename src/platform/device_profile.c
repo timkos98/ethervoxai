@@ -56,13 +56,24 @@ static int detect_cpu_cores(void) {
 
 /**
  * Detect total and available RAM
+ * 
+ * NOTE: On Android, sysinfo.freeram only shows truly unused RAM (very low!).
+ * Android intentionally uses most RAM for caching. We estimate "usable RAM"
+ * as 50% of total RAM, which accounts for system, apps, and our model.
  */
 static void detect_memory(long* total_mb, long* available_mb) {
 #ifdef __ANDROID__
   struct sysinfo info;
   if (sysinfo(&info) == 0) {
     *total_mb = info.totalram / (1024 * 1024);
-    *available_mb = info.freeram / (1024 * 1024);
+    
+    // Android memory management: Don't trust freeram (it's too conservative)
+    // Estimate usable RAM as 50% of total (accounts for system + other apps)
+    // This gives us a realistic estimate of what we can safely use
+    *available_mb = (*total_mb) / 2;
+    
+    ETHERVOX_LOG_DEBUG("[Device Profile] RAM: total=%ld MB, freeram=%ld MB, usable=%ld MB",
+                       *total_mb, info.freeram / (1024 * 1024), *available_mb);
     return;
   }
 #endif
@@ -155,7 +166,7 @@ void ethervox_device_profile_init(void) {
   ETHERVOX_LOG_INFO("  SoC: %s", g_device_caps.soc_name);
   ETHERVOX_LOG_INFO("  CPU Cores: %d", g_device_caps.cpu_cores);
   ETHERVOX_LOG_INFO("  Total RAM: %ld MB", g_device_caps.total_ram_mb);
-  ETHERVOX_LOG_INFO("  Available RAM: %ld MB", g_device_caps.available_ram_mb);
+  ETHERVOX_LOG_INFO("  Usable RAM: %ld MB (50%% estimate for safety)", g_device_caps.available_ram_mb);
   ETHERVOX_LOG_INFO("  NEON Support: %s", g_device_caps.has_neon ? "YES" : "NO");
   ETHERVOX_LOG_INFO("  Device Tier: %s", tier_names[g_device_caps.tier]);
 }

@@ -730,6 +730,7 @@ elseif(WIN32 OR TARGET_PLATFORM STREQUAL "WINDOWS")
         src/platform/desktop_hal.c
         src/platform/windows_stubs.c  # Stubs for excluded features
         src/platform/device_profile.c  # Hardware detection and adaptive configuration (needed for governor)
+        src/platform/gguf_config_helper.c  # GGUF metadata extraction and config calculation
     )
 elseif(APPLE OR TARGET_PLATFORM STREQUAL "MACOS")
     message(STATUS "Building for macOS - using macOS platform sources")
@@ -737,6 +738,7 @@ elseif(APPLE OR TARGET_PLATFORM STREQUAL "MACOS")
         src/audio/platform_macos.c
         src/platform/desktop_hal.c
         src/platform/device_profile.c  # Hardware detection and adaptive configuration (needed for governor)
+        src/platform/gguf_config_helper.c  # GGUF metadata extraction and config calculation
     )
 elseif(ANDROID OR TARGET_PLATFORM STREQUAL "ANDROID")
     message(STATUS "Building for Android - using Android platform sources")
@@ -744,6 +746,7 @@ elseif(ANDROID OR TARGET_PLATFORM STREQUAL "ANDROID")
         src/audio/platform_android.c
         src/platform/android_hal.c
         src/platform/device_profile.c  # Hardware detection and adaptive configuration
+        src/platform/gguf_config_helper.c  # GGUF metadata extraction and config calculation
     )
 else()
     message(STATUS "Building for Linux - using Linux platform sources")
@@ -752,6 +755,7 @@ else()
         src/audio/platform_linux.c
         src/platform/desktop_hal.c
         src/platform/device_profile.c  # Hardware detection and adaptive configuration (needed for governor)
+        src/platform/gguf_config_helper.c  # GGUF metadata extraction and config calculation
     )
 endif()
 

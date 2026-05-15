@@ -98,6 +98,27 @@ target_include_directories(test_tool_manifest PRIVATE ${CMAKE_SOURCE_DIR}/includ
 add_test(NAME ToolManifest COMMAND test_tool_manifest)
 set_tests_properties(ToolManifest PROPERTIES TIMEOUT 30 LABELS "unit;tool_manifest")
 
+# Device profiling tests (adaptive hardware detection)
+add_executable(test_device_profile unit/test_device_profile.c)
+target_link_libraries(test_device_profile ethervoxai)
+target_include_directories(test_device_profile PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME DeviceProfile COMMAND test_device_profile)
+set_tests_properties(DeviceProfile PROPERTIES TIMEOUT 30 LABELS "unit;adaptive")
+
+# GGUF config helper tests (model metadata extraction and optimal config)
+add_executable(test_gguf_config unit/test_gguf_config.c)
+target_link_libraries(test_gguf_config ethervoxai)
+target_include_directories(test_gguf_config PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME GGUFConfig COMMAND test_gguf_config)
+set_tests_properties(GGUFConfig PROPERTIES TIMEOUT 30 LABELS "unit;adaptive")
+
+# GGUF metadata extraction test (requires model file, manual test)
+add_executable(test_gguf_metadata_real test_gguf_metadata_real.c)
+target_link_libraries(test_gguf_metadata_real ethervoxai)
+target_include_directories(test_gguf_metadata_real PRIVATE ${CMAKE_SOURCE_DIR}/include)
+# Run manually: ./tests/test_gguf_metadata_real [model_path.gguf]
+# Example: ./tests/test_gguf_metadata_real ~/.ethervox/models/governor/granite-4.0-h-1b-Q4_K_M.gguf
+
 # Tool Manifest System benchmarks (not a test, run manually)
 add_executable(benchmark_tool_manifest benchmark_tool_manifest.c)
 target_link_libraries(benchmark_tool_manifest ethervoxai)
