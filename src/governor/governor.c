@@ -2553,18 +2553,30 @@ ethervox_governor_status_t ethervox_governor_execute(
         
         if (!inside_tool_call && strstr(llm_response_buffer, "<tool_call")) {
           inside_tool_call = true;
+          GOV_LOG("Tool call started, continuing generation to capture complete call");
         }
         
         if (inside_tool_call) {
           // Check if exiting tool call
+          bool tool_call_complete = false;
           if (tool_format == TOOL_FORMAT_JSON_IN_XML) {
             if (strstr(llm_response_buffer, "</tool_call>")) {
               inside_tool_call = false;
+              tool_call_complete = true;
             }
           } else {
             if (strstr(llm_response_buffer, "/>")) {
               inside_tool_call = false;
+              tool_call_complete = true;
             }
+          }
+          
+          // CRITICAL FIX: Stop generation immediately after tool call completion
+          // Previously, we only updated the flag but continued generating, causing
+          // the model to hallucinate explanatory text after the tool call
+          if (tool_call_complete && governor->tool_execution_enabled) {
+            GOV_LOG("Complete tool call detected (format=%d), ending generation immediately", tool_format);
+            break;  // Exit generation loop - tool call is ready for execution
           }
         }
         
@@ -2770,11 +2782,14 @@ ethervox_governor_status_t ethervox_governor_execute(
       generated_count++;
 
       // Early stopping conditions to prevent hallucination
-      // 1. Stop immediately after tool_call closing tag (only if tool execution is enabled)
-      if (governor->tool_execution_enabled && strstr(llm_response_buffer, "<tool_call") &&
-          strstr(llm_response_buffer, "/>")) {
-        GOV_LOG("Early stop: Tool call completed (%d tokens)", generated_count);
-        break;  // Tool call complete, stop immediately
+      // 1. Safety net: Stop immediately after tool_call closing tag (only if tool execution is enabled)
+      // This is a backup check - main check happens during token streaming above
+      if (governor->tool_execution_enabled && strstr(llm_response_buffer, "<tool_call")) {
+        // Check for both self-closing and XML closing formats
+        if (strstr(llm_response_buffer, "/>") || strstr(llm_response_buffer, "</tool_call>")) {
+          GOV_LOG("Early stop safety net: Tool call completed (%d tokens)", generated_count);
+          break;  // Tool call complete, stop immediately
+        }
       }
 
       // 2. Check for stop sequences DURING streaming (early detection)
