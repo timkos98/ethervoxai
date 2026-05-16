@@ -429,22 +429,30 @@ ethervox_result_t ethervox_tool_registry_build_system_prompt(
             remaining -= tool_written;
         }
         
-        // Close tools and add list of ALL available tools
-        int tools_list_written = snprintf(ptr, remaining, "</tools>\n\nOther available tools (use get_tool_info to learn about these):\n");
+        // Close tools and add comma-separated list of ALL available tools
+        int tools_list_written = snprintf(ptr, remaining, "</tools>\n\nOther available tools (use get_tool_info to learn about these): ");
         if (tools_list_written < 0 || (size_t)tools_list_written >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;
         ptr += tools_list_written;
         remaining -= tools_list_written;
         
-        // List all non-fast-path tools by name only
+        // List all non-fast-path tools as comma-separated (token-efficient)
+        bool first_tool = true;
         for (uint32_t i = 0; i < registry->tool_count; i++) {
             const ethervox_tool_t* tool = &registry->tools[i];
             if (is_fast_path_tool(tool->name)) continue;  // Skip fast-path tools already listed
             
-            int name_written = snprintf(ptr, remaining, "  - %s\n", tool->name);
+            int name_written = snprintf(ptr, remaining, "%s%s", first_tool ? "" : ", ", tool->name);
             if (name_written < 0 || (size_t)name_written >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;
             ptr += name_written;
             remaining -= name_written;
+            first_tool = false;
         }
+        
+        // Add newline after tool list
+        int newline_written = snprintf(ptr, remaining, "\n");
+        if (newline_written < 0 || (size_t)newline_written >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;
+        ptr += newline_written;
+        remaining -= newline_written;
         
         // Add calling instructions
         int instr_written = snprintf(ptr, remaining,
@@ -459,9 +467,9 @@ ethervox_result_t ethervox_tool_registry_build_system_prompt(
             "After </tool_call>, generation STOPS. System executes tool and provides <tool_result>.\n"
             "Then respond naturally using the factual tool results.\n\n"
             "EXAMPLE - Tool discovery flow:\n"
-            "<tool_call>\n{\"name\": \"get_tool_info\", \"arguments\": {\"tool_name\": \"memory_search\"}}\n</tool_call>\n"
+            "<tool_call>\n{\"name\": \"get_tool_info\", \"arguments\": {\"tool_name\": \"get_weather_forecast\"}}\n</tool_call>\n"
             "[System returns schema]\n"
-            "<tool_call>\n{\"name\": \"memory_search\", \"arguments\": {\"query\": \"user preferences\"}}\n</tool_call>\n\n");
+            "<tool_call>\n{\"name\": \"get_weather_forecast\", \"arguments\": {\"location\": \"Berlin\"}}\n</tool_call>\n\n");
             
         // NOTE: Do NOT append system_end marker - tokenizer handles it automatically
             
@@ -535,10 +543,10 @@ ethervox_result_t ethervox_tool_registry_build_system_prompt(
         // Use default examples based on platform
         const char* usage_section = is_mobile
             ? "\nEXAMPLE - Discover tool:\n"
-              "<tool_call name=\"get_tool_info\" tool_name=\"memory_search\" />\n"
+              "<tool_call name=\"get_tool_info\" tool_name=\"get_weather_forecast\" />\n"
             : "\nEXAMPLE - Discovering a tool:\n"
-              "<tool_call name=\"get_tool_info\" tool_name=\"memory_search\" />\n"
-              "Then: <tool_call name=\"memory_search\" query=\"user preferences\" />\n\n";
+              "<tool_call name=\"get_tool_info\" tool_name=\"get_weather_forecast\" />\n"
+              "Then: <tool_call name=\"get_weather_forecast\" location=\"Berlin\" />\n\n";
         
         int instr_written = snprintf(ptr, remaining, "%s", usage_section);
         if (instr_written < 0 || (size_t)instr_written >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;
