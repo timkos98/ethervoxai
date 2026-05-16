@@ -264,9 +264,17 @@ static bool process_json_entry(ethervox_memory_store_t* store, const char* line)
     timestamp = strtol(strchr(ts_ptr, ':') + 1, NULL, 10);
     importance = strtof(strchr(imp_ptr, ':') + 1, NULL);
     
-    // Check is_user boolean
-    if (strstr(user_ptr, "true")) {
-        is_user = true;
+    // Check is_user boolean - only check the value immediately after the colon
+    // Find the value start (skip whitespace after colon)
+    char* user_value = strchr(user_ptr, ':');
+    if (user_value) {
+        user_value++;  // Skip colon
+        while (*user_value == ' ' || *user_value == '\t') user_value++;
+        
+        // Check if value starts with 'true' (not just contains it somewhere)
+        if (strncmp(user_value, "true", 4) == 0) {
+            is_user = true;
+        }
     }
     
     // Extract text field
