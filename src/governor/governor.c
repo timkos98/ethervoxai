@@ -3372,6 +3372,26 @@ ethervox_governor_status_t ethervox_governor_execute(
       memmove(marker, marker + marker_len, strlen(marker + marker_len) + 1);
       GOV_LOG("Removed <|end_of_text|> marker from response");
     }
+    
+    // CRITICAL FIX: Remove trailing single-character stop sequence prefixes
+    // When min_prefix=2, single "<" can slip through and get stored to memory.
+    // Check if response ends with "<" and trim it before storing.
+    size_t final_len = strlen(llm_response_buffer);
+    if (final_len > 0 && llm_response_buffer[final_len - 1] == '<') {
+      // Check if this could be a stop sequence prefix
+      bool is_stop_prefix = false;
+      for (int i = 0; i < stop_sequence_count && stop_sequences_ptr[i] != NULL; i++) {
+        if (stop_sequences_ptr[i][0] == '<') {
+          is_stop_prefix = true;
+          break;
+        }
+      }
+      
+      if (is_stop_prefix) {
+        llm_response_buffer[final_len - 1] = '\0';
+        GOV_LOG("Removed trailing '<' (potential stop sequence prefix) from response before storage");
+      }
+    }
 
     const char* llm_response = llm_response_buffer;
     GOV_LOG("Generated response: %s", llm_response);
