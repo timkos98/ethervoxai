@@ -396,7 +396,7 @@ ethervox_result_t ethervox_tool_registry_build_system_prompt(
         // The tokenizer handles these automatically as special tokens.
         written = snprintf(ptr, remaining,
             "You are a helpful assistant with access to tools. "
-            "When generating stories or creative content, write complete narratives with proper endings. "
+            "When generating stories or creative content, write complete narratives with proper endings. Respond in the language in which you are addressed."
             "For conversations: Only generate YOUR response, then STOP. DO NOT generate the user's next message. "
             "You are provided with function signatures within <tools></tools> XML tags:\n<tools>\n");
         
@@ -459,9 +459,9 @@ ethervox_result_t ethervox_tool_registry_build_system_prompt(
             "After </tool_call>, generation STOPS. System executes tool and provides <tool_result>.\n"
             "Then respond naturally using the factual tool results.\n\n"
             "EXAMPLE - Tool discovery flow:\n"
-            "<tool_call>\n{\"name\": \"get_tool_info\", \"arguments\": {\"tool_name\": \"weather_get\"}}\n</tool_call>\n"
+            "<tool_call>\n{\"name\": \"get_tool_info\", \"arguments\": {\"tool_name\": \"memory_search\"}}\n</tool_call>\n"
             "[System returns schema]\n"
-            "<tool_call>\n{\"name\": \"weather_get\", \"arguments\": {\"location\": \"Berlin\"}}\n</tool_call>\n\n");
+            "<tool_call>\n{\"name\": \"memory_search\", \"arguments\": {\"query\": \"user preferences\"}}\n</tool_call>\n\n");
             
         // NOTE: Do NOT append system_end marker - tokenizer handles it automatically
             
@@ -535,10 +535,10 @@ ethervox_result_t ethervox_tool_registry_build_system_prompt(
         // Use default examples based on platform
         const char* usage_section = is_mobile
             ? "\nEXAMPLE - Discover tool:\n"
-              "<tool_call name=\"get_tool_info\" tool_name=\"weather_get\" />\n"
+              "<tool_call name=\"get_tool_info\" tool_name=\"memory_search\" />\n"
             : "\nEXAMPLE - Discovering a tool:\n"
-              "<tool_call name=\"get_tool_info\" tool_name=\"weather_get\" />\n"
-              "Then: <tool_call name=\"weather_get\" location=\"Berlin\" />\n\n";
+              "<tool_call name=\"get_tool_info\" tool_name=\"memory_search\" />\n"
+              "Then: <tool_call name=\"memory_search\" query=\"user preferences\" />\n\n";
         
         int instr_written = snprintf(ptr, remaining, "%s", usage_section);
         if (instr_written < 0 || (size_t)instr_written >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;
