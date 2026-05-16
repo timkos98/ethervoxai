@@ -418,6 +418,15 @@ bool ethervox_governor_is_loaded(ethervox_governor_t* governor);
 float ethervox_governor_get_kv_cache_usage(ethervox_governor_t* governor, int32_t* current_pos, int32_t* context_size);
 
 /**
+ * Get full KV cache contents as decoded text string
+ * Useful for debugging context issues and hallucination problems
+ *
+ * @param governor Governor instance
+ * @return Malloc'd string containing decoded KV cache content (caller must free), or NULL if tracking disabled or model not loaded
+ */
+char* ethervox_governor_get_kv_cache_contents(ethervox_governor_t* governor);
+
+/**
  * Execute user query with tool orchestration
  *
  * @param governor Governor instance

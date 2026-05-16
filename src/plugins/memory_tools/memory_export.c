@@ -386,6 +386,8 @@ static bool process_json_entry(ethervox_memory_store_t* store, const char* line)
         strcpy(tag_storage[tag_count], "imported");
         tag_array[tag_count] = tag_storage[tag_count];
         tag_count++;
+        ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
+                    "Added 'imported' tag (total tags now: %u)", tag_count);
     }
     
     // Ensure at least one tag
@@ -395,11 +397,92 @@ static bool process_json_entry(ethervox_memory_store_t* store, const char* line)
         tag_count = 1;
     }
     
+    // Parse tools array (if present)
+    char tools_storage[16][64];
+    uint32_t tools_count = 0;
+    
+    char* tools_start = strstr(line, "\"tools\":");
+    if (tools_start) {
+        ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
+                    "Found tools field in JSONL line");
+        tools_start = strchr(tools_start, '[');
+        if (tools_start) {
+            tools_start++;  // Skip '['
+            char* tools_end = strchr(tools_start, ']');
+            
+            if (tools_end) {
+                char* tool_cursor = tools_start;
+                while (tool_cursor < tools_end && tools_count < 16) {
+                    // Skip whitespace and commas
+                    while (tool_cursor < tools_end && (*tool_cursor == ' ' || *tool_cursor == ',' || 
+                           *tool_cursor == '\n' || *tool_cursor == '\r' || *tool_cursor == '\t')) {
+                        tool_cursor++;
+                    }
+                    
+                    if (*tool_cursor == '"') {
+                        tool_cursor++;  // Skip opening quote
+                        char* tool_end = tool_cursor;
+                        
+                        // Find closing quote
+                        while (tool_end < tools_end && *tool_end != '"') {
+                            tool_end++;
+                        }
+                        
+                        if (tool_end < tools_end && *tool_end == '"') {
+                            size_t tool_len = tool_end - tool_cursor;
+                            if (tool_len > 0 && tool_len < 64) {
+                                memcpy(tools_storage[tools_count], tool_cursor, tool_len);
+                                tools_storage[tools_count][tool_len] = '\0';
+                                ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
+                                            "Parsed tool %u: '%s'", tools_count, tools_storage[tools_count]);
+                                tools_count++;
+                            }
+                            tool_cursor = tool_end + 1;
+                        } else {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    
     // Add memory with original metadata
     uint64_t memory_id_out;
-    return (memory_store_add_internal(store, text, tag_array, tag_count,
+    ethervox_result_t result = memory_store_add_internal(store, text, tag_array, tag_count,
                                      importance, is_user, id, turn_id,
-                                     timestamp, &memory_id_out) == 0);
+                                     timestamp, &memory_id_out);
+    
+    // If tools were found, add them to the entry
+    if (result == 0 && tools_count > 0) {
+        ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
+                    "Attempting to set %u tools on memory ID %llu", 
+                    tools_count, (unsigned long long)memory_id_out);
+        // Find the entry we just added and set its tools
+        bool found = false;
+        for (uint32_t i = 0; i < store->entry_count; i++) {
+            if (store->entries[i].memory_id == memory_id_out) {
+                store->entries[i].tools_called_count = tools_count;
+                for (uint32_t t = 0; t < tools_count; t++) {
+                    snprintf(store->entries[i].tools_called[t], 64, "%s", tools_storage[t]);
+                }
+                ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
+                            "Successfully set %u tools on memory ID %llu", 
+                            tools_count, (unsigned long long)memory_id_out);
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            ethervox_log(ETHERVOX_LOG_LEVEL_WARN, __FILE__, __LINE__, __func__,
+                        "Failed to find entry with memory ID %llu to set tools", 
+                        (unsigned long long)memory_id_out);
+        }
+    }
+    
+    return (result == 0);
 }
 
 ethervox_result_t ethervox_memory_import(

@@ -150,6 +150,12 @@ struct ethervox_governor {
   char* model_path;
 #endif
 
+  // KV Cache Debugging - Track all tokens for full cache dumps
+  llama_token* kv_cache_tokens;  // All tokens currently in KV cache
+  int kv_cache_tokens_capacity;  // Allocated capacity
+  int kv_cache_tokens_count;     // Actual count
+  bool kv_cache_tracking_enabled; // Enable/disable tracking (memory intensive)
+
   // State tracking
   uint32_t last_iteration_count;
   bool initialized;
@@ -167,6 +173,157 @@ struct ethervox_governor {
   // Chat template for formatting
   const chat_template_t* chat_template;
 };
+
+// ============================================================================
+// KV Cache Debugging Functions
+// ============================================================================
+
+#if defined(ETHERVOX_WITH_LLAMA) && LLAMA_HEADER_AVAILABLE
+
+/**
+ * Track tokens added to KV cache for debugging
+ */
+static void track_kv_cache_tokens(struct ethervox_governor* governor, const llama_token* tokens, int n_tokens) {
+  if (!governor || !governor->kv_cache_tracking_enabled || !tokens || n_tokens <= 0) {
+    return;
+  }
+
+  // Ensure capacity
+  int required_capacity = governor->kv_cache_tokens_count + n_tokens;
+  if (required_capacity > governor->kv_cache_tokens_capacity) {
+    int new_capacity = required_capacity * 2;
+    error_context_t track_error = {0};
+    llama_token* new_buffer = (llama_token*)safe_realloc(
+        governor->kv_cache_tokens, 
+        new_capacity * sizeof(llama_token),
+        &track_error);
+    if (!new_buffer) {
+      GOV_ERROR("Failed to expand KV cache tracking buffer: %s", 
+                error_context_get_message(&track_error));
+      return;
+    }
+    governor->kv_cache_tokens = new_buffer;
+    governor->kv_cache_tokens_capacity = new_capacity;
+  }
+
+  // Append tokens
+  memcpy(governor->kv_cache_tokens + governor->kv_cache_tokens_count, 
+         tokens, 
+         n_tokens * sizeof(llama_token));
+  governor->kv_cache_tokens_count += n_tokens;
+}
+
+/**
+ * Dump entire KV cache contents to log (decoded to text)
+ */
+static void dump_kv_cache_contents(struct ethervox_governor* governor) {
+  if (!governor || !governor->kv_cache_tracking_enabled || !governor->kv_cache_tokens) {
+    GOV_LOG("KV cache tracking not enabled or no tokens tracked");
+    return;
+  }
+
+  GOV_LOG("=== KV CACHE DUMP (%d tokens) ===", governor->kv_cache_tokens_count);
+  
+  const struct llama_vocab* vocab = llama_model_get_vocab(governor->llm_model);
+  char full_text[65536] = {0};
+  int text_pos = 0;
+  
+  // Decode all tokens
+  for (int i = 0; i < governor->kv_cache_tokens_count && text_pos < sizeof(full_text) - 128; i++) {
+    char token_str[128];
+    int token_len = llama_token_to_piece(vocab, governor->kv_cache_tokens[i], 
+                                          token_str, sizeof(token_str), 0, false);
+    if (token_len > 0 && token_len < sizeof(token_str)) {
+      token_str[token_len] = '\0';
+      int remaining = sizeof(full_text) - text_pos - 1;
+      if (token_len < remaining) {
+        memcpy(full_text + text_pos, token_str, token_len);
+        text_pos += token_len;
+      }
+    }
+  }
+  full_text[text_pos] = '\0';
+  
+  // Log in chunks (logcat has ~4KB line limit)
+  GOV_LOG("Total decoded length: %d chars", text_pos);
+  const int chunk_size = 1000;
+  for (int i = 0; i < text_pos; i += chunk_size) {
+    int remaining = text_pos - i;
+    int current_chunk = remaining < chunk_size ? remaining : chunk_size;
+    
+    char chunk[chunk_size + 1];
+    memcpy(chunk, full_text + i, current_chunk);
+    chunk[current_chunk] = '\0';
+    
+    GOV_LOG("[KV_CACHE][%d-%d]: %s", i, i + current_chunk - 1, chunk);
+  }
+  
+  GOV_LOG("=== END KV CACHE DUMP ===");
+}
+
+/**
+ * Get KV cache contents as string (for UI display)
+ * Returns malloc'd string that caller must free, or NULL if tracking disabled
+ */
+static char* get_kv_cache_contents_string(struct ethervox_governor* governor) {
+  if (!governor || !governor->kv_cache_tracking_enabled || !governor->kv_cache_tokens) {
+    return NULL;
+  }
+  
+  if (!governor->llm_model) {
+    return NULL;
+  }
+  
+  const struct llama_vocab* vocab = llama_model_get_vocab(governor->llm_model);
+  
+  // Allocate large buffer for full cache contents (2MB should be enough)
+  size_t buffer_size = 2 * 1024 * 1024;
+  char* full_text = (char*)malloc(buffer_size);
+  if (!full_text) {
+    return NULL;
+  }
+  
+  int text_pos = 0;
+  
+  // Decode all tokens
+  for (int i = 0; i < governor->kv_cache_tokens_count && text_pos < buffer_size - 256; i++) {
+    char token_str[256];
+    int token_len = llama_token_to_piece(vocab, governor->kv_cache_tokens[i], 
+                                          token_str, sizeof(token_str), 0, false);
+    if (token_len > 0 && token_len < sizeof(token_str)) {
+      token_str[token_len] = '\0';
+      int remaining = buffer_size - text_pos - 1;
+      if (token_len < remaining) {
+        memcpy(full_text + text_pos, token_str, token_len);
+        text_pos += token_len;
+      }
+    }
+  }
+  full_text[text_pos] = '\0';
+  
+  return full_text;
+}
+
+/**
+ * Reset KV cache tracking after clear
+ */
+static void reset_kv_cache_tracking(struct ethervox_governor* governor, int start_pos) {
+  if (!governor || !governor->kv_cache_tracking_enabled) {
+    return;
+  }
+  
+  if (start_pos == 0) {
+    // Full clear
+    governor->kv_cache_tokens_count = 0;
+    GOV_LOG("[KV_TRACK] Full reset - cleared all tracked tokens");
+  } else if (start_pos < governor->kv_cache_tokens_count) {
+    // Partial clear - keep tokens before start_pos
+    governor->kv_cache_tokens_count = start_pos;
+    GOV_LOG("[KV_TRACK] Partial reset - kept %d tokens", start_pos);
+  }
+}
+
+#endif  // ETHERVOX_WITH_LLAMA
 
 // ============================================================================
 // Helper Function Implementations (Summary Loading)
@@ -234,6 +391,12 @@ static int load_tokens_to_kv_cache(struct ethervox_governor* governor, const lla
     }
 
     int decode_result = llama_decode(governor->llm_ctx, batch);
+    
+    if (decode_result == 0) {
+      // Track tokens successfully added to KV cache
+      track_kv_cache_tokens(governor, &tokens[i], chunk_len);
+    }
+    
     llama_batch_free(batch);
 
     if (decode_result != 0) {
@@ -1335,6 +1498,9 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
       return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
 
+    // Track tokens added to KV cache for debugging
+    track_kv_cache_tokens(governor, &tokens[i], chunk_len);
+
     // Report progress after each chunk
     int tokens_processed = i + chunk_len;
     float progress = (float)tokens_processed / (float)n_tokens;
@@ -1384,6 +1550,10 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
   
   const char* prefix = governor->chat_template->tool_result_start;
   const char* suffix = governor->chat_template->tool_result_end;
+  
+  GOV_LOG("Pre-tokenizing tool result wrappers:");
+  GOV_LOG("  Prefix text: '%s'", prefix);
+  GOV_LOG("  Suffix text: '%s'", suffix);
 
   governor->tool_result_prefix_len =
       -llama_tokenize(vocab, prefix, strlen(prefix), NULL, 0, false, false);
@@ -1392,6 +1562,20 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
   if (governor->tool_result_prefix_tokens) {
     llama_tokenize(vocab, prefix, strlen(prefix), governor->tool_result_prefix_tokens,
                    governor->tool_result_prefix_len, false, false);
+    
+    // Decode back to verify
+    char prefix_verify[512] = {0};
+    for (int i = 0; i < governor->tool_result_prefix_len && i < 50; i++) {
+      char token_str[64];
+      int token_len = llama_token_to_piece(vocab, governor->tool_result_prefix_tokens[i],
+                                            token_str, sizeof(token_str), 0, false);
+      if (token_len > 0 && token_len < sizeof(token_str)) {
+        token_str[token_len] = '\0';
+        strncat(prefix_verify, token_str, sizeof(prefix_verify) - strlen(prefix_verify) - 1);
+      }
+    }
+    GOV_LOG("  Prefix tokenized to %d tokens, decodes to: '%s'",
+            governor->tool_result_prefix_len, prefix_verify);
   }
 
   governor->tool_result_suffix_len =
@@ -1401,6 +1585,20 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
   if (governor->tool_result_suffix_tokens) {
     llama_tokenize(vocab, suffix, strlen(suffix), governor->tool_result_suffix_tokens,
                    governor->tool_result_suffix_len, false, false);
+    
+    // Decode back to verify
+    char suffix_verify[512] = {0};
+    for (int i = 0; i < governor->tool_result_suffix_len && i < 50; i++) {
+      char token_str[64];
+      int token_len = llama_token_to_piece(vocab, governor->tool_result_suffix_tokens[i],
+                                            token_str, sizeof(token_str), 0, false);
+      if (token_len > 0 && token_len < sizeof(token_str)) {
+        token_str[token_len] = '\0';
+        strncat(suffix_verify, token_str, sizeof(suffix_verify) - strlen(suffix_verify) - 1);
+      }
+    }
+    GOV_LOG("  Suffix tokenized to %d tokens, decodes to: '%s'",
+            governor->tool_result_suffix_len, suffix_verify);
   }
 
   governor->llm_loaded = true;
@@ -1555,6 +1753,17 @@ float ethervox_governor_get_kv_cache_usage(ethervox_governor_t* governor, int32_
 }
 
 /**
+ * Get full KV cache contents as decoded text string
+ */
+char* ethervox_governor_get_kv_cache_contents(ethervox_governor_t* governor) {
+  if (!governor) {
+    return NULL;
+  }
+  
+  return get_kv_cache_contents_string(governor);
+}
+
+/**
  * Initialize Governor with configuration
  */
 ethervox_result_t ethervox_governor_init(ethervox_governor_t** governor,
@@ -1592,6 +1801,12 @@ ethervox_result_t ethervox_governor_init(ethervox_governor_t** governor,
   gov->interrupt_requested = false;    // No interrupt pending
   gov->system_prompt_tokens = NULL;
   gov->system_prompt_tokens_len = 0;
+
+  // Initialize KV cache tracking for debugging
+  gov->kv_cache_tokens = NULL;
+  gov->kv_cache_tokens_capacity = 0;
+  gov->kv_cache_tokens_count = 0;
+  gov->kv_cache_tracking_enabled = true;  // Enable by default for debugging
 
   // Initialize context manager
   memset(&gov->context_manager, 0, sizeof(context_manager_state_t));
@@ -1709,6 +1924,9 @@ ethervox_governor_status_t ethervox_governor_execute_with_context(
 /**
  * Check if text ends with a prefix of any stop sequence
  * Used by lookahead buffer to detect potential stop sequence formation
+ * 
+ * IMPORTANT: Requires at least 2 characters to match to avoid false positives
+ * from single characters like '<' that appear in normal text
  */
 static bool is_potential_stop_prefix_check(const chat_template_t* template, const char* text) {
   if (!template || !text) return false;
@@ -1725,7 +1943,10 @@ static bool is_potential_stop_prefix_check(const chat_template_t* template, cons
     size_t stop_len = strlen(stop_seq);
     
     // Check if text could be building up to this stop sequence
-    for (size_t prefix_len = 1; prefix_len < stop_len && prefix_len <= text_len; prefix_len++) {
+    // CRITICAL FIX: Start from prefix_len=2 to avoid false positives on single chars like '<'
+    // Single character matches are too ambiguous (could be '<' in story text, not a stop sequence)
+    size_t min_prefix = (stop_len >= 2) ? 2 : 1;  // Require 2 chars unless stop sequence is only 1 char
+    for (size_t prefix_len = min_prefix; prefix_len < stop_len && prefix_len <= text_len; prefix_len++) {
       const char* text_suffix = text + (text_len - prefix_len);
       if (strncmp(text_suffix, stop_seq, prefix_len) == 0) {
         return true;  // Text ends with a prefix of a stop sequence
@@ -1929,6 +2150,9 @@ ethervox_governor_status_t ethervox_governor_execute(
     // Now clear the KV cache
     llama_memory_seq_rm(mem, 0, governor->system_prompt_token_count, -1);
 
+    // Reset KV cache tracking - partial clear (keep system prompt)
+    reset_kv_cache_tracking(governor, governor->system_prompt_token_count);
+
     // CRITICAL: After removal, re-query the actual max position
     // llama_memory_seq_rm doesn't immediately update internal position tracking
     // We must verify what llama.cpp thinks the position is NOW
@@ -1943,6 +2167,9 @@ ethervox_governor_status_t ethervox_governor_execute(
       actual_max = llama_memory_seq_pos_max(mem, 0);
       needed_nuclear_clear = true;
       GOV_LOG("Nuclear clear: completely wiped KV cache, max_pos now: %d", actual_max);
+      
+      // Reset KV cache tracking - full clear (nothing left)
+      reset_kv_cache_tracking(governor, 0);
     }
 
     // Use the actual max position from llama.cpp, or system_prompt_token_count if empty
@@ -1994,6 +2221,9 @@ ethervox_governor_status_t ethervox_governor_execute(
             llama_batch_free(batch);
             break;
           }
+          
+          // Track restored tokens
+          track_kv_cache_tokens(governor, &governor->system_prompt_tokens[i], chunk_len);
 
           llama_batch_free(batch);
         }
@@ -2300,6 +2530,9 @@ ethervox_governor_status_t ethervox_governor_execute(
         return ETHERVOX_GOVERNOR_ERROR;
       }
 
+      // Track tokens added to KV cache
+      track_kv_cache_tokens(governor, tokens, n_tokens);
+
       llama_batch_free(batch);
       free(tokens);
 
@@ -2482,29 +2715,11 @@ ethervox_governor_status_t ethervox_governor_execute(
               next_token);
           break;
         } else {
-          // Check if response ends with incomplete sentence markers
-          bool seems_incomplete = false;
-          size_t resp_len = strlen(llm_response_buffer);
-          if (resp_len > 0) {
-            // Check last few characters for incompleteness
-            const char* tail = llm_response_buffer + (resp_len > 50 ? resp_len - 50 : 0);
-            // If ends with comma, ellipsis, or no punctuation, it's incomplete
-            if (strrchr(tail, ',') && !strrchr(tail, '.') && !strrchr(tail, '!') && !strrchr(tail, '?')) {
-              seems_incomplete = true;
-            } else if (resp_len < 100) {
-              // Very short responses are probably incomplete
-              seems_incomplete = true;
-            }
-          }
-          
-          if (seems_incomplete && generated_count < 150) {
-            GOV_LOG("EOG detected at %d tokens but response seems incomplete, continuing...", generated_count);
-            // Don't break, let it continue generating
-          } else {
-            GOV_LOG("Stopping generation: EOG token detected (id=%d) after %d tokens", next_token,
-                    generated_count);
-            break;
-          }
+          // FIXED: Trust the model's EOG token - it knows when it's done
+          // Don't second-guess with "seems incomplete" heuristics that cause hallucination
+          GOV_LOG("Stopping generation: EOG token detected (id=%d) after %d tokens", 
+                  next_token, generated_count);
+          break;
         }
       }
 
@@ -2775,8 +2990,10 @@ ethervox_governor_status_t ethervox_governor_execute(
         // ========================================================================
         // Check for stop sequences using template's sequences
         bool found_complete_stop = false;
+        bool found_stop_prefix = false;
         char* stop_pos = NULL;
         
+        // First, check for COMPLETE stop sequences
         for (int i = 0; i < stop_sequence_count && stop_sequences_ptr[i] != NULL; i++) {
           stop_pos = strstr(llm_response_buffer, stop_sequences_ptr[i]);
           if (stop_pos) {
@@ -2787,7 +3004,39 @@ ethervox_governor_status_t ethervox_governor_execute(
           }
         }
         
-        if (found_complete_stop) {
+        // Second, check if response buffer ENDS WITH a PREFIX of any stop sequence
+        // This catches partial stop sequences being built (e.g., "<tool" before "_result")
+        if (!found_complete_stop) {
+          size_t response_len = strlen(llm_response_buffer);
+          
+          for (int i = 0; i < stop_sequence_count && stop_sequences_ptr[i] != NULL; i++) {
+            const char* stop_seq = stop_sequences_ptr[i];
+            size_t stop_len = strlen(stop_seq);
+            
+            // Check all possible prefix lengths (2 to stop_len-1)
+            // CRITICAL FIX: Start from 2 to avoid false positives on single '<' character
+            size_t min_prefix = (stop_len >= 2) ? 2 : 1;
+            for (size_t prefix_len = min_prefix; prefix_len < stop_len && prefix_len <= response_len; prefix_len++) {
+              const char* response_suffix = llm_response_buffer + (response_len - prefix_len);
+              
+              if (strncmp(response_suffix, stop_seq, prefix_len) == 0) {
+                // Response ends with a prefix of this stop sequence!
+                // Truncate it immediately to prevent garbage output
+                llm_response_buffer[response_len - prefix_len] = '\0';
+                found_stop_prefix = true;
+                GOV_LOG("Response ends with %zu-char prefix of stop sequence '%s' - truncated from %zu to %zu chars",
+                        prefix_len, stop_seq, response_len, response_len - prefix_len);
+                break;
+              }
+            }
+            
+            if (found_stop_prefix) {
+              break;
+            }
+          }
+        }
+        
+        if (found_complete_stop || found_stop_prefix) {
           break;
         }
 
@@ -2855,6 +3104,10 @@ ethervox_governor_status_t ethervox_governor_execute(
         llama_batch_free(next_batch);
         break;
       }
+      
+      // Track generated token added to KV cache
+      track_kv_cache_tokens(governor, &next_token, 1);
+      
       llama_batch_free(next_batch);
 
       governor->current_kv_pos++;
@@ -2937,8 +3190,10 @@ ethervox_governor_status_t ethervox_governor_execute(
           const char* stop_seq = stop_sequences_ptr[i];
           size_t stop_len = strlen(stop_seq);
           
-          // Check all possible prefix lengths (from 1 to stop_len-1)
-          for (size_t prefix_len = 1; prefix_len < stop_len; prefix_len++) {
+          // Check all possible prefix lengths (from 2 to stop_len-1)
+          // CRITICAL FIX: Start from 2 to avoid false positives on single '<' character
+          size_t min_prefix = (stop_len >= 2) ? 2 : 1;
+          for (size_t prefix_len = min_prefix; prefix_len < stop_len; prefix_len++) {
             if (buf_len >= prefix_len) {
               const char* buf_suffix = combined_lookahead + (buf_len - prefix_len);
               if (strncmp(buf_suffix, stop_seq, prefix_len) == 0) {
@@ -2999,6 +3254,59 @@ ethervox_governor_status_t ethervox_governor_execute(
       } else {
         GOV_LOG("Discarded entire lookahead buffer (starts with stop sequence '%s')", 
                 found_sequence);
+      }
+      
+      // ========================================================================
+      // CRITICAL FIX: Remove unwanted tokens from KV cache
+      // ========================================================================
+      // When we detect a stop sequence, we've already added ALL generated tokens
+      // to the KV cache via llama_decode, but we only outputted part of them.
+      // We need to remove the tokens that came after the stop sequence so they
+      // don't pollute the context for the next conversation turn.
+      if (earliest_stop && lookahead.count > 0) {
+        // Count how many tokens we actually flushed vs how many are in lookahead
+        int tokens_to_remove = lookahead.count;
+        
+        // Calculate how many characters we flushed
+        int tokens_flushed = 0;
+        size_t chars_counted = 0;
+        for (int i = 0; i < lookahead.count && chars_counted < safe_char_count; i++) {
+          size_t token_len = strlen(lookahead.tokens[i]);
+          if (chars_counted + token_len <= safe_char_count) {
+            tokens_flushed++;
+            chars_counted += token_len;
+          } else {
+            // Partial token counts as flushed
+            tokens_flushed++;
+            break;
+          }
+        }
+        
+        tokens_to_remove = lookahead.count - tokens_flushed;
+        
+        if (tokens_to_remove > 0) {
+          // Remove unwanted tokens from end of KV cache
+          llama_memory_t mem = llama_get_memory(governor->llm_ctx);
+          int remove_start = governor->current_kv_pos - tokens_to_remove;
+          int remove_end = governor->current_kv_pos - 1;
+          
+          GOV_LOG("Removing %d unwanted tokens from KV cache (positions %d to %d)", 
+                  tokens_to_remove, remove_start, remove_end);
+          
+          llama_memory_seq_rm(mem, 0, remove_start, remove_end);
+          
+          // Update position and count
+          governor->current_kv_pos -= tokens_to_remove;
+          generated_count -= tokens_to_remove;
+          
+          // Also update our tracking buffer
+          if (governor->kv_cache_tracking_enabled && 
+              governor->kv_cache_tokens_count >= tokens_to_remove) {
+            governor->kv_cache_tokens_count -= tokens_to_remove;
+            GOV_LOG("[KV_TRACK] Removed %d tokens from tracking (new count: %d)", 
+                    tokens_to_remove, governor->kv_cache_tokens_count);
+          }
+        }
       }
     }
 
@@ -3162,8 +3470,30 @@ ethervox_governor_status_t ethervox_governor_execute(
           // Instead of: concatenate string → tokenize → decode
           // Do: decode prefix tokens → decode result tokens → decode suffix tokens
 
+          // ============================================================================
+          // TOOL RESULT KV CACHE ADDITION - WITH DETAILED LOGGING
+          // ============================================================================
+          GOV_LOG("=== TOOL RESULT KV CACHE ADDITION START ===");
+          GOV_LOG("Tool: %s", tool_name ? tool_name : "unknown");
+          GOV_LOG("Result length: %zu chars", strlen(tool_result));
+          GOV_LOG("Current KV position: %d", governor->current_kv_pos);
+          
           // Decode prefix: chat_template->tool_result_start
           if (governor->tool_result_prefix_tokens && governor->tool_result_prefix_len > 0) {
+            // Decode tokens back to text for verification
+            char prefix_decoded[512] = {0};
+            for (int j = 0; j < governor->tool_result_prefix_len && j < 50; j++) {
+              char token_str[64];
+              int token_len = llama_token_to_piece(vocab, governor->tool_result_prefix_tokens[j],
+                                                    token_str, sizeof(token_str), 0, false);
+              if (token_len > 0 && token_len < sizeof(token_str)) {
+                token_str[token_len] = '\0';
+                strncat(prefix_decoded, token_str, sizeof(prefix_decoded) - strlen(prefix_decoded) - 1);
+              }
+            }
+            GOV_LOG("[PREFIX] Adding %d tokens: '%s'", 
+                    governor->tool_result_prefix_len, prefix_decoded);
+            
             // Check if prefix will fit in context
             int n_ctx = llama_n_ctx(governor->llm_ctx);
             if (governor->current_kv_pos + governor->tool_result_prefix_len > n_ctx) {
@@ -3185,6 +3515,8 @@ ethervox_governor_status_t ethervox_governor_execute(
                           governor->current_kv_pos);
               } else {
                 governor->current_kv_pos += governor->tool_result_prefix_len;
+                GOV_LOG("[PREFIX] Successfully added to KV cache, new position: %d", 
+                        governor->current_kv_pos);
               }
               llama_batch_free(prefix_batch);
             }
@@ -3192,8 +3524,15 @@ ethervox_governor_status_t ethervox_governor_execute(
 
           // Tokenize and decode actual tool result (in chunks if large)
           size_t result_len = strlen(tool_result);
+          
+          // Log first 200 chars of tool result content
+          GOV_LOG("[CONTENT] Tool result content (first 200 chars): %.200s%s",
+                  tool_result, result_len > 200 ? "..." : "");
+          
           int result_n_tokens =
               -llama_tokenize(vocab, tool_result, result_len, NULL, 0, false, false);
+          GOV_LOG("[CONTENT] Tool result tokenized to %d tokens", result_n_tokens);
+          
           if (result_n_tokens > 0) {
             // Check if tool result will fit in context
             int n_ctx = llama_n_ctx(governor->llm_ctx);
@@ -3214,6 +3553,21 @@ ethervox_governor_status_t ethervox_governor_execute(
             if (result_tokens) {
               llama_tokenize(vocab, tool_result, result_len, result_tokens, result_n_tokens, false,
                              false);
+
+              // Decode first few tokens for verification
+              char result_preview[256] = {0};
+              int preview_tokens = result_n_tokens < 20 ? result_n_tokens : 20;
+              for (int j = 0; j < preview_tokens; j++) {
+                char token_str[64];
+                int token_len = llama_token_to_piece(vocab, result_tokens[j],
+                                                      token_str, sizeof(token_str), 0, false);
+                if (token_len > 0 && token_len < sizeof(token_str)) {
+                  token_str[token_len] = '\0';
+                  strncat(result_preview, token_str, sizeof(result_preview) - strlen(result_preview) - 1);
+                }
+              }
+              GOV_LOG("[CONTENT] First %d tokens decode to: '%s%s'",
+                      preview_tokens, result_preview, result_n_tokens > 20 ? "..." : "");
 
               // Process in chunks to respect batch size limit
               // CRITICAL: Use actual n_batch from context
@@ -3245,14 +3599,34 @@ ethervox_governor_status_t ethervox_governor_execute(
 
                 governor->current_kv_pos += batch_size;
                 tokens_processed += batch_size;
+                
+                GOV_LOG("[CONTENT] Processed chunk %d/%d (%d tokens), KV position now: %d",
+                        (tokens_processed / n_batch), 
+                        (result_n_tokens + n_batch - 1) / n_batch,
+                        batch_size, governor->current_kv_pos);
               }
 
               free(result_tokens);
+              GOV_LOG("[CONTENT] Successfully added %d tokens to KV cache", result_n_tokens);
             }
           }
 
           // Decode suffix: chat_template->tool_result_end
           if (governor->tool_result_suffix_tokens && governor->tool_result_suffix_len > 0) {
+            // Decode tokens back to text for verification
+            char suffix_decoded[512] = {0};
+            for (int j = 0; j < governor->tool_result_suffix_len && j < 50; j++) {
+              char token_str[64];
+              int token_len = llama_token_to_piece(vocab, governor->tool_result_suffix_tokens[j],
+                                                    token_str, sizeof(token_str), 0, false);
+              if (token_len > 0 && token_len < sizeof(token_str)) {
+                token_str[token_len] = '\0';
+                strncat(suffix_decoded, token_str, sizeof(suffix_decoded) - strlen(suffix_decoded) - 1);
+              }
+            }
+            GOV_LOG("[SUFFIX] Adding %d tokens: '%s'", 
+                    governor->tool_result_suffix_len, suffix_decoded);
+            
             // Check if suffix will fit in context
             int n_ctx = llama_n_ctx(governor->llm_ctx);
             if (governor->current_kv_pos + governor->tool_result_suffix_len > n_ctx) {
@@ -3275,10 +3649,17 @@ ethervox_governor_status_t ethervox_governor_execute(
                           governor->current_kv_pos);
               } else {
                 governor->current_kv_pos += governor->tool_result_suffix_len;
+                GOV_LOG("[SUFFIX] Successfully added to KV cache, new position: %d", 
+                        governor->current_kv_pos);
               }
               llama_batch_free(suffix_batch);
             }
           }
+
+          GOV_LOG("=== TOOL RESULT KV CACHE ADDITION COMPLETE ===");
+          GOV_LOG("Final KV position: %d (%.1f%% of context)",
+                  governor->current_kv_pos, 
+                  (float)governor->current_kv_pos / llama_n_ctx(governor->llm_ctx) * 100.0f);
 
           // Update processed_length - no string concat needed
           processed_length = strlen(conversation);
@@ -3569,6 +3950,14 @@ void ethervox_governor_cleanup(ethervox_governor_t* governor) {
   if (governor->tool_result_suffix_tokens) {
     free(governor->tool_result_suffix_tokens);
     governor->tool_result_suffix_tokens = NULL;
+  }
+  
+  // Free KV cache tracking buffer
+  if (governor->kv_cache_tokens) {
+    free(governor->kv_cache_tokens);
+    governor->kv_cache_tokens = NULL;
+    governor->kv_cache_tokens_capacity = 0;
+    governor->kv_cache_tokens_count = 0;
   }
 
   llama_backend_free();

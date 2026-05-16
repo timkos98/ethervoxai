@@ -49,7 +49,7 @@ static const chat_template_t granite_template = {
     .assistant_start = "<|start_of_role|>assistant<|end_of_role|>",
     .assistant_end = "<|end_of_text|>\n",
     .tool_result_start = "<|start_of_role|>user<|end_of_role|><tool_result>",
-    .tool_result_end = "</tool_result><|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>",
+    .tool_result_end = "</tool_result><|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>Based on the tool result above, here is my answer:\n",
     .stop_sequences = {
         "<|end_of_text|>",              // Official Granite stop token
         "<|start_of_role|>",            // Catch complete role markers

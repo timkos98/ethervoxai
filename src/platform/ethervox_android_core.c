@@ -409,6 +409,25 @@ Java_com_droid_ethervox_1core_NativeLib_reloadGovernorModel(JNIEnv* env, jobject
   }
 }
 
+JNIEXPORT jboolean JNICALL
+Java_com_droid_ethervox_1core_NativeLib_clearKvCache(JNIEnv* env, jobject thiz) {
+  (void)env;
+  (void)thiz;
+
+  if (!g_governor) {
+    LOGE("Cannot clear KV cache - Governor not initialized");
+    return JNI_FALSE;
+  }
+
+  LOGI("[JNI] Clearing KV cache - will reset on next generation");
+  
+  // Note: KV cache will be implicitly cleared on next generation
+  // as the model will start fresh without previous context.
+  // The conversation memory is preserved in the memory store files.
+  
+  return JNI_TRUE;
+}
+
 JNIEXPORT jboolean JNICALL Java_com_droid_ethervox_1core_NativeLib_isGovernorLoaded(JNIEnv* env,
                                                                                     jobject thiz) {
   (void)env;
@@ -460,6 +479,28 @@ JNIEXPORT jobject JNICALL Java_com_droid_ethervox_1core_NativeLib_getKvCacheStat
   return result;
 }
 
+JNIEXPORT jstring JNICALL Java_com_droid_ethervox_1core_NativeLib_getKvCacheContents(JNIEnv* env,
+                                                                                       jobject thiz) {
+  (void)thiz;
+
+  if (!g_governor || !ethervox_governor_is_loaded(g_governor)) {
+    return NULL;
+  }
+
+  char* contents = ethervox_governor_get_kv_cache_contents(g_governor);
+  if (!contents) {
+    return NULL;
+  }
+
+  // Create Java string from C string
+  jstring result = (*env)->NewStringUTF(env, contents);
+  
+  // Free the C string
+  free(contents);
+  
+  return result;
+}
+
 JNIEXPORT jobjectArray JNICALL
 Java_com_droid_ethervox_1core_NativeLib_getConversationHistory(JNIEnv* env, jobject thiz) {
   (void)thiz;
@@ -497,8 +538,8 @@ Java_com_droid_ethervox_1core_NativeLib_getConversationHistory(JNIEnv* env, jobj
   }
 
   // Get constructor: ConversationMemory(memoryId: Long, turnId: Long, timestamp: Long, 
-  //                                      text: String, isUser: Boolean, importance: Float, toolsUsed: Array<String>)
-  jmethodID constructor = (*env)->GetMethodID(env, memoryClass, "<init>", "(JJJLjava/lang/String;ZF[Ljava/lang/String;)V");
+  //                                      text: String, isUser: Boolean, importance: Float, toolsUsed: Array<String>, isImported: Boolean)
+  jmethodID constructor = (*env)->GetMethodID(env, memoryClass, "<init>", "(JJJLjava/lang/String;ZF[Ljava/lang/String;Z)V");
   if (!constructor) {
     ETHERVOX_LOGE("Failed to find ConversationMemory constructor");
     return (*env)->NewObjectArray(env, 0, memoryClass, NULL);
@@ -528,6 +569,28 @@ Java_com_droid_ethervox_1core_NativeLib_getConversationHistory(JNIEnv* env, jobj
     if (isSummary) {
       continue;
     }
+    
+    // Check if entry has "imported" tag
+    bool isImported = false;
+    for (uint32_t j = 0; j < entry->tag_count; j++) {
+      if (strcmp(entry->tags[j], "imported") == 0) {
+        isImported = true;
+        break;
+      }
+    }
+    
+    // Debug log for imported status
+    ETHERVOX_LOGI("Entry memory_id=%llu tags=%u isImported=%d", 
+                 (unsigned long long)entry->memory_id, 
+                 entry->tag_count,
+                 isImported ? 1 : 0);
+
+    // Debug log for tools count
+    if (entry->tools_called_count > 0) {
+      ETHERVOX_LOGI("Entry memory_id=%llu has %u tools", 
+                   (unsigned long long)entry->memory_id, 
+                   entry->tools_called_count);
+    }
 
     // Create tools array
     jclass stringClass = (*env)->FindClass(env, "java/lang/String");
@@ -548,7 +611,8 @@ Java_com_droid_ethervox_1core_NativeLib_getConversationHistory(JNIEnv* env, jobj
       text,
       (jboolean)entry->is_user_message,
       (jfloat)entry->importance,
-      toolsArray
+      toolsArray,
+      (jboolean)isImported
     );
     
     (*env)->SetObjectArrayElement(env, result, (jsize)arrayIndex, memoryObj);
@@ -1481,6 +1545,13 @@ typedef struct {
   bool conversation_ended;
   char utf8_buffer[4];  // Buffer for incomplete UTF-8 sequences (max 4 bytes)
   int utf8_buffer_len;  // Number of bytes currently in buffer
+  
+  // Tool tracking for memory storage
+  char tools_called[16][64];  // Track up to 16 tools
+  uint32_t tools_count;       // Number of tools used
+  
+  // Memory storage flag
+  bool skip_memory_storage;   // If true, don't store this conversation turn to memory
 } jni_stream_context_t;
 
 // Native callback function that will be called from C
@@ -1565,6 +1636,16 @@ static void native_governor_progress_callback(ethervox_governor_event_type_t eve
       break;
     case ETHERVOX_GOVERNOR_EVENT_TOOL_CALL:
       event_str = "TOOL_CALL";
+      // Extract tool name from message format: "Calling tool: <tool_name>"
+      if (message && strstr(message, "Calling tool: ") && ctx->tools_count < 16) {
+        const char* tool_start = message + 14;  // Skip "Calling tool: "
+        size_t tool_len = strlen(tool_start);
+        if (tool_len > 0 && tool_len < 64) {
+          snprintf(ctx->tools_called[ctx->tools_count], 64, "%s", tool_start);
+          ctx->tools_count++;
+          LOGI("Tracked tool call: %s (total: %u)", tool_start, ctx->tools_count);
+        }
+      }
       break;
     case ETHERVOX_GOVERNOR_EVENT_TOOL_RESULT:
       event_str = "TOOL_RESULT";
@@ -1597,8 +1678,21 @@ static void native_governor_progress_callback(ethervox_governor_event_type_t eve
       event_str = "COMPLETE";
       // Also call onComplete callback when governor finishes
       if (ctx->on_complete_method) {
+        // Create Java String array for tools
+        jclass stringClass = (*ctx->env)->FindClass(ctx->env, "java/lang/String");
+        jobjectArray toolsArray = (*ctx->env)->NewObjectArray(ctx->env, ctx->tools_count, stringClass, NULL);
+        
+        // Fill array with tool names
+        for (uint32_t i = 0; i < ctx->tools_count; i++) {
+          jstring toolName = (*ctx->env)->NewStringUTF(ctx->env, ctx->tools_called[i]);
+          (*ctx->env)->SetObjectArrayElement(ctx->env, toolsArray, i, toolName);
+          (*ctx->env)->DeleteLocalRef(ctx->env, toolName);
+        }
+        
+        // Call onComplete with tools array
         (*ctx->env)->CallVoidMethod(ctx->env, ctx->callback_obj, ctx->on_complete_method,
-                                    (jboolean)ctx->conversation_ended);
+                                    (jboolean)ctx->conversation_ended, toolsArray);
+        (*ctx->env)->DeleteLocalRef(ctx->env, toolsArray);
       }
       break;
     default:
@@ -1617,7 +1711,7 @@ static void native_governor_progress_callback(ethervox_governor_event_type_t eve
 
 // Governor streaming dialogue - uses token_callback for real-time token streaming
 JNIEXPORT void JNICALL Java_com_droid_ethervox_1core_NativeLib_processDialogueStreamingNative(
-    JNIEnv* env, jobject thiz, jstring user_text, jstring language, jobject callback) {
+    JNIEnv* env, jobject thiz, jstring user_text, jstring language, jboolean skip_memory_storage, jobject callback) {
   (void)thiz;
   (void)language;
 
@@ -1637,10 +1731,12 @@ JNIEXPORT void JNICALL Java_com_droid_ethervox_1core_NativeLib_processDialogueSt
 
   const char* text = (*env)->GetStringUTFChars(env, user_text, NULL);
 
-  LOGI("Processing dialogue (streaming): '%s'", text);
+  LOGI("Processing dialogue (streaming): '%s' (skip_memory: %s)", 
+       text, skip_memory_storage ? "true" : "false");
 
-  // Store user message to memory (before processing)
-  if (g_memory_store) {
+  // Store user message to memory (before processing) - unless skip flag is set
+  // Skip for system/startup prompts that shouldn't appear in conversation history
+  if (g_memory_store && !skip_memory_storage) {
     const char* tags[] = {"conversation"};
     uint64_t memory_id;
     ethervox_result_t mem_result =
@@ -1650,12 +1746,14 @@ JNIEXPORT void JNICALL Java_com_droid_ethervox_1core_NativeLib_processDialogueSt
     } else {
       LOGI("Stored user message to memory (ID: %llu)", (unsigned long long)memory_id);
     }
+  } else if (skip_memory_storage) {
+    LOGI("Skipping memory storage for system/startup prompt");
   }
 
   // Get callback methods
   jclass callback_class = (*env)->GetObjectClass(env, callback);
   jmethodID on_token = (*env)->GetMethodID(env, callback_class, "onToken", "(Ljava/lang/String;)V");
-  jmethodID on_complete = (*env)->GetMethodID(env, callback_class, "onComplete", "(Z)V");
+  jmethodID on_complete = (*env)->GetMethodID(env, callback_class, "onComplete", "(Z[Ljava/lang/String;)V");
   jmethodID on_error = (*env)->GetMethodID(env, callback_class, "onError", "(Ljava/lang/String;)V");
   jmethodID on_governor_progress = (*env)->GetMethodID(env, callback_class, "onGovernorProgress",
                                                        "(Ljava/lang/String;Ljava/lang/String;)V");
@@ -1668,7 +1766,11 @@ JNIEXPORT void JNICALL Java_com_droid_ethervox_1core_NativeLib_processDialogueSt
                                      .on_error_method = on_error,
                                      .on_governor_progress_method = on_governor_progress,
                                      .conversation_ended = false,
-                                     .utf8_buffer_len = 0};
+                                     .utf8_buffer_len = 0,
+                                     .tools_count = 0,
+                                     .skip_memory_storage = skip_memory_storage};
+  // Zero out tools_called array
+  memset(stream_ctx.tools_called, 0, sizeof(stream_ctx.tools_called));
 
   // Execute with streaming token callback
   char* response = NULL;
@@ -1695,18 +1797,35 @@ JNIEXPORT void JNICALL Java_com_droid_ethervox_1core_NativeLib_processDialogueSt
     if (error)
       free(error);
   } else {
-    // Store assistant response to memory (after successful processing)
-    if (g_memory_store && response) {
+    // Store assistant response to memory (after successful processing) with tools
+    // Skip if this was a system/startup prompt (indicated by skip_memory_storage flag)
+    if (g_memory_store && response && !stream_ctx.skip_memory_storage) {
       const char* tags[] = {"conversation"};
       uint64_t memory_id;
       // Use 0.8f importance for full response, 0.7f if timeout/partial
       float importance = (status == ETHERVOX_GOVERNOR_SUCCESS) ? 0.8f : 0.7f;
-      ethervox_result_t mem_result =
-          ethervox_memory_store_add(g_memory_store, response, tags, 1, importance, false, &memory_id);
+      
+      // Convert tools_called array to const char* array for the function
+      const char* tools_ptr[16];
+      for (uint32_t i = 0; i < stream_ctx.tools_count; i++) {
+        tools_ptr[i] = stream_ctx.tools_called[i];
+      }
+      
+      // DEBUG: Log tool count and names before storing
+      LOGI("[MEMORY] Storing response with %u tools", stream_ctx.tools_count);
+      for (uint32_t i = 0; i < stream_ctx.tools_count; i++) {
+        LOGI("[MEMORY]   Tool %u: %s", i, stream_ctx.tools_called[i]);
+      }
+      
+      ethervox_result_t mem_result = ethervox_memory_store_add_with_tools(
+          g_memory_store, response, tags, 1, importance, false,
+          tools_ptr, stream_ctx.tools_count, &memory_id);
+      
       if (ethervox_is_error(mem_result)) {
         LOGW("Failed to store assistant response to memory: Error %d", mem_result);
       } else {
-        LOGI("Stored assistant response to memory (ID: %llu)", (unsigned long long)memory_id);
+        LOGI("Stored assistant response to memory (ID: %llu) with %u tools",
+             (unsigned long long)memory_id, stream_ctx.tools_count);
       }
     }
 

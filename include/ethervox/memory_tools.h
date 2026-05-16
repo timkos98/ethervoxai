@@ -156,6 +156,32 @@ ethervox_result_t ethervox_memory_store_add(
 );
 
 /**
+ * Store a new conversational memory with tool tracking
+ * 
+ * @param store Memory store
+ * @param text Content to store
+ * @param tags Array of category tags
+ * @param tag_count Number of tags
+ * @param importance Relevance score 0.0-1.0
+ * @param is_user_message True if from user, false if from assistant
+ * @param tools_called Array of tool names that were invoked (can be NULL)
+ * @param tools_count Number of tools called (max 16)
+ * @param memory_id_out Output: assigned memory ID
+ * @return ETHERVOX_SUCCESS on success, error code on failure
+ */
+ethervox_result_t ethervox_memory_store_add_with_tools(
+    ethervox_memory_store_t* store,
+    const char* text,
+    const char* tags[],
+    uint32_t tag_count,
+    float importance,
+    bool is_user_message,
+    const char* tools_called[],
+    uint32_t tools_count,
+    uint64_t* memory_id_out
+);
+
+/**
  * TOOL: memory_search - Query memories by tags and text similarity
  * 
  * @param store Memory store

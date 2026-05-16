@@ -38,6 +38,55 @@ static int ensure_directory(const char* path) {
     return ETHERVOX_SUCCESS;
 }
 
+// Ensure storage directory and file handle are ready for writing
+// This handles the case where files are deleted during a session
+static int ensure_storage_ready(ethervox_memory_store_t* store) {
+    if (!store || !store->is_initialized) {
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
+    
+    // If no storage path configured, nothing to do (memory-only mode)
+    if (store->storage_filepath[0] == '\0') {
+        return ETHERVOX_SUCCESS;
+    }
+    
+    // If file handle is already open, we're good
+    if (store->append_log != NULL) {
+        return ETHERVOX_SUCCESS;
+    }
+    
+    // File handle is NULL - need to (re)open it
+    // First, ensure the directory exists
+    char storage_dir[512];
+    strncpy(storage_dir, store->storage_filepath, sizeof(storage_dir) - 1);
+    storage_dir[sizeof(storage_dir) - 1] = '\0';
+    
+    char* last_slash = strrchr(storage_dir, '/');
+    if (last_slash) {
+        *last_slash = '\0';  // Truncate to get directory path
+        
+        // Recreate directory if it was deleted
+        if (ensure_directory(storage_dir) != 0) {
+            ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__,
+                        "Failed to create storage directory: %s", storage_dir);
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
+        }
+    }
+    
+    // (Re)open the file in append mode
+    store->append_log = fopen(store->storage_filepath, "a");
+    if (!store->append_log) {
+        ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__,
+                    "Failed to open storage file: %s", store->storage_filepath);
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
+    
+    ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
+                "Reopened memory storage file: %s", store->storage_filepath);
+    
+    return ETHERVOX_SUCCESS;
+}
+
 ethervox_result_t ethervox_memory_init(
     ethervox_memory_store_t* store,
     const char* session_id,
@@ -250,6 +299,9 @@ ethervox_result_t memory_store_add_internal(
     
     store->entry_count++;
     
+    // Ensure storage is ready before writing (handles directory deletion during session)
+    ensure_storage_ready(store);
+    
     // Append to persistent log (JSONL format)
     if (store->append_log) {
         fprintf(store->append_log,
@@ -310,6 +362,140 @@ ethervox_result_t ethervox_memory_store_add(
     return memory_store_add_internal(store, text, tags, tag_count, importance,
                                     is_user_message, memory_id, turn_id,
                                     timestamp, memory_id_out);
+}
+
+ethervox_result_t ethervox_memory_store_add_with_tools(
+    ethervox_memory_store_t* store,
+    const char* text,
+    const char* tags[],
+    uint32_t tag_count,
+    float importance,
+    bool is_user_message,
+    const char* tools_called[],
+    uint32_t tools_count,
+    uint64_t* memory_id_out
+) {
+    if (!store || !store->is_initialized || !text) {
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
+    
+    // Validate inputs
+    if (tag_count > ETHERVOX_MEMORY_MAX_TAGS) {
+        tag_count = ETHERVOX_MEMORY_MAX_TAGS;
+    }
+    
+    if (tools_count > 16) {
+        tools_count = 16;  // Max tools per memory entry
+    }
+    
+    if (importance < 0.0f) importance = 0.0f;
+    if (importance > 1.0f) importance = 1.0f;
+    
+    // Grow entries array if needed
+    if (store->entry_count >= store->entry_capacity) {
+        uint32_t new_capacity = store->entry_capacity * 2;
+        if (new_capacity > ETHERVOX_MEMORY_MAX_ENTRIES) {
+            new_capacity = ETHERVOX_MEMORY_MAX_ENTRIES;
+        }
+        
+        ethervox_memory_entry_t* new_entries = realloc(
+            store->entries,
+            new_capacity * sizeof(ethervox_memory_entry_t)
+        );
+        if (!new_entries) {
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
+        }
+        store->entries = new_entries;
+        store->entry_capacity = new_capacity;
+    }
+    
+    // Generate new ID and timestamp
+    uint64_t memory_id = store->total_memories_stored;
+    uint64_t turn_id = store->current_turn_id;
+    time_t timestamp = time(NULL);
+    
+    // Create new entry
+    ethervox_memory_entry_t* entry = &store->entries[store->entry_count];
+    memset(entry, 0, sizeof(ethervox_memory_entry_t));
+    
+    entry->memory_id = memory_id;
+    entry->turn_id = turn_id;
+    entry->timestamp = timestamp;
+    entry->importance = importance;
+    entry->is_user_message = is_user_message;
+    
+    // Copy text (truncate if too long)
+    snprintf(entry->text, sizeof(entry->text), "%s", text);
+    
+    // Copy tags
+    entry->tag_count = tag_count;
+    for (uint32_t i = 0; i < tag_count; i++) {
+        snprintf(entry->tags[i], ETHERVOX_MEMORY_TAG_LEN, "%s", tags[i]);
+        
+        // Update tag index
+        ethervox_memory_tag_index_t* idx = get_tag_index(store, tags[i]);
+        if (idx && idx->count < 1024) {
+            idx->memory_ids[idx->count++] = entry->memory_id;
+        }
+    }
+    
+    // Copy tools called
+    entry->tools_called_count = tools_count;
+    for (uint32_t i = 0; i < tools_count; i++) {
+        snprintf(entry->tools_called[i], 64, "%s", tools_called[i]);
+    }
+    
+    store->entry_count++;
+    
+    // Ensure storage is ready before writing (handles directory deletion during session)
+    ensure_storage_ready(store);
+    
+    // Append to persistent log (JSONL format) with tools
+    if (store->append_log) {
+        fprintf(store->append_log,
+                "{\"id\":%llu,\"turn\":%llu,\"ts\":%ld,\"user\":%s,\"imp\":%.2f,\"text\":",
+                (unsigned long long)entry->memory_id, (unsigned long long)entry->turn_id, entry->timestamp,
+                is_user_message ? "true" : "false", importance);
+        
+        // Write JSON-escaped text
+        fputc('"', store->append_log);
+        for (const char* p = text; *p && (p - text) < ETHERVOX_MEMORY_MAX_TEXT_LEN - 1; p++) {
+            if (*p == '"' || *p == '\\') {
+                fputc('\\', store->append_log);
+            }
+            fputc(*p, store->append_log);
+        }
+        fputc('"', store->append_log);
+        
+        // Write tags
+        fprintf(store->append_log, ",\"tags\":[");
+        for (uint32_t i = 0; i < tag_count; i++) {
+            fprintf(store->append_log, "%s\"%s\"", i > 0 ? "," : "", tags[i]);
+        }
+        fprintf(store->append_log, "]");
+        
+        // Write tools if any
+        if (tools_count > 0) {
+            fprintf(store->append_log, ",\"tools\":[");
+            for (uint32_t i = 0; i < tools_count; i++) {
+                fprintf(store->append_log, "%s\"%s\"", i > 0 ? "," : "", tools_called[i]);
+            }
+            fprintf(store->append_log, "]");
+        }
+        
+        fprintf(store->append_log, "}\n");
+        fflush(store->append_log);
+    }
+    
+    if (memory_id_out) {
+        *memory_id_out = entry->memory_id;
+    }
+    
+    // Update counters
+    store->total_memories_stored = memory_id + 1;
+    store->current_turn_id = turn_id + 1;
+    
+    return ETHERVOX_SUCCESS;
 }
 
 // Internal update_tags function with optional persistence (non-static for use in memory_export.c)
