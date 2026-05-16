@@ -542,6 +542,17 @@ static inline ethervox_governor_config_t ethervox_governor_default_config(void) 
 ethervox_tool_registry_t* ethervox_governor_get_registry(ethervox_governor_t* governor);
 
 /**
+ * Set the manifest registry for Governor (enables optimized system prompts)
+ *
+ * Must be called BEFORE loading the model to use optimized prompts.
+ * If called after model load, will take effect on next model load.
+ *
+ * @param governor Governor instance
+ * @param manifest Manifest registry pointer (can be NULL to disable)
+ */
+void ethervox_governor_set_manifest(ethervox_governor_t* governor, tool_manifest_registry_t* manifest);
+
+/**
  * Request interruption of ongoing generation
  *
  * Sets an interrupt flag that will be checked at the start of each iteration.

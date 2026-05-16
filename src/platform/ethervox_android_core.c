@@ -292,6 +292,36 @@ JNIEXPORT jboolean JNICALL Java_com_droid_ethervox_1core_NativeLib_loadGovernorM
 
   LOGI("[JNI] Loading Governor model from: %s", path);
 
+  // === CRITICAL: Initialize Tool Manifest System BEFORE loading model ===
+  // This ensures optimized prompts are available during system prompt generation
+  if (!g_manifest_registry) {
+    LOGI("[JNI] Initializing manifest registry BEFORE model load (for optimized prompts)");
+
+    // Use the centralized manifest setup helper
+    tool_manifest_registry_t* manifest = NULL;
+    ethervox_result_t manifest_result =
+        ethervox_governor_setup_manifest(g_governor, path, &manifest);
+
+    if (ethervox_is_success(manifest_result) && manifest) {
+      g_manifest_registry = manifest;
+      
+      // Attach manifest to governor so it can use optimized prompts
+      ethervox_governor_set_manifest(g_governor, manifest);
+      
+      LOGI("[JNI] Manifest initialized and attached to governor");
+      LOGI("  Fallback level: %u", manifest->fallback_level);
+      LOGI("  Tools available: %s", manifest->tools_available ? "YES" : "NO");
+      LOGI("  Optimization loaded: %s", manifest->optimization_loaded ? "YES" : "NO");
+    } else {
+      LOGW("Manifest initialization failed - will use legacy system prompt");
+      // Continue anyway - graceful fallback to old system
+    }
+  } else {
+    LOGI("[JNI] Manifest already initialized, using existing registry");
+    // Make sure it's attached to governor
+    ethervox_governor_set_manifest(g_governor, g_manifest_registry);
+  }
+
   // Setup progress callback if provided
   jni_load_context_t load_ctx = {0};
   ethervox_load_progress_callback progress_callback = NULL;
@@ -310,6 +340,7 @@ JNIEXPORT jboolean JNICALL Java_com_droid_ethervox_1core_NativeLib_loadGovernorM
     }
   }
 
+  // Load the model (will use manifest for system prompt if available)
   ethervox_result_t result = ethervox_governor_load_model(g_governor, path, progress_callback, progress_user_data);
 
   (*env)->ReleaseStringUTFChars(env, modelPath, path);
@@ -319,30 +350,6 @@ JNIEXPORT jboolean JNICALL Java_com_droid_ethervox_1core_NativeLib_loadGovernorM
 
   if (ethervox_is_success(result)) {
     LOGI("[JNI] Governor model loaded successfully");
-
-    // Initialize Tool Manifest System (after Governor model is loaded)
-    // This is optional - graceful fallback if it fails
-    if (!g_manifest_registry) {
-      LOGI("[JNI] Initializing manifest registry after model load");
-
-      // Get the model path from JNI parameter (we need to get it again since we released it)
-      const char* model_path_for_manifest = (*env)->GetStringUTFChars(env, modelPath, NULL);
-
-      // Use the centralized manifest setup helper
-      tool_manifest_registry_t* manifest = NULL;
-      ethervox_result_t manifest_result =
-          ethervox_governor_setup_manifest(g_governor, model_path_for_manifest, &manifest);
-
-      if (ethervox_is_success(manifest_result) && manifest) {
-        g_manifest_registry = manifest;
-        LOGI("[JNI] Manifest initialized successfully");
-      } else {
-        LOGE("Manifest initialization failed - using runtime registry only");
-      }
-
-      (*env)->ReleaseStringUTFChars(env, modelPath, model_path_for_manifest);
-    }
-
     return JNI_TRUE;
   } else {
     if (result == -2) {
@@ -2557,6 +2564,24 @@ JNIEXPORT jboolean JNICALL Java_com_droid_ethervox_1core_NativeLib_loadGovernorM
   // Cannot change config after governor is initialized
   // This function is now equivalent to loadGovernorModel
   // TODO: Add proper API to change governor mode at runtime
+
+  // === CRITICAL: Initialize Tool Manifest System BEFORE loading model ===
+  // Even in minimal mode, we prepare the manifest for potential future use
+  if (!g_manifest_registry) {
+    LOGI("[JNI] Initializing manifest registry BEFORE model load");
+
+    tool_manifest_registry_t* manifest = NULL;
+    ethervox_result_t manifest_result =
+        ethervox_governor_setup_manifest(g_governor, path, &manifest);
+
+    if (ethervox_is_success(manifest_result) && manifest) {
+      g_manifest_registry = manifest;
+      ethervox_governor_set_manifest(g_governor, manifest);
+      LOGI("[JNI] Manifest initialized (minimal mode, may not be used)");
+    }
+  } else {
+    ethervox_governor_set_manifest(g_governor, g_manifest_registry);
+  }
 
   // Setup progress callback if provided
   jni_load_context_t load_ctx = {0};

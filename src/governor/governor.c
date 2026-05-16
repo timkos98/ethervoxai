@@ -23,6 +23,7 @@
 #include "ethervox/config.h"
 #include "ethervox/device_profile.h"  // Adaptive hardware configuration
 #include "ethervox/error.h"
+#include "ethervox/tool_manifest.h"   // Manifest system for optimized prompts
 
 #ifdef _WIN32
 #include <malloc.h>  // For alloca on Windows
@@ -125,6 +126,7 @@ static bool governor_load_progress_callback(float progress, void* user_data) {
 struct ethervox_governor {
   ethervox_governor_config_t config;
   ethervox_tool_registry_t* tool_registry;
+  tool_manifest_registry_t* manifest_registry;  // Manifest system (optimized prompts)
 
 #if defined(ETHERVOX_WITH_LLAMA) && LLAMA_HEADER_AVAILABLE
   struct llama_model* llm_model;
@@ -1379,12 +1381,35 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
     // Full mode: complete system prompt with all tools and capabilities
     GOV_LOG("Building FULL system prompt (all tools available)");
 
-    ethervox_result_t build_result = ethervox_tool_registry_build_system_prompt(
-            governor->tool_registry, governor->chat_template, system_prompt, sizeof(system_prompt),
-            NULL,  // TODO: Wire memory_store for adaptive learning
-            governor->model_path);
+    // Use manifest-based prompt builder if available (optimized), otherwise fall back to old system
+    ethervox_result_t build_result;
+    if (governor->manifest_registry && governor->manifest_registry->tools_available) {
+      GOV_LOG("Using MANIFEST system prompt builder (optimized prompts)");
+      GOV_LOG("  Fallback level: %u (%s)",
+              governor->manifest_registry->fallback_level,
+              ethervox_tool_fallback_level_name(governor->manifest_registry->fallback_level));
+      GOV_LOG("  Optimization loaded: %s",
+              governor->manifest_registry->optimization_loaded ? "YES" : "NO");
+      GOV_LOG("  Tool count: %u", governor->manifest_registry->header.tool_count);
+      
+      build_result = ethervox_governor_build_system_prompt_with_manifest(
+          governor->manifest_registry, system_prompt, sizeof(system_prompt));
+    } else {
+      GOV_LOG("Using LEGACY system prompt builder (no optimizations)");
+      if (governor->manifest_registry) {
+        GOV_LOG("  Manifest exists but tools_available=false (fallback level %u)",
+                governor->manifest_registry->fallback_level);
+      } else {
+        GOV_LOG("  No manifest registry available");
+      }
+      
+      build_result = ethervox_tool_registry_build_system_prompt(
+          governor->tool_registry, governor->chat_template, system_prompt, sizeof(system_prompt),
+          NULL,  // TODO: Wire memory_store for adaptive learning
+          governor->model_path);
+    }
     
-    if (build_result != 0) {
+    if (build_result < 0) {
       GOV_ERROR("Failed to build system prompt (error code: %d)", build_result);
       llama_free(governor->llm_ctx);
       llama_model_free(governor->llm_model);
@@ -1793,6 +1818,7 @@ ethervox_result_t ethervox_governor_init(ethervox_governor_t** governor,
   }
 
   gov->tool_registry = tool_registry;
+  gov->manifest_registry = NULL;       // Set later via ethervox_governor_set_manifest()
   gov->initialized = true;
   gov->llm_loaded = false;
   gov->tool_execution_enabled = true;  // Enabled by default
@@ -4110,6 +4136,20 @@ ethervox_result_t ethervox_governor_reset_conversation(ethervox_governor_t* gove
 
 ethervox_tool_registry_t* ethervox_governor_get_registry(ethervox_governor_t* governor) {
   return governor ? governor->tool_registry : NULL;
+}
+
+void ethervox_governor_set_manifest(ethervox_governor_t* governor, tool_manifest_registry_t* manifest) {
+  if (governor) {
+    governor->manifest_registry = manifest;
+    GOV_LOG("[Manifest] Manifest registry attached to governor");
+    if (manifest) {
+      GOV_LOG("  Tools available: %s", manifest->tools_available ? "YES" : "NO");
+      GOV_LOG("  Fallback level: %u (%s)",
+              manifest->fallback_level,
+              ethervox_tool_fallback_level_name(manifest->fallback_level));
+      GOV_LOG("  Optimization loaded: %s", manifest->optimization_loaded ? "YES" : "NO");
+    }
+  }
 }
 
 void ethervox_governor_request_interrupt(ethervox_governor_t* governor) {
