@@ -450,15 +450,17 @@ ethervox_result_t ethervox_tool_registry_build_system_prompt(
         int instr_written = snprintf(ptr, remaining,
             "\nTOOL CALL FORMAT:\n"
             "<tool_call>\n{\"name\": \"function_name\", \"arguments\": {\"param\": \"value\"}}\n</tool_call>\n\n"
-            "RULES:\n"
-            "1. Tools in <tools> above: call directly with their parameters\n"
-            "2. Other tools: call get_tool_info first to discover parameters\n"
-            "3. ALWAYS use calculator_compute for math, get_time/get_date for time queries\n"
-            "4. After </tool_call>, STOP - system executes and provides results as <tool_result>\n"
-            "5. Then respond naturally and briefly using the tool results\n\n"
-            "EXAMPLE - Discovering and using a tool:\n"
+            "DECISION FRAMEWORK:\n"
+            "Before responding, ask: Would a tool provide more accurate, current, or complete information?\n"
+            "- Calculations, time/date, measurements: tools provide precision\n"
+            "- Current conditions, real-time data: tools access live information\n"
+            "- User's personal data, memories, files: tools retrieve specific context\n"
+            "- Uncertain about parameters: call get_tool_info to discover capabilities\n\n"
+            "After </tool_call>, generation STOPS. System executes tool and provides <tool_result>.\n"
+            "Then respond naturally using the factual tool results.\n\n"
+            "EXAMPLE - Tool discovery flow:\n"
             "<tool_call>\n{\"name\": \"get_tool_info\", \"arguments\": {\"tool_name\": \"weather_get\"}}\n</tool_call>\n"
-            "[System returns weather_get schema]\n"
+            "[System returns schema]\n"
             "<tool_call>\n{\"name\": \"weather_get\", \"arguments\": {\"location\": \"Berlin\"}}\n</tool_call>\n\n");
             
         // NOTE: Do NOT append system_end marker - tokenizer handles it automatically
@@ -487,10 +489,10 @@ ethervox_result_t ethervox_tool_registry_build_system_prompt(
         
         // Strong instruction about tool usage
         int instruction_written = snprintf(ptr, remaining,
-            "\nYou are a tool-using assistant. CRITICAL RULES:\n"
-            "1. For ALL math/calculations, you MUST call calculator_compute - never calculate mentally\n"
-            "2. For time/date queries, call get_date or get_time\n"
-            "3. For tools without schemas below, call get_tool_info first to learn parameters\n\n");
+            "\nDECISION FRAMEWORK:\n"
+            "Before responding, consider: Would a tool provide more accurate or current information?\n"
+            "Use tools when factual accuracy matters (calculations, time, real-time data, user context).\n"
+            "For unfamiliar tools, call get_tool_info first to discover parameters.\n\n");
         if (instruction_written < 0 || (size_t)instruction_written >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;
         ptr += instruction_written;
         remaining -= instruction_written;
