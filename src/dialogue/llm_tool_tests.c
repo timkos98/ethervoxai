@@ -938,7 +938,7 @@ static void test_llm_model_lifecycle(const char* model_path) {
 
   // Test 2: Load model
   LLM_TEST_INFO("Loading model: %s", model_path);
-  if (ethervox_governor_load_model(test_governor, model_path, NULL, NULL) != 0) {
+  if (ethervox_governor_load_model(test_governor, model_path, NULL, NULL, NULL) != 0) {
     LLM_TEST_FAIL("Failed to load model");
     ethervox_governor_cleanup(test_governor);
     ethervox_tool_registry_cleanup(&test_registry);

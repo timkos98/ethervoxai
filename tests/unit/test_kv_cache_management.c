@@ -353,7 +353,7 @@ int main(int argc, char** argv) {
 
   // Load model
   printf("Loading model (this may take a moment)...\n");
-  if (ethervox_governor_load_model(governor, model_path, NULL, NULL) != 0) {
+  if (ethervox_governor_load_model(governor, model_path, NULL, NULL, NULL) != 0) {
     printf(COLOR_RED "Failed to load model from: %s\n" COLOR_RESET, model_path);
     printf("Please ensure the model file exists and is readable.\n");
     ethervox_governor_cleanup(governor);

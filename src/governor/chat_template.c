@@ -39,7 +39,7 @@ static const chat_template_t qwen_template = {
     .tool_format = TOOL_FORMAT_XML_ATTR  // Uses XML with attributes
 };
 
-// IBM Granite 4.1 template (also compatible with 4.0)
+// IBM Granite 4.0/4.1 template (uses official GGUF markers)
 static const chat_template_t granite_template = {
     .type = CHAT_TEMPLATE_GRANITE,
     .system_start = "<|start_of_role|>system<|end_of_role|>",
@@ -49,16 +49,15 @@ static const chat_template_t granite_template = {
     .assistant_start = "<|start_of_role|>assistant<|end_of_role|>",
     .assistant_end = "<|end_of_text|>\n",
     .tool_result_start = "<|start_of_role|>user<|end_of_role|><tool_result>",
-    .tool_result_end = "</tool_result><|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>Based on the tool result above, here is my answer:\n",
+    .tool_result_end = "</tool_result><|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>",
     .stop_sequences = {
         "<|end_of_text|>",              // Official Granite stop token
-        "<|start_of_role|>",            // Catch complete role markers
-        "<|start_of_role|",             // Catch incomplete role markers (without >)
-        "<|end_of_role|>",              // Catch role end markers
+        "<|start_of_role|>",            // Catch role markers
+        "<|end_of_role|>",
         "<tool_result",                 // Prevent fake tool results
         NULL
     },
-    .stop_sequence_count = 5,
+    .stop_sequence_count = 4,
     .tool_format = TOOL_FORMAT_JSON_IN_XML  // Granite uses JSON inside <tool_call> tags
 };
 

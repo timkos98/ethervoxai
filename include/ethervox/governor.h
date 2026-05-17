@@ -373,12 +373,14 @@ typedef bool (*ethervox_load_progress_callback)(const char* stage, float progres
  *
  * @param governor Governor instance
  * @param model_path Path to GGUF model file
+ * @param cache_dir Directory to store/load KV cache (can be NULL to disable caching)
  * @param progress_callback Optional progress callback (can be NULL)
  * @param user_data User data for progress callback (can be NULL)
  * @return 0 on success, negative on error
  */
 ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
                                                const char* model_path,
+                                               const char* cache_dir,
                                                ethervox_load_progress_callback progress_callback,
                                                void* user_data);
 
@@ -623,12 +625,16 @@ ethervox_result_t ethervox_governor_setup_manifest(ethervox_governor_t* governor
  * Generates minimal prompt (~150 tokens) instead of full schemas (~15K tokens).
  *
  * @param manifest_registry Tool manifest registry
+ * @param chat_template Chat template for model-specific formatting
  * @param output Output buffer
  * @param output_size Buffer size
  * @return Number of bytes written, or negative on error
  */
 ethervox_result_t ethervox_governor_build_system_prompt_with_manifest(
-    const tool_manifest_registry_t* manifest_registry, char* output, size_t output_size);
+    const tool_manifest_registry_t* manifest_registry,
+    const chat_template_t* chat_template,
+    char* output,
+    size_t output_size);
 
 #ifdef __cplusplus
 }

@@ -156,6 +156,7 @@ typedef struct tool_manifest_registry {
     bool needs_byte_swap;             // True if file endianness differs
     bool tools_available;             // True if manifest loaded successfully
     uint8_t fallback_level;           // 0=optimal, 1=one-liners, 2=LLM-only, 3=emergency
+    bool name_only_mode;              // True to list ONLY names (model uses get_tool_info for schemas)
     
     // Guard system - tracks whether tools are actually usable
     bool tools_detected;              // True if tools.bin was found (tools exist)

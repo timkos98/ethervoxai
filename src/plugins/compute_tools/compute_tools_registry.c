@@ -13,30 +13,32 @@
 ethervox_result_t ethervox_compute_tools_register_all(ethervox_tool_registry_t* registry) {
     ETHERVOX_CHECK_PTR(registry);
     
+    int count = 0;
+    
     // Register calculator
     const ethervox_tool_t* calc = ethervox_tool_calculator();
-    ETHERVOX_CHECK(ethervox_tool_registry_add(registry, calc));
+    if (ethervox_is_success(ethervox_tool_registry_add(registry, calc))) count++;
     
     // Register percentage calculator
     const ethervox_tool_t* percent = ethervox_tool_percentage();
-    ETHERVOX_CHECK(ethervox_tool_registry_add(registry, percent));
+    if (ethervox_is_success(ethervox_tool_registry_add(registry, percent))) count++;
     
     // Register time query tools
     const ethervox_tool_t* time_current = ethervox_tool_time_get_current();
-    ETHERVOX_CHECK(ethervox_tool_registry_add(registry, time_current));
+    if (ethervox_is_success(ethervox_tool_registry_add(registry, time_current))) count++;
     
     const ethervox_tool_t* time_date = ethervox_tool_time_get_date();
-    ETHERVOX_CHECK(ethervox_tool_registry_add(registry, time_date));
+    if (ethervox_is_success(ethervox_tool_registry_add(registry, time_date))) count++;
     
     const ethervox_tool_t* time_day = ethervox_tool_time_get_day_of_week();
-    ETHERVOX_CHECK(ethervox_tool_registry_add(registry, time_day));
+    if (ethervox_is_success(ethervox_tool_registry_add(registry, time_day))) count++;
     
     const ethervox_tool_t* time_week = ethervox_tool_time_get_week_number();
-    ETHERVOX_CHECK(ethervox_tool_registry_add(registry, time_week));
+    if (ethervox_is_success(ethervox_tool_registry_add(registry, time_week))) count++;
     
     // TODO: Register unit converter when implemented
     // const ethervox_tool_t* units = ethervox_tool_unit_converter();
-    // ETHERVOX_CHECK(ethervox_tool_registry_add(registry, units));
+    // if (ethervox_is_success(ethervox_tool_registry_add(registry, units))) count++;
     
-    return ETHERVOX_SUCCESS;
+    return count;  // Return count of tools registered, not ETHERVOX_SUCCESS
 }

@@ -19,11 +19,23 @@
 #include <string.h>
 #include <time.h>
 #include <math.h>
+#include <ctype.h>
 
+// Platform-specific HTTP implementation
+#ifdef ETHERVOX_PLATFORM_ANDROID
+// Android: Use JNI-based HTTP client (implemented in weather_http_android.c)
+extern ethervox_result_t android_http_get_request(
+    const char* url,
+    char** response_out,
+    char** error_message_out);
+#define PLATFORM_HTTP_GET android_http_get_request
+#else
+// Desktop: Use libcurl
 #if HAVE_LIBCURL
 #include <curl/curl.h>
 #else
-#error "Weather tools require libcurl support. Install libcurl development packages."
+#error "Weather tools require libcurl support on desktop platforms. Install libcurl development packages."
+#endif
 #endif
 
 #include "cJSON.h"
@@ -95,6 +107,52 @@ static const char* wmo_code_to_condition(int code) {
 // ============================================================================
 // HTTP Request Handling
 // ============================================================================
+
+#ifdef ETHERVOX_PLATFORM_ANDROID
+/**
+ * @brief Make HTTP GET request - Android implementation (delegates to JNI)
+ */
+static ethervox_result_t http_get_request(
+    const char* url,
+    char** response_out,
+    char** error_message_out
+) {
+    // On Android, use JNI-based HTTP client
+    return android_http_get_request(url, response_out, error_message_out);
+}
+
+/**
+ * @brief URL-encode a string - Android simple implementation
+ */
+static char* url_encode(const char* str) {
+    if (!str) return NULL;
+    
+    // Simple URL encoding for Android (handles spaces and special chars)
+    size_t len = strlen(str);
+    char* encoded = malloc(len * 3 + 1);  // Max 3x expansion
+    if (!encoded) return NULL;
+    
+    const char* hex = "0123456789ABCDEF";
+    size_t pos = 0;
+    
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)str[i];
+        if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+            encoded[pos++] = c;
+        } else if (c == ' ') {
+            encoded[pos++] = '+';
+        } else {
+            encoded[pos++] = '%';
+            encoded[pos++] = hex[c >> 4];
+            encoded[pos++] = hex[c & 0x0F];
+        }
+    }
+    encoded[pos] = '\0';
+    
+    return encoded;
+}
+
+#else  // Desktop/libcurl implementation
 
 /**
  * @brief Callback for curl to write response data
@@ -247,9 +305,138 @@ static char* url_encode(const char* str) {
     return result;
 }
 
+#endif  // ETHERVOX_PLATFORM_ANDROID
+
 // ============================================================================
 // Geocoding
 // ============================================================================
+
+/**
+ * @brief Expand US state abbreviations to full names
+ * Example: "Portland, OR" -> "Portland, Oregon"
+ */
+static char* expand_us_state(const char* location_name) {
+    // Map of US state abbreviations to full names
+    static const struct {
+        const char* abbr;
+        const char* full;
+    } states[] = {
+        {"AL", "Alabama"}, {"AK", "Alaska"}, {"AZ", "Arizona"}, {"AR", "Arkansas"},
+        {"CA", "California"}, {"CO", "Colorado"}, {"CT", "Connecticut"}, {"DE", "Delaware"},
+        {"FL", "Florida"}, {"GA", "Georgia"}, {"HI", "Hawaii"}, {"ID", "Idaho"},
+        {"IL", "Illinois"}, {"IN", "Indiana"}, {"IA", "Iowa"}, {"KS", "Kansas"},
+        {"KY", "Kentucky"}, {"LA", "Louisiana"}, {"ME", "Maine"}, {"MD", "Maryland"},
+        {"MA", "Massachusetts"}, {"MI", "Michigan"}, {"MN", "Minnesota"}, {"MS", "Mississippi"},
+        {"MO", "Missouri"}, {"MT", "Montana"}, {"NE", "Nebraska"}, {"NV", "Nevada"},
+        {"NH", "New Hampshire"}, {"NJ", "New Jersey"}, {"NM", "New Mexico"}, {"NY", "New York"},
+        {"NC", "North Carolina"}, {"ND", "North Dakota"}, {"OH", "Ohio"}, {"OK", "Oklahoma"},
+        {"OR", "Oregon"}, {"PA", "Pennsylvania"}, {"RI", "Rhode Island"}, {"SC", "South Carolina"},
+        {"SD", "South Dakota"}, {"TN", "Tennessee"}, {"TX", "Texas"}, {"UT", "Utah"},
+        {"VT", "Vermont"}, {"VA", "Virginia"}, {"WA", "Washington"}, {"WV", "West Virginia"},
+        {"WI", "Wisconsin"}, {"WY", "Wyoming"}, {"DC", "Washington DC"}
+    };
+    
+    // Look for comma followed by 2-letter state code
+    const char* comma = strrchr(location_name, ',');
+    if (!comma) return strdup(location_name);
+    
+    // Extract potential state abbreviation
+    const char* state_start = comma + 1;
+    while (*state_start == ' ') state_start++;
+    
+    if (strlen(state_start) != 2 && strlen(state_start) != 3) {
+        return strdup(location_name);  // Not a 2-letter code
+    }
+    
+    // Convert to uppercase for comparison
+    char abbr[3] = {0};
+    abbr[0] = toupper(state_start[0]);
+    abbr[1] = toupper(state_start[1]);
+    
+    // Find matching state
+    for (size_t i = 0; i < sizeof(states) / sizeof(states[0]); i++) {
+        if (strcmp(abbr, states[i].abbr) == 0) {
+            // Build expanded location name
+            size_t city_len = comma - location_name;
+            size_t full_len = city_len + 2 + strlen(states[i].full) + 1;  // city + ", " + state + null
+            char* expanded = malloc(full_len);
+            if (!expanded) return strdup(location_name);
+            
+            strncpy(expanded, location_name, city_len);
+            expanded[city_len] = '\0';
+            strcat(expanded, ", ");
+            strcat(expanded, states[i].full);
+            
+            ethervox_log(ETHERVOX_LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__,
+                        "Expanded '%s' to '%s'", location_name, expanded);
+            return expanded;
+        }
+    }
+    
+    return strdup(location_name);  // No match, return original
+}
+
+/**
+ * @brief Try geocoding with a specific location string
+ * Returns ETHERVOX_SUCCESS if found, ETHERVOX_ERROR_NOT_FOUND if not found, other errors otherwise
+ */
+static ethervox_result_t try_geocode_variant(
+    const char* location_variant,
+    double* latitude_out,
+    double* longitude_out
+) {
+    // URL-encode location name
+    char* encoded_name = url_encode(location_variant);
+    if (!encoded_name) {
+        return ETHERVOX_ERROR_OUT_OF_MEMORY;
+    }
+    
+    // Build geocoding URL
+    char url[1024];
+    snprintf(url, sizeof(url), "%s?name=%s&count=1&language=en&format=json",
+             OPENMETEO_GEOCODING_URL, encoded_name);
+    free(encoded_name);
+    
+    // Make request
+    char* response_json = NULL;
+    char* error_msg = NULL;
+    ethervox_result_t result = http_get_request(url, &response_json, &error_msg);
+    
+    if (result != ETHERVOX_SUCCESS) {
+        free(error_msg);
+        return result;
+    }
+    
+    // Parse JSON response
+    cJSON* root = cJSON_Parse(response_json);
+    free(response_json);
+    
+    if (!root) {
+        return ETHERVOX_ERROR_API_RESPONSE;
+    }
+    
+    cJSON* results = cJSON_GetObjectItem(root, "results");
+    if (!results || !cJSON_IsArray(results) || cJSON_GetArraySize(results) == 0) {
+        cJSON_Delete(root);
+        return ETHERVOX_ERROR_NOT_FOUND;
+    }
+    
+    // Extract coordinates
+    cJSON* first_result = cJSON_GetArrayItem(results, 0);
+    cJSON* lat = cJSON_GetObjectItem(first_result, "latitude");
+    cJSON* lon = cJSON_GetObjectItem(first_result, "longitude");
+    
+    if (!lat || !lon || !cJSON_IsNumber(lat) || !cJSON_IsNumber(lon)) {
+        cJSON_Delete(root);
+        return ETHERVOX_ERROR_API_RESPONSE;
+    }
+    
+    *latitude_out = lat->valuedouble;
+    *longitude_out = lon->valuedouble;
+    
+    cJSON_Delete(root);
+    return ETHERVOX_SUCCESS;
+}
 
 ethervox_result_t ethervox_weather_geocode(
     const char* location_name,
@@ -271,77 +458,90 @@ ethervox_result_t ethervox_weather_geocode(
         return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
-    // URL-encode location name
-    char* encoded_name = url_encode(location_name);
-    if (!encoded_name) {
-        if (error_message_out) {
-            *error_message_out = strdup("Failed to encode location name");
-        }
-        return ETHERVOX_ERROR_OUT_OF_MEMORY;
+    ethervox_result_t result;
+    
+    // Strategy 1: Try with expanded state name (e.g., "Portland, OR" -> "Portland, Oregon")
+    char* expanded_location = expand_us_state(location_name);
+    result = try_geocode_variant(expanded_location, latitude_out, longitude_out);
+    
+    if (result == ETHERVOX_SUCCESS) {
+        ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
+                    "Geocoded '%s' (expanded from '%s') -> lat=%.4f, lon=%.4f",
+                    expanded_location, location_name, *latitude_out, *longitude_out);
+        free(expanded_location);
+        return ETHERVOX_SUCCESS;
     }
     
-    // Build geocoding URL
-    char url[1024];
-    snprintf(url, sizeof(url), "%s?name=%s&count=1&language=en&format=json",
-             OPENMETEO_GEOCODING_URL, encoded_name);
-    free(encoded_name);
-    
-    // Make request
-    char* response_json = NULL;
-    char* error_msg = NULL;
-    ethervox_result_t result = http_get_request(url, &response_json, &error_msg);
-    
-    if (result != ETHERVOX_SUCCESS) {
-        if (error_message_out) {
-            *error_message_out = error_msg;
-        } else {
-            free(error_msg);
+    // Strategy 2: If that failed and we have a comma, try just the city name
+    const char* comma = strchr(location_name, ',');
+    if (comma && result == ETHERVOX_ERROR_NOT_FOUND) {
+        // Extract city name only
+        size_t city_len = comma - location_name;
+        char city_only[256];
+        if (city_len < sizeof(city_only)) {
+            strncpy(city_only, location_name, city_len);
+            city_only[city_len] = '\0';
+            
+            // Trim trailing spaces
+            char* end = city_only + strlen(city_only) - 1;
+            while (end > city_only && *end == ' ') {
+                *end = '\0';
+                end--;
+            }
+            
+            ethervox_log(ETHERVOX_LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__,
+                        "Trying city name only: '%s'", city_only);
+            
+            result = try_geocode_variant(city_only, latitude_out, longitude_out);
+            
+            if (result == ETHERVOX_SUCCESS) {
+                ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
+                            "Geocoded '%s' (city only from '%s') -> lat=%.4f, lon=%.4f",
+                            city_only, location_name, *latitude_out, *longitude_out);
+                free(expanded_location);
+                return ETHERVOX_SUCCESS;
+            }
         }
-        return result;
     }
     
-    // Parse JSON response
-    cJSON* root = cJSON_Parse(response_json);
-    free(response_json);
-    
-    if (!root) {
-        if (error_message_out) {
-            *error_message_out = strdup("Failed to parse geocoding response");
+    // Strategy 3: Try with ", USA" appended
+    if (comma && result == ETHERVOX_ERROR_NOT_FOUND) {
+        char usa_variant[512];
+        size_t city_len = comma - location_name;
+        if (city_len < sizeof(usa_variant) - 10) {
+            strncpy(usa_variant, location_name, city_len);
+            usa_variant[city_len] = '\0';
+            strcat(usa_variant, ", USA");
+            
+            ethervox_log(ETHERVOX_LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__,
+                        "Trying with USA suffix: '%s'", usa_variant);
+            
+            result = try_geocode_variant(usa_variant, latitude_out, longitude_out);
+            
+            if (result == ETHERVOX_SUCCESS) {
+                ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
+                            "Geocoded '%s' (with USA from '%s') -> lat=%.4f, lon=%.4f",
+                            usa_variant, location_name, *latitude_out, *longitude_out);
+                free(expanded_location);
+                return ETHERVOX_SUCCESS;
+            }
         }
-        return ETHERVOX_ERROR_API_RESPONSE;
     }
     
-    cJSON* results = cJSON_GetObjectItem(root, "results");
-    if (!results || !cJSON_IsArray(results) || cJSON_GetArraySize(results) == 0) {
-        cJSON_Delete(root);
+    free(expanded_location);
+    
+    // All strategies failed
+    if (result == ETHERVOX_ERROR_NOT_FOUND) {
         if (error_message_out) {
             char msg[512];
-            snprintf(msg, sizeof(msg), "Location '%s' not found", location_name);
+            snprintf(msg, sizeof(msg), "Location '%s' not found. Try using just the city name or add country (e.g., 'Portland, USA')", location_name);
             *error_message_out = strdup(msg);
         }
-        return ETHERVOX_ERROR_NOT_FOUND;
+    } else if (error_message_out) {
+        *error_message_out = strdup("Geocoding request failed");
     }
     
-    cJSON* first_result = cJSON_GetArrayItem(results, 0);
-    cJSON* lat = cJSON_GetObjectItem(first_result, "latitude");
-    cJSON* lon = cJSON_GetObjectItem(first_result, "longitude");
-    
-    if (!lat || !lon || !cJSON_IsNumber(lat) || !cJSON_IsNumber(lon)) {
-        cJSON_Delete(root);
-        if (error_message_out) {
-            *error_message_out = strdup("Invalid geocoding response format");
-        }
-        return ETHERVOX_ERROR_API_RESPONSE;
-    }
-    
-    *latitude_out = lat->valuedouble;
-    *longitude_out = lon->valuedouble;
-    
-    ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
-                "Geocoded '%s' to (%.4f, %.4f)", location_name, *latitude_out, *longitude_out);
-    
-    cJSON_Delete(root);
-    return ETHERVOX_SUCCESS;
+    return result;
 }
 
 // ============================================================================
@@ -771,8 +971,10 @@ ethervox_result_t ethervox_weather_init(const ethervox_weather_config_t* config)
         g_config = *config;
     }
     
-    // Initialize curl globally
+#ifndef ETHERVOX_PLATFORM_ANDROID
+    // Initialize curl globally (not needed on Android - using JNI HTTP)
     curl_global_init(CURL_GLOBAL_DEFAULT);
+#endif
     
     g_initialized = true;
     
@@ -790,7 +992,10 @@ void ethervox_weather_cleanup(void) {
     }
     
     weather_cache_clear();
+    
+#ifndef ETHERVOX_PLATFORM_ANDROID
     curl_global_cleanup();
+#endif
     
     g_initialized = false;
     

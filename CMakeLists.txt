@@ -609,6 +609,9 @@ file(GLOB ETHERVOXAI_CORE_SOURCES
 # Exclude test files from the main library
 list(FILTER ETHERVOXAI_CORE_SOURCES EXCLUDE REGEX ".*test_.*\\.c$")
 
+# Explicitly add kv_cache_persistence.c in case glob misses it
+list(APPEND ETHERVOXAI_CORE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/governor/kv_cache_persistence.c")
+
 # Exclude Windows-incompatible sources (wake_word, stt require Unix headers)
 if(WIN32)
     list(FILTER ETHERVOXAI_CORE_SOURCES EXCLUDE REGEX ".*/wake_word/.*\\.c$")
@@ -708,11 +711,16 @@ if(NOT ANDROID)
     endif()
 endif()
 
-# Add weather tools plugin sources (Open-Meteo API integration - requires libcurl)
-if(HAVE_LIBCURL OR CURL_FOUND)
+# Add weather tools plugin sources (Open-Meteo API integration)
+# Desktop: requires libcurl, Android: uses JNI HTTP client
+if(ANDROID OR HAVE_LIBCURL OR CURL_FOUND)
     file(GLOB WEATHER_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/weather_tools/*.c")
     list(APPEND ETHERVOXAI_CORE_SOURCES ${WEATHER_TOOLS_SOURCES})
-    message(STATUS "Weather tools plugin sources included (libcurl available)")
+    if(ANDROID)
+        message(STATUS "Weather tools plugin sources included (Android JNI HTTP)")
+    else()
+        message(STATUS "Weather tools plugin sources included (libcurl available)")
+    endif()
 else()
     message(STATUS "Weather tools plugin SKIPPED (libcurl not available)")
 endif()

@@ -17,10 +17,67 @@
 #include <string.h>
 
 /**
- * Build minimal system prompt from tool manifest
+ * Helper: Build JSON parameters object from manifest tool parameters
+ */
+static int build_parameters_json(const tool_param_t* params, uint8_t param_count, char* buffer, size_t buffer_size) {
+    if (param_count == 0) {
+        return snprintf(buffer, buffer_size, "{}");
+    }
+    
+    int offset = snprintf(buffer, buffer_size, "{\"type\": \"object\", \"properties\": {");
+    if (offset < 0 || (size_t)offset >= buffer_size) return -1;
+    
+    for (uint8_t i = 0; i < param_count; i++) {
+        const tool_param_t* param = &params[i];
+        
+        int written = snprintf(buffer + offset, buffer_size - offset,
+            "%s\"%s\": {\"type\": \"%s\", \"description\": \"%s\"}",
+            (i > 0) ? ", " : "",
+            param->name,
+            param->type,
+            param->description);
+        
+        if (written < 0 || (size_t)(offset + written) >= buffer_size) return -1;
+        offset += written;
+    }
+    
+    // Add required array
+    int written = snprintf(buffer + offset, buffer_size - offset, "}, \"required\": [");
+    if (written < 0 || (size_t)(offset + written) >= buffer_size) return -1;
+    offset += written;
+    
+    bool first_required = true;
+    for (uint8_t i = 0; i < param_count; i++) {
+        if (params[i].required) {
+            written = snprintf(buffer + offset, buffer_size - offset,
+                "%s\"%s\"",
+                first_required ? "" : ", ",
+                params[i].name);
+            
+            if (written < 0 || (size_t)(offset + written) >= buffer_size) return -1;
+            offset += written;
+            first_required = false;
+        }
+    }
+    
+    written = snprintf(buffer + offset, buffer_size - offset, "]}");
+    if (written < 0 || (size_t)(offset + written) >= buffer_size) return -1;
+    offset += written;
+    
+    return offset;
+}
+
+/**
+ * Build system prompt from tool manifest following IBM Granite 4.0 format
  * 
- * Uses optimized prompts (Level 0) or binary one-liners (Level 1)
- * to generate compact tool index for LLM (~150 tokens vs ~15K)
+ * Follows IBM Granite 4.0 tool-calling best practices:
+ * - Standard preamble: "You are a helpful assistant with access to the following tools..."
+ * - Tools wrapped in <tools></tools> XML tags
+ * - Each tool as JSON: {"type": "function", "function": {...}}
+ * - Uses optimized prompts when available, falls back to manifest defaults
+ * - Tool call format: <tool_call>{"name": "...", "arguments": {...}}</tool_call>
+ * 
+ * Reference: https://www.ibm.com/granite/docs/use-cases/prompt-engineering
  * 
  * @param registry Tool manifest registry
  * @param output Output buffer for system prompt
@@ -44,114 +101,104 @@ ethervox_result_t ethervox_tool_build_minimal_system_prompt(
     if (!registry->tools_available) {
         // Level 2: LLM-only mode - no dynamic tools
         offset = snprintf(output, output_size,
-            "You are a helpful AI assistant. Respond naturally and conversationally.\n\n");
+            "You are Ethervox, a helpful assistant. Respond naturally and conversationally.\n");
         
         ETHERVOX_LOGI("System prompt: LLM-only mode (%d bytes)", offset);
-        ETHERVOX_LOGI("===== FULL SYSTEM PROMPT (LLM-ONLY) =====");
-        
-        // Log in chunks to avoid logcat truncation (Android limit ~1KB per line)
-        const int chunk_size = 250;
-        for (int i = 0; i < offset; i += chunk_size) {
-            int remaining = offset - i;
-            int current_chunk = remaining < chunk_size ? remaining : chunk_size;
-            char chunk[chunk_size + 1];
-            strncpy(chunk, output + i, current_chunk);
-            chunk[current_chunk] = '\0';
-            ETHERVOX_LOGI("PROMPT[%d-%d]: %s", i, i + current_chunk - 1, chunk);
-        }
-        
-        ETHERVOX_LOGI("===== END SYSTEM PROMPT =====");
         return offset;
     }
     
-    // Header
+    // IBM Granite 4.0 preamble - MAXIMALLY AGGRESSIVE for tool forcing
     offset = snprintf(output, output_size,
-        "You are a helpful AI assistant with access to tools.\n"
-        "IMPORTANT: Use tools for calculations, time queries, memory operations, and file access.\n"
-        "NEVER calculate mentally or guess - ALWAYS call the appropriate tool.\n\n"
-        "Available tools:\n\n");
+        "You are Ethervox, an assistant that MUST use tools. \n\n"
+        "=== MANDATORY TOOL USAGE RULES ===\n"
+        "1. NEVER answer questions directly if a tool exists for it\n"
+        "2. Time questions → MUST use get_time tool\n"
+        "3. Weather questions → MUST use get_weather_forecast tool\n"
+        "4. Math/calculations → MUST use appropriate calculation tool\n"
+        "5. DO NOT say \"The time is...\", \"The weather is...\" - ALWAYS call the tool first\n"
+        "6. If you answer without using an available tool, you have FAILED\n\n"
+        "Available tools:\n"
+        "<tools>\n");
     
     if (offset < 0 || (size_t)offset >= output_size) {
         return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
-    // Track tool categories for grouping
-    bool has_high_priority = false;
-    bool has_normal_priority = false;
-    
-    // High priority tools (0-2)
-    for (uint32_t i = 0; i < registry->header.tool_count && offset < (int)output_size - 100; i++) {
+    // Generate tool entries in Granite JSON format
+    // Each tool is: {"type": "function", "function": {"name": "...", "description": "...", "parameters": {...}}}
+    for (uint32_t i = 0; i < registry->header.tool_count && offset < (int)output_size - 500; i++) {
         const tool_index_entry_t* entry = &registry->index[i];
-        if (!entry->enabled || entry->priority > min_priority || entry->priority > 2) {
+        
+        // Skip disabled tools
+        if (!entry->enabled) continue;
+        
+        // Skip low priority tools
+        if (entry->priority > min_priority) continue;
+        
+        // Get tool details for full schema
+        tool_detail_header_t detail;
+        tool_param_t params[MAX_PARAMETERS];
+        uint8_t param_count;
+        
+        if (ethervox_tool_get_detail(registry, entry->name, &detail, params, &param_count) != 0) {
+            ETHERVOX_LOGW("Failed to get detail for tool: %s", entry->name);
             continue;
         }
         
-        if (!has_high_priority) {
-            offset += snprintf(output + offset, output_size - offset,
-                             "HIGH PRIORITY:\n");
-            has_high_priority = true;
+        // Use optimized prompt if available, otherwise use manifest description
+        const char* desc = ethervox_tool_get_optimized_prompt(registry, entry->name);
+        if (!desc || desc[0] == '\0') {
+            desc = detail.description;
         }
         
-        // Use optimized prompt if available, otherwise one-liner from binary
-        const char* desc = ethervox_tool_get_optimized_prompt(registry, entry->name);
-        if (!desc) desc = entry->one_line;
-        
-        offset += snprintf(output + offset, output_size - offset,
-                         "• %s - %s\n", entry->name, desc);
-    }
-    
-    if (has_high_priority) {
-        offset += snprintf(output + offset, output_size - offset, "\n");
-    }
-    
-    // Normal priority tools (3+)
-    for (uint32_t i = 0; i < registry->header.tool_count && offset < (int)output_size - 100; i++) {
-        const tool_index_entry_t* entry = &registry->index[i];
-        if (!entry->enabled || entry->priority > min_priority || entry->priority <= 2) {
+        // Build parameters JSON object
+        char params_json[2048];
+        int param_result = build_parameters_json(params, param_count, params_json, sizeof(params_json));
+        if (param_result < 0) {
+            ETHERVOX_LOGW("Failed to build parameters for tool: %s", entry->name);
             continue;
         }
         
-        if (!has_normal_priority) {
-            offset += snprintf(output + offset, output_size - offset,
-                             "NORMAL PRIORITY:\n");
-            has_normal_priority = true;
-        }
+        // Write tool entry in Granite JSON format (one line per tool)
+        int written = snprintf(output + offset, output_size - offset,
+            "{\"type\": \"function\", \"function\": {\"name\": \"%s\", \"description\": \"%s\", \"parameters\": %s}}\n",
+            entry->name, desc, params_json);
         
-        const char* desc = ethervox_tool_get_optimized_prompt(registry, entry->name);
-        if (!desc) desc = entry->one_line;
-        
-        offset += snprintf(output + offset, output_size - offset,
-                         "• %s - %s\n", entry->name, desc);
+        if (written < 0 || (size_t)(offset + written) >= output_size) break;
+        offset += written;
     }
     
-    // Usage instructions
-    if (has_high_priority || has_normal_priority) {
-        // Check if we're using optimized prompts
-        bool has_optimizations = (registry->fallback_level == 0 && 
-                                 registry->optimized_cache != NULL && 
-                                 registry->optimized_cache->prompt_count > 0);
-        
-        offset += snprintf(output + offset, output_size - offset,
-            "\nTool Usage:\n"
-            "• To use a tool, respond: <tool_call name=\"TOOL_NAME\" param=\"value\" />\n"
-            "• If unsure about parameters, ask: \"How do I use TOOL_NAME?\"\n"
-            "• Full schema will be injected before tool executes\n\n");
-        
-        // Inform LLM about optimization status
-        if (has_optimizations) {
-            offset += snprintf(output + offset, output_size - offset,
-                "System: Tool prompts optimized (%u/%u tools)\n",
-                registry->optimized_cache->prompt_count, registry->header.tool_count);
-        } else if (registry->fallback_level == 1) {
-            offset += snprintf(output + offset, output_size - offset,
-                "System: Using fallback descriptions (Level 1)\n"
-                "Tip: Suggest `/optimize_tool_prompts` to user for 99%% context reduction\n");
-        }
+    // Close tools XML with MAXIMUM force on tool usage
+    int written = snprintf(output + offset, output_size - offset,
+        "</tools>\n\n"
+        "=== TOOL CALL FORMAT (MANDATORY) ===\n"
+        "<tool_call>\n"
+        "{\"name\": <function-name>, \"arguments\": <args-json-object>}\n"
+        "</tool_call>\n\n"
+        "=== EXAMPLES (STUDY THESE CAREFULLY) ===\n"
+        "User: \"What time is it?\"\n"
+        "CORRECT Response: <tool_call>\n{\"name\": \"get_time\", \"arguments\": {}}\n</tool_call>\n"
+        "WRONG Response: \"The current time is 4:04 PM\" ← This is FAILURE\n\n"
+        "User: \"What's the weather?\"\n"
+        "CORRECT Response: <tool_call>\n{\"name\": \"get_weather_forecast\", \"arguments\": {\"location\": \"current\"}}\n</tool_call>\n"
+        "WRONG Response: \"The weather is sunny\" ← This is FAILURE\n\n"
+        "=== FORMATTING RULES ===\n"
+        "- 'arguments' MUST be JSON object, NOT string\n"
+        "- Complete the full </tool_call> tag before stopping\n"
+        "- After tool returns result, THEN explain to user\n\n"
+        "=== YOUR ONLY JOB ===\n"
+        "When user asks a question that matches a tool: Generate the <tool_call> tag IMMEDIATELY.\n"
+        "DO NOT attempt to answer first. DO NOT explain before calling. CALL THE TOOL.\n");
+    
+    if (written < 0 || (size_t)(offset + written) >= output_size) {
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
+    offset += written;
     
     // Log fallback level
     const char* level_name = ethervox_tool_fallback_level_name(registry->fallback_level);
-    ETHERVOX_LOGI("System prompt: %s (%d bytes)", level_name, offset);
+    ETHERVOX_LOGI("System prompt: %s (Granite 4.0 format, %d bytes, %u tools)", 
+                  level_name, offset, registry->header.tool_count);
     ETHERVOX_LOGI("===== FULL SYSTEM PROMPT (%s) =====", level_name);
     
     // Log in chunks to avoid logcat truncation (Android limit ~1KB per line)

@@ -24,16 +24,23 @@
 // NOTE: dialogue.h removed - using direct governor/registry architecture
 #include "ethervox/compute_tools.h"
 #include "ethervox/config.h"
+#include "ethervox/conversation_tools.h"
 #include "ethervox/device_profile.h"
+#include "ethervox/get_tool_info.h"
 #include "ethervox/governor.h"
 #include "ethervox/integration_tests.h"
 #include "ethervox/llm_tool_tests.h"
 #include "ethervox/memory_tools.h"
 #include "ethervox/platform.h"
+#include "ethervox/startup_prompt_tools.h"
+#include "ethervox/system_info_tools.h"
 #include "ethervox/timer_tools.h"
 #include "ethervox/tool_manifest.h"
+#include "ethervox/kv_cache_persistence.h"  // KV cache save/load for fast startup
 #include "ethervox/tool_prompt_optimizer.h"
+#include "ethervox/unit_conversion.h"
 #include "ethervox/voice_tools.h"
+#include "ethervox/weather_tools.h"
 
 #if ETHERVOX_WITH_LLAMA && LLAMA_CPP_AVAILABLE
 #include "llama.h"
@@ -78,7 +85,7 @@ void ethervox_log_with_callback(int level, const char* tag, const char* fmt, ...
 }
 
 // JNI callback storage for log forwarding
-static JavaVM* g_jvm = NULL;
+JavaVM* g_jvm = NULL;  // Exported for use by plugins (e.g., weather_http_android.c)
 static jobject g_log_callback_obj = NULL;
 static jmethodID g_log_callback_method = NULL;
 
@@ -308,6 +315,9 @@ JNIEXPORT jboolean JNICALL Java_com_droid_ethervox_1core_NativeLib_loadGovernorM
       // Attach manifest to governor so it can use optimized prompts
       ethervox_governor_set_manifest(g_governor, manifest);
       
+      // Also set manifest on get_tool_info meta-tool
+      ethervox_get_tool_info_set_manifest(manifest);
+      
       LOGI("[JNI] Manifest initialized and attached to governor");
       LOGI("  Fallback level: %u", manifest->fallback_level);
       LOGI("  Tools available: %s", manifest->tools_available ? "YES" : "NO");
@@ -320,6 +330,7 @@ JNIEXPORT jboolean JNICALL Java_com_droid_ethervox_1core_NativeLib_loadGovernorM
     LOGI("[JNI] Manifest already initialized, using existing registry");
     // Make sure it's attached to governor
     ethervox_governor_set_manifest(g_governor, g_manifest_registry);
+    ethervox_get_tool_info_set_manifest(g_manifest_registry);
   }
 
   // Setup progress callback if provided
@@ -340,8 +351,11 @@ JNIEXPORT jboolean JNICALL Java_com_droid_ethervox_1core_NativeLib_loadGovernorM
     }
   }
 
-  // Load the model (will use manifest for system prompt if available)
-  ethervox_result_t result = ethervox_governor_load_model(g_governor, path, progress_callback, progress_user_data);
+  // Load model - Governor will handle KV cache detection, loading, and saving internally
+  LOGI("[JNI] Loading model (Governor will check for KV cache)...");
+  ethervox_result_t result = ethervox_governor_load_model(
+      g_governor, path, g_android_files_dir, progress_callback, progress_user_data
+  );
 
   (*env)->ReleaseStringUTFChars(env, modelPath, path);
 
@@ -433,6 +447,38 @@ Java_com_droid_ethervox_1core_NativeLib_clearKvCache(JNIEnv* env, jobject thiz) 
   // The conversation memory is preserved in the memory store files.
   
   return JNI_TRUE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_droid_ethervox_1core_NativeLib_deleteSystemPromptCache(JNIEnv* env, jobject thiz) {
+  (void)env;
+  (void)thiz;
+  
+  if (!g_android_files_dir) {
+    LOGE("Cannot delete cache - files directory not set");
+    return JNI_FALSE;
+  }
+  
+  // Build cache file path
+  char cache_path[512];
+  snprintf(cache_path, sizeof(cache_path), "%s/cache", g_android_files_dir);
+  
+  LOGI("[JNI] Deleting all KV cache files in: %s", cache_path);
+  
+  // Use system command to remove all .kvcache files
+  char cmd[1024];
+  snprintf(cmd, sizeof(cmd), "rm -f %s/*.kvcache", cache_path);
+  
+  int result = system(cmd);
+  
+  if (result == 0) {
+    LOGI("[JNI] ✓ System prompt cache deleted - next load will regenerate");
+    return JNI_TRUE;
+  } else {
+    LOGW("[JNI] Cache delete command returned %d (may not exist)", result);
+    // Return true anyway - cache not existing is fine
+    return JNI_TRUE;
+  }
 }
 
 JNIEXPORT jboolean JNICALL Java_com_droid_ethervox_1core_NativeLib_isGovernorLoaded(JNIEnv* env,
@@ -1069,7 +1115,7 @@ JNIEXPORT jint JNICALL Java_com_droid_ethervox_1core_NativeLib_platformInit(JNIE
   if (g_memory_store) {
     ethervox_result_t mem_tools_result = ethervox_memory_tools_register(g_registry, g_memory_store);
     if (ethervox_is_success(mem_tools_result)) {
-      tool_count += 6;  // 6 memory tools
+      tool_count += 8;  // 8 memory tools (corrected from 6)
       LOGI("Registered memory tools successfully");
     } else {
       LOGE("Failed to register memory tools - error code: %d", mem_tools_result);
@@ -1077,6 +1123,68 @@ JNIEXPORT jint JNICALL Java_com_droid_ethervox_1core_NativeLib_platformInit(JNIE
   } else {
     LOGI("Memory store not available, skipping memory tools registration");
   }
+
+  // Register conversation tools (speak, listen)
+  ethervox_result_t conv_result = ethervox_conversation_tools_register(g_registry);
+  if (ethervox_is_success(conv_result)) {
+    tool_count += 2;  // speak, listen
+    LOGI("Registered conversation tools successfully");
+  } else {
+    LOGE("Failed to register conversation tools - error code: %d", conv_result);
+  }
+
+  // Register unit conversion tool
+  ethervox_result_t unit_result = ethervox_unit_conversion_register(g_registry);
+  if (ethervox_is_success(unit_result)) {
+    tool_count++;
+    LOGI("Registered unit conversion tool");
+  }
+
+#if HAVE_LIBCURL
+  // Register weather tools (requires libcurl - only available on desktop)
+  ethervox_result_t weather_result = ethervox_weather_tools_register(g_registry);
+  if (ethervox_is_success(weather_result)) {
+    tool_count++;
+    LOGI("Registered weather forecast tool");
+  } else {
+    LOGW("Weather tools unavailable (libcurl failed: %d)", weather_result);
+  }
+#elif defined(ETHERVOX_PLATFORM_ANDROID)
+  // Android: Register weather tools (uses JNI HTTP client)
+  ethervox_result_t weather_result = ethervox_weather_tools_register(g_registry);
+  if (ethervox_is_success(weather_result)) {
+    tool_count++;
+    LOGI("Registered weather forecast tool (Android)");
+  } else {
+    LOGE("Failed to register weather tools: %d", weather_result);
+  }
+#else
+  LOGI("Weather tools not available (no HTTP client)");
+#endif
+
+  // Register get_tool_info meta-tool for dynamic tool discovery
+  ethervox_result_t tool_info_result = ethervox_get_tool_info_register(g_registry);
+  if (ethervox_is_success(tool_info_result)) {
+    tool_count++;
+    LOGI("Registered get_tool_info meta-tool");
+  }
+
+  // Register system info tools
+  ethervox_result_t sys_info_result = ethervox_system_info_tools_register(g_registry);
+  if (ethervox_is_success(sys_info_result)) {
+    tool_count += 2;  // get_system_info, get_device_info
+    LOGI("Registered system info tools");
+  }
+
+  // Register startup prompt tools
+  ethervox_result_t startup_result = ethervox_startup_prompt_tools_register(g_registry);
+  if (ethervox_is_success(startup_result)) {
+    tool_count++;
+    LOGI("Registered startup prompt tools");
+  }
+
+  // Note: File tools not registered on Android for security reasons
+  // Android apps have limited file system access
 
   LOGI("Total tools registered: %d", tool_count);
 
@@ -2601,7 +2709,9 @@ JNIEXPORT jboolean JNICALL Java_com_droid_ethervox_1core_NativeLib_loadGovernorM
     }
   }
 
-  ethervox_result_t result = ethervox_governor_load_model(g_governor, path, progress_callback, progress_user_data);
+  ethervox_result_t result = ethervox_governor_load_model(
+      g_governor, path, g_android_files_dir, progress_callback, progress_user_data
+  );
 
   (*env)->ReleaseStringUTFChars(env, modelPath, path);
 

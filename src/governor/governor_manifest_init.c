@@ -172,6 +172,7 @@ ethervox_result_t ethervox_governor_init_with_manifest(
         manifest_registry->fallback_level = 0;
         manifest_registry->tools_loaded_count = manifest_registry->header.tool_count;
         manifest_registry->tools_available = true;
+        
         ETHERVOX_LOGI("[OK] Loaded optimized prompts: %s",
                       ethervox_tool_fallback_level_name(0));
         ETHERVOX_LOGI("  Tools will be available for use");
@@ -217,14 +218,17 @@ ethervox_result_t ethervox_governor_init_with_manifest(
  * Build complete system prompt using Tool Manifest System
  * 
  * Generates minimal prompt with tool index, then appends base instructions.
+ * Wraps the entire prompt with chat template markers for proper model recognition.
  * 
  * @param manifest_registry Tool manifest registry
+ * @param chat_template Chat template for wrapping (system_start/system_end markers)
  * @param output Output buffer
  * @param output_size Buffer size
  * @return Number of bytes written, or negative on error
  */
 ethervox_result_t ethervox_governor_build_system_prompt_with_manifest(
     const tool_manifest_registry_t* manifest_registry,
+    const chat_template_t* chat_template,
     char* output,
     size_t output_size
 ) {
@@ -234,17 +238,15 @@ ethervox_result_t ethervox_governor_build_system_prompt_with_manifest(
     
     int offset = 0;
     
-    // Base system message
-    offset = snprintf(output, output_size,
-        "You are a helpful AI assistant.\n"
-        "CRITICAL: Only generate YOUR response. Stop immediately after answering.\n"
-        "DO NOT generate the user's next message. DO NOT continue the conversation.\n\n");
-    
-    if (offset < 0 || (size_t)offset >= output_size) {
-        return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    // Start with chat template system marker (e.g., "<|system|>\n")
+    if (chat_template && chat_template->system_start) {
+        offset = snprintf(output, output_size, "%s", chat_template->system_start);
+        if (offset < 0 || (size_t)offset >= output_size) {
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
+        }
     }
     
-    // Add tool index (minimal prompt) - uses optimized prompts (Level 0) or one-liners (Level 1)
+    // Add tool section - the manifest builder will add the Granite-formatted tools
     if (manifest_registry && manifest_registry->tools_available) {
         int tool_prompt_len = ethervox_tool_build_minimal_system_prompt(
             manifest_registry,
@@ -257,24 +259,25 @@ ethervox_result_t ethervox_governor_build_system_prompt_with_manifest(
             offset += tool_prompt_len;
         }
     } else {
-        // Level 2/3: No dynamic tools
-#ifndef ETHERVOX_PLATFORM_ANDROID
-        // Terminal-specific: show slash commands
-        int cmd_len = snprintf(output + offset, output_size - offset,
-            "Available commands:\n"
-            "• /help - Show this help\n"
-            "• /quit - Exit conversation\n"
-            "• /clear - Clear history\n"
-            "• /memory - Search past conversations\n"
-            "• /status - System information\n\n");
+        // Level 2/3: No dynamic tools - simple assistant prompt
+        int written = snprintf(output + offset, output_size - offset,
+            "You are Ethervox, a helpful AI assistant. Respond naturally and conversationally.\n");
         
-        if (cmd_len > 0) {
-            offset += cmd_len;
+        if (written > 0) {
+            offset += written;
         }
-#endif
     }
     
-    ETHERVOX_LOGI("System prompt generated: %d bytes", offset);
+    // End with chat template system end marker (e.g., "<|end|>\n")
+    if (chat_template && chat_template->system_end) {
+        int written = snprintf(output + offset, output_size - offset, "%s", chat_template->system_end);
+        if (written < 0 || (size_t)(offset + written) >= output_size) {
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
+        }
+        offset += written;
+    }
+    
+    ETHERVOX_LOGI("System prompt generated: %d bytes (with chat template markers)", offset);
     
     return offset;
 }

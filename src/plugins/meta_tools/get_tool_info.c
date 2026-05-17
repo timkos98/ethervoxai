@@ -42,32 +42,43 @@ static char* build_tool_schema_json(const char* tool_name) {
     char* json = malloc(4096);
     if (!json) return strdup("{\"error\": \"Memory allocation failed\"}");
     
+    // Get optimized prompt if available
+    const char* optimized_desc = ethervox_tool_get_optimized_prompt(g_manifest_registry, tool_name);
+    if (!optimized_desc || optimized_desc[0] == '\0') {
+        optimized_desc = detail.description;  // Fallback to full description
+    }
+    
     int off = 0;
-    off += snprintf(json + off, 4096 - off, "{");
+    off += snprintf(json + off, 4096 - off, "{\"type\":\"function\",\"function\":{");
     off += snprintf(json + off, 4096 - off, "\"name\":\"%s\",", tool_name);
-    off += snprintf(json + off, 4096 - off, "\"description\":\"%s\",", detail.description);
-    off += snprintf(json + off, 4096 - off, "\"category\":\"%s\",", detail.category);
+    off += snprintf(json + off, 4096 - off, "\"description\":\"%s\",", optimized_desc);
     
-    // TODO: Load optimized prompt from ~/.ethervox/tools/optimized/<model>.json if available
-    // For now, use the full description
-    off += snprintf(json + off, 4096 - off, "\"optimized_prompt\":\"%s\",", detail.description);
-    
-    // Add parameters
-    off += snprintf(json + off, 4096 - off, "\"parameters\":[");
+    // Add parameters in JSON Schema format
+    off += snprintf(json + off, 4096 - off, "\"parameters\":{\"type\":\"object\",\"properties\":{");
     for (uint8_t i = 0; i < param_count; i++) {
         if (i > 0) off += snprintf(json + off, 4096 - off, ",");
-        off += snprintf(json + off, 4096 - off, "{");
-        off += snprintf(json + off, 4096 - off, "\"name\":\"%s\",", params[i].name);
+        off += snprintf(json + off, 4096 - off, "\"%s\":{", params[i].name);
         off += snprintf(json + off, 4096 - off, "\"type\":\"%s\",", params[i].type);
-        off += snprintf(json + off, 4096 - off, "\"description\":\"%s\",", params[i].description);
-        off += snprintf(json + off, 4096 - off, "\"required\":%s", params[i].required ? "true" : "false");
+        off += snprintf(json + off, 4096 - off, "\"description\":\"%s\"", params[i].description);
         off += snprintf(json + off, 4096 - off, "}");
+    }
+    off += snprintf(json + off, 4096 - off, "}");
+    
+    // Add required array
+    off += snprintf(json + off, 4096 - off, ",\"required\":[");
+    bool first_required = true;
+    for (uint8_t i = 0; i < param_count; i++) {
+        if (params[i].required) {
+            if (!first_required) off += snprintf(json + off, 4096 - off, ",");
+            off += snprintf(json + off, 4096 - off, "\"%s\"", params[i].name);
+            first_required = false;
+        }
     }
     off += snprintf(json + off, 4096 - off, "]");
     
-    // Note: Tool metadata (deterministic, stateless, latency) not available in manifest
-    // Only stored in runtime tool registry
-    off += snprintf(json + off, 4096 - off, "}");
+    // Close parameters and function
+    off += snprintf(json + off, 4096 - off, "}");  // Close parameters
+    off += snprintf(json + off, 4096 - off, "}}");  // Close function and root
     
     return json;
 }

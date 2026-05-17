@@ -409,7 +409,12 @@ static bool process_json_entry(ethervox_memory_store_t* store, const char* line)
     char tools_storage[16][64];
     uint32_t tools_count = 0;
     
-    char* tools_start = strstr(line, "\"tools\":");
+    // Try both "tools_called" (current format) and "tools" (legacy format)
+    char* tools_start = strstr(line, "\"tools_called\":");
+    if (!tools_start) {
+        tools_start = strstr(line, "\"tools\":");
+    }
+    
     if (tools_start) {
         ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__,
                     "Found tools field in JSONL line");
