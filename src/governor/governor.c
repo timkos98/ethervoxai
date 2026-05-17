@@ -13,6 +13,7 @@
 #include "ethervox/governor.h"
 #include "governor_helpers.h"  // Clean, testable helper functions
 
+#include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,6 +24,7 @@
 #include "ethervox/config.h"
 #include "ethervox/device_profile.h"  // Adaptive hardware configuration
 #include "ethervox/error.h"
+#include "ethervox/kv_cache_persistence.h"  // KV cache save/load for fast startup
 #include "ethervox/tool_manifest.h"   // Manifest system for optimized prompts
 
 #ifdef _WIN32
@@ -633,19 +635,82 @@ static int extract_tool_calls_json(const char* response, char** tool_calls, int 
 
     const char* json_start = start + 11;  // Skip "<tool_call>"
 
-    // Find closing tag
+    // Find closing tag (optional - handle incomplete tool calls gracefully)
     const char* end = strstr(json_start, "</tool_call>");
-    if (!end)
-      break;
+    const char* json_end;
+    
+    if (end) {
+      // Normal case: closing tag found
+      json_end = end;
+    } else {
+      // Fallback: No closing tag - try to extract complete JSON object
+      // This handles cases where model stops generating before closing tag
+      GOV_LOG("WARNING: Tool call without closing tag, attempting to extract JSON");
+      
+      // Find the end of the JSON object by counting braces
+      const char* p = json_start;
+      
+      // Skip whitespace to find opening brace
+      while (*p && (*p == ' ' || *p == '\n' || *p == '\r' || *p == '\t')) {
+        p++;
+      }
+      
+      if (*p != '{') {
+        GOV_ERROR("Tool call JSON doesn't start with '{', skipping");
+        break;
+      }
+      
+      int brace_count = 0;
+      bool in_string = false;
+      bool escaped = false;
+      
+      while (*p) {
+        if (escaped) {
+          escaped = false;
+          p++;
+          continue;
+        }
+        
+        if (*p == '\\') {
+          escaped = true;
+          p++;
+          continue;
+        }
+        
+        if (*p == '"' && !escaped) {
+          in_string = !in_string;
+        }
+        
+        if (!in_string) {
+          if (*p == '{') {
+            brace_count++;
+          } else if (*p == '}') {
+            brace_count--;
+            if (brace_count == 0) {
+              // Found complete JSON object
+              json_end = p + 1;
+              end = json_end;  // Set end so we can continue parsing
+              GOV_LOG("Extracted incomplete tool call (no closing tag)");
+              break;
+            }
+          }
+        }
+        p++;
+      }
+      
+      if (brace_count != 0) {
+        GOV_ERROR("Incomplete JSON in tool call, skipping");
+        break;
+      }
+    }
 
     // Skip whitespace at start of JSON
-    while (json_start < end && (*json_start == ' ' || *json_start == '\n' || *json_start == '\r' ||
+    while (json_start < json_end && (*json_start == ' ' || *json_start == '\n' || *json_start == '\r' ||
                                 *json_start == '\t')) {
       json_start++;
     }
 
     // Find actual JSON end (skip trailing whitespace)
-    const char* json_end = end;
     while (json_end > json_start && (*(json_end - 1) == ' ' || *(json_end - 1) == '\n' ||
                                      *(json_end - 1) == '\r' || *(json_end - 1) == '\t')) {
       json_end--;
@@ -669,7 +734,12 @@ static int extract_tool_calls_json(const char* response, char** tool_calls, int 
       count++;
     }
 
-    pos = end + 12;  // Move past "</tool_call>"
+    // Move past the tool call (either closing tag or end of JSON)
+    if (strstr(end, "</tool_call>") == end) {
+      pos = end + 12;  // Move past "</tool_call>"
+    } else {
+      pos = end;  // Move past JSON end
+    }
   }
 
   return count;
@@ -871,8 +941,58 @@ static int execute_tool_call_json(const char* tool_call_json, ethervox_tool_regi
         args_value_start++;
       }
 
-      // Find the opening brace
-      if (*args_value_start == '{') {
+      // Handle two formats:
+      // 1. Object: "arguments": {"location": "..."}  (correct Granite format)
+      // 2. String: "arguments": "{\"location\": \"...\"}" (model sometimes generates this)
+      
+      if (*args_value_start == '"') {
+        // Format 2: Arguments as JSON string - extract the string content
+        args_value_start++; // Skip opening quote
+        
+        // Find the closing quote (handle escaped quotes)
+        const char* p = args_value_start;
+        const char* args_end = NULL;
+        while (*p) {
+          if (*p == '\\' && *(p + 1) == '"') {
+            p += 2;  // Skip escaped quote
+            continue;
+          }
+          if (*p == '"') {
+            args_end = p;
+            break;
+          }
+          p++;
+        }
+        
+        if (args_end) {
+          // Copy the string content and unescape it
+          size_t args_len = args_end - args_value_start;
+          if (args_len < sizeof(json_input)) {
+            size_t dst_idx = 0;
+            const char* src = args_value_start;
+            while (src < args_end && dst_idx < sizeof(json_input) - 1) {
+              if (*src == '\\' && src + 1 < args_end) {
+                // Handle escape sequences
+                src++;
+                switch (*src) {
+                  case 'n':  json_input[dst_idx++] = '\n'; break;
+                  case 't':  json_input[dst_idx++] = '\t'; break;
+                  case 'r':  json_input[dst_idx++] = '\r'; break;
+                  case '"':  json_input[dst_idx++] = '"';  break;
+                  case '\\': json_input[dst_idx++] = '\\'; break;
+                  default:   json_input[dst_idx++] = *src; break;
+                }
+                src++;
+              } else {
+                json_input[dst_idx++] = *src++;
+              }
+            }
+            json_input[dst_idx] = '\0';
+            GOV_LOG("Extracted arguments from JSON string format: %s", json_input);
+          }
+        }
+      } else if (*args_value_start == '{') {
+        // Format 1: Arguments as JSON object (correct format)
         int brace_count = 0;
         const char* p = args_value_start;
         const char* args_end = NULL;
@@ -896,6 +1016,7 @@ static int execute_tool_call_json(const char* tool_call_json, ethervox_tool_regi
           if (args_len < sizeof(json_input)) {
             strncpy(json_input, args_value_start, args_len);
             json_input[args_len] = '\0';
+            GOV_LOG("Extracted arguments from JSON object format: %s", json_input);
           }
         }
       }
@@ -1102,6 +1223,7 @@ static int execute_tool_call(const char* tool_call_xml, ethervox_tool_registry_t
 
 ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
                                                const char* model_path,
+                                               const char* cache_dir,
                                                ethervox_load_progress_callback progress_callback,
                                                void* user_data) {
   if (!governor || !model_path)
@@ -1348,6 +1470,69 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
 
   GOV_LOG("Context created successfully");
 
+  // Get vocab early - needed for both cache load and normal generation paths
+  const struct llama_vocab* vocab = llama_model_get_vocab(governor->llm_model);
+
+  // === KV CACHE OPTIMIZATION ===
+  // Check for saved KV cache to skip expensive system prompt processing
+  bool cache_loaded = false;
+  if (cache_dir) {
+    char cache_path[512];
+    ethervox_result_t cache_path_result = ethervox_kv_cache_get_path(
+        model_path, cache_dir, cache_path, sizeof(cache_path)
+    );
+    
+    if (ethervox_is_success(cache_path_result) && 
+        ethervox_kv_cache_exists(cache_path, model_path)) {
+      
+      GOV_LOG("═══════════════════════════════════════════════════════");
+      GOV_LOG("KV CACHE FOUND - Loading system prompt instantly");
+      GOV_LOG("Cache file: %s", cache_path);
+      GOV_LOG("═══════════════════════════════════════════════════════");
+      
+      if (progress_callback) {
+        progress_callback("processing_prompt", 0.1f, 
+                        "Loading system prompt from cache...", user_data);
+      }
+      
+      ethervox_result_t load_result = ethervox_kv_cache_load(governor, cache_path);
+      
+      if (ethervox_is_success(load_result)) {
+        cache_loaded = true;
+        
+        if (progress_callback) {
+          progress_callback("processing_prompt", 1.0f, 
+                          "✓ System prompt ready (loaded from cache)", user_data);
+        }
+        
+        GOV_LOG("KV cache loaded successfully");
+        GOV_LOG("Skipped system prompt generation");
+      } else {
+        GOV_LOG("KV cache load failed (code %d), will generate from scratch", load_result);
+      }
+    }
+  }
+  
+  // If cache was loaded successfully, skip system prompt generation
+  if (cache_loaded) {
+    // Set up essentials that would normally be set during system prompt processing
+    governor->model_path = strdup(model_path);
+    governor->tools_available = (governor->config.system_prompt_mode != ETHERVOX_GOVERNOR_MODE_MINIMAL);
+    
+    // System prompt token count and KV pos were restored by ethervox_kv_cache_load
+    // via ethervox_governor_set_system_tokens
+    
+    // We'll handle tool result wrapper tokenization at the end (shared code)
+    goto setup_tool_wrappers;
+  }
+  
+  // No cache - generate system prompt normally
+  if (progress_callback) {
+    progress_callback("processing_prompt", 0.0f, 
+                    "Generating system prompt (first launch)...", user_data);
+  }
+  GOV_LOG("No KV cache found - generating system prompt (~5 minutes)");
+
   // Log tool registry state BEFORE building system prompt
   GOV_LOG("Tool registry has %u tools registered", governor->tool_registry->tool_count);
   for (uint32_t i = 0; i < governor->tool_registry->tool_count; i++) {
@@ -1393,7 +1578,7 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
       GOV_LOG("  Tool count: %u", governor->manifest_registry->header.tool_count);
       
       build_result = ethervox_governor_build_system_prompt_with_manifest(
-          governor->manifest_registry, system_prompt, sizeof(system_prompt));
+          governor->manifest_registry, governor->chat_template, system_prompt, sizeof(system_prompt));
     } else {
       GOV_LOG("Using LEGACY system prompt builder (no optimizations)");
       if (governor->manifest_registry) {
@@ -1443,8 +1628,7 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
   }
   GOV_LOG("===== END SYSTEM PROMPT =====");
 
-  // Tokenize system prompt
-  const struct llama_vocab* vocab = llama_model_get_vocab(governor->llm_model);
+  // Tokenize system prompt (vocab already declared earlier for cache path compatibility)
   int n_tokens = -llama_tokenize(vocab, system_prompt, strlen(system_prompt), NULL, 0, true, false);
 
   if (n_tokens <= 0) {
@@ -1559,13 +1743,36 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
 
   // Call progress callback for completion
   if (progress_callback) {
-    progress_callback("processing_prompt", 1.0f, "System prompt loaded successfully", user_data);
+    progress_callback("processing_prompt", 0.98f, "Saving cache for faster future startups...", user_data);
   }
 
   governor->system_prompt_token_count = n_tokens;
   governor->current_kv_pos = n_tokens;  // Start after system prompt
   governor->model_path = strdup(model_path);
+  
+  // Save KV cache for next app launch
+  if (cache_dir) {
+    char cache_path[512];
+    ethervox_result_t cache_path_result = ethervox_kv_cache_get_path(
+        model_path, cache_dir, cache_path, sizeof(cache_path)
+    );
+    
+    if (ethervox_is_success(cache_path_result)) {
+      ethervox_result_t save_result = ethervox_kv_cache_save(governor, cache_path);
+      if (ethervox_is_success(save_result)) {
+        GOV_LOG("✓ KV cache saved to: %s", cache_path);
+        GOV_LOG("✓ Next app start will load from cache (~3-5 seconds)");
+      } else {
+        GOV_LOG("Failed to save KV cache (code %d) - next startup will regenerate", save_result);
+      }
+    }
+  }
+  
+  if (progress_callback) {
+    progress_callback("processing_prompt", 1.0f, "✓ System prompt ready", user_data);
+  }
 
+setup_tool_wrappers:
   // Pre-tokenize static tool result wrappers for speed
   // Validate chat_template before accessing members
   if (!governor->chat_template) {
@@ -1628,7 +1835,8 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
 
   governor->llm_loaded = true;
 
-  GOV_LOG("System prompt processed into KV cache (%d tokens)", n_tokens);
+  GOV_LOG("System prompt processed into KV cache (%d tokens)", 
+          governor->system_prompt_token_count);
   GOV_LOG("Pre-tokenized wrappers: prefix=%d tokens, suffix=%d tokens",
           governor->tool_result_prefix_len, governor->tool_result_suffix_len);
 
@@ -1726,7 +1934,8 @@ ethervox_result_t ethervox_governor_reload_model(ethervox_governor_t* governor) 
   GOV_LOG("[Governor] Reloading model from: %s", governor->model_path);
 
   // Use the existing load_model function with the saved path
-  return ethervox_governor_load_model(governor, governor->model_path, NULL, NULL);
+  // Note: cache_dir=NULL for reload (don't save/load cache on explicit reload)
+  return ethervox_governor_load_model(governor, governor->model_path, NULL, NULL, NULL);
 }
 
 /**
@@ -2350,6 +2559,63 @@ ethervox_governor_status_t ethervox_governor_execute(
                        governor->chat_template->user_start, user_query,
                        governor->chat_template->user_end, governor->chat_template->assistant_start);
 
+  // ========================================================================
+  // RESPONSE PREFILLING - Force tool usage for common queries
+  // ========================================================================
+  // The model is trained to answer queries like "What time is it?" directly
+  // even with aggressive prompting. Prefilling forces it to start with a tool call.
+  // 
+  // IMPORTANT: These triggers should be SPECIFIC to avoid false positives.
+  // Generic triggers like "what's" or "tell me" will fire on conversational
+  // requests like "tell me a story" which should NOT use tools.
+  // 
+  // TODO: Move these triggers to tool manifest metadata for scalability.
+  // Each tool should declare its trigger phrases in optimized_prompts.json.
+  bool prefilled_tool_call = false;  // Track if we prefilled
+  if (governor->tool_execution_enabled) {
+    // Convert query to lowercase for case-insensitive matching
+    char query_lower[512];
+    size_t query_len = strlen(user_query);
+    if (query_len >= sizeof(query_lower)) query_len = sizeof(query_lower) - 1;
+    for (size_t i = 0; i < query_len; i++) {
+      query_lower[i] = tolower((unsigned char)user_query[i]);
+    }
+    query_lower[query_len] = '\0';
+    
+    // Detect tool-triggering queries
+    // Use SPECIFIC phrases to avoid false positives on conversational queries
+    bool should_prefill_tool = false;
+    const char* tool_triggers[] = {
+      // Time tool triggers
+      "what time", "current time", "time is it", "what's the time", "whats the time",
+      
+      // Weather tool triggers  
+      "weather in", "weather at", "weather for", "temperature in", "forecast for",
+      "how's the weather", "hows the weather", "what's the weather", "whats the weather",
+      
+      // Math tool triggers
+      "calculate", "compute", "what is the result", "solve",
+      
+      NULL
+    };
+    
+    for (int i = 0; tool_triggers[i] != NULL; i++) {
+      if (strstr(query_lower, tool_triggers[i]) != NULL) {
+        should_prefill_tool = true;
+        GOV_LOG("PREFILL: Detected tool trigger '%s' in query", tool_triggers[i]);
+        break;
+      }
+    }
+    
+    // Add tool call prefix to force model to use tools
+    if (should_prefill_tool) {
+      conv_pos += snprintf(conversation + conv_pos, sizeof(conversation) - conv_pos, 
+                          "<tool_call>\n");
+      prefilled_tool_call = true;
+      GOV_LOG("PREFILL: Forcing response to start with '<tool_call>' tag");
+    }
+  }
+
   // Track how much of conversation has been processed to avoid re-processing
   size_t processed_length = 0;
 
@@ -2395,7 +2661,13 @@ ethervox_governor_status_t ethervox_governor_execute(
       if (error) *error = strdup("Memory allocation failed");
       return ETHERVOX_GOVERNOR_ERROR;
     }
-    bool inside_tool_call = false;
+    
+    // CRITICAL: If we prefilled a tool call, set inside_tool_call IMMEDIATELY
+    // This prevents the first JSON tokens from leaking through before detection
+    bool inside_tool_call = prefilled_tool_call;
+    if (prefilled_tool_call) {
+      GOV_LOG("PREFILL: Setting inside_tool_call=true from start of generation");
+    }
 
     // Only tokenize and decode the NEW part of the conversation (what hasn't been processed yet)
     const char* new_content = conversation + processed_length;
@@ -2625,11 +2897,11 @@ ethervox_governor_status_t ethervox_governor_execute(
                      ETHERVOX_GOVERNOR_PENALTY_LAST_N, ETHERVOX_GOVERNOR_REPETITION_PENALTY,
                      ETHERVOX_GOVERNOR_FREQUENCY_PENALTY, ETHERVOX_GOVERNOR_PRESENCE_PENALTY));
 
-    // Use low temperature for deterministic, focused tool-oriented responses
-    // 0.3 keeps model grounded and prevents hallucination/rambling
-    // Allows longer answers when needed, but stays on-task
-    float temperature = (governor->config.temperature > 0.0f) ? governor->config.temperature : 0.3f;
-    GOV_LOG("Using temperature: %.2f (config: %.2f)", temperature, governor->config.temperature);
+    // Use VERY low temperature for maximally deterministic tool selection
+    // 0.05 forces the model to pick the highest probability path (tool calling)
+    // This prevents the model from choosing conversational responses over tool calls
+    float temperature = (governor->config.temperature > 0.0f) ? governor->config.temperature : 0.05f;
+    GOV_LOG("Using temperature: %.2f (config: %.2f) [TOOL FORCING MODE]", temperature, governor->config.temperature);
     llama_sampler_chain_add(sampler, llama_sampler_init_temp(temperature));
     llama_sampler_chain_add(sampler, llama_sampler_init_dist(0));
 
@@ -2936,6 +3208,46 @@ ethervox_governor_status_t ethervox_governor_execute(
             }
           }
           
+          // CRITICAL: Also check if lookahead contains tool call JSON fragments
+          // These indicate we're in the middle of a tool call that should not be streamed
+          bool contains_tool_json = false;
+          const char* tool_json_indicators[] = {
+            "{\"name\":",           // JSON start (very common in tool calls)
+            "\"arguments\":", "\"name\":", "\"location\":", "\"forecast_type\":",
+            "\"expression\":", "\"duration_",
+            "},",                  // JSON object closing with comma
+            "}\n",                 // JSON object closing with newline
+            "}}",                  // Double closing brace (nested JSON end)
+            "\"},",                // JSON string closing with comma
+            "\"}\n",               // JSON string closing with newline
+            "</tool_call",         // Closing tag (partial or full)
+            NULL
+          };
+          for (int i = 0; tool_json_indicators[i] != NULL; i++) {
+            if (strstr(combined_lookahead, tool_json_indicators[i]) != NULL) {
+              contains_tool_json = true;
+              GOV_LOG("Lookahead contains tool JSON: '%s', holding back streaming", 
+                      tool_json_indicators[i]);
+              break;
+            }
+          }
+          
+          // CRITICAL: Also detect if lookahead starts with JSON object opening
+          // This catches {"name": patterns at the very beginning of tool calls
+          if (!contains_tool_json && buf_len > 0) {
+            // Check if buffer starts with { or {" which indicates JSON
+            if (combined_lookahead[0] == '{' || 
+                (buf_len >= 2 && combined_lookahead[0] == '{' && combined_lookahead[1] == '"')) {
+              contains_tool_json = true;
+              GOV_LOG("Lookahead starts with JSON opening brace, holding back");
+            }
+            // CRITICAL: Also check for closing brace at start (end of tool call)
+            if (combined_lookahead[0] == '}') {
+              contains_tool_json = true;
+              GOV_LOG("Lookahead starts with closing brace (tool call end), holding back");
+            }
+          }
+          
           // Critical checks before streaming oldest token
           // Check if what we've STREAMED SO FAR + lookahead buffer contains stop sequences
           // This catches stop sequences that span across the streaming boundary
@@ -2968,6 +3280,7 @@ ethervox_governor_status_t ethervox_governor_execute(
           // Stream oldest token ONLY if all checks pass
           bool should_stream_oldest = !inside_tool_call && 
                                       !might_be_tool_start &&
+                                      !contains_tool_json &&
                                       !lookahead_building_stop && 
                                       !oldest_could_be_stop;
           
@@ -3208,6 +3521,63 @@ ethervox_governor_status_t ethervox_governor_execute(
         found_sequence = "<tool_call";
       }
       
+      // CRITICAL: Check for tool call JSON fragments (not just the opening tag)
+      // These can leak into the buffer when tool call detection happens after tokens are added
+      // Examples: `"arguments":`, `"location":`, `"forecast_type":`, `}"}`, etc.
+      const char* tool_json_patterns[] = {
+        "{\"name\":",       // JSON start with name field (very beginning of tool call)
+        "\"arguments\":",   // Tool call argument field
+        "\"name\":",        // Tool call name field (when appearing mid-buffer)
+        "\"location\":",    // Common parameter
+        "\"forecast_type\":",
+        "\"days_ahead\":",
+        "\"expression\":",
+        "\"duration_",      // duration_minutes, duration_seconds
+        "},",               // JSON object closing with comma
+        "}\n",              // JSON object closing with newline
+        "}}",               // Double closing brace (nested JSON end)
+        "\"},",            // JSON string closing with comma
+        "\"}\n",           // JSON string closing with newline
+        "</tool_call",     // Closing tag (partial or full)
+        NULL
+      };
+      
+      for (int i = 0; tool_json_patterns[i] != NULL; i++) {
+        char* json_pos = strstr(combined_lookahead, tool_json_patterns[i]);
+        if (json_pos && (!earliest_stop || json_pos < earliest_stop)) {
+          earliest_stop = json_pos;
+          found_sequence = "tool_call_json_fragment";
+          GOV_LOG("Detected tool call JSON fragment: '%s' at position %ld", 
+                  tool_json_patterns[i], (long)(json_pos - combined_lookahead));
+          break;
+        }
+      }
+      
+      // CRITICAL: Also catch JSON opening at buffer start
+      // This is the most common leak: {"name": "get_time", ...
+      if (!earliest_stop) {
+        size_t buf_len = strlen(combined_lookahead);
+        if (buf_len > 0 && (combined_lookahead[0] == '{' || 
+            (buf_len >= 2 && combined_lookahead[0] == '{' && combined_lookahead[1] == '"'))) {
+          earliest_stop = combined_lookahead;  // Stop at the very beginning
+          found_sequence = "json_object_start";
+          GOV_LOG("Buffer starts with JSON object, discarding entire buffer");
+        }
+        // CRITICAL: Also catch closing brace at start (end of tool call)
+        if (buf_len > 0 && combined_lookahead[0] == '}') {
+          earliest_stop = combined_lookahead;  // Stop at the very beginning
+          found_sequence = "json_object_end";
+          GOV_LOG("Buffer starts with closing brace (tool call end), discarding entire buffer");
+        }
+      }
+      
+      // Also check for closing tags that suggest we're at the end of a tool call
+      char* tool_close_pos = strstr(combined_lookahead, "</tool_call>");
+      if (tool_close_pos && (!earliest_stop || tool_close_pos < earliest_stop)) {
+        earliest_stop = tool_close_pos;
+        found_sequence = "</tool_call>";
+      }
+      
       // CRITICAL: Also check if buffer ENDS WITH a prefix of any stop sequence
       // This catches cases like "<|start_of_role" (incomplete, missing final |)
       if (!earliest_stop) {
@@ -3321,8 +3691,19 @@ ethervox_governor_status_t ethervox_governor_execute(
           
           llama_memory_seq_rm(mem, 0, remove_start, remove_end);
           
-          // Update position and count
-          governor->current_kv_pos -= tokens_to_remove;
+          // CRITICAL: Sync with llama.cpp's actual KV cache position
+          // llama_memory_seq_pos_max returns the LAST FILLED position, not next free position
+          // Our current_kv_pos should be the NEXT FREE position (last filled + 1)
+          int32_t actual_max_pos = llama_memory_seq_pos_max(mem, 0);
+          int expected_last_filled = remove_start - 1;  // Last position we expect to remain
+          
+          if (actual_max_pos != expected_last_filled) {
+            GOV_LOG("KV cache removal inconsistency: expected last filled pos %d, llama.cpp reports %d", 
+                     expected_last_filled, actual_max_pos);
+          }
+          
+          // Always use llama.cpp's reported position + 1 (convert last filled to next free)
+          governor->current_kv_pos = actual_max_pos + 1;
           generated_count -= tokens_to_remove;
           
           // Also update our tracking buffer
@@ -3332,6 +3713,8 @@ ethervox_governor_status_t ethervox_governor_execute(
             GOV_LOG("[KV_TRACK] Removed %d tokens from tracking (new count: %d)", 
                     tokens_to_remove, governor->kv_cache_tokens_count);
           }
+          
+          GOV_LOG("KV position after removal: %d (next free position)", governor->current_kv_pos);
         }
       }
     }
@@ -3421,6 +3804,42 @@ ethervox_governor_status_t ethervox_governor_execute(
 
     const char* llm_response = llm_response_buffer;
     GOV_LOG("Generated response: %s", llm_response);
+
+    // ========================================================================
+    // PREFILL RECONSTRUCTION - Add back the prefilled tag for extraction
+    // ========================================================================
+    // If we prefilled "<tool_call>\n", the model's output doesn't include it.
+    // We need to prepend it so the extraction logic can find it.
+    // CRITICAL: Only reconstruct if response looks like JSON (starts with '{')
+    // Otherwise we incorrectly tag normal text responses as tool calls!
+    if (prefilled_tool_call && strlen(llm_response_buffer) > 0) {
+      // Check if response already starts with <tool_call> (shouldn't happen, but be safe)
+      if (strncmp(llm_response_buffer, "<tool_call>", 11) != 0) {
+        // Skip whitespace to check first non-whitespace character
+        const char* first_char = llm_response_buffer;
+        while (*first_char == ' ' || *first_char == '\t' || *first_char == '\n') {
+          first_char++;
+        }
+        
+        // Only reconstruct if response starts with JSON object ('{')
+        if (*first_char == '{') {
+          // Create temp buffer with prefilled tag
+          size_t response_len = strlen(llm_response_buffer);
+          size_t needed = 12 + response_len + 1;  // "<tool_call>\n" + response + '\0'
+          
+          if (needed < 65536) {  // Buffer size check
+            // Shift response right to make room for tag
+            memmove(llm_response_buffer + 12, llm_response_buffer, response_len + 1);
+            memcpy(llm_response_buffer, "<tool_call>\n", 12);
+            GOV_LOG("PREFILL: Reconstructed full tool call with opening tag (response is JSON)");
+          } else {
+            GOV_ERROR("PREFILL: Response too large to prepend tag (%zu bytes)", needed);
+          }
+        } else {
+          GOV_LOG("PREFILL: Response is normal text (not JSON), skipping reconstruction");
+        }
+      }
+    }
 
     if (metrics) {
       metrics->iteration_count = iteration + 1;
@@ -4150,6 +4569,58 @@ void ethervox_governor_set_manifest(ethervox_governor_t* governor, tool_manifest
       GOV_LOG("  Optimization loaded: %s", manifest->optimization_loaded ? "YES" : "NO");
     }
   }
+}
+
+// ============================================================================
+// KV Cache Persistence Accessor Functions
+// ============================================================================
+
+llama_token* ethervox_governor_get_system_tokens(struct ethervox_governor* gov, int* len) {
+  if (!gov || !len) return NULL;
+#if defined(ETHERVOX_WITH_LLAMA) && LLAMA_HEADER_AVAILABLE
+  *len = gov->system_prompt_tokens_len;
+  return gov->system_prompt_tokens;
+#else
+  *len = 0;
+  return NULL;
+#endif
+}
+
+struct llama_context* ethervox_governor_get_context(struct ethervox_governor* gov) {
+  if (!gov) return NULL;
+#if defined(ETHERVOX_WITH_LLAMA) && LLAMA_HEADER_AVAILABLE
+  return gov->llm_ctx;
+#else
+  return NULL;
+#endif
+}
+
+void ethervox_governor_set_system_tokens(struct ethervox_governor* gov, 
+                                         llama_token* tokens, int len) {
+  if (!gov || !tokens || len <= 0) return;
+#if defined(ETHERVOX_WITH_LLAMA) && LLAMA_HEADER_AVAILABLE
+  // Free old tokens if they exist
+  if (gov->system_prompt_tokens) {
+    free(gov->system_prompt_tokens);
+  }
+  
+  // Store new tokens (takes ownership)
+  gov->system_prompt_tokens = tokens;
+  gov->system_prompt_tokens_len = len;
+  gov->system_prompt_token_count = len;
+  gov->current_kv_pos = len;
+  
+  GOV_LOG("[KV Cache] Stored %d cached system prompt tokens, KV pos set to %d", len, len);
+#endif
+}
+
+const char* ethervox_governor_get_model_path(struct ethervox_governor* gov) {
+  if (!gov) return "";
+#if defined(ETHERVOX_WITH_LLAMA) && LLAMA_HEADER_AVAILABLE
+  return gov->model_path ? gov->model_path : "";
+#else
+  return "";
+#endif
 }
 
 void ethervox_governor_request_interrupt(ethervox_governor_t* governor) {

@@ -198,6 +198,13 @@ target_include_directories(test_tts_synthesis PRIVATE ${CMAKE_SOURCE_DIR}/includ
 add_executable(test_voice_training unit/test_voice_training.c)
 target_link_libraries(test_voice_training ethervoxai m)
 target_include_directories(test_voice_training PRIVATE ${CMAKE_SOURCE_DIR}/include)
+
+# Lookahead buffer filtering tests (token streaming, JSON leak prevention)
+add_executable(test_lookahead_filtering test_lookahead_filtering.c)
+target_link_libraries(test_lookahead_filtering ethervoxai)
+target_include_directories(test_lookahead_filtering PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME LookaheadFiltering COMMAND test_lookahead_filtering)
+set_tests_properties(LookaheadFiltering PROPERTIES TIMEOUT 10 LABELS "unit;governor;streaming")
 add_test(NAME VoiceTraining COMMAND test_voice_training)
 set_tests_properties(VoiceTraining PROPERTIES TIMEOUT 60 LABELS "unit;voice;training")
 
