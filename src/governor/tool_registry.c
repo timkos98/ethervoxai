@@ -389,167 +389,36 @@ ethervox_result_t ethervox_tool_registry_build_system_prompt(
     size_t remaining = buffer_size;
     char* ptr = buffer;
     
-    // Format differs significantly between XML and JSON tool formats
+    // Custom trained model - minimal system prompt without tool definitions
+    // The model has been trained to use tools, so we don't need to define them
+    ETHERVOX_LOG_INFO("Building minimal system prompt for custom trained model (no tool definitions)");
+    
+    // Format differs slightly between XML and JSON tool formats
     if (tool_format == TOOL_FORMAT_JSON_IN_XML) {
-        // Granite format: system prompt with JSON tools in <tools></tools>
+        // Granite format: minimal system prompt
         // NOTE: Do NOT include chat template markers (system_start/end) as visible text!
         // The tokenizer handles these automatically as special tokens.
         written = snprintf(ptr, remaining,
             "You are a helpful assistant with access to tools. "
-            "When generating stories or creative content, write complete narratives with proper endings. Respond in the language in which you are addressed."
-            "For conversations: Only generate YOUR response, then STOP. DO NOT generate the user's next message. "
-            "You are provided with function signatures within <tools></tools> XML tags:\n<tools>\n");
+            "When generating stories or creative content, write complete narratives with proper endings. "
+            "Respond in the language in which you are addressed. "
+            "For conversations: Only generate YOUR response, then STOP. DO NOT generate the user's next message.\n");
         
         if (written < 0 || (size_t)written >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;
-        ptr += written;
-        remaining -= written;
-        
-        // Add each fast-path tool as JSON
-        for (uint32_t i = 0; i < registry->tool_count; i++) {
-            const ethervox_tool_t* tool = &registry->tools[i];
-            if (!is_fast_path_tool(tool->name)) continue;
-            
-            ETHERVOX_LOG_INFO("Adding fast-path tool to system prompt: %s", tool->name);
-            
-            char json_tool[1024];
-            int json_len = build_json_tool_definition(tool, json_tool, sizeof(json_tool));
-            if (json_len < 0 || json_len >= (int)sizeof(json_tool)) {
-                ETHERVOX_LOG_WARN("Tool %s JSON too large (%d bytes), skipping from fast-path", 
-                                 tool->name, json_len);
-                continue;
-            }
-            
-            int tool_written = snprintf(ptr, remaining, "%s\n", json_tool);
-            if (tool_written < 0 || (size_t)tool_written >= remaining) {
-                ETHERVOX_LOG_ERROR("Buffer overflow adding tool %s (needed %d, have %zu)", 
-                                  tool->name, tool_written, remaining);
-                return ETHERVOX_ERROR_INVALID_ARGUMENT;
-            }
-            ptr += tool_written;
-            remaining -= tool_written;
-        }
-        
-        // Close tools and add comma-separated list of ALL available tools
-        int tools_list_written = snprintf(ptr, remaining, "</tools>\n\nOther available tools (use get_tool_info to learn about these): ");
-        if (tools_list_written < 0 || (size_t)tools_list_written >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;
-        ptr += tools_list_written;
-        remaining -= tools_list_written;
-        
-        // List all non-fast-path tools as comma-separated (token-efficient)
-        bool first_tool = true;
-        for (uint32_t i = 0; i < registry->tool_count; i++) {
-            const ethervox_tool_t* tool = &registry->tools[i];
-            if (is_fast_path_tool(tool->name)) continue;  // Skip fast-path tools already listed
-            
-            int name_written = snprintf(ptr, remaining, "%s%s", first_tool ? "" : ", ", tool->name);
-            if (name_written < 0 || (size_t)name_written >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;
-            ptr += name_written;
-            remaining -= name_written;
-            first_tool = false;
-        }
-        
-        // Add newline after tool list
-        int newline_written = snprintf(ptr, remaining, "\n");
-        if (newline_written < 0 || (size_t)newline_written >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;
-        ptr += newline_written;
-        remaining -= newline_written;
-        
-        // Add calling instructions
-        int instr_written = snprintf(ptr, remaining,
-            "\nTOOL CALL FORMAT:\n"
-            "<tool_call>\n{\"name\": \"function_name\", \"arguments\": {\"param\": \"value\"}}\n</tool_call>\n\n"
-            "DECISION FRAMEWORK:\n"
-            "Before responding, ask: Would a tool provide more accurate, current, or complete information?\n"
-            "- Calculations, time/date, measurements: tools provide precision\n"
-            "- Current conditions, real-time data: tools access live information\n"
-            "- User's personal data, memories, files: tools retrieve specific context\n"
-            "- Uncertain about parameters: call get_tool_info to discover capabilities\n\n"
-            "After </tool_call>, generation STOPS. System executes tool and provides <tool_result>.\n"
-            "Then respond naturally using the factual tool results.\n\n"
-            "EXAMPLE - Tool discovery flow:\n"
-            "<tool_call>\n{\"name\": \"get_tool_info\", \"arguments\": {\"tool_name\": \"get_weather_forecast\"}}\n</tool_call>\n"
-            "[System returns schema]\n"
-            "<tool_call>\n{\"name\": \"get_weather_forecast\", \"arguments\": {\"location\": \"Berlin\"}}\n</tool_call>\n\n");
-            
-        // NOTE: Do NOT append system_end marker - tokenizer handles it automatically
-            
-        if (instr_written < 0 || (size_t)instr_written >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;
         
     } else {
-        // XML attribute format (Qwen, Phi, Llama, etc.)
+        // XML attribute format (Qwen, Phi, Llama, etc.) - minimal prompt for custom trained model
         const char* platform_context = is_mobile
-            ? "You are Ethervox. ALWAYS use tools - never answer from memory alone.\n"
-              "Tool syntax: <tool_call name=\"tool_name\" param=\"value\" />\n"
-            : "You are Ethervox, a helpful AI assistant.\n"
-              "IMPORTANT: You MUST use tools for all calculations, time queries, and memory operations.\n"
-              "NEVER calculate mentally or guess - ALWAYS call the appropriate tool.\n"
-              "Tool call format: <tool_call name=\"tool_name\" param=\"value\" />\n";
+            ? "You are Ethervox, a helpful assistant with access to tools.\n"
+            : "You are Ethervox, a helpful AI assistant with access to tools.\n";
         
         // NOTE: Do NOT include system_start marker - tokenizer handles it automatically
         written = snprintf(ptr, remaining,
-            "%s\n",
+            "%s",
             platform_context
         );
         
         if (written < 0 || (size_t)written >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;
-        ptr += written;
-        remaining -= written;
-        
-        // Strong instruction about tool usage
-        int instruction_written = snprintf(ptr, remaining,
-            "\nDECISION FRAMEWORK:\n"
-            "Before responding, consider: Would a tool provide more accurate or current information?\n"
-            "Use tools when factual accuracy matters (calculations, time, real-time data, user context).\n"
-            "For unfamiliar tools, call get_tool_info first to discover parameters.\n\n");
-        if (instruction_written < 0 || (size_t)instruction_written >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;
-        ptr += instruction_written;
-        remaining -= instruction_written;
-        
-        // Tool list header - minimal mode for KV cache efficiency
-        int tools_header = snprintf(ptr, remaining, 
-            "Available Tools:\n");
-        if (tools_header < 0 || (size_t)tools_header >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;
-        ptr += tools_header;
-        remaining -= tools_header;
-        
-        // Add each tool - minimal listing for non-fast-path, full schema for fast-path
-        for (uint32_t i = 0; i < registry->tool_count; i++) {
-            const ethervox_tool_t* tool = &registry->tools[i];
-            int tool_written;
-            
-            if (is_fast_path_tool(tool->name)) {
-                // Fast-path tools: include full description and schema
-                const char* schema = (tool->parameters_json_schema[0] != '\0') 
-                    ? tool->parameters_json_schema 
-                    : "{}";
-                tool_written = snprintf(ptr, remaining,
-                    "- %s: %s\n  Schema: %s\n",
-                    tool->name,
-                    tool->description,
-                    schema);
-            } else {
-                // Non-fast-path tools: name only, call get_tool_info for details
-                tool_written = snprintf(ptr, remaining,
-                    "- %s\n",
-                    tool->name);
-            }
-            
-            if (tool_written < 0 || (size_t)tool_written >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;
-            
-            ptr += tool_written;
-            remaining -= tool_written;
-        }
-        
-        // Use default examples based on platform
-        const char* usage_section = is_mobile
-            ? "\nEXAMPLE - Discover tool:\n"
-              "<tool_call name=\"get_tool_info\" tool_name=\"get_weather_forecast\" />\n"
-            : "\nEXAMPLE - Discovering a tool:\n"
-              "<tool_call name=\"get_tool_info\" tool_name=\"get_weather_forecast\" />\n"
-              "Then: <tool_call name=\"get_weather_forecast\" location=\"Berlin\" />\n\n";
-        
-        int instr_written = snprintf(ptr, remaining, "%s", usage_section);
-        if (instr_written < 0 || (size_t)instr_written >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
     // Validate final buffer integrity
