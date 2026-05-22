@@ -1848,7 +1848,8 @@ setup_tool_wrappers:
   // but happens at initial model load instead of after KV cache clear.
 
   GOV_LOG("STARTUP: Checking for previous conversation context...");
-  load_conversation_summary(governor, "[\"context_summary\"]", "[Previous Session Context]",
+  // Use plain text without brackets to avoid confusing the model
+  load_conversation_summary(governor, "[\"context_summary\"]", "Previous conversation context:",
                             "STARTUP");
 
   GOV_LOG("[Governor] Model loaded and ready");
@@ -2473,8 +2474,9 @@ ethervox_governor_status_t ethervox_governor_execute(
 
           // Load conversation summary from memory to restore context
           GOV_LOG("RELIGHT: Loading conversation summary from memory...");
+          // Use plain text without brackets to avoid confusing the model
           load_conversation_summary(governor, "[\"context_summary\",\"kv_cleared\"]",
-                                    "[Context Restored] Previous conversation summary:", "RELIGHT");
+                                    "Restored conversation context:", "RELIGHT");
 
           // Notify UI that recovery was successful
           if (progress_callback) {
@@ -2569,10 +2571,10 @@ ethervox_governor_status_t ethervox_governor_execute(
   // Generic triggers like "what's" or "tell me" will fire on conversational
   // requests like "tell me a story" which should NOT use tools.
   // 
-  // TODO: Move these triggers to tool manifest metadata for scalability.
-  // Each tool should declare its trigger phrases in optimized_prompts.json.
+  // NOTE: Disabled by default - confuses custom trained models that already
+  // know when to use tools. Enable via config.enable_tool_prefilling if needed.
   bool prefilled_tool_call = false;  // Track if we prefilled
-  if (governor->tool_execution_enabled) {
+  if (governor->tool_execution_enabled && governor->config.enable_tool_prefilling) {
     // Convert query to lowercase for case-insensitive matching
     char query_lower[512];
     size_t query_len = strlen(user_query);

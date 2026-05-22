@@ -292,6 +292,7 @@ typedef struct {
   ethervox_governor_system_prompt_mode_t
       system_prompt_mode;       // Full or minimal prompt (default: FULL)
   bool disable_memory_logging;  // Secret mode - disable conversation logging (default: false)
+  bool enable_tool_prefilling;   // Force tool calls with prefix for common queries (default: false)
 } ethervox_governor_config_t;
 
 /**
@@ -530,7 +531,8 @@ static inline ethervox_governor_config_t ethervox_governor_default_config(void) 
       .n_threads = 8,        // 8 threads by default (overridden by settings)
       .temperature = 0.7f,   // Balanced creativity (overridden by settings)
       .system_prompt_mode = ETHERVOX_GOVERNOR_MODE_FULL,  // Default to full capabilities
-      .disable_memory_logging = false                     // Default to normal memory logging
+      .disable_memory_logging = false,                    // Default to normal memory logging
+      .enable_tool_prefilling = false                     // Disabled by default (confuses trained models)
   };
   return config;
 }

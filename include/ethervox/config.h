@@ -367,6 +367,10 @@ extern "C" {
 #define ETHERVOX_GOVERNOR_PENALTY_LAST_N 128  // Apply penalties to last N tokens (increased from 64)
 #endif
 
+#ifndef ETHERVOX_GOVERNOR_ENABLE_TOOL_PREFILLING
+#define ETHERVOX_GOVERNOR_ENABLE_TOOL_PREFILLING false  // Disabled by default (confuses trained models)
+#endif
+
 // Debug configuration
 #ifdef DEBUG_ENABLED
 #define ETHERVOX_DEBUG 1
