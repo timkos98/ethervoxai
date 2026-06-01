@@ -821,6 +821,14 @@ else()
     add_library(ethervoxai STATIC ${ETHERVOXAI_SOURCES})
 endif()
 
+# MSVC-specific fix: phonemizer.c has too many sections
+if(MSVC)
+    set_source_files_properties(
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/tts/phonemizer/phonemizer.c
+        PROPERTIES COMPILE_FLAGS "/bigobj"
+    )
+endif()
+
 target_include_directories(ethervoxai
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
