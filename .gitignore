@@ -115,9 +115,8 @@ examples/*_demo
 !examples/*.cpp
 
 # External dependencies (cloned at build time)
+# Note: llama.cpp and whisper.cpp are git submodules - don't track their contents
 external/*
-!external/llama.cpp
-!external/whisper.cpp
 
 # OS generated files
 .DS_Store
