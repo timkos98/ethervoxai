@@ -1199,7 +1199,7 @@ JNIEXPORT jint JNICALL Java_com_droid_ethervox_1core_NativeLib_platformInit(JNIE
 }
 
 JNIEXPORT jint JNICALL Java_com_droid_ethervox_1core_NativeLib_platformInitGovernor(
-    JNIEnv* env, jobject thiz, jboolean minimal_mode) {
+    JNIEnv* env, jobject thiz, jboolean minimal_mode, jboolean is_finetuned) {
   (void)env;
   (void)thiz;
 
@@ -1221,7 +1221,7 @@ JNIEXPORT jint JNICALL Java_com_droid_ethervox_1core_NativeLib_platformInitGover
     return -1;
   }
 
-  // Initialize Governor with chosen config (minimal or full)
+  // Initialize Governor with chosen config (minimal, finetuned, or full)
   ethervox_governor_config_t gov_config = ethervox_governor_default_config();
 
   // Apply runtime configuration from g_governor_config
@@ -1233,6 +1233,9 @@ JNIEXPORT jint JNICALL Java_com_droid_ethervox_1core_NativeLib_platformInitGover
   if (minimal_mode) {
     gov_config.system_prompt_mode = ETHERVOX_GOVERNOR_MODE_MINIMAL;
     LOGI("Initializing Governor in MINIMAL MODE (fast loading, tools disabled)");
+  } else if (is_finetuned) {
+    gov_config.system_prompt_mode = ETHERVOX_GOVERNOR_MODE_FINETUNED;
+    LOGI("Initializing Governor in FINETUNED MODE (basic instructions, no tool list)");
   } else {
     gov_config.system_prompt_mode = ETHERVOX_GOVERNOR_MODE_FULL;
     LOGI("Initializing Governor in FULL MODE (all tools available)");
@@ -1248,7 +1251,8 @@ JNIEXPORT jint JNICALL Java_com_droid_ethervox_1core_NativeLib_platformInitGover
     return -1;
   }
 
-  LOGI("Governor initialized successfully (mode: %s)", minimal_mode ? "MINIMAL" : "FULL");
+  const char* mode_name = minimal_mode ? "MINIMAL" : (is_finetuned ? "FINETUNED" : "FULL");
+  LOGI("Governor initialized successfully (mode: %s)", mode_name);
 
   return 0;
 }

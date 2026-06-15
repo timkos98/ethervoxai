@@ -1333,10 +1333,18 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
   GOV_LOG("[Governor] Model params: n_gpu_layers=%d, use_mmap=%d", model_params.n_gpu_layers,
           model_params.use_mmap);
 
+  // Verify model path is not empty
+  if (model_path[0] == '\0') {
+    GOV_ERROR("Model path is empty string - cannot load model");
+    GOV_ERROR("This usually means asset pack download failed or path construction error");
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
+  }
+
   // Verify file exists and is readable before trying to load
   FILE* test_file = fopen(model_path, "rb");
   if (!test_file) {
     GOV_ERROR("Cannot open model file: %s (errno: %d - %s)", model_path, errno, strerror(errno));
+    GOV_ERROR("Check if asset pack is downloaded and path is correct");
     return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
 
@@ -1539,7 +1547,7 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
     GOV_LOG("  Tool %u: %s", i, governor->tool_registry->tools[i].name);
   }
 
-  // Build system prompt based on mode (full vs minimal)
+  // Build system prompt based on mode (full vs minimal vs finetuned)
   // Increased to 16KB to accommodate all tools and examples (full mode)
   char system_prompt[16384];
 
@@ -1561,6 +1569,28 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
 
     // Mark tools as unavailable in governor state
     governor->tools_available = false;
+
+  } else if (governor->config.system_prompt_mode == ETHERVOX_GOVERNOR_MODE_FINETUNED) {
+    // Finetuned mode: basic instructions only, no tool list (model was trained on tools)
+    GOV_LOG("Building FINETUNED system prompt (model trained on tools, skipping tool list)");
+
+    // Basic instructions without the lengthy tool list - model was finetuned with tool knowledge
+    // This saves ~1000 tokens while maintaining full tool capabilities
+    const char* finetuned_prompt =
+        "You are Ethervox, an AI assistant with access to tools. "
+        "When the user asks a question that requires a tool:\n"
+        "1. Use the <tool_call> format you were trained on\n"
+        "2. Generate tool calls BEFORE explaining to the user\n"
+        "3. Wait for tool results, then explain the outcome naturally\n\n"
+        "Remember: Call tools first, explain after receiving results.";
+
+    strncpy(system_prompt, finetuned_prompt, sizeof(system_prompt) - 1);
+    system_prompt[sizeof(system_prompt) - 1] = '\0';
+
+    GOV_LOG("Finetuned system prompt (%zu chars) - tools available without detailed list", strlen(system_prompt));
+
+    // Mark tools as available (model knows about them from training)
+    governor->tools_available = true;
 
   } else {
     // Full mode: complete system prompt with all tools and capabilities
@@ -2418,7 +2448,66 @@ ethervox_governor_status_t ethervox_governor_execute(
 
       GOV_LOG("Nuclear clear wiped KV cache - initiating RELIGHT sequence...");
 
-      // Attempt to restore system prompt from saved tokens
+      // ========================================================================
+      // FAST PATH: Try loading complete state from KV cache file
+      // ========================================================================
+      // This is 10-100x faster than manually reprocessing tokens
+      bool kv_cache_loaded = false;
+      if (governor->model_path) {
+        // Get cache directory from environment (Android files dir)
+        const char* cache_dir = getenv("ETHERVOX_FILES_DIR");
+        if (cache_dir) {
+          char cache_path[512];
+          ethervox_result_t path_result = ethervox_kv_cache_get_path(
+              governor->model_path, cache_dir, cache_path, sizeof(cache_path)
+          );
+          
+          if (ethervox_is_success(path_result) && 
+              ethervox_kv_cache_exists(cache_path, governor->model_path)) {
+            
+            GOV_LOG("RELIGHT FAST PATH: Found KV cache file, attempting instant recovery...");
+            ethervox_result_t load_result = ethervox_kv_cache_load(governor, cache_path);
+            
+            if (ethervox_is_success(load_result)) {
+              kv_cache_loaded = true;
+              GOV_LOG("✓ RELIGHT COMPLETE (instant): Loaded from KV cache file");
+              GOV_LOG("  Restored %d tokens + full KV state", governor->system_prompt_token_count);
+              
+              // Update position and state
+              governor->current_kv_pos = governor->system_prompt_token_count;
+              governor->system_prompt_lost = false;
+              
+              // Restore KV tracking
+              reset_kv_cache_tracking(governor, governor->system_prompt_token_count);
+              
+              // Load conversation summary from memory to restore context
+              GOV_LOG("RELIGHT: Loading conversation summary from memory...");
+              load_conversation_summary(governor, "[\"context_summary\",\"kv_cleared\"]",
+                                       "Restored conversation context:", "RELIGHT");
+              
+              // Notify UI
+              if (progress_callback) {
+                char relight_msg[256];
+                snprintf(relight_msg, sizeof(relight_msg),
+                        "System recovered instantly - full capabilities restored");
+                progress_callback(ETHERVOX_GOVERNOR_EVENT_CONTEXT_CLEARED, relight_msg, user_data);
+              }
+            } else {
+              GOV_LOG("KV cache load failed (code %d), falling back to manual RELIGHT", load_result);
+            }
+          } else {
+            GOV_LOG("No KV cache file available, falling back to manual RELIGHT");
+          }
+        }
+      }
+      
+      // ========================================================================
+      // SLOW PATH: Manual RELIGHT (fallback if KV cache file unavailable)
+      // ========================================================================
+      if (!kv_cache_loaded) {
+        GOV_LOG("RELIGHT MANUAL PATH: Reprocessing system prompt tokens...");
+        
+        // Attempt to restore system prompt from saved tokens
       if (governor->system_prompt_tokens && governor->system_prompt_tokens_len > 0) {
         GOV_LOG("RELIGHT: Restoring system prompt (%d tokens)...",
                 governor->system_prompt_tokens_len);
@@ -2499,6 +2588,8 @@ ethervox_governor_status_t ethervox_governor_execute(
         GOV_ERROR("RELIGHT IMPOSSIBLE: No saved system prompt tokens");
         GOV_ERROR("Governor in degraded mode - continuing without tools");
       }
+      
+      } // End manual RELIGHT (!kv_cache_loaded)
     } else {
       // Normal partial clear - system prompt is intact
       governor->current_kv_pos =
@@ -4469,17 +4560,55 @@ ethervox_result_t ethervox_governor_reset_conversation(ethervox_governor_t* gove
           governor->system_prompt_token_count, (max_pos * 100 / n_ctx));
 
   // ========================================================================
-  // NUCLEAR CLEAR + RELIGHT (without summary reload)
+  // NUCLEAR CLEAR + RELIGHT
   // ========================================================================
-  // We can't trust llama_memory_seq_rm due to llama.cpp bugs, so we nuclear
-  // clear everything and RELIGHT with system prompt only (no conversation summary)
+  // Note: llama_memory_seq_rm had bugs in older llama.cpp versions (pre-2025)
+  // PR #15473 removed problematic defragmentation logic, but we keep nuclear
+  // clear as a safe fallback for edge cases and compatibility
 
   GOV_LOG("Nuclear clear: wiping entire KV cache for clean reset...");
   llama_memory_clear(mem, true);  // Clear both metadata and data
   int32_t actual_max = llama_memory_seq_pos_max(mem, 0);
   GOV_LOG("Nuclear clear complete: KV cache at position %d", actual_max);
 
-  // RELIGHT: Restore system prompt from saved tokens
+  // ========================================================================
+  // FAST PATH: Try loading complete state from KV cache file
+  // ========================================================================
+  bool kv_cache_loaded = false;
+  if (governor->model_path) {
+    const char* cache_dir = getenv("ETHERVOX_FILES_DIR");
+    if (cache_dir) {
+      char cache_path[512];
+      ethervox_result_t path_result = ethervox_kv_cache_get_path(
+          governor->model_path, cache_dir, cache_path, sizeof(cache_path)
+      );
+      
+      if (ethervox_is_success(path_result) && 
+          ethervox_kv_cache_exists(cache_path, governor->model_path)) {
+        
+        GOV_LOG("Reset fast path: Loading from KV cache file...");
+        ethervox_result_t load_result = ethervox_kv_cache_load(governor, cache_path);
+        
+        if (ethervox_is_success(load_result)) {
+          kv_cache_loaded = true;
+          GOV_LOG("✓ Reset complete (instant): Loaded %d tokens from KV cache file",
+                  governor->system_prompt_token_count);
+          
+          governor->current_kv_pos = governor->system_prompt_token_count;
+          governor->system_prompt_lost = false;
+        } else {
+          GOV_LOG("KV cache load failed, falling back to manual RELIGHT");
+        }
+      }
+    }
+  }
+
+  // ========================================================================
+  // SLOW PATH: Manual RELIGHT (fallback if KV cache file unavailable)
+  // ========================================================================
+  if (!kv_cache_loaded) {
+    GOV_LOG("Reset manual path: Reprocessing system prompt tokens...");
+    
   GOV_LOG("RELIGHT: Restoring system prompt (%d tokens) without conversation summary...",
           governor->system_prompt_tokens_len);
 
@@ -4534,8 +4663,10 @@ ethervox_result_t ethervox_governor_reset_conversation(ethervox_governor_t* gove
   governor->system_prompt_lost = false;
   GOV_LOG("RELIGHT COMPLETE: System prompt restored at position %d (%d%% full)",
           governor->current_kv_pos, (governor->current_kv_pos * 100 / n_ctx));
+  
+  } // End manual RELIGHT (!kv_cache_loaded)
 
-  // Clear conversation history tracking
+  // Clear conversation history tracking (common for both fast and slow paths)
   cleanup_conversation_history(&governor->conversation_history);
   init_conversation_history(&governor->conversation_history, 32);
 

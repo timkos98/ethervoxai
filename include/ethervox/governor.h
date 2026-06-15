@@ -268,8 +268,9 @@ typedef void (*ethervox_governor_progress_callback)(ethervox_governor_event_type
  * System prompt loading mode
  */
 typedef enum {
-  ETHERVOX_GOVERNOR_MODE_FULL,    // Full prompt with all tools (slower load, full capabilities)
-  ETHERVOX_GOVERNOR_MODE_MINIMAL  // Brief prompt without tools (fast load, limited capabilities)
+  ETHERVOX_GOVERNOR_MODE_FULL,      // Full prompt with all tools (slower load, full capabilities)
+  ETHERVOX_GOVERNOR_MODE_MINIMAL,   // Brief prompt without tools (fast load, limited capabilities)
+  ETHERVOX_GOVERNOR_MODE_FINETUNED  // Basic instructions only (model trained on tools, skip tool list)
 } ethervox_governor_system_prompt_mode_t;
 
 /**
