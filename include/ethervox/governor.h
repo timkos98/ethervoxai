@@ -431,6 +431,15 @@ float ethervox_governor_get_kv_cache_usage(ethervox_governor_t* governor, int32_
 char* ethervox_governor_get_kv_cache_contents(ethervox_governor_t* governor);
 
 /**
+ * Get system prompt content that was processed during initialization
+ * Useful for debugging tool availability and prompt construction
+ *
+ * @param governor Governor instance
+ * @return Malloc'd string containing system prompt text (caller must free), or NULL if model not loaded
+ */
+char* ethervox_governor_get_system_prompt_content(ethervox_governor_t* governor);
+
+/**
  * Execute user query with tool orchestration
  *
  * @param governor Governor instance

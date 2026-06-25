@@ -140,6 +140,7 @@ struct ethervox_governor {
   // Saved system prompt for recovery after nuclear clear
   llama_token* system_prompt_tokens;
   int system_prompt_tokens_len;
+  char* system_prompt_text;  // Full text of system prompt for debugging
 
   // Pre-tokenized static wrappers for speed optimization (from chat_template)
   llama_token* tool_result_prefix_tokens;  // chat_template->tool_result_start
@@ -1691,6 +1692,14 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
   } else {
     GOV_ERROR("Failed to allocate memory for system prompt backup");
   }
+  
+  // Save a copy of the system prompt text for debugging/viewing
+  governor->system_prompt_text = strdup(system_prompt);
+  if (governor->system_prompt_text) {
+    GOV_LOG("Saved system prompt text (%zu chars) for debugging", strlen(system_prompt));
+  } else {
+    GOV_ERROR("Failed to allocate memory for system prompt text");
+  }
 
   GOV_LOG("Processing %d system prompt tokens in chunks...", n_tokens);
 
@@ -2026,6 +2035,20 @@ char* ethervox_governor_get_kv_cache_contents(ethervox_governor_t* governor) {
   }
   
   return get_kv_cache_contents_string(governor);
+}
+
+/**
+ * Get the system prompt content (for debugging)
+ * @return Dynamically allocated string containing system prompt text, or NULL if not available
+ *         Caller must free() the returned string
+ */
+char* ethervox_governor_get_system_prompt_content(ethervox_governor_t* governor) {
+  if (!governor || !governor->system_prompt_text) {
+    return NULL;
+  }
+  
+  // Return a copy of the system prompt text
+  return strdup(governor->system_prompt_text);
 }
 
 /**
@@ -4508,6 +4531,16 @@ void ethervox_governor_cleanup(ethervox_governor_t* governor) {
   if (governor->tool_result_suffix_tokens) {
     free(governor->tool_result_suffix_tokens);
     governor->tool_result_suffix_tokens = NULL;
+  }
+  
+  // Free saved system prompt
+  if (governor->system_prompt_tokens) {
+    free(governor->system_prompt_tokens);
+    governor->system_prompt_tokens = NULL;
+  }
+  if (governor->system_prompt_text) {
+    free(governor->system_prompt_text);
+    governor->system_prompt_text = NULL;
   }
   
   // Free KV cache tracking buffer
