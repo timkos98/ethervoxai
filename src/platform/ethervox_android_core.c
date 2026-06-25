@@ -39,6 +39,7 @@
 #include "ethervox/timer_tools.h"
 #include "ethervox/tool_manifest.h"
 #include "ethervox/kv_cache_persistence.h"  // KV cache save/load for fast startup
+#include "ethervox/conversation_summary.h"  // Conversation summarization for KV cache
 #include "ethervox/tool_prompt_optimizer.h"
 #include "ethervox/unit_conversion.h"
 #include "ethervox/voice_tools.h"
@@ -628,6 +629,34 @@ JNIEXPORT jstring JNICALL Java_com_droid_ethervox_1core_NativeLib_getSystemPromp
   free(contents);
   
   return result;
+}
+
+JNIEXPORT jstring JNICALL Java_com_droid_ethervox_1core_NativeLib_triggerConversationSummary(JNIEnv* env,
+                                                                                              jobject thiz) {
+  (void)thiz;
+
+  if (!g_governor || !ethervox_governor_is_loaded(g_governor)) {
+    return (*env)->NewStringUTF(env, "Error: Governor not loaded");
+  }
+
+  if (!g_memory_store || !g_memory_store->is_initialized) {
+    return (*env)->NewStringUTF(env, "Error: Memory store not initialized");
+  }
+
+  // Allocate buffer for summary output
+  char summary_buffer[2048];
+  
+  // Call the conversation summary generation function
+  ethervox_result_t result = ethervox_generate_conversation_summary(g_governor, g_memory_store, summary_buffer, sizeof(summary_buffer));
+  
+  if (result == ETHERVOX_SUCCESS) {
+    return (*env)->NewStringUTF(env, "Conversation summary generated successfully");
+  } else {
+    // Get error message based on result code
+    char error_msg[256];
+    snprintf(error_msg, sizeof(error_msg), "Error generating summary: code %d", result);
+    return (*env)->NewStringUTF(env, error_msg);
+  }
 }
 
 JNIEXPORT jobjectArray JNICALL

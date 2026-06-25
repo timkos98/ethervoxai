@@ -440,6 +440,38 @@ char* ethervox_governor_get_kv_cache_contents(ethervox_governor_t* governor);
 char* ethervox_governor_get_system_prompt_content(ethervox_governor_t* governor);
 
 /**
+ * Get model file path from governor
+ *
+ * @param governor Governor instance
+ * @return Model path string (empty string if not loaded, never NULL)
+ */
+const char* ethervox_governor_get_model_path(struct ethervox_governor* governor);
+
+/**
+ * Get llama model pointer from governor (for internal use)
+ *
+ * @param governor Governor instance
+ * @return llama_model pointer, or NULL if not loaded
+ */
+struct llama_model* ethervox_governor_get_llm_model(ethervox_governor_t* governor);
+
+/**
+ * Get llama context pointer from governor (for internal use)
+ *
+ * @param governor Governor instance
+ * @return llama_context pointer, or NULL if not loaded
+ */
+struct llama_context* ethervox_governor_get_llm_context(ethervox_governor_t* governor);
+
+/**
+ * Get current KV cache position
+ *
+ * @param governor Governor instance
+ * @return Current KV position, or -1 if not loaded
+ */
+int32_t ethervox_governor_get_kv_pos(ethervox_governor_t* governor);
+
+/**
  * Execute user query with tool orchestration
  *
  * @param governor Governor instance

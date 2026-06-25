@@ -140,7 +140,6 @@ struct ethervox_governor {
   // Saved system prompt for recovery after nuclear clear
   llama_token* system_prompt_tokens;
   int system_prompt_tokens_len;
-  char* system_prompt_text;  // Full text of system prompt for debugging
 
   // Pre-tokenized static wrappers for speed optimization (from chat_template)
   llama_token* tool_result_prefix_tokens;  // chat_template->tool_result_start
@@ -1692,14 +1691,6 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
   } else {
     GOV_ERROR("Failed to allocate memory for system prompt backup");
   }
-  
-  // Save a copy of the system prompt text for debugging/viewing
-  governor->system_prompt_text = strdup(system_prompt);
-  if (governor->system_prompt_text) {
-    GOV_LOG("Saved system prompt text (%zu chars) for debugging", strlen(system_prompt));
-  } else {
-    GOV_ERROR("Failed to allocate memory for system prompt text");
-  }
 
   GOV_LOG("Processing %d system prompt tokens in chunks...", n_tokens);
 
@@ -2038,17 +2029,100 @@ char* ethervox_governor_get_kv_cache_contents(ethervox_governor_t* governor) {
 }
 
 /**
- * Get the system prompt content (for debugging)
- * @return Dynamically allocated string containing system prompt text, or NULL if not available
- *         Caller must free() the returned string
+ * Get system prompt content that was processed during initialization
  */
 char* ethervox_governor_get_system_prompt_content(ethervox_governor_t* governor) {
-  if (!governor || !governor->system_prompt_text) {
+  if (!governor || !governor->llm_loaded) {
     return NULL;
   }
-  
-  // Return a copy of the system prompt text
-  return strdup(governor->system_prompt_text);
+
+#if defined(ETHERVOX_WITH_LLAMA) && LLAMA_HEADER_AVAILABLE
+  // Check if we have saved system prompt tokens
+  if (!governor->system_prompt_tokens || governor->system_prompt_tokens_len <= 0) {
+    GOV_LOG("No system prompt tokens saved");
+    return strdup("System prompt not available (not saved during initialization)");
+  }
+
+  // Decode tokens back to text
+  const struct llama_vocab* vocab = llama_model_get_vocab(governor->llm_model);
+  if (!vocab) {
+    GOV_ERROR("Failed to get vocabulary from model");
+    return NULL;
+  }
+
+  // Allocate buffer for decoded text (estimate 4 bytes per token as upper bound)
+  size_t buffer_size = governor->system_prompt_tokens_len * 4 + 1024;
+  char* result = (char*)malloc(buffer_size);
+  if (!result) {
+    GOV_ERROR("Failed to allocate buffer for system prompt content");
+    return NULL;
+  }
+
+  size_t result_len = 0;
+  result[0] = '\0';
+
+  // Decode each token
+  for (int i = 0; i < governor->system_prompt_tokens_len; i++) {
+    char piece[256];
+    int n_chars = llama_token_to_piece(vocab, governor->system_prompt_tokens[i],
+                                       piece, sizeof(piece), 0, false);
+
+    if (n_chars > 0 && result_len + n_chars < buffer_size - 1) {
+      memcpy(result + result_len, piece, n_chars);
+      result_len += n_chars;
+      result[result_len] = '\0';
+    }
+  }
+
+  GOV_LOG("Decoded system prompt: %zu bytes, %d tokens",
+          result_len, governor->system_prompt_tokens_len);
+
+  return result;
+#else
+  return strdup("System prompt viewing requires llama.cpp support");
+#endif
+}
+
+/**
+ * Get llama model pointer from governor (for internal use)
+ */
+struct llama_model* ethervox_governor_get_llm_model(ethervox_governor_t* governor) {
+  if (!governor || !governor->llm_loaded) {
+    return NULL;
+  }
+#if defined(ETHERVOX_WITH_LLAMA) && LLAMA_HEADER_AVAILABLE
+  return governor->llm_model;
+#else
+  return NULL;
+#endif
+}
+
+/**
+ * Get llama context pointer from governor (for internal use)
+ */
+struct llama_context* ethervox_governor_get_llm_context(ethervox_governor_t* governor) {
+  if (!governor || !governor->llm_loaded) {
+    return NULL;
+  }
+#if defined(ETHERVOX_WITH_LLAMA) && LLAMA_HEADER_AVAILABLE
+  return governor->llm_ctx;
+#else
+  return NULL;
+#endif
+}
+
+/**
+ * Get current KV cache position
+ */
+int32_t ethervox_governor_get_kv_pos(ethervox_governor_t* governor) {
+  if (!governor || !governor->llm_loaded) {
+    return -1;
+  }
+#if defined(ETHERVOX_WITH_LLAMA) && LLAMA_HEADER_AVAILABLE
+  return governor->current_kv_pos;
+#else
+  return -1;
+#endif
 }
 
 /**
@@ -2304,8 +2378,8 @@ ethervox_governor_status_t ethervox_governor_execute(
   int32_t max_pos = llama_memory_seq_pos_max(mem, 0);
   int n_ctx = llama_n_ctx(governor->llm_ctx);
 
-  // Clear if we're past system prompt and getting close to context limit (>50% full)
-  if (max_pos > governor->system_prompt_token_count && max_pos > (n_ctx / 2)) {
+  // Clear if we're past system prompt and getting close to context limit (>80% full)
+  if (max_pos > governor->system_prompt_token_count && max_pos > (n_ctx * 4 / 5)) {
     GOV_LOG("KV cache clearing: removing positions %d to %d (was at %d%% capacity)",
             governor->system_prompt_token_count, max_pos, (max_pos * 100 / n_ctx));
 
@@ -4531,16 +4605,6 @@ void ethervox_governor_cleanup(ethervox_governor_t* governor) {
   if (governor->tool_result_suffix_tokens) {
     free(governor->tool_result_suffix_tokens);
     governor->tool_result_suffix_tokens = NULL;
-  }
-  
-  // Free saved system prompt
-  if (governor->system_prompt_tokens) {
-    free(governor->system_prompt_tokens);
-    governor->system_prompt_tokens = NULL;
-  }
-  if (governor->system_prompt_text) {
-    free(governor->system_prompt_text);
-    governor->system_prompt_text = NULL;
   }
   
   // Free KV cache tracking buffer
