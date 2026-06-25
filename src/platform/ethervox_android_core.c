@@ -16,6 +16,8 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <dirent.h>
+#include <errno.h>
 
 #include "ethervox/audio.h"
 #include "ethervox/llm.h"
@@ -454,31 +456,83 @@ Java_com_droid_ethervox_1core_NativeLib_deleteSystemPromptCache(JNIEnv* env, job
   (void)env;
   (void)thiz;
   
-  if (!g_android_files_dir) {
+  if (g_android_files_dir[0] == '\0') {
     LOGE("Cannot delete cache - files directory not set");
     return JNI_FALSE;
   }
   
-  // Build cache file path
-  char cache_path[512];
-  snprintf(cache_path, sizeof(cache_path), "%s/cache", g_android_files_dir);
+  // Build cache directory path
+  char cache_dir[512];
+  snprintf(cache_dir, sizeof(cache_dir), "%s/.ethervox/cache", g_android_files_dir);
   
-  LOGI("[JNI] Deleting all KV cache files in: %s", cache_path);
+  LOGI("[JNI] Deleting all KV cache files in: %s", cache_dir);
   
-  // Use system command to remove all .kvcache files
-  char cmd[1024];
-  snprintf(cmd, sizeof(cmd), "rm -f %s/*.kvcache", cache_path);
-  
-  int result = system(cmd);
-  
-  if (result == 0) {
-    LOGI("[JNI] ✓ System prompt cache deleted - next load will regenerate");
-    return JNI_TRUE;
-  } else {
-    LOGW("[JNI] Cache delete command returned %d (may not exist)", result);
-    // Return true anyway - cache not existing is fine
-    return JNI_TRUE;
+  // Open directory and delete .kvcache files using native C operations
+  DIR* dir = opendir(cache_dir);
+  if (!dir) {
+    // Try without .ethervox subdirectory
+    snprintf(cache_dir, sizeof(cache_dir), "%s/cache", g_android_files_dir);
+    LOGI("[JNI] Trying alternate path: %s", cache_dir);
+    dir = opendir(cache_dir);
+    
+    if (!dir) {
+      LOGW("[JNI] Cache directory does not exist - nothing to delete");
+      return JNI_TRUE;  // Not an error if cache doesn't exist
+    }
   }
+  
+  int deleted_count = 0;
+  int error_count = 0;
+  int total_files = 0;
+  struct dirent* entry;
+  
+  while ((entry = readdir(dir)) != NULL) {
+    // Skip . and ..
+    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+      continue;
+    }
+    
+    total_files++;
+    LOGI("[JNI]   Found file: %s", entry->d_name);
+    
+    // Check if file ends with .kvcache
+    size_t name_len = strlen(entry->d_name);
+    if (name_len > 8 && strcmp(entry->d_name + name_len - 8, ".kvcache") == 0) {
+      // Build full path
+      char file_path[768];
+      snprintf(file_path, sizeof(file_path), "%s/%s", cache_dir, entry->d_name);
+      
+      LOGI("[JNI]   Attempting to delete: %s", file_path);
+      
+      // Delete file using unlink
+      if (unlink(file_path) == 0) {
+        LOGI("[JNI]   ✓ Deleted: %s", entry->d_name);
+        deleted_count++;
+      } else {
+        LOGE("[JNI]   ✗ Failed to delete: %s (errno=%d: %s)", 
+             entry->d_name, errno, strerror(errno));
+        error_count++;
+      }
+    }
+  }
+  
+  closedir(dir);
+  
+  LOGI("[JNI] Directory scan complete: %d total files, %d deleted, %d errors", 
+       total_files, deleted_count, error_count);
+  
+  if (deleted_count > 0) {
+    LOGI("[JNI] ✓ Deleted %d KV cache file(s) - next load will regenerate", deleted_count);
+  } else {
+    LOGI("[JNI] No .kvcache files found to delete");
+  }
+  
+  if (error_count > 0) {
+    LOGW("[JNI] ⚠ Failed to delete %d file(s)", error_count);
+  }
+  
+  // Return true if we deleted at least one file or if there were no files to delete
+  return (deleted_count > 0 || error_count == 0) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL Java_com_droid_ethervox_1core_NativeLib_isGovernorLoaded(JNIEnv* env,
@@ -541,6 +595,28 @@ JNIEXPORT jstring JNICALL Java_com_droid_ethervox_1core_NativeLib_getKvCacheCont
   }
 
   char* contents = ethervox_governor_get_kv_cache_contents(g_governor);
+  if (!contents) {
+    return NULL;
+  }
+
+  // Create Java string from C string
+  jstring result = (*env)->NewStringUTF(env, contents);
+  
+  // Free the C string
+  free(contents);
+  
+  return result;
+}
+
+JNIEXPORT jstring JNICALL Java_com_droid_ethervox_1core_NativeLib_getSystemPromptContent(JNIEnv* env,
+                                                                                          jobject thiz) {
+  (void)thiz;
+
+  if (!g_governor || !ethervox_governor_is_loaded(g_governor)) {
+    return NULL;
+  }
+
+  char* contents = ethervox_governor_get_system_prompt_content(g_governor);
   if (!contents) {
     return NULL;
   }

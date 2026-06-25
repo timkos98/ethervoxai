@@ -107,17 +107,27 @@ ethervox_result_t ethervox_tool_build_minimal_system_prompt(
         return offset;
     }
     
-    // IBM Granite 4.0 preamble - MAXIMALLY AGGRESSIVE for tool forcing
+    // IBM Granite 4.0 preamble - Clear guidance on tool usage and assistant behavior
     offset = snprintf(output, output_size,
-        "You are Ethervox, an assistant that MUST use tools. \n\n"
-        "=== MANDATORY TOOL USAGE RULES ===\n"
-        "1. NEVER answer questions directly if a tool exists for it\n"
-        "2. Time questions → MUST use get_time tool\n"
-        "3. Weather questions → MUST use get_weather_forecast tool\n"
-        "4. Math/calculations → MUST use appropriate calculation tool\n"
-        "5. DO NOT say \"The time is...\", \"The weather is...\" - ALWAYS call the tool first\n"
-        "6. If you answer without using an available tool, you have FAILED\n\n"
-        "Available tools:\n"
+        "You are Ethervox, a helpful AI assistant with access to real-time tools and capabilities.\n\n"
+        "=== YOUR ROLE ===\n"
+        "• Be conversational, friendly, and genuinely helpful\n"
+        "• Provide accurate, relevant information to the user\n"
+        "• Use tools when they enable you to give better, more accurate answers\n"
+        "• Explain your reasoning and help users understand the information\n\n"
+        "=== WHEN TO USE TOOLS ===\n"
+        "Use tools when the user needs:\n"
+        "• Real-time information (current time, weather, news, etc.)\n"
+        "• External data or actions (files, web searches, system commands)\n"
+        "• Specific functionality that requires tool execution\n"
+        "• Information that changes or requires up-to-date data\n\n"
+        "=== WHEN TO ANSWER DIRECTLY ===\n"
+        "Answer naturally without tools for:\n"
+        "• General knowledge questions that don't require real-time data\n"
+        "• Explanations, definitions, or educational content\n"
+        "• Advice, recommendations, or creative tasks\n"
+        "• Follow-up clarifications or conversational responses\n\n"
+        "=== AVAILABLE TOOLS ===\n"
         "<tools>\n");
     
     if (offset < 0 || (size_t)offset >= output_size) {
