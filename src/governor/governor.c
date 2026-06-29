@@ -384,7 +384,7 @@ static int load_tokens_to_kv_cache(struct ethervox_governor* governor, const lla
   for (int i = 0; i < n_tokens; i += chunk_size) {
     int chunk_len = (i + chunk_size > n_tokens) ? (n_tokens - i) : chunk_size;
 
-    llama_batch batch = llama_batch_init(chunk_len, 0, 1);
+    llama_batch batch = llama_batch_init(chunk_len, 0, llama_n_seq_max(governor->llm_ctx));
     batch.n_tokens = chunk_len;
     for (int j = 0; j < chunk_len; j++) {
       batch.token[j] = tokens[i + j];
@@ -414,6 +414,303 @@ static int load_tokens_to_kv_cache(struct ethervox_governor* governor, const lla
   // Update position after all chunks processed
   governor->current_kv_pos += n_tokens;
   return n_tokens;
+}
+
+/**
+ * Clear conversation from sequence 0, preserving system prompt in sequence 1
+ * Implements fallback strategy if sequence clear fails
+ * 
+ * @return ETHERVOX_SUCCESS or error code
+ */
+static ethervox_result_t clear_conversation_keep_system_prompt(struct ethervox_governor* governor) {
+  if (!governor || !governor->llm_ctx) {
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
+  }
+
+  llama_memory_t mem = llama_get_memory(governor->llm_ctx);
+  
+  // === ATTEMPT 1: Clear entire sequence 0 (conversation) ===
+  // This should NEVER fail for complete sequence removal
+  GOV_LOG("Clearing conversation (sequence 0)...");
+  bool seq0_cleared = llama_memory_seq_rm(mem, 0, -1, -1);
+  
+  if (!seq0_cleared) {
+    GOV_ERROR("Sequence 0 clear failed (unexpected)");
+    goto fallback_nuclear_clear;
+  }
+  
+  // Verify sequence 0 is empty
+  int32_t seq0_min = llama_memory_seq_pos_min(mem, 0);
+  int32_t seq0_max = llama_memory_seq_pos_max(mem, 0);
+  
+  if (seq0_min != -1 || seq0_max != -1) {
+    GOV_ERROR("Sequence 0 clear verification failed: min=%d, max=%d (expected -1, -1)",
+              seq0_min, seq0_max);
+    goto fallback_nuclear_clear;
+  }
+  
+  // Verify system prompt still in sequence 1
+  int32_t seq1_max = llama_memory_seq_pos_max(mem, 1);
+  if (seq1_max < 100) {
+    GOV_ERROR("System prompt lost or corrupted! seq1_max=%d (expected >= 100)", seq1_max);
+    goto fallback_nuclear_clear;
+  }
+  
+  GOV_LOG("✓ Sequence 0 cleared, sequence 1 intact (%d tokens)", seq1_max + 1);
+  governor->current_kv_pos = 0;  // Sequence 0 now empty
+  return ETHERVOX_SUCCESS;
+
+fallback_nuclear_clear:
+  // === FALLBACK: Nuclear clear + reload system prompt ===
+  GOV_LOG("FALLBACK: Nuclear clear with system prompt reload");
+  
+  llama_memory_clear(mem, true);  // Clear EVERYTHING
+  
+  // Verify completely cleared
+  seq0_max = llama_memory_seq_pos_max(mem, 0);
+  int32_t seq1_max_after = llama_memory_seq_pos_max(mem, 1);
+  
+  if (seq0_max != -1 || seq1_max_after != -1) {
+    GOV_ERROR("Nuclear clear failed! seq0_max=%d, seq1_max=%d", seq0_max, seq1_max_after);
+    return ETHERVOX_ERROR_FILE_READ;
+  }
+  
+  GOV_LOG("Nuclear clear complete, attempting system prompt reload...");
+  
+  // Try fast path: reload from cache
+  bool reloaded = false;
+  if (governor->model_path) {
+    const char* cache_dir = getenv("ETHERVOX_FILES_DIR");
+    if (cache_dir) {
+      char cache_path[512];
+      ethervox_result_t path_result = ethervox_kv_cache_get_path(
+          governor->model_path, cache_dir, cache_path, sizeof(cache_path)
+      );
+      
+      if (ethervox_is_success(path_result) && 
+          ethervox_kv_cache_exists(cache_path, governor->model_path)) {
+        
+        GOV_LOG("Reloading system prompt from cache: %s", cache_path);
+        ethervox_result_t load_result = ethervox_kv_cache_load(governor, cache_path);
+        
+        if (ethervox_is_success(load_result)) {
+          reloaded = true;
+          GOV_LOG("✓ System prompt reloaded from cache");
+        } else {
+          GOV_LOG("Cache load failed (code %d), regenerating from tokens", load_result);
+        }
+      }
+    }
+  }
+  
+  if (!reloaded) {
+    // FALLBACK 2: Regenerate from saved tokens
+    GOV_LOG("Regenerating system prompt from saved tokens...");
+    
+    if (!governor->system_prompt_tokens || governor->system_prompt_tokens_len == 0) {
+      GOV_ERROR("FATAL: No saved system prompt tokens!");
+      return ETHERVOX_ERROR_NOT_INITIALIZED;
+    }
+    
+    // Reprocess system prompt tokens (same as RELIGHT)
+    int actual_n_batch = llama_n_batch(governor->llm_ctx);
+    int chunk_size = (actual_n_batch > 0) ? actual_n_batch : 512;
+    
+    for (int i = 0; i < governor->system_prompt_tokens_len; i += chunk_size) {
+      int chunk_len = (i + chunk_size > governor->system_prompt_tokens_len)
+                          ? (governor->system_prompt_tokens_len - i)
+                          : chunk_size;
+      bool is_final_chunk = (i + chunk_size >= governor->system_prompt_tokens_len);
+      
+      llama_batch batch = llama_batch_init(chunk_len, 0, llama_n_seq_max(governor->llm_ctx));
+      batch.n_tokens = chunk_len;
+      for (int j = 0; j < chunk_len; j++) {
+        batch.token[j] = governor->system_prompt_tokens[i + j];
+        batch.pos[j] = i + j;
+        batch.n_seq_id[j] = 1;
+        batch.seq_id[j][0] = 1;  // System prompt uses sequence 1
+        batch.logits[j] = false;
+      }
+      if (is_final_chunk) {
+        batch.logits[chunk_len - 1] = true;
+      }
+      
+      if (llama_decode(governor->llm_ctx, batch) != 0) {
+        GOV_ERROR("FATAL: Failed to regenerate system prompt at token %d", i);
+        llama_batch_free(batch);
+        return ETHERVOX_ERROR_FILE_READ;
+      }
+      
+      llama_batch_free(batch);
+    }
+    
+    GOV_LOG("✓ System prompt regenerated (%d tokens)", governor->system_prompt_tokens_len);
+  }
+  
+  governor->current_kv_pos = 0;  // Sequence 0 empty, ready for conversation
+  GOV_LOG("✓ Recovery complete after nuclear clear");
+  return ETHERVOX_SUCCESS;
+}
+
+/**
+ * Validate KV cache state after operations
+ * Checks that sequences are in valid states
+ * 
+ * @return true if valid, false if corruption detected
+ */
+static bool validate_kv_cache_state(struct ethervox_governor* governor) {
+  if (!governor || !governor->llm_ctx) {
+    return false;
+  }
+
+  llama_memory_t mem = llama_get_memory(governor->llm_ctx);
+  
+  // Check sequence 1 (system prompt)
+  int32_t seq1_min = llama_memory_seq_pos_min(mem, 1);
+  int32_t seq1_max = llama_memory_seq_pos_max(mem, 1);
+  
+  if (seq1_min < 0 && seq1_max < 0) {
+    // Sequence 1 is empty - this is a problem, system prompt should always be loaded
+    GOV_ERROR("Sequence 1 (system prompt) is empty!");
+    return false;
+  }
+  
+  if (seq1_min != 0) {
+    GOV_ERROR("Sequence 1 has invalid min position: %d (expected 0)", seq1_min);
+    return false;
+  }
+  
+  if (seq1_max < 100) {
+    GOV_ERROR("Sequence 1 too short: max=%d (expected >= 100)", seq1_max);
+    return false;
+  }
+  
+  // Check sequence 0 (conversation/summary)
+  int32_t seq0_min = llama_memory_seq_pos_min(mem, 0);
+  int32_t seq0_max = llama_memory_seq_pos_max(mem, 0);
+  
+  // Sequence 0 can be empty (min=-1, max=-1) or have data
+  if (seq0_max >= 0) {
+    if (seq0_min != 0) {
+      GOV_ERROR("Sequence 0 has invalid min position: %d (expected 0)", seq0_min);
+      return false;
+    }
+    
+    // Allow small drift between tracked position and actual position
+    if (seq0_max > governor->current_kv_pos + 100) {
+      GOV_ERROR("Sequence 0 position mismatch: max=%d, tracked=%d",
+                seq0_max, governor->current_kv_pos);
+      return false;
+    }
+  }
+  
+  GOV_LOG("KV cache state valid: seq1=[%d,%d], seq0=[%d,%d]",
+          seq1_min, seq1_max, seq0_min, seq0_max);
+  return true;
+}
+
+/**
+ * Auto-repair KV cache if corruption detected
+ * Attempts to restore to valid state
+ * 
+ * @return ETHERVOX_SUCCESS or error code
+ */
+static ethervox_result_t auto_repair_kv_cache(struct ethervox_governor* governor) {
+  if (!governor || !governor->llm_ctx) {
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
+  }
+
+  GOV_LOG("Attempting automatic KV cache repair...");
+  
+  // Nuclear clear
+  llama_memory_t mem = llama_get_memory(governor->llm_ctx);
+  llama_memory_clear(mem, true);
+  
+  // Verify cleared
+  int32_t seq0_max = llama_memory_seq_pos_max(mem, 0);
+  int32_t seq1_max = llama_memory_seq_pos_max(mem, 1);
+  
+  if (seq0_max != -1 || seq1_max != -1) {
+    GOV_ERROR("Repair failed: clear did not work (seq0=%d, seq1=%d)", seq0_max, seq1_max);
+    return ETHERVOX_ERROR_FILE_READ;
+  }
+  
+  // Reload system prompt
+  const char* cache_dir = getenv("ETHERVOX_FILES_DIR");
+  if (!cache_dir) {
+    GOV_ERROR("No cache directory available for repair");
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
+  }
+  
+  char cache_path[512];
+  ethervox_result_t path_result = ethervox_kv_cache_get_path(
+      governor->model_path, cache_dir, cache_path, sizeof(cache_path)
+  );
+  
+  if (!ethervox_is_success(path_result)) {
+    GOV_ERROR("Failed to get cache path for repair");
+    return path_result;
+  }
+  
+  // Try loading from cache
+  ethervox_result_t load_result = ethervox_kv_cache_load(governor, cache_path);
+  
+  if (!ethervox_is_success(load_result)) {
+    // Regenerate from tokens as last resort
+    GOV_LOG("Cache load failed during repair, regenerating from tokens...");
+    
+    if (!governor->system_prompt_tokens || governor->system_prompt_tokens_len == 0) {
+      GOV_ERROR("Cannot repair: no saved system prompt tokens");
+      return ETHERVOX_ERROR_NOT_INITIALIZED;
+    }
+    
+    // Reprocess tokens (same as in clear_conversation_keep_system_prompt fallback)
+    int actual_n_batch = llama_n_batch(governor->llm_ctx);
+    int chunk_size = (actual_n_batch > 0) ? actual_n_batch : 512;
+    
+    for (int i = 0; i < governor->system_prompt_tokens_len; i += chunk_size) {
+      int chunk_len = (i + chunk_size > governor->system_prompt_tokens_len)
+                          ? (governor->system_prompt_tokens_len - i)
+                          : chunk_size;
+      bool is_final_chunk = (i + chunk_size >= governor->system_prompt_tokens_len);
+      
+      llama_batch batch = llama_batch_init(chunk_len, 0, llama_n_seq_max(governor->llm_ctx));
+      batch.n_tokens = chunk_len;
+      for (int j = 0; j < chunk_len; j++) {
+        batch.token[j] = governor->system_prompt_tokens[i + j];
+        batch.pos[j] = i + j;
+        batch.n_seq_id[j] = 1;
+        batch.seq_id[j][0] = 1;  // System prompt uses sequence 1
+        batch.logits[j] = false;
+      }
+      if (is_final_chunk) {
+        batch.logits[chunk_len - 1] = true;
+      }
+      
+      if (llama_decode(governor->llm_ctx, batch) != 0) {
+        GOV_ERROR("Repair failed: could not decode system prompt at token %d", i);
+        llama_batch_free(batch);
+        return ETHERVOX_ERROR_FILE_READ;
+      }
+      
+      llama_batch_free(batch);
+    }
+    
+    GOV_LOG("✓ System prompt regenerated during repair");
+  } else {
+    GOV_LOG("✓ System prompt reloaded from cache during repair");
+  }
+  
+  governor->current_kv_pos = 0;  // Sequence 0 empty
+  
+  // Validate repair was successful
+  if (!validate_kv_cache_state(governor)) {
+    GOV_ERROR("Repair validation failed");
+    return ETHERVOX_ERROR_FILE_READ;
+  }
+  
+  GOV_LOG("✓ KV cache repaired successfully");
+  return ETHERVOX_SUCCESS;
 }
 
 /**
@@ -1427,10 +1724,28 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
   // Context params - Use runtime config with adaptive hardware detection
   struct llama_context_params ctx_params = llama_context_default_params();
 
+  // CRITICAL: Enable sequence-based KV cache (requires n_seq_max >= 3)
+  // Sequence 0: Conversation/summary
+  // Sequence 1: System prompt (protected)
+  // Sequence 2: Temporary workspace (e.g., summary generation)
+  ctx_params.n_seq_max = 3;
+  GOV_LOG("[Governor] Enabled sequence-based KV cache with n_seq_max = %d", ctx_params.n_seq_max);
+
   // DEBUG: Log the context size that's about to be used
   GOV_LOG("[Governor] Setting n_ctx from config.context_size = %u", governor->config.context_size);
   ctx_params.n_ctx = governor->config.context_size;
   GOV_LOG("[Governor] ctx_params.n_ctx set to = %d", ctx_params.n_ctx);
+
+  // CRITICAL: Validate context size is sufficient for multi-sequence KV cache
+  // With n_seq_max=3, context is divided: n_ctx_seq = n_ctx / 3
+  // System prompt is ~4101 tokens, needs buffer for chat template overhead
+  // Minimum: 4500 tokens/seq × 3 = 13500 total
+  const uint32_t MIN_CONTEXT_FOR_SYSTEM_PROMPT = 13500;
+  if (ctx_params.n_ctx < MIN_CONTEXT_FOR_SYSTEM_PROMPT) {
+    GOV_LOG("[Governor] WARNING: n_ctx (%d) < minimum (%d) for system prompt - increasing to %d",
+            ctx_params.n_ctx, MIN_CONTEXT_FOR_SYSTEM_PROMPT, MIN_CONTEXT_FOR_SYSTEM_PROMPT);
+    ctx_params.n_ctx = MIN_CONTEXT_FOR_SYSTEM_PROMPT;
+  }
 
   // Adaptive batch size based on device tier
   int optimal_batch_size = ethervox_device_profile_get_optimal_batch_size();
@@ -1508,6 +1823,12 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
       if (ethervox_is_success(load_result)) {
         cache_loaded = true;
         
+        // CRITICAL: Copy sequence 1 (loaded system prompt) to sequence 0 for conversation use
+        GOV_LOG("Copying cached system prompt from sequence 1 to sequence 0...");
+        llama_memory_t mem = llama_get_memory(governor->llm_ctx);
+        llama_memory_seq_cp(mem, 1, 0, 0, -1);  // Copy all of seq 1 to seq 0
+        GOV_LOG("System prompt now accessible in conversation (sequence 0)");
+        
         if (progress_callback) {
           progress_callback("processing_prompt", 1.0f, 
                           "✓ System prompt ready (loaded from cache)", user_data);
@@ -1548,8 +1869,9 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
   }
 
   // Build system prompt based on mode (full vs minimal vs finetuned)
-  // Increased to 16KB to accommodate all tools and examples (full mode)
-  char system_prompt[16384];
+  // Increased to 20KB to accommodate all tools and examples (full mode)
+  // With 30 tools, full prompt is ~17KB (preamble 988 + tools 13474 + instructions 2405)
+  char system_prompt[20480];
 
   if (governor->config.system_prompt_mode == ETHERVOX_GOVERNOR_MODE_MINIMAL) {
     // Minimal mode: brief prompt without tools for fast mobile loading
@@ -1703,10 +2025,25 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
   // This significantly improves perceived responsiveness during model loading
   // Android/iOS can override via JNI, desktop/ESP32 use config.h default
   int chunk_size = ethervox_get_startup_batch_size();
+  
+  // CRITICAL: Reduce batch size for multi-sequence contexts
+  // With n_seq_max > 1, attention buffers are allocated per sequence
+  // This multiplies memory requirements exponentially, so we need smaller batches
+  uint32_t n_seq_max = llama_n_seq_max(governor->llm_ctx);
+  if (n_seq_max > 1) {
+    // For n_seq_max=3, divide by 4 to reduce memory pressure
+    int divisor = (n_seq_max == 2) ? 2 : 4;
+    int adjusted_size = chunk_size / divisor;
+    if (adjusted_size < 32) adjusted_size = 32;  // Minimum 32 tokens for efficiency
+    GOV_LOG("Adjusting batch size for n_seq_max=%u: %d -> %d tokens (divisor=%d)", 
+            n_seq_max, chunk_size, adjusted_size, divisor);
+    chunk_size = adjusted_size;
+  }
+  
   GOV_LOG("Using startup batch size: %d tokens per batch (optimized for fast loading)", chunk_size);
   
   // Allocate batch once outside loop for maximum efficiency
-  llama_batch batch = llama_batch_init(chunk_size, 0, 1);
+  llama_batch batch = llama_batch_init(chunk_size, 0, llama_n_seq_max(governor->llm_ctx));
   
   for (int i = 0; i < n_tokens; i += chunk_size) {
     int chunk_len = (i + chunk_size > n_tokens) ? (n_tokens - i) : chunk_size;
@@ -1718,7 +2055,7 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
       batch.token[j] = tokens[i + j];
       batch.pos[j] = i + j;  // Absolute position from start
       batch.n_seq_id[j] = 1;
-      batch.seq_id[j][0] = 0;   // Use sequence 0 for everything
+      batch.seq_id[j][0] = 1;   // System prompt uses sequence 1
       batch.logits[j] = false;  // Skip logits for all tokens
     }
     // Only compute logits for the very last token of the entire system prompt
@@ -1775,6 +2112,14 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
   if (progress_callback) {
     progress_callback("processing_prompt", 0.98f, "Saving cache for faster future startups...", user_data);
   }
+
+  // CRITICAL: Copy sequence 1 (system prompt) to sequence 0 so conversation can see it
+  // After this, sequence 0 contains positions 0-4100 (system prompt)
+  // New conversation tokens will be added to sequence 0 starting at position 4101
+  GOV_LOG("Copying system prompt from sequence 1 to sequence 0 for conversation access...");
+  llama_memory_t mem = llama_get_memory(governor->llm_ctx);
+  llama_memory_seq_cp(mem, 1, 0, 0, -1);  // Copy all of seq 1 to seq 0
+  GOV_LOG("System prompt now accessible in conversation (sequence 0, positions 0-%d)", n_tokens - 1);
 
   governor->system_prompt_token_count = n_tokens;
   governor->current_kv_pos = n_tokens;  // Start after system prompt
@@ -2037,47 +2382,32 @@ char* ethervox_governor_get_system_prompt_content(ethervox_governor_t* governor)
   }
 
 #if defined(ETHERVOX_WITH_LLAMA) && LLAMA_HEADER_AVAILABLE
-  // Check if we have saved system prompt tokens
-  if (!governor->system_prompt_tokens || governor->system_prompt_tokens_len <= 0) {
-    GOV_LOG("No system prompt tokens saved");
-    return strdup("System prompt not available (not saved during initialization)");
+  // Instead of decoding cached tokens (which may be stale), rebuild the system prompt fresh
+  // This ensures the displayed prompt always matches the current tool registry/manifest state
+  
+  char system_prompt[20480];
+  ethervox_result_t build_result;
+  
+  // Use the same builder that was used during initialization
+  if (governor->manifest_registry && governor->manifest_registry->tools_available) {
+    GOV_LOG("Rebuilding system prompt for display using MANIFEST");
+    build_result = ethervox_governor_build_system_prompt_with_manifest(
+        governor->manifest_registry, governor->chat_template, system_prompt, sizeof(system_prompt));
+  } else {
+    GOV_LOG("Rebuilding system prompt for display using LEGACY registry");
+    build_result = ethervox_tool_registry_build_system_prompt(
+        governor->tool_registry, governor->chat_template, system_prompt, sizeof(system_prompt),
+        NULL, governor->model_path);
   }
-
-  // Decode tokens back to text
-  const struct llama_vocab* vocab = llama_model_get_vocab(governor->llm_model);
-  if (!vocab) {
-    GOV_ERROR("Failed to get vocabulary from model");
-    return NULL;
+  
+  if (build_result < 0) {
+    GOV_ERROR("Failed to rebuild system prompt for display (error code: %d)", build_result);
+    return strdup("Error: Failed to rebuild system prompt");
   }
+  
+  GOV_LOG("Rebuilt system prompt for display: %zu bytes", strlen(system_prompt));
+  return strdup(system_prompt);
 
-  // Allocate buffer for decoded text (estimate 4 bytes per token as upper bound)
-  size_t buffer_size = governor->system_prompt_tokens_len * 4 + 1024;
-  char* result = (char*)malloc(buffer_size);
-  if (!result) {
-    GOV_ERROR("Failed to allocate buffer for system prompt content");
-    return NULL;
-  }
-
-  size_t result_len = 0;
-  result[0] = '\0';
-
-  // Decode each token
-  for (int i = 0; i < governor->system_prompt_tokens_len; i++) {
-    char piece[256];
-    int n_chars = llama_token_to_piece(vocab, governor->system_prompt_tokens[i],
-                                       piece, sizeof(piece), 0, false);
-
-    if (n_chars > 0 && result_len + n_chars < buffer_size - 1) {
-      memcpy(result + result_len, piece, n_chars);
-      result_len += n_chars;
-      result[result_len] = '\0';
-    }
-  }
-
-  GOV_LOG("Decoded system prompt: %zu bytes, %d tokens",
-          result_len, governor->system_prompt_tokens_len);
-
-  return result;
 #else
   return strdup("System prompt viewing requires llama.cpp support");
 #endif
@@ -2623,13 +2953,13 @@ ethervox_governor_status_t ethervox_governor_execute(
           bool is_final_chunk = (i + chunk_size >= governor->system_prompt_tokens_len);
 
           // Create batch with explicit positions
-          llama_batch batch = llama_batch_init(chunk_len, 0, 1);
+          llama_batch batch = llama_batch_init(chunk_len, 0, llama_n_seq_max(governor->llm_ctx));
           batch.n_tokens = chunk_len;
           for (int j = 0; j < chunk_len; j++) {
             batch.token[j] = governor->system_prompt_tokens[i + j];
             batch.pos[j] = i + j;
             batch.n_seq_id[j] = 1;
-            batch.seq_id[j][0] = 0;
+            batch.seq_id[j][0] = 1;  // System prompt uses sequence 1 (RELIGHT)
             batch.logits[j] = false;
           }
           // Compute logits only for the very last token
@@ -2651,10 +2981,15 @@ ethervox_governor_status_t ethervox_governor_execute(
         }
 
         if (relight_successful) {
-          // System prompt successfully restored!
+          // System prompt successfully restored to sequence 1!
+          // Copy to sequence 0 for conversation use
+          GOV_LOG("RELIGHT: Copying restored system prompt from sequence 1 to sequence 0...");
+          llama_memory_t relight_mem = llama_get_memory(governor->llm_ctx);
+          llama_memory_seq_cp(relight_mem, 1, 0, 0, -1);  // Copy all of seq 1 to seq 0
+          
           governor->current_kv_pos = governor->system_prompt_token_count;
           governor->system_prompt_lost = false;
-          GOV_LOG("RELIGHT COMPLETE: System prompt restored, tools re-enabled");
+          GOV_LOG("RELIGHT COMPLETE: System prompt restored to seq 0, tools re-enabled");
           GOV_LOG("KV cache restored to position %d (%d%% full)", governor->current_kv_pos,
                   (governor->current_kv_pos * 100 / n_ctx));
 
@@ -2949,13 +3284,13 @@ ethervox_governor_status_t ethervox_governor_execute(
                            false, false);
 
             // Create batch for warning
-            llama_batch warning_batch = llama_batch_init(n_warning, 0, 1);
+            llama_batch warning_batch = llama_batch_init(n_warning, 0, llama_n_seq_max(governor->llm_ctx));
             warning_batch.n_tokens = n_warning;
             for (int i = 0; i < n_warning; i++) {
               warning_batch.token[i] = warning_tokens[i];
               warning_batch.pos[i] = governor->current_kv_pos + i;
               warning_batch.n_seq_id[i] = 1;
-              warning_batch.seq_id[i][0] = 0;
+              warning_batch.seq_id[i][0] = 0;      // Sequence 0 only
               warning_batch.logits[i] = false;
             }
             warning_batch.logits[n_warning - 1] = true;
@@ -2991,13 +3326,16 @@ ethervox_governor_status_t ethervox_governor_execute(
       }
 
       // Create batch with explicit positions starting at current KV position
-      llama_batch batch = llama_batch_init(n_tokens, 0, 1);
+      // Tokens go to sequence 0 only (which now contains copied system prompt from seq 1)
+      // IMPORTANT: n_seq_max must match the context's n_seq_max (3 for our architecture)
+      int n_seq_max = llama_n_seq_max(governor->llm_ctx);
+      llama_batch batch = llama_batch_init(n_tokens, 0, n_seq_max);
       batch.n_tokens = n_tokens;
       for (int i = 0; i < n_tokens; i++) {
         batch.token[i] = tokens[i];
         batch.pos[i] = governor->current_kv_pos + i;
         batch.n_seq_id[i] = 1;
-        batch.seq_id[i][0] = 0;
+        batch.seq_id[i][0] = 0;         // Sequence 0: conversation (includes system prompt copy)
         batch.logits[i] = false;
       }
       batch.logits[n_tokens - 1] = true;  // Only need logits from last token
@@ -3621,12 +3959,12 @@ ethervox_governor_status_t ethervox_governor_execute(
         break;  // Stop generation gracefully
       }
 
-      llama_batch next_batch = llama_batch_init(1, 0, 1);
+      llama_batch next_batch = llama_batch_init(1, 0, llama_n_seq_max(governor->llm_ctx));
       next_batch.n_tokens = 1;
       next_batch.token[0] = next_token;
       next_batch.pos[0] = governor->current_kv_pos;
       next_batch.n_seq_id[0] = 1;
-      next_batch.seq_id[0][0] = 0;
+      next_batch.seq_id[0][0] = 0;      // Sequence 0 only
       next_batch.logits[0] = true;
 
       if (llama_decode(governor->llm_ctx, next_batch) != 0) {
@@ -4156,7 +4494,7 @@ ethervox_governor_status_t ethervox_governor_execute(
                   "Cannot add tool result prefix: would exceed context (pos=%d, prefix=%d, ctx=%d)",
                   governor->current_kv_pos, governor->tool_result_prefix_len, n_ctx);
             } else {
-              llama_batch prefix_batch = llama_batch_init(governor->tool_result_prefix_len, 0, 1);
+              llama_batch prefix_batch = llama_batch_init(governor->tool_result_prefix_len, 0, llama_n_seq_max(governor->llm_ctx));
               prefix_batch.n_tokens = governor->tool_result_prefix_len;
               for (int j = 0; j < governor->tool_result_prefix_len; j++) {
                 prefix_batch.token[j] = governor->tool_result_prefix_tokens[j];
@@ -4234,7 +4572,7 @@ ethervox_governor_status_t ethervox_governor_execute(
                                      ? n_batch
                                      : (result_n_tokens - tokens_processed);
 
-                llama_batch result_batch = llama_batch_init(batch_size, 0, 1);
+                llama_batch result_batch = llama_batch_init(batch_size, 0, llama_n_seq_max(governor->llm_ctx));
                 result_batch.n_tokens = batch_size;
                 for (int j = 0; j < batch_size; j++) {
                   result_batch.token[j] = result_tokens[tokens_processed + j];
@@ -4289,7 +4627,7 @@ ethervox_governor_status_t ethervox_governor_execute(
                   "Cannot add tool result suffix: would exceed context (pos=%d, suffix=%d, ctx=%d)",
                   governor->current_kv_pos, governor->tool_result_suffix_len, n_ctx);
             } else {
-              llama_batch suffix_batch = llama_batch_init(governor->tool_result_suffix_len, 0, 1);
+              llama_batch suffix_batch = llama_batch_init(governor->tool_result_suffix_len, 0, llama_n_seq_max(governor->llm_ctx));
               suffix_batch.n_tokens = governor->tool_result_suffix_len;
               for (int j = 0; j < governor->tool_result_suffix_len; j++) {
                 suffix_batch.token[j] = governor->tool_result_suffix_tokens[j];
@@ -4354,7 +4692,7 @@ ethervox_governor_status_t ethervox_governor_execute(
               if (prefix_tokens) {
                 llama_tokenize(vocab, error_prefix, strlen(error_prefix), prefix_tokens,
                                prefix_n_tokens, false, false);
-                llama_batch prefix_batch = llama_batch_init(prefix_n_tokens, 0, 1);
+                llama_batch prefix_batch = llama_batch_init(prefix_n_tokens, 0, llama_n_seq_max(governor->llm_ctx));
                 prefix_batch.n_tokens = prefix_n_tokens;
                 for (int j = 0; j < prefix_n_tokens; j++) {
                   prefix_batch.token[j] = prefix_tokens[j];
@@ -4403,7 +4741,7 @@ ethervox_governor_status_t ethervox_governor_execute(
                 int batch_size = (error_n_tokens - tokens_processed > n_batch)
                                      ? n_batch
                                      : (error_n_tokens - tokens_processed);
-                llama_batch error_batch = llama_batch_init(batch_size, 0, 1);
+                llama_batch error_batch = llama_batch_init(batch_size, 0, llama_n_seq_max(governor->llm_ctx));
                 error_batch.n_tokens = batch_size;
                 for (int j = 0; j < batch_size; j++) {
                   error_batch.token[j] = error_tokens[tokens_processed + j];
@@ -4447,7 +4785,7 @@ ethervox_governor_status_t ethervox_governor_execute(
               if (suffix_tokens) {
                 llama_tokenize(vocab, error_suffix, strlen(error_suffix), suffix_tokens,
                                suffix_n_tokens, false, false);
-                llama_batch suffix_batch = llama_batch_init(suffix_n_tokens, 0, 1);
+                llama_batch suffix_batch = llama_batch_init(suffix_n_tokens, 0, llama_n_seq_max(governor->llm_ctx));
                 suffix_batch.n_tokens = suffix_n_tokens;
                 for (int j = 0; j < suffix_n_tokens; j++) {
                   suffix_batch.token[j] = suffix_tokens[j];
@@ -4724,13 +5062,13 @@ ethervox_result_t ethervox_governor_reset_conversation(ethervox_governor_t* gove
     bool is_final_chunk = (i + chunk_size >= governor->system_prompt_tokens_len);
 
     // Create batch with explicit positions
-    llama_batch batch = llama_batch_init(chunk_len, 0, 1);
+    llama_batch batch = llama_batch_init(chunk_len, 0, llama_n_seq_max(governor->llm_ctx));
     batch.n_tokens = chunk_len;
     for (int j = 0; j < chunk_len; j++) {
       batch.token[j] = governor->system_prompt_tokens[i + j];
       batch.pos[j] = i + j;
       batch.n_seq_id[j] = 1;
-      batch.seq_id[j][0] = 0;
+      batch.seq_id[j][0] = 1;  // System prompt uses sequence 1 (reset)
       batch.logits[j] = false;
     }
     // Compute logits only for the very last token
@@ -4960,7 +5298,7 @@ ethervox_result_t ethervox_governor_summarize_and_clear_cache(ethervox_governor_
     int chunk_len = (i + chunk_size > n_summary_tokens) ? (n_summary_tokens - i) : chunk_size;
     bool is_last_chunk = (i + chunk_size >= n_summary_tokens);
 
-    llama_batch batch = llama_batch_init(chunk_len, 0, 1);
+    llama_batch batch = llama_batch_init(chunk_len, 0, llama_n_seq_max(governor->llm_ctx));
     batch.n_tokens = chunk_len;
     for (int j = 0; j < chunk_len; j++) {
       batch.token[j] = summary_tokens[i + j];
@@ -5017,7 +5355,7 @@ ethervox_result_t ethervox_governor_summarize_and_clear_cache(ethervox_governor_
       }
 
       // Feed the token back for next iteration
-      llama_batch batch = llama_batch_init(1, 0, 1);
+      llama_batch batch = llama_batch_init(1, 0, llama_n_seq_max(governor->llm_ctx));
       batch.n_tokens = 1;
       batch.token[0] = next_token;
       batch.pos[0] = current_gen_pos + i;
