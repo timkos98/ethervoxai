@@ -569,7 +569,7 @@ static inline ethervox_governor_config_t ethervox_governor_default_config(void) 
       .timeout_seconds = 30,
       .max_tokens_per_response = 192,  // Conservative limit for voice assistant responses (was 2048 - too verbose)
       .gpu_layers = 999,     // Full GPU offload by default (overridden by settings)
-      .context_size = 768,   // Optimized for mobile (was 8192 - too high for 350M models)
+      .context_size = 16384, // Increased for multi-sequence KV cache (n_seq_max=3: 16384/3=5461 per seq, needed for 4101-token system prompt)
       .n_threads = 8,        // 8 threads by default (overridden by settings)
       .temperature = 0.7f,   // Balanced creativity (overridden by settings)
       .system_prompt_mode = ETHERVOX_GOVERNOR_MODE_FULL,  // Default to full capabilities

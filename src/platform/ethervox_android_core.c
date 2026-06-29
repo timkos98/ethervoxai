@@ -2833,3 +2833,87 @@ JNIEXPORT jboolean JNICALL Java_com_droid_ethervox_1core_NativeLib_loadGovernorM
     return JNI_FALSE;
   }
 }
+
+// ============================================================================
+// Additional Conversation Summary JNI Functions
+// ============================================================================
+
+/**
+ * Get the last generated conversation summary text for UI display
+ */
+JNIEXPORT jstring JNICALL
+Java_com_droid_ethervox_1core_NativeLib_getLastSummary(
+    JNIEnv* env, jobject thiz
+) {
+    (void)thiz;
+    const char* summary = ethervox_get_last_summary();
+    return (*env)->NewStringUTF(env, summary);
+}
+
+/**
+ * Restore conversation context from memory
+ */
+JNIEXPORT jboolean JNICALL
+Java_com_droid_ethervox_1core_NativeLib_restoreContextFromMemory(
+    JNIEnv* env, jobject thiz
+) {
+    (void)thiz;
+    (void)env;
+    
+    if (!g_governor || !g_memory_store) {
+        LOGE("[JNI] Governor or memory store not initialized");
+        return JNI_FALSE;
+    }
+    
+    LOGI("[JNI] Restoring conversation context from memory...");
+    
+    ethervox_result_t result = ethervox_restore_context_from_memory(
+        g_governor,
+        g_memory_store
+    );
+    
+    return ethervox_is_success(result) ? JNI_TRUE : JNI_FALSE;
+}
+
+/**
+ * Load conversation summary from KV cache file (if exists)
+ */
+JNIEXPORT jboolean JNICALL
+Java_com_droid_ethervox_1core_NativeLib_loadConversationSummary(
+    JNIEnv* env, jobject thiz
+) {
+    (void)thiz;
+    (void)env;
+    
+    if (!g_governor) {
+        LOGE("[JNI] Governor not initialized");
+        return JNI_FALSE;
+    }
+    
+    if (g_android_files_dir[0] == '\0') {
+        LOGE("[JNI] Android files directory not set");
+        return JNI_FALSE;
+    }
+    
+    char cache_dir[512];
+    snprintf(cache_dir, sizeof(cache_dir), "%s/cache", g_android_files_dir);
+    
+    LOGI("[JNI] Loading conversation summary from: %s", cache_dir);
+    
+    ethervox_result_t result = ethervox_load_conversation_summary(
+        g_governor,
+        cache_dir
+    );
+    
+    if (!ethervox_is_success(result)) {
+        LOGE("[JNI] Failed to load conversation summary: %d", result);
+        return JNI_FALSE;
+    }
+    
+    // After loading summary, restore recent context from memory
+    if (g_memory_store) {
+        ethervox_restore_context_from_memory(g_governor, g_memory_store);
+    }
+    
+    return JNI_TRUE;
+}

@@ -67,6 +67,27 @@ ethervox_result_t ethervox_load_conversation_summary(
     const char* cache_dir
 );
 
+/**
+ * Get the last generated conversation summary text for UI display
+ * @return Summary text or message if no summary exists
+ */
+const char* ethervox_get_last_summary(void);
+
+/**
+ * Restore conversation context from memory after loading summary
+ * 
+ * Loads recent conversations (after summary checkpoint), active tasks,
+ * and important context items into KV cache for continuity.
+ * 
+ * @param governor Governor instance
+ * @param memory_store Memory store containing conversation history
+ * @return ETHERVOX_SUCCESS or error code
+ */
+ethervox_result_t ethervox_restore_context_from_memory(
+    struct ethervox_governor* governor,
+    ethervox_memory_store_t* memory_store
+);
+
 #ifdef __cplusplus
 }
 #endif
