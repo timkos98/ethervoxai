@@ -432,7 +432,6 @@ static int load_tokens_to_kv_cache(struct ethervox_governor* governor, const lla
 
 /**
  * Clear conversation from sequence 0, preserving system prompt in sequence 1
- * Implements fallback strategy if sequence clear fails
  * 
  * @return ETHERVOX_SUCCESS or error code
  */
@@ -443,50 +442,38 @@ static ethervox_result_t clear_conversation_keep_system_prompt(struct ethervox_g
 
   llama_memory_t mem = llama_get_memory(governor->llm_ctx);
   
-  // === 2-SEQUENCE ARCHITECTURE: Clear conversation part of seq 0, keep system prompt ===
-  // Seq 0 contains: [system prompt tokens] [conversation tokens]
-  // We need to clear only the conversation tokens (from system_prompt_token_count onward)
+  // === 2-SEQUENCE ARCHITECTURE: Clear all of seq 0 (conversation), keep seq 1 (system prompt) ===
+  // Seq 1: System prompt (permanent, never touched)
+  // Seq 0: Conversation only (can be fully cleared)
   
-  if (governor->system_prompt_token_count == 0) {
-    GOV_ERROR("System prompt length is 0 - cannot clear conversation safely");
-    goto fallback_nuclear_clear;
-  }
-  
-  // Check current state before clearing
   int32_t current_max = llama_memory_seq_pos_max(mem, 0);
-  GOV_LOG("Clearing conversation from position %d onward (keeping system prompt 0-%d)...",
-          governor->system_prompt_token_count, governor->system_prompt_token_count - 1);
-  GOV_LOG("Current seq0 max position: %d, clearing %d tokens",
-          current_max, current_max - governor->system_prompt_token_count + 1);
+  GOV_LOG("Clearing conversation sequence 0 (current max: %d tokens)", current_max);
   
-  // If there's nothing to clear beyond system prompt, we're already done
-  if (current_max < (int32_t)governor->system_prompt_token_count) {
-    GOV_LOG("Cache already clean (max_pos %d < system_prompt %d)", current_max, governor->system_prompt_token_count);
-    governor->current_kv_pos = governor->system_prompt_token_count;
+  // If sequence 0 is already empty, we're done
+  if (current_max < 0) {
+    GOV_LOG("Cache already clean (seq 0 is empty)");
+    governor->current_kv_pos = 0;
     return ETHERVOX_SUCCESS;
   }
   
-  // Clear from system_prompt_token_count to end of sequence 0
-  bool conv_cleared = llama_memory_seq_rm(mem, 0, governor->system_prompt_token_count, -1);
+  // Clear entire sequence 0 (conversation)
+  bool conv_cleared = llama_memory_seq_rm(mem, 0, -1, -1);
   
   if (!conv_cleared) {
     GOV_ERROR("Conversation clear failed (unexpected)");
     goto fallback_nuclear_clear;
   }
   
-  // Verify conversation is cleared but system prompt remains
+  // Verify sequence 0 is cleared
   int32_t seq0_max = llama_memory_seq_pos_max(mem, 0);
   
-  // seq0_max should be system_prompt_token_count - 1 (last token of system prompt)
-  if (seq0_max != (int32_t)(governor->system_prompt_token_count - 1)) {
-    GOV_ERROR("Clear verification failed: seq0_max=%d (expected %d)",
-              seq0_max, governor->system_prompt_token_count - 1);
+  if (seq0_max != -1) {
+    GOV_ERROR("Clear verification failed: seq0_max=%d (expected -1)", seq0_max);
     goto fallback_nuclear_clear;
   }
   
-  GOV_LOG("✓ Conversation cleared, system prompt intact (0-%d, %d tokens)",
-          seq0_max, governor->system_prompt_token_count);
-  governor->current_kv_pos = governor->system_prompt_token_count;  // Reset to end of system prompt
+  GOV_LOG("✓ Conversation cleared, system prompt intact in seq 1");
+  governor->current_kv_pos = 0;  // Seq 0 is empty, start from position 0
   return ETHERVOX_SUCCESS;
 
 fallback_nuclear_clear:
@@ -2014,7 +2001,7 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
       batch.token[j] = tokens[i + j];
       batch.pos[j] = i + j;  // Absolute position from start
       batch.n_seq_id[j] = 1;
-      batch.seq_id[j][0] = 0;   // System prompt loaded directly into sequence 0
+      batch.seq_id[j][0] = 1;   // System prompt loaded into sequence 1 (permanent)
       batch.logits[j] = false;  // Skip logits for all tokens
     }
     // Only compute logits for the very last token of the entire system prompt
@@ -3393,16 +3380,17 @@ ethervox_governor_status_t ethervox_governor_execute(
       }
 
       // Create batch with explicit positions starting at current KV position
-      // Tokens go to sequence 0 only (which now contains copied system prompt from seq 1)
-      // IMPORTANT: n_seq_max must match the context's n_seq_max (3 for our architecture)
+      // 2-SEQUENCE ARCHITECTURE: Conversation tokens reference both seq 0 (conversation) and seq 1 (system prompt)
+      // This allows the model to see both the permanent system prompt and the conversation context
       int n_seq_max = llama_n_seq_max(governor->llm_ctx);
       llama_batch batch = llama_batch_init(n_tokens, 0, n_seq_max);
       batch.n_tokens = n_tokens;
       for (int i = 0; i < n_tokens; i++) {
         batch.token[i] = tokens[i];
         batch.pos[i] = governor->current_kv_pos + i;
-        batch.n_seq_id[i] = 1;
-        batch.seq_id[i][0] = 0;         // Sequence 0: conversation (includes system prompt copy)
+        batch.n_seq_id[i] = 2;           // Reference 2 sequences
+        batch.seq_id[i][0] = 0;          // Sequence 0: conversation
+        batch.seq_id[i][1] = 1;          // Sequence 1: system prompt (permanent)
         batch.logits[i] = false;
       }
       batch.logits[n_tokens - 1] = true;  // Only need logits from last token
@@ -4030,8 +4018,9 @@ ethervox_governor_status_t ethervox_governor_execute(
       next_batch.n_tokens = 1;
       next_batch.token[0] = next_token;
       next_batch.pos[0] = governor->current_kv_pos;
-      next_batch.n_seq_id[0] = 1;
-      next_batch.seq_id[0][0] = 0;      // Sequence 0 only
+      next_batch.n_seq_id[0] = 2;          // Reference 2 sequences
+      next_batch.seq_id[0][0] = 0;         // Sequence 0: conversation
+      next_batch.seq_id[0][1] = 1;         // Sequence 1: system prompt
       next_batch.logits[0] = true;
 
       if (llama_decode(governor->llm_ctx, next_batch) != 0) {
