@@ -452,8 +452,19 @@ static ethervox_result_t clear_conversation_keep_system_prompt(struct ethervox_g
     goto fallback_nuclear_clear;
   }
   
+  // Check current state before clearing
+  int32_t current_max = llama_memory_seq_pos_max(mem, 0);
   GOV_LOG("Clearing conversation from position %d onward (keeping system prompt 0-%d)...",
           governor->system_prompt_token_count, governor->system_prompt_token_count - 1);
+  GOV_LOG("Current seq0 max position: %d, clearing %d tokens",
+          current_max, current_max - governor->system_prompt_token_count + 1);
+  
+  // If there's nothing to clear beyond system prompt, we're already done
+  if (current_max < (int32_t)governor->system_prompt_token_count) {
+    GOV_LOG("Cache already clean (max_pos %d < system_prompt %d)", current_max, governor->system_prompt_token_count);
+    governor->current_kv_pos = governor->system_prompt_token_count;
+    return ETHERVOX_SUCCESS;
+  }
   
   // Clear from system_prompt_token_count to end of sequence 0
   bool conv_cleared = llama_memory_seq_rm(mem, 0, governor->system_prompt_token_count, -1);
@@ -493,80 +504,14 @@ fallback_nuclear_clear:
     return ETHERVOX_ERROR_FILE_READ;
   }
   
-  GOV_LOG("Nuclear clear complete, attempting system prompt reload...");
+  GOV_LOG("Nuclear clear complete, system prompt will regenerate on next message");
   
-  // Try fast path: reload from cache
-  bool reloaded = false;
-  if (governor->model_path) {
-    const char* cache_dir = getenv("ETHERVOX_FILES_DIR");
-    if (cache_dir) {
-      char cache_path[512];
-      ethervox_result_t path_result = ethervox_kv_cache_get_path(
-          governor->model_path, cache_dir, cache_path, sizeof(cache_path)
-      );
-      
-      if (ethervox_is_success(path_result) && 
-          ethervox_kv_cache_exists(cache_path, governor->model_path)) {
-        
-        GOV_LOG("Reloading system prompt from cache: %s", cache_path);
-        ethervox_result_t load_result = ethervox_kv_cache_load(governor, cache_path);
-        
-        if (ethervox_is_success(load_result)) {
-          reloaded = true;
-          GOV_LOG("✓ System prompt reloaded from cache");
-        } else {
-          GOV_LOG("Cache load failed (code %d), regenerating from tokens", load_result);
-        }
-      }
-    }
-  }
+  // Don't regenerate system prompt now - it's too slow in debug builds (15+ minutes for 4543 tokens)
+  // Instead, let it regenerate naturally on the next message when context restoration runs
+  // The restoration code in process_dialogue will handle this automatically
+  governor->current_kv_pos = 0;  // Reset to start
+  governor->system_prompt_token_count = 0;  // Mark as needing reload
   
-  if (!reloaded) {
-    // FALLBACK 2: Regenerate from saved tokens
-    GOV_LOG("Regenerating system prompt from saved tokens...");
-    
-    if (!governor->system_prompt_tokens || governor->system_prompt_tokens_len == 0) {
-      GOV_ERROR("FATAL: No saved system prompt tokens!");
-      return ETHERVOX_ERROR_NOT_INITIALIZED;
-    }
-    
-    // Reprocess system prompt tokens (same as RELIGHT)
-    int actual_n_batch = llama_n_batch(governor->llm_ctx);
-    int chunk_size = (actual_n_batch > 0) ? actual_n_batch : 512;
-    
-    for (int i = 0; i < governor->system_prompt_tokens_len; i += chunk_size) {
-      int chunk_len = (i + chunk_size > governor->system_prompt_tokens_len)
-                          ? (governor->system_prompt_tokens_len - i)
-                          : chunk_size;
-      bool is_final_chunk = (i + chunk_size >= governor->system_prompt_tokens_len);
-      
-      llama_batch batch = llama_batch_init(chunk_len, 0, llama_n_seq_max(governor->llm_ctx));
-      batch.n_tokens = chunk_len;
-      for (int j = 0; j < chunk_len; j++) {
-        batch.token[j] = governor->system_prompt_tokens[i + j];
-        batch.pos[j] = i + j;
-        batch.n_seq_id[j] = 1;
-        batch.seq_id[j][0] = 1;  // System prompt uses sequence 1
-        batch.logits[j] = false;
-      }
-      if (is_final_chunk) {
-        batch.logits[chunk_len - 1] = true;
-      }
-      
-      if (llama_decode(governor->llm_ctx, batch) != 0) {
-        GOV_ERROR("FATAL: Failed to regenerate system prompt at token %d", i);
-        llama_batch_free(batch);
-        return ETHERVOX_ERROR_FILE_READ;
-      }
-      
-      llama_batch_free(batch);
-    }
-    
-    GOV_LOG("✓ System prompt regenerated (%d tokens)", governor->system_prompt_tokens_len);
-  }
-  
-  governor->current_kv_pos = 0;  // Sequence 0 empty, ready for conversation
-  GOV_LOG("✓ Recovery complete after nuclear clear");
   return ETHERVOX_SUCCESS;
 }
 
