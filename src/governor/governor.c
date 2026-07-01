@@ -2358,17 +2358,21 @@ float ethervox_governor_get_kv_cache_usage(ethervox_governor_t* governor, int32_
     return -1.0f;
   }
 
-  int32_t n_ctx = llama_n_ctx(governor->llm_ctx);
+  // Use per-sequence capacity for accurate percentage (2-sequence architecture)
+  int32_t seq_capacity = get_ctx_seq_capacity(governor->llm_ctx);
   int32_t pos = governor->current_kv_pos;
+  int32_t n_ctx = llama_n_ctx(governor->llm_ctx);
 
   if (current_pos) {
     *current_pos = pos;
   }
   if (context_size) {
-    *context_size = n_ctx;
+    // Return per-sequence capacity, not total context
+    *context_size = seq_capacity;
   }
 
-  return (float)pos / (float)n_ctx;
+  // Calculate percentage based on per-sequence capacity
+  return (float)pos / (float)seq_capacity;
 }
 
 /**
