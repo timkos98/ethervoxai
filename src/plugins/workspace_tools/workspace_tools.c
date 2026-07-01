@@ -397,7 +397,8 @@ ethervox_result_t ethervox_workspace_tools_register(ethervox_tool_registry_t* re
           "{\"type\":{\"type\":\"string\",\"description\":\"Object type filter: markdown-note, "
           "folder, file, code-snippet, web-link, conversation, image, or "
           "all\",\"default\":\"all\"}}",
-      .execute = tool_workspace_list_objects_wrapper,
+      .test_scenario = "List all objects in workspace",
+        .execute = tool_workspace_list_objects_wrapper,
       .requires_confirmation = 0};
   result = ethervox_tool_registry_add(registry, &list_tool);
   if (result != ETHERVOX_SUCCESS) {
@@ -415,7 +416,8 @@ ethervox_result_t ethervox_workspace_tools_register(ethervox_tool_registry_t* re
       .parameters_json_schema =
           "{\"query\":{\"type\":\"string\",\"description\":\"Search query "
           "text\",\"required\":true}}",
-      .execute = tool_workspace_search_objects_wrapper,
+      .test_scenario = "Search for documents about AI",
+        .execute = tool_workspace_search_objects_wrapper,
       .requires_confirmation = 0};
   result = ethervox_tool_registry_add(registry, &search_tool);
   if (result != ETHERVOX_SUCCESS) {
@@ -432,7 +434,8 @@ ethervox_result_t ethervox_workspace_tools_register(ethervox_tool_registry_t* re
           "files. Requires object_id.",
       .parameters_json_schema =
           "{\"object_id\":{\"type\":\"string\",\"description\":\"Object UUID\",\"required\":true}}",
-      .execute = tool_workspace_get_object_wrapper,
+      .test_scenario = "Get details about note 123",
+        .execute = tool_workspace_get_object_wrapper,
       .requires_confirmation = 0};
   result = ethervox_tool_registry_add(registry, &get_tool);
   if (result != ETHERVOX_SUCCESS) {
@@ -456,7 +459,8 @@ ethervox_result_t ethervox_workspace_tools_register(ethervox_tool_registry_t* re
           "\"content\":{\"type\":\"string\",\"description\":\"Node content in markdown "
           "format\",\"required\":true},\"tags\":{\"type\":\"array\",\"description\":\"Optional "
           "tags list\",\"required\":false}}",
-      .execute = tool_workspace_create_note_wrapper,
+      .test_scenario = "Create a note about meeting",
+        .execute = tool_workspace_create_note_wrapper,
       .requires_confirmation = 0};
   result = ethervox_tool_registry_add(registry, &create_note_tool);
   if (result != ETHERVOX_SUCCESS) {
@@ -477,7 +481,8 @@ ethervox_result_t ethervox_workspace_tools_register(ethervox_tool_registry_t* re
           "object "
           "UUID\",\"required\":true},\"label\":{\"type\":\"string\",\"description\":\"Connection "
           "label\"}}",
-      .execute = tool_workspace_create_connection_wrapper,
+      .test_scenario = "Connect note A to note B",
+        .execute = tool_workspace_create_connection_wrapper,
       .requires_confirmation = 0};
   result = ethervox_tool_registry_add(registry, &create_connection_tool);
   if (result != ETHERVOX_SUCCESS) {
@@ -503,7 +508,8 @@ ethervox_result_t ethervox_workspace_tools_register(ethervox_tool_registry_t* re
           "content to add or replace\",\"required\":true},\"append\":{\"type\":\"string\","
           "\"description\":\"Append (true) or replace (false) "
           "content\",\"default\":\"true\"}}",
-      .execute = tool_workspace_update_object_wrapper,
+      .test_scenario = "Update note 456 with new content",
+        .execute = tool_workspace_update_object_wrapper,
       .requires_confirmation = 0};
   result = ethervox_tool_registry_add(registry, &update_object_tool);
   if (result != ETHERVOX_SUCCESS) {
@@ -524,7 +530,8 @@ ethervox_result_t ethervox_workspace_tools_register(ethervox_tool_registry_t* re
       .parameters_json_schema =
           "{\"object_id\":{\"type\":\"string\",\"description\":\"UUID of the markdown note to "
           "export\",\"required\":true}}",
-      .execute = tool_workspace_export_to_docx_wrapper,
+      .test_scenario = "Export workspace to Word document",
+        .execute = tool_workspace_export_to_docx_wrapper,
       .requires_confirmation = 0};
   result = ethervox_tool_registry_add(registry, &export_docx_tool);
   if (result != ETHERVOX_SUCCESS) {
@@ -546,7 +553,8 @@ ethervox_result_t ethervox_workspace_tools_register(ethervox_tool_registry_t* re
       .parameters_json_schema =
           "{\"node_ids\":{\"type\":\"array\",\"description\":\"Array of node UUIDs to highlight "
           "in the graph\",\"items\":{\"type\":\"string\"},\"required\":true}}",
-      .execute = tool_workspace_highlight_nodes_wrapper,
+      .test_scenario = "Highlight important nodes in graph",
+        .execute = tool_workspace_highlight_nodes_wrapper,
       .requires_confirmation = 0};
   result = ethervox_tool_registry_add(registry, &highlight_tool);
   if (result != ETHERVOX_SUCCESS) {

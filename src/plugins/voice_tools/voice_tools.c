@@ -1452,7 +1452,8 @@ static ethervox_tool_t listen_tool = {
         "status\"}"
         "},"
         "\"required\":[\"action\"]}",
-    .execute = tool_listen_and_summarize_wrapper,
+    .test_scenario = "Listen to this recording and summarize it",
+        .execute = tool_listen_and_summarize_wrapper,
     .is_deterministic = false,
     .requires_confirmation = false,
     .is_stateful = true,

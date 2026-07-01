@@ -725,6 +725,7 @@ ethervox_result_t ethervox_memory_tools_register(
             "  },"
             "  \"required\": [\"memory_id\"]"
             "}",
+        .test_scenario = "Mark my grocery reminder as done",
         .execute = tool_memory_complete_reminder_wrapper,
         .is_deterministic = false,
         .requires_confirmation = false,
@@ -746,6 +747,7 @@ ethervox_result_t ethervox_memory_tools_register(
             "  },"
             "  \"required\": [\"memory_id\", \"new_text\"]"
             "}",
+        .test_scenario = "Change my meeting reminder to 5pm",
         .execute = tool_memory_update_reminder_wrapper,
         .is_deterministic = false,
         .requires_confirmation = false,
@@ -771,6 +773,7 @@ ethervox_result_t ethervox_memory_tools_register(
             "  },"
             "  \"required\": []"
             "}",
+        .test_scenario = "Remember my favorite color is blue",
         .execute = tool_memory_store_wrapper,
         .is_deterministic = false,
         .requires_confirmation = false,
@@ -790,6 +793,7 @@ ethervox_result_t ethervox_memory_tools_register(
             "\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100},"
             "\"min_importance\":{\"type\":\"number\",\"minimum\":0.0,\"maximum\":1.0,\"description\":\"Minimum importance threshold (0.0-1.0). Use 0.8+ for important context, 0.9+ for critical info.\"}"
             "}}",
+        .test_scenario = "What's my favorite color?",
         .execute = tool_memory_search_wrapper,
         .is_deterministic = true,
         .requires_confirmation = false,
@@ -806,6 +810,7 @@ ethervox_result_t ethervox_memory_tools_register(
         .name = "memory_reminder_list",
         .description = "List all active reminders (entries tagged with 'reminder'). Returns reminder text, deadlines, importance, and memory_id for completing reminders.",
         .parameters_json_schema = "{\"type\":\"object\",\"properties\":{}}",
+        .test_scenario = "What reminders do I have?",
         .execute = tool_memory_reminder_list_wrapper,
         .is_deterministic = true,
         .requires_confirmation = false,
@@ -821,6 +826,7 @@ ethervox_result_t ethervox_memory_tools_register(
             "\"filepath\":{\"type\":\"string\",\"description\":\"Path where to save the file (required). Example: './conversation.md' or './notes.json'\"},"
             "\"format\":{\"type\":\"string\",\"enum\":[\"json\",\"markdown\"],\"description\":\"File format: 'json' or 'markdown' (required)\"}"
             "},\"required\":[\"filepath\",\"format\"]}",
+        .test_scenario = "Export all my memories",
         .execute = tool_memory_export_wrapper,
         .is_deterministic = true,
         .requires_confirmation = true,
@@ -839,6 +845,7 @@ ethervox_result_t ethervox_memory_tools_register(
             "\"older_than_seconds\":{\"type\":\"integer\",\"minimum\":0},"
             "\"importance_threshold\":{\"type\":\"number\",\"minimum\":0,\"maximum\":1}"
             "}}",
+        .test_scenario = "Forget my birthday",
         .execute = tool_memory_forget_wrapper,
         .is_deterministic = false,
         .requires_confirmation = true,
@@ -857,6 +864,7 @@ ethervox_result_t ethervox_memory_tools_register(
             "\"memory_ids\":{\"type\":\"array\",\"items\":{\"type\":\"integer\"}},"
             "\"memory_id\":{\"type\":\"string\"}"
             "}}",
+        .test_scenario = "Delete that reminder",
         .execute = tool_memory_delete_wrapper,
         .is_deterministic = false,
         .requires_confirmation = true,
@@ -875,6 +883,7 @@ ethervox_result_t ethervox_memory_tools_register(
             "\"correction\":{\"type\":\"string\",\"description\":\"What the user corrected (required)\"},"
             "\"context\":{\"type\":\"string\",\"description\":\"Optional: What was wrong or what this relates to\"}"
             "},\"required\":[\"correction\"]}",
+        .test_scenario = "Actually, my name is John, not Jon",
         .execute = tool_memory_store_correction_wrapper,
         .is_deterministic = false,
         .requires_confirmation = false,
@@ -892,6 +901,7 @@ ethervox_result_t ethervox_memory_tools_register(
             "{\"type\":\"object\",\"properties\":{"
             "\"pattern\":{\"type\":\"string\",\"description\":\"Description of what worked well (required)\"}"
             "},\"required\":[\"pattern\"]}",
+        .test_scenario = "I always drink coffee in the morning",
         .execute = tool_memory_store_pattern_wrapper,
         .is_deterministic = false,
         .requires_confirmation = false,

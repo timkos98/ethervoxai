@@ -300,6 +300,7 @@ static ethervox_tool_t calculator_tool = {
         "\"decimal_places\":{\"type\":\"integer\",\"description\":\"Number of decimal places (0-15, default: 2)\",\"default\":2}"
         "},"
         "\"required\":[\"expression\"]}",
+    .test_scenario = "Calculate 157 times 43",
     .execute = calculator_execute,
     .is_deterministic = true,
     .requires_confirmation = false,

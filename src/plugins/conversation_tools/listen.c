@@ -210,6 +210,7 @@ ethervox_tool_t* ethervox_tool_listen_create(void) {
             "\"timeout_ms\":{\"type\":\"integer\",\"description\":\"Maximum time to wait for user input in milliseconds (default: 5000, range: 1000-30000)\"},"
             "\"prompt_hint\":{\"type\":\"string\",\"description\":\"Optional hint about what you're waiting for (e.g., 'waiting for your answer...')\"}"
             "},\"required\":[]}",
+        .test_scenario = "Listen to my voice note",
         .execute = tool_listen_wrapper,
         .is_deterministic = false,      // User input varies
         .requires_confirmation = false,  // No confirmation needed

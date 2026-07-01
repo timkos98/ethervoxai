@@ -218,6 +218,7 @@ ethervox_result_t register_context_manage_tool(
             "},"
             "\"required\": [\"action\"]"
             "}",
+        .test_scenario = "Manage the conversation context",
         .execute = context_manage_execute,
         .is_deterministic = false,
         .requires_confirmation = false,
