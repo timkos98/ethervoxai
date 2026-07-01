@@ -3090,8 +3090,13 @@ ethervox_governor_status_t ethervox_governor_execute(
 
   // If we're starting fresh (max_pos at system prompt) but have conversation history,
   // restore context: summary (if exists) + recent turns after summary
+  GOV_LOG("Context restoration check: max_pos=%d, system_prompt_tokens=%d, turn_count=%u",
+          max_pos, governor->system_prompt_token_count, governor->conversation_history.turn_count);
+  
   bool need_context_restoration = (max_pos <= governor->system_prompt_token_count) && 
                                    (governor->conversation_history.turn_count > 0);
+  
+  GOV_LOG("Context restoration %s", need_context_restoration ? "TRIGGERED" : "SKIPPED");
   
   if (need_context_restoration) {
     // Notify UI that context restoration is starting
@@ -3363,21 +3368,6 @@ ethervox_governor_status_t ethervox_governor_execute(
       }
 
       llama_tokenize(vocab, new_content, new_content_len, tokens, n_tokens, false, false);
-
-      // DEBUG: Decode tokens back to text to verify tokenization is correct
-      GOV_LOG("[DEBUG-TOKENIZE] Decoding %d tokens to verify input:", n_tokens);
-      char decoded_preview[512] = {0};
-      int preview_chars = 0;
-      for (int i = 0; i < (n_tokens < 10 ? n_tokens : 10); i++) {
-        char token_str[128];
-        int n = llama_token_to_piece(vocab, tokens[i], token_str, sizeof(token_str), 0, false);
-        if (n > 0 && preview_chars + n < sizeof(decoded_preview) - 1) {
-          memcpy(decoded_preview + preview_chars, token_str, n);
-          preview_chars += n;
-        }
-      }
-      decoded_preview[preview_chars] = '\0';
-      GOV_LOG("[DEBUG-TOKENIZE] First 10 tokens decode to: '%s...'", decoded_preview);
 
       // ========================================================================
       // Context Health Monitoring - Check before decoding new tokens

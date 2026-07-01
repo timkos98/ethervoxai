@@ -449,16 +449,20 @@ const char* ethervox_get_last_summary(void) {
 }
 
 /**
- * Restore conversation context from memory after loading summary
+ * Prepare context restoration by finding most recent summary
  * 
- * Loads:
- * 1. Conversations AFTER last summary checkpoint
- * 2. Active tasks (reminder, todo, action_item tags)
- * 3. Important context (important, personal_info, user_preference tags)
+ * NOTE: Actual restoration happens at generation time in governor.c
+ * This function runs at startup to find and store the summary for UI display.
+ * 
+ * The generation-time restoration (in process_dialogue) will:
+ * 1. Detect if KV cache needs restoration (max_pos <= system_prompt_token_count)
+ * 2. Load summary from memory (tagged with context_summary) 
+ * 3. Load conversation turns from conversation_history
+ * 4. Tokenize and add to KV cache right before generation
  * 
  * @param governor Governor instance
- * @param memory_store Memory store
- * @return ETHERVOX_SUCCESS or error code
+ * @param memory_store Memory store (for finding summary)
+ * @return ETHERVOX_SUCCESS
  */
 ethervox_result_t ethervox_restore_context_from_memory(
     struct ethervox_governor* governor,
@@ -468,10 +472,12 @@ ethervox_result_t ethervox_restore_context_from_memory(
         return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
-    ETHERVOX_LOGI("Restoring conversation context from memory...");
+    ETHERVOX_LOGI("Preparing context restoration (actual restore happens on first message)");
     
-    // Find the last summary checkpoint timestamp
+    // Find the last summary checkpoint for UI display
     uint64_t summary_timestamp = 0;
+    int summaries_found = 0;
+    
     for (int i = memory_store->entry_count - 1; i >= 0; i--) {
         ethervox_memory_entry_t* entry = &memory_store->entries[i];
         
@@ -479,77 +485,30 @@ ethervox_result_t ethervox_restore_context_from_memory(
         for (uint32_t j = 0; j < entry->tag_count; j++) {
             if (strcmp(entry->tags[j], "context_summary") == 0) {
                 summary_timestamp = entry->timestamp;
-                ETHERVOX_LOGI("Found summary checkpoint at timestamp: %llu", summary_timestamp);
+                summaries_found++;
                 
                 // Store the summary text for UI display
                 strncpy(g_last_summary, entry->text, sizeof(g_last_summary) - 1);
                 g_last_summary[sizeof(g_last_summary) - 1] = '\0';
                 g_has_summary = true;
-                goto found_summary;
+                
+                ETHERVOX_LOGI("Found summary checkpoint at timestamp: %llu", summary_timestamp);
+                goto done_searching;
             }
         }
     }
     
-    // Collect entries to restore
-    int conversations_loaded = 0;
-    int tasks_loaded = 0;
-    int context_loaded = 0;
+done_searching:
     
-found_summary:
-    
-    for (uint32_t i = 0; i < memory_store->entry_count; i++) {
-        ethervox_memory_entry_t* entry = &memory_store->entries[i];
-        bool should_load = false;
-        
-        // Skip the summary itself
-        bool is_summary = false;
-        for (uint32_t j = 0; j < entry->tag_count; j++) {
-            if (strcmp(entry->tags[j], "context_summary") == 0) {
-                is_summary = true;
-                break;
-            }
-        }
-        if (is_summary) continue;
-        
-        // Load conversations after summary
-        if (entry->timestamp > summary_timestamp && entry->tag_count == 0) {
-            // Regular conversation message (no special tags)
-            should_load = true;
-            conversations_loaded++;
-        }
-        
-        // Load active tasks
-        for (uint32_t j = 0; j < entry->tag_count; j++) {
-            if (strcmp(entry->tags[j], "reminder") == 0 ||
-                strcmp(entry->tags[j], "todo") == 0 ||
-                strcmp(entry->tags[j], "action_item") == 0) {
-                should_load = true;
-                tasks_loaded++;
-                break;
-            }
-        }
-        
-        // Load important context
-        for (uint32_t j = 0; j < entry->tag_count; j++) {
-            if (strcmp(entry->tags[j], "important") == 0 ||
-                strcmp(entry->tags[j], "personal_info") == 0 ||
-                strcmp(entry->tags[j], "user_preference") == 0) {
-                should_load = true;
-                context_loaded++;
-                break;
-            }
-        }
-        
-        // TODO: Actually load these into KV cache
-        // For now, just counting what would be loaded
-        // This would require tokenizing and adding to KV cache
-        if (should_load) {
-            // Future: tokenize entry->text and add to KV cache
-        }
+    if (summaries_found > 0) {
+        ETHERVOX_LOGI("Context restoration ready: found summary from %llu", summary_timestamp);
+    } else {
+        ETHERVOX_LOGI("Context restoration ready: no summary found, will restore from full history");
     }
     
-    ETHERVOX_LOGI("Context restoration complete: %d conversations, %d tasks, %d context items",
-                  conversations_loaded, tasks_loaded, context_loaded);
+    // Context restoration happens automatically in governor.c process_dialogue()
+    // when condition (max_pos <= system_prompt_token_count && turn_count > 0) is met.
+    // This ensures conversation_history is fully loaded when restoration runs.
     
     return ETHERVOX_SUCCESS;
 }

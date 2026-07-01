@@ -402,7 +402,7 @@ ethervox_result_t ethervox_tool_registry_build_system_prompt(
             "You are a helpful assistant with access to tools. "
             "When generating stories or creative content, write complete narratives with proper endings. "
             "Respond in the language in which you are addressed. "
-            "For conversations: Only generate YOUR response, then STOP. DO NOT generate the user's next message.\n");
+            "For conversations: Complete your thought with proper punctuation, then stop. Never generate the user's next message.\n");
         
         if (written < 0 || (size_t)written >= remaining) return ETHERVOX_ERROR_INVALID_ARGUMENT;
         
