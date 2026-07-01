@@ -443,13 +443,22 @@ Java_com_droid_ethervox_1core_NativeLib_clearKvCache(JNIEnv* env, jobject thiz) 
     return JNI_FALSE;
   }
 
-  LOGI("[JNI] Clearing KV cache - will reset on next generation");
+  LOGI("[JNI] Clearing KV cache (force clear with summarization)");
   
-  // Note: KV cache will be implicitly cleared on next generation
-  // as the model will start fresh without previous context.
-  // The conversation memory is preserved in the memory store files.
+  // Actually clear the KV cache using the summarize_and_clear_cache function
+  // This will:
+  // 1. Generate a summary of the conversation
+  // 2. Store it in memory with context_summary tag
+  // 3. Clear conversation tokens from KV cache (keeping system prompt)
+  ethervox_result_t result = ethervox_governor_summarize_and_clear_cache(g_governor, true);
   
-  return JNI_TRUE;
+  if (ethervox_is_success(result)) {
+    LOGI("[JNI] KV cache cleared successfully - context will be restored on next message");
+    return JNI_TRUE;
+  } else {
+    LOGE("[JNI] Failed to clear KV cache");
+    return JNI_FALSE;
+  }
 }
 
 JNIEXPORT jboolean JNICALL
