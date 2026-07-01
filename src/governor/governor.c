@@ -431,7 +431,8 @@ static int load_tokens_to_kv_cache(struct ethervox_governor* governor, const lla
 }
 
 /**
- * Clear conversation from sequence 0, preserving system prompt in sequence 1
+ * Clear conversation from sequence 0, preserving system prompt master in sequence 1
+ * After clearing, seq 1→seq 0 copy will happen automatically on next message
  * 
  * @return ETHERVOX_SUCCESS or error code
  */
@@ -442,9 +443,9 @@ static ethervox_result_t clear_conversation_keep_system_prompt(struct ethervox_g
 
   llama_memory_t mem = llama_get_memory(governor->llm_ctx);
   
-  // === 2-SEQUENCE ARCHITECTURE: Clear all of seq 0 (conversation), keep seq 1 (system prompt) ===
-  // Seq 1: System prompt (permanent, never touched)
-  // Seq 0: Conversation only (can be fully cleared)
+  // === 2-SEQUENCE ARCHITECTURE: Clear all of seq 0, keep seq 1 (system prompt master) ===
+  // Seq 1: System prompt master (permanent, never touched)
+  // Seq 0: System prompt copy + conversation (cleared, will be re-copied from seq 1 on next message)
   
   int32_t current_max = llama_memory_seq_pos_max(mem, 0);
   GOV_LOG("Clearing conversation sequence 0 (current max: %d tokens)", current_max);
@@ -456,7 +457,7 @@ static ethervox_result_t clear_conversation_keep_system_prompt(struct ethervox_g
     return ETHERVOX_SUCCESS;
   }
   
-  // Clear entire sequence 0 (conversation)
+  // Clear entire sequence 0 (system prompt copy + conversation)
   bool conv_cleared = llama_memory_seq_rm(mem, 0, -1, -1);
   
   if (!conv_cleared) {
@@ -3015,6 +3016,28 @@ ethervox_governor_status_t ethervox_governor_execute(
 
   const struct llama_vocab* vocab = llama_model_get_vocab(governor->llm_model);
 
+  // === 2-SEQUENCE ARCHITECTURE: Copy system prompt from seq 1 to seq 0 if needed ===
+  // After clearing, seq 0 is empty but seq 1 still has the system prompt
+  // We need to copy seq 1 → seq 0 so conversation can build on top of it
+  if (max_pos < 0 || max_pos < (int32_t)governor->system_prompt_token_count) {
+    // Seq 0 is empty or incomplete, need to copy system prompt from seq 1
+    GOV_LOG("Copying system prompt from seq 1 to seq 0 (max_pos=%d < system_prompt=%d)",
+            max_pos, governor->system_prompt_token_count);
+    
+    llama_memory_t mem = llama_get_memory(governor->llm_ctx);
+    llama_memory_seq_cp(mem, 1, 0, 0, -1);  // Copy all of seq 1 to seq 0
+    
+    int32_t new_max = llama_memory_seq_pos_max(mem, 0);
+    if (new_max >= 0) {
+      GOV_LOG("✓ System prompt copied to seq 0 (0-%d, %d tokens)", new_max, governor->system_prompt_token_count);
+      governor->current_kv_pos = governor->system_prompt_token_count;
+    } else {
+      GOV_ERROR("Failed to copy system prompt from seq 1 to seq 0 (seq0_max=%d)", new_max);
+      if (error) *error = strdup("Failed to initialize KV cache");
+      return ETHERVOX_GOVERNOR_ERROR;
+    }
+  }
+
   // Build conversation history in Qwen2.5 format
   // Include recent context from conversation_history when KV cache was cleared
   char conversation[8192];
@@ -3380,17 +3403,15 @@ ethervox_governor_status_t ethervox_governor_execute(
       }
 
       // Create batch with explicit positions starting at current KV position
-      // 2-SEQUENCE ARCHITECTURE: Conversation tokens reference both seq 0 (conversation) and seq 1 (system prompt)
-      // This allows the model to see both the permanent system prompt and the conversation context
+      // 2-SEQUENCE ARCHITECTURE: Conversation tokens go to seq 0 (which now contains system prompt copy)
       int n_seq_max = llama_n_seq_max(governor->llm_ctx);
       llama_batch batch = llama_batch_init(n_tokens, 0, n_seq_max);
       batch.n_tokens = n_tokens;
       for (int i = 0; i < n_tokens; i++) {
         batch.token[i] = tokens[i];
         batch.pos[i] = governor->current_kv_pos + i;
-        batch.n_seq_id[i] = 2;           // Reference 2 sequences
-        batch.seq_id[i][0] = 0;          // Sequence 0: conversation
-        batch.seq_id[i][1] = 1;          // Sequence 1: system prompt (permanent)
+        batch.n_seq_id[i] = 1;           // Reference only 1 sequence
+        batch.seq_id[i][0] = 0;          // Sequence 0: system prompt copy + conversation
         batch.logits[i] = false;
       }
       batch.logits[n_tokens - 1] = true;  // Only need logits from last token
@@ -4018,9 +4039,8 @@ ethervox_governor_status_t ethervox_governor_execute(
       next_batch.n_tokens = 1;
       next_batch.token[0] = next_token;
       next_batch.pos[0] = governor->current_kv_pos;
-      next_batch.n_seq_id[0] = 2;          // Reference 2 sequences
-      next_batch.seq_id[0][0] = 0;         // Sequence 0: conversation
-      next_batch.seq_id[0][1] = 1;         // Sequence 1: system prompt
+      next_batch.n_seq_id[0] = 1;          // Reference only 1 sequence
+      next_batch.seq_id[0][0] = 0;         // Sequence 0: system prompt copy + conversation
       next_batch.logits[0] = true;
 
       if (llama_decode(governor->llm_ctx, next_batch) != 0) {
@@ -5284,11 +5304,17 @@ ethervox_result_t ethervox_governor_summarize_and_clear_cache(ethervox_governor_
   int32_t max_pos = llama_memory_seq_pos_max(mem, 0);
   int percent = 0;  // Reusable for percentage calculations
 
-  // Check if we need to clear
-  if (!force_clear && max_pos <= governor->system_prompt_token_count) {
-    GOV_LOG("Cache already clean (at position %d, system prompt is %d tokens)", max_pos,
-            governor->system_prompt_token_count);
-    return ETHERVOX_SUCCESS;
+  // If KV cache has no conversation content (at or below system prompt), nothing to summarize
+  // This includes: empty cache (max_pos=-1), or only system prompt loaded
+  if (max_pos < (int32_t)governor->system_prompt_token_count) {
+    GOV_LOG("No conversation in KV cache to summarize (max_pos=%d, system_prompt=%d) - clearing directly",
+            max_pos, governor->system_prompt_token_count);
+    ethervox_result_t clear_result = clear_conversation_keep_system_prompt(governor);
+    if (ethervox_is_success(clear_result)) {
+      GOV_LOG("Cache cleared: now at position %d (%d%% of sequence capacity)",
+              governor->current_kv_pos, get_ctx_seq_percent(governor->current_kv_pos, governor->llm_ctx));
+    }
+    return clear_result;
   }
 
   uint32_t capacity = get_ctx_seq_capacity(governor->llm_ctx);
