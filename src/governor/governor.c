@@ -5358,15 +5358,22 @@ ethervox_result_t ethervox_governor_summarize_and_clear_cache(ethervox_governor_
   }
 
   uint32_t capacity = get_ctx_seq_capacity(governor->llm_ctx);
-  if (!force_clear && max_pos <= (int32_t)(capacity / 2)) {
-    percent = get_ctx_seq_percent(max_pos, governor->llm_ctx);
-    GOV_LOG("Cache only at %d%% capacity - not clearing (use force_clear=true to override)",
-            percent);
-    return ETHERVOX_SUCCESS;
-  }
-
   percent = get_ctx_seq_percent(max_pos, governor->llm_ctx);
-  GOV_LOG("Manual cache summarization: max_pos=%d, system_prompt=%d (%d%% of sequence capacity)", max_pos,
+  
+  // If cache usage is low (<70%), skip expensive summarization even with force_clear
+  // Just clear the cache directly since there's not much context to preserve
+  if (percent < 70) {
+    GOV_LOG("Cache at %d%% capacity - skipping summarization (not worth the time), clearing directly", percent);
+    ethervox_result_t clear_result = clear_conversation_keep_system_prompt(governor);
+    if (ethervox_is_success(clear_result)) {
+      GOV_LOG("Cache cleared: now at position %d (%d%% of sequence capacity)",
+              governor->current_kv_pos, get_ctx_seq_percent(governor->current_kv_pos, governor->llm_ctx));
+    }
+    return clear_result;
+  }
+  
+  // Cache is full enough to warrant summarization
+  GOV_LOG("Cache summarization: max_pos=%d, system_prompt=%d (%d%% of sequence capacity)", max_pos,
           governor->system_prompt_token_count, percent);
 
   // Build conversation context from history
