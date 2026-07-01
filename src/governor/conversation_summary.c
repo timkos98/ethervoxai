@@ -311,9 +311,9 @@ static ethervox_result_t generate_summary_with_llm(
     // Get current KV position - not used for temp generation
     int32_t saved_kv_pos = ethervox_governor_get_kv_pos(governor);
     
-    // Use sequence 2 for temporary summary generation (will be cleared after)
-    // Positions start from 0 in this temporary sequence
-    int temp_seq_id = 2;
+    // Use sequence 1 for temporary summary generation (will be cleared after)
+    // With 2-sequence architecture: seq 0 = system prompt + conversation, seq 1 = temp workspace
+    int temp_seq_id = 1;
     
     // Process prompt into KV cache in temporary sequence 2
     // PERFORMANCE: Use batch size of 128 (was 512) for faster mobile processing

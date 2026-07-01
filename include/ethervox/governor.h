@@ -140,6 +140,7 @@ typedef struct {
   char name[64];                      // Tool name (e.g., "calculator_compute")
   char description[256];              // Human-readable description
   char parameters_json_schema[1024];  // JSON schema for parameters
+  char test_scenario[512];            // Test prompt that should trigger this tool
 
   ethervox_tool_execute_fn execute;  // Execution function
 
@@ -245,6 +246,7 @@ typedef enum {
   ETHERVOX_GOVERNOR_EVENT_CONFIDENCE_UPDATE,    // Confidence level changed
   ETHERVOX_GOVERNOR_EVENT_CONTEXT_SUMMARIZING,  // Context being summarized before clearing
   ETHERVOX_GOVERNOR_EVENT_CONTEXT_CLEARED,      // Context cleared, summary stored in memory
+  ETHERVOX_GOVERNOR_EVENT_CONTEXT_RESTORING,    // Restoring conversation context after clear
   ETHERVOX_GOVERNOR_EVENT_MANIFEST_LOADING,     // Manifest system initializing
   ETHERVOX_GOVERNOR_EVENT_MANIFEST_READY,       // Manifest loaded successfully (optimal state)
   ETHERVOX_GOVERNOR_EVENT_MANIFEST_FALLBACK_LEVEL_1,  // Binary manifest one-liners (good fallback)

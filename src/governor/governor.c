@@ -59,6 +59,9 @@ static bool g_llama_backend_initialized = false;
 // Global flag to detect model corruption from llama.cpp error messages
 static bool g_model_corruption_detected = false;
 
+// Context window management constants
+#define CONTEXT_CLEAR_THRESHOLD_PERCENT 80  // Clear when >80% of per-sequence capacity used
+
 // Forward declarations for helper functions (defined after struct definition)
 #if defined(ETHERVOX_WITH_LLAMA) && LLAMA_HEADER_AVAILABLE
 static bool parse_memory_search_text(const char* json_result, char* text_out, size_t text_out_size);
@@ -67,6 +70,17 @@ static int load_tokens_to_kv_cache(struct ethervox_governor* governor, const lla
 static int load_conversation_summary(struct ethervox_governor* governor,
                                      const char* tag_filter_json, const char* context_prefix,
                                      const char* log_prefix);
+
+// Helper: Get per-sequence context capacity
+static inline uint32_t get_ctx_seq_capacity(struct llama_context* ctx) {
+  return llama_n_ctx(ctx) / llama_n_seq_max(ctx);
+}
+
+// Helper: Calculate percentage of per-sequence capacity used
+static inline int get_ctx_seq_percent(int32_t pos, struct llama_context* ctx) {
+  uint32_t capacity = get_ctx_seq_capacity(ctx);
+  return (int)((pos * 100) / capacity);
+}
 #endif
 
 // GGML log callback to capture llama.cpp errors
@@ -133,7 +147,7 @@ struct ethervox_governor {
 #if defined(ETHERVOX_WITH_LLAMA) && LLAMA_HEADER_AVAILABLE
   struct llama_model* llm_model;
   struct llama_context* llm_ctx;
-  llama_pos system_prompt_token_count;
+  llama_pos system_prompt_token_count;  // Length of system prompt (for partial clearing)
   llama_pos current_kv_pos;  // Track current position in KV cache
   char* model_path;
 
@@ -429,35 +443,39 @@ static ethervox_result_t clear_conversation_keep_system_prompt(struct ethervox_g
 
   llama_memory_t mem = llama_get_memory(governor->llm_ctx);
   
-  // === ATTEMPT 1: Clear entire sequence 0 (conversation) ===
-  // This should NEVER fail for complete sequence removal
-  GOV_LOG("Clearing conversation (sequence 0)...");
-  bool seq0_cleared = llama_memory_seq_rm(mem, 0, -1, -1);
+  // === 2-SEQUENCE ARCHITECTURE: Clear conversation part of seq 0, keep system prompt ===
+  // Seq 0 contains: [system prompt tokens] [conversation tokens]
+  // We need to clear only the conversation tokens (from system_prompt_token_count onward)
   
-  if (!seq0_cleared) {
-    GOV_ERROR("Sequence 0 clear failed (unexpected)");
+  if (governor->system_prompt_token_count == 0) {
+    GOV_ERROR("System prompt length is 0 - cannot clear conversation safely");
     goto fallback_nuclear_clear;
   }
   
-  // Verify sequence 0 is empty
-  int32_t seq0_min = llama_memory_seq_pos_min(mem, 0);
+  GOV_LOG("Clearing conversation from position %d onward (keeping system prompt 0-%d)...",
+          governor->system_prompt_token_count, governor->system_prompt_token_count - 1);
+  
+  // Clear from system_prompt_token_count to end of sequence 0
+  bool conv_cleared = llama_memory_seq_rm(mem, 0, governor->system_prompt_token_count, -1);
+  
+  if (!conv_cleared) {
+    GOV_ERROR("Conversation clear failed (unexpected)");
+    goto fallback_nuclear_clear;
+  }
+  
+  // Verify conversation is cleared but system prompt remains
   int32_t seq0_max = llama_memory_seq_pos_max(mem, 0);
   
-  if (seq0_min != -1 || seq0_max != -1) {
-    GOV_ERROR("Sequence 0 clear verification failed: min=%d, max=%d (expected -1, -1)",
-              seq0_min, seq0_max);
+  // seq0_max should be system_prompt_token_count - 1 (last token of system prompt)
+  if (seq0_max != (int32_t)(governor->system_prompt_token_count - 1)) {
+    GOV_ERROR("Clear verification failed: seq0_max=%d (expected %d)",
+              seq0_max, governor->system_prompt_token_count - 1);
     goto fallback_nuclear_clear;
   }
   
-  // Verify system prompt still in sequence 1
-  int32_t seq1_max = llama_memory_seq_pos_max(mem, 1);
-  if (seq1_max < 100) {
-    GOV_ERROR("System prompt lost or corrupted! seq1_max=%d (expected >= 100)", seq1_max);
-    goto fallback_nuclear_clear;
-  }
-  
-  GOV_LOG("✓ Sequence 0 cleared, sequence 1 intact (%d tokens)", seq1_max + 1);
-  governor->current_kv_pos = 0;  // Sequence 0 now empty
+  GOV_LOG("✓ Conversation cleared, system prompt intact (0-%d, %d tokens)",
+          seq0_max, governor->system_prompt_token_count);
+  governor->current_kv_pos = governor->system_prompt_token_count;  // Reset to end of system prompt
   return ETHERVOX_SUCCESS;
 
 fallback_nuclear_clear:
@@ -1724,11 +1742,10 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
   // Context params - Use runtime config with adaptive hardware detection
   struct llama_context_params ctx_params = llama_context_default_params();
 
-  // CRITICAL: Enable sequence-based KV cache (requires n_seq_max >= 3)
-  // Sequence 0: Conversation/summary
-  // Sequence 1: System prompt (protected)
-  // Sequence 2: Temporary workspace (e.g., summary generation)
-  ctx_params.n_seq_max = 3;
+  // CRITICAL: Enable sequence-based KV cache (requires n_seq_max >= 2)
+  // Sequence 0: System prompt + conversation (combined)
+  // Sequence 1: Temporary workspace (summaries, tool operations)
+  ctx_params.n_seq_max = 2;
   GOV_LOG("[Governor] Enabled sequence-based KV cache with n_seq_max = %d", ctx_params.n_seq_max);
 
   // DEBUG: Log the context size that's about to be used
@@ -1737,10 +1754,10 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
   GOV_LOG("[Governor] ctx_params.n_ctx set to = %d", ctx_params.n_ctx);
 
   // CRITICAL: Validate context size is sufficient for multi-sequence KV cache
-  // With n_seq_max=3, context is divided: n_ctx_seq = n_ctx / 3
-  // System prompt is ~4101 tokens, needs buffer for chat template overhead
-  // Minimum: 4500 tokens/seq × 3 = 13500 total
-  const uint32_t MIN_CONTEXT_FOR_SYSTEM_PROMPT = 13500;
+  // With n_seq_max=2, context is divided: n_ctx_seq = n_ctx / 2
+  // System prompt is ~4543 tokens, needs buffer for conversation
+  // Minimum: 8192 tokens/seq × 2 = 16384 total (gives ~3600 tokens for conversation)
+  const uint32_t MIN_CONTEXT_FOR_SYSTEM_PROMPT = 16384;
   if (ctx_params.n_ctx < MIN_CONTEXT_FOR_SYSTEM_PROMPT) {
     GOV_LOG("[Governor] WARNING: n_ctx (%d) < minimum (%d) for system prompt - increasing to %d",
             ctx_params.n_ctx, MIN_CONTEXT_FOR_SYSTEM_PROMPT, MIN_CONTEXT_FOR_SYSTEM_PROMPT);
@@ -1823,11 +1840,8 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
       if (ethervox_is_success(load_result)) {
         cache_loaded = true;
         
-        // CRITICAL: Copy sequence 1 (loaded system prompt) to sequence 0 for conversation use
-        GOV_LOG("Copying cached system prompt from sequence 1 to sequence 0...");
-        llama_memory_t mem = llama_get_memory(governor->llm_ctx);
-        llama_memory_seq_cp(mem, 1, 0, 0, -1);  // Copy all of seq 1 to seq 0
-        GOV_LOG("System prompt now accessible in conversation (sequence 0)");
+        // System prompt is already in sequence 0 (no copy needed with 2-sequence architecture)
+        GOV_LOG("System prompt loaded in sequence 0 from cache");
         
         if (progress_callback) {
           progress_callback("processing_prompt", 1.0f, 
@@ -2055,7 +2069,7 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
       batch.token[j] = tokens[i + j];
       batch.pos[j] = i + j;  // Absolute position from start
       batch.n_seq_id[j] = 1;
-      batch.seq_id[j][0] = 1;   // System prompt uses sequence 1
+      batch.seq_id[j][0] = 0;   // System prompt loaded directly into sequence 0
       batch.logits[j] = false;  // Skip logits for all tokens
     }
     // Only compute logits for the very last token of the entire system prompt
@@ -2113,13 +2127,8 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
     progress_callback("processing_prompt", 0.98f, "Saving cache for faster future startups...", user_data);
   }
 
-  // CRITICAL: Copy sequence 1 (system prompt) to sequence 0 so conversation can see it
-  // After this, sequence 0 contains positions 0-4100 (system prompt)
-  // New conversation tokens will be added to sequence 0 starting at position 4101
-  GOV_LOG("Copying system prompt from sequence 1 to sequence 0 for conversation access...");
-  llama_memory_t mem = llama_get_memory(governor->llm_ctx);
-  llama_memory_seq_cp(mem, 1, 0, 0, -1);  // Copy all of seq 1 to seq 0
-  GOV_LOG("System prompt now accessible in conversation (sequence 0, positions 0-%d)", n_tokens - 1);
+  // System prompt is already in sequence 0 (no copy needed with 2-sequence architecture)
+  GOV_LOG("System prompt loaded in sequence 0 (positions 0-%d)", n_tokens - 1);
 
   governor->system_prompt_token_count = n_tokens;
   governor->current_kv_pos = n_tokens;  // Start after system prompt
@@ -2706,12 +2715,14 @@ ethervox_governor_status_t ethervox_governor_execute(
   // This allows conversation history to accumulate naturally
   llama_memory_t mem = llama_get_memory(governor->llm_ctx);
   int32_t max_pos = llama_memory_seq_pos_max(mem, 0);
-  int n_ctx = llama_n_ctx(governor->llm_ctx);
+  uint32_t capacity = get_ctx_seq_capacity(governor->llm_ctx);
+  uint32_t threshold_pos = (capacity * CONTEXT_CLEAR_THRESHOLD_PERCENT) / 100;
 
-  // Clear if we're past system prompt and getting close to context limit (>80% full)
-  if (max_pos > governor->system_prompt_token_count && max_pos > (n_ctx * 4 / 5)) {
-    GOV_LOG("KV cache clearing: removing positions %d to %d (was at %d%% capacity)",
-            governor->system_prompt_token_count, max_pos, (max_pos * 100 / n_ctx));
+  // Clear if we're past system prompt and at threshold
+  if (max_pos > governor->system_prompt_token_count && max_pos > (int32_t)threshold_pos) {
+    int percent = get_ctx_seq_percent(max_pos, governor->llm_ctx);
+    GOV_LOG("KV cache clearing: removing positions %d to %d (was at %d%% of sequence capacity)",
+            governor->system_prompt_token_count, max_pos, percent);
 
     // ========================================================================
     // CONTEXT SUMMARIZATION - Preserve conversation knowledge before clearing
@@ -2720,9 +2731,10 @@ ethervox_governor_status_t ethervox_governor_execute(
     // Notify UI that summarization is starting
     if (progress_callback) {
       char summary_msg[256];
+      int percent = get_ctx_seq_percent(max_pos, governor->llm_ctx);
       snprintf(summary_msg, sizeof(summary_msg),
                "Context at %d%% - summarizing conversation before clearing...",
-               (max_pos * 100 / n_ctx));
+               percent);
       progress_callback(ETHERVOX_GOVERNOR_EVENT_CONTEXT_SUMMARIZING, summary_msg, user_data);
     }
 
@@ -2786,17 +2798,18 @@ ethervox_governor_status_t ethervox_governor_execute(
     if (memory_tool) {
       // Use LLM summary if available, otherwise fallback to simple marker
       char summary_content[2048];
+      int percent = get_ctx_seq_percent(max_pos, governor->llm_ctx);
       if (llm_summary[0] != '\0') {
         snprintf(summary_content, sizeof(summary_content),
                  "[Conversation Summary - Context Cleared at %d%% capacity]\n\n%s\n\n"
                  "Turn count: %u. Full conversation history preserved in memory.",
-                 (max_pos * 100 / n_ctx), llm_summary, governor->turn_counter);
+                 percent, llm_summary, governor->turn_counter);
       } else {
         snprintf(summary_content, sizeof(summary_content),
-                 "Context cleared at position %d (%d%% full). "
+                 "Context cleared at position %d (%d%% of sequence capacity). "
                  "Conversation history up to this point preserved. "
                  "Turn count: %u. Use memory_search to recall earlier conversation if needed.",
-                 max_pos, (max_pos * 100 / n_ctx), governor->turn_counter);
+                 max_pos, percent, governor->turn_counter);
       }
 
       // Escape quotes for JSON
@@ -2981,17 +2994,16 @@ ethervox_governor_status_t ethervox_governor_execute(
         }
 
         if (relight_successful) {
-          // System prompt successfully restored to sequence 1!
-          // Copy to sequence 0 for conversation use
-          GOV_LOG("RELIGHT: Copying restored system prompt from sequence 1 to sequence 0...");
-          llama_memory_t relight_mem = llama_get_memory(governor->llm_ctx);
-          llama_memory_seq_cp(relight_mem, 1, 0, 0, -1);  // Copy all of seq 1 to seq 0
+          // System prompt successfully restored to sequence 0!
+          GOV_LOG("RELIGHT: System prompt restored to sequence 0");
           
           governor->current_kv_pos = governor->system_prompt_token_count;
           governor->system_prompt_lost = false;
           GOV_LOG("RELIGHT COMPLETE: System prompt restored to seq 0, tools re-enabled");
-          GOV_LOG("KV cache restored to position %d (%d%% full)", governor->current_kv_pos,
-                  (governor->current_kv_pos * 100 / n_ctx));
+          
+          int percent = get_ctx_seq_percent(governor->current_kv_pos, governor->llm_ctx);
+          GOV_LOG("KV cache restored to position %d (%d%% of sequence capacity)", 
+                  governor->current_kv_pos, percent);
 
           // Load conversation summary from memory to restore context
           GOV_LOG("RELIGHT: Loading conversation summary from memory...");
@@ -3034,22 +3046,29 @@ ethervox_governor_status_t ethervox_governor_execute(
     // Notify UI that clearing is complete
     if (progress_callback) {
       char clear_msg[256];
+      int percent = get_ctx_seq_percent(governor->current_kv_pos, governor->llm_ctx);
       snprintf(clear_msg, sizeof(clear_msg),
                "Context cleared - conversation summary saved to memory (resuming from %d%%)",
-               (governor->current_kv_pos * 100 / n_ctx));
+               percent);
       progress_callback(ETHERVOX_GOVERNOR_EVENT_CONTEXT_CLEARED, clear_msg, user_data);
     }
   } else if (max_pos >= governor->system_prompt_token_count) {
     // Continue from where we left off (normal case with system prompt)
     governor->current_kv_pos = max_pos + 1;
-    GOV_LOG("KV cache continuing: from position %d (%d%% full)", governor->current_kv_pos,
-            (governor->current_kv_pos * 100 / n_ctx));
+    // Calculate percentage based on PER-SEQUENCE capacity, not total n_ctx
+    uint32_t capacity = get_ctx_seq_capacity(governor->llm_ctx);
+    int percent = get_ctx_seq_percent(governor->current_kv_pos, governor->llm_ctx);
+    GOV_LOG("KV cache continuing: from position %d (%d%% full of sequence capacity %u)", 
+            governor->current_kv_pos, percent, capacity);
   } else if (governor->system_prompt_lost) {
     // After nuclear clear: system prompt is gone, continue from actual position
     // This applies to all iterations until model is reloaded
     governor->current_kv_pos = (max_pos >= 0) ? max_pos + 1 : 0;
-    GOV_LOG("KV cache continuing (post-nuclear): from position %d (%d%% full, NO SYSTEM PROMPT)",
-            governor->current_kv_pos, (governor->current_kv_pos * 100 / n_ctx));
+    // Calculate percentage based on PER-SEQUENCE capacity, not total n_ctx
+    uint32_t capacity = get_ctx_seq_capacity(governor->llm_ctx);
+    int percent = get_ctx_seq_percent(governor->current_kv_pos, governor->llm_ctx);
+    GOV_LOG("KV cache continuing (post-nuclear): from position %d (%d%% full of sequence capacity %u, NO SYSTEM PROMPT)",
+            governor->current_kv_pos, percent, capacity);
   } else {
     // First query - start after system prompt
     GOV_LOG("KV position decision: max_pos=%d, current_kv_pos=%d, system_prompt=%d", max_pos,
@@ -3061,16 +3080,125 @@ ethervox_governor_status_t ethervox_governor_execute(
   const struct llama_vocab* vocab = llama_model_get_vocab(governor->llm_model);
 
   // Build conversation history in Qwen2.5 format
-  // Include recent context from memory if available
+  // Include recent context from conversation_history when KV cache was cleared
   char conversation[8192];
   size_t conv_pos = 0;
 
-  // Check if we have a memory store to get recent conversation turns
-  // We want the actual RECENT conversation, not a search result
-  // Access the memory store directly if possible through the tool registry
-
-  // For now, just use the current user query without trying to inject old context
-  // The memory is better used explicitly via memory_search tool when needed
+  // If we're starting fresh (max_pos at system prompt) but have conversation history,
+  // restore context: summary (if exists) + recent turns after summary
+  bool need_context_restoration = (max_pos <= governor->system_prompt_token_count) && 
+                                   (governor->conversation_history.turn_count > 0);
+  
+  if (need_context_restoration) {
+    // Notify UI that context restoration is starting
+    if (progress_callback) {
+      progress_callback(ETHERVOX_GOVERNOR_EVENT_CONTEXT_RESTORING, 
+                       "Restoring conversation context...", user_data);
+    }
+    
+    time_t summary_timestamp = 0;
+    
+    // Step 1: Try to load summary from memory (tagged with context_summary)
+    GOV_LOG("Searching for recent conversation summary in memory...");
+    
+    // Search for most recent summary with context_summary tag
+    ethervox_tool_t* memory_search_tool = NULL;
+    for (uint32_t i = 0; i < governor->tool_registry->tool_count; i++) {
+      if (strcmp(governor->tool_registry->tools[i].name, "memory_search") == 0) {
+        memory_search_tool = &governor->tool_registry->tools[i];
+        break;
+      }
+    }
+    
+    if (memory_search_tool) {
+      char search_args[512];
+      snprintf(search_args, sizeof(search_args),
+               "{\"query\":\"context summary\","
+               "\"tags\":[\"context_summary\"],"
+               "\"limit\":1}");
+      
+      char* search_result = NULL;
+      char* search_error = NULL;
+      
+      if (memory_search_tool->execute(search_args, &search_result, &search_error) == 0 && search_result) {
+        // Parse the summary from search result
+        char summary_text[2048] = {0};
+        if (parse_memory_search_text(search_result, summary_text, sizeof(summary_text))) {
+          GOV_LOG("Found conversation summary in memory (%zu chars)", strlen(summary_text));
+          
+          // Add summary to conversation buffer
+          size_t remaining = sizeof(conversation) - conv_pos;
+          conv_pos += snprintf(conversation + conv_pos, remaining,
+                              "%s[Previous Conversation Summary]\n%s%s",
+                              governor->chat_template->system_start,
+                              summary_text,
+                              governor->chat_template->system_end);
+          
+          // Extract timestamp from summary if available (summaries include "Turn count: N")
+          // For now, use current time as baseline
+          summary_timestamp = time(NULL) - 3600;  // Assume summary is ~1 hour old
+        } else {
+          GOV_LOG("Failed to parse summary from memory search result");
+        }
+      } else {
+        GOV_LOG("No conversation summary found in memory (first session or after clear)");
+      }
+      
+      free(search_result);
+      free(search_error);
+    }
+    
+    // Step 2: Restore conversation turns that came AFTER the summary
+    // Use configurable limit from config.h
+    uint32_t max_turns = ETHERVOX_GOVERNOR_MAX_CONTEXT_RESTORE_TURNS;
+    uint32_t start_turn = 0;
+    
+    if (summary_timestamp > 0) {
+      // Find first turn after summary timestamp
+      for (uint32_t i = 0; i < governor->conversation_history.turn_count; i++) {
+        if (governor->conversation_history.turns[i].timestamp > summary_timestamp) {
+          start_turn = i;
+          break;
+        }
+      }
+      GOV_LOG("Restoring turns after summary: starting from turn %d", start_turn);
+    } else {
+      // No summary - restore last N turns
+      if (governor->conversation_history.turn_count > max_turns) {
+        start_turn = governor->conversation_history.turn_count - max_turns;
+      }
+      GOV_LOG("No summary - restoring last %d turns", 
+              (int)(governor->conversation_history.turn_count - start_turn));
+    }
+    
+    // Add turns to conversation buffer
+    for (uint32_t i = start_turn; i < governor->conversation_history.turn_count; i++) {
+      conversation_turn_t* turn = &governor->conversation_history.turns[i];
+      size_t remaining = sizeof(conversation) - conv_pos;
+      
+      if (remaining < 200) {
+        GOV_LOG("Conversation buffer nearly full, stopping at turn %d", i);
+        break;
+      }
+      
+      if (turn->is_user) {
+        conv_pos += snprintf(conversation + conv_pos, remaining,
+                            "%s%s%s", 
+                            governor->chat_template->user_start,
+                            turn->preview,
+                            governor->chat_template->user_end);
+      } else {
+        conv_pos += snprintf(conversation + conv_pos, remaining,
+                            "%s%s%s",
+                            governor->chat_template->assistant_start,
+                            turn->preview,
+                            governor->chat_template->assistant_end);
+      }
+    }
+    
+    GOV_LOG("Context restoration complete: summary + %d turns (%zu chars total)",
+            (int)(governor->conversation_history.turn_count - start_turn), conv_pos);
+  }
 
   // Add current user query using chat template
   // CRITICAL: Validate chat_template before dereferencing
@@ -4990,9 +5118,9 @@ ethervox_result_t ethervox_governor_reset_conversation(ethervox_governor_t* gove
     return ETHERVOX_SUCCESS;
   }
 
-  int n_ctx = llama_n_ctx(governor->llm_ctx);
-  GOV_LOG("Resetting conversation: max_pos=%d, system_prompt=%d (%d%% full)", max_pos,
-          governor->system_prompt_token_count, (max_pos * 100 / n_ctx));
+  int percent = get_ctx_seq_percent(max_pos, governor->llm_ctx);
+  GOV_LOG("Resetting conversation: max_pos=%d, system_prompt=%d (%d%% of sequence capacity)", max_pos,
+          governor->system_prompt_token_count, percent);
 
   // ========================================================================
   // NUCLEAR CLEAR + RELIGHT
@@ -5096,8 +5224,9 @@ ethervox_result_t ethervox_governor_reset_conversation(ethervox_governor_t* gove
   // System prompt successfully restored!
   governor->current_kv_pos = governor->system_prompt_token_count;
   governor->system_prompt_lost = false;
-  GOV_LOG("RELIGHT COMPLETE: System prompt restored at position %d (%d%% full)",
-          governor->current_kv_pos, (governor->current_kv_pos * 100 / n_ctx));
+  int percent = get_ctx_seq_percent(governor->current_kv_pos, governor->llm_ctx);
+  GOV_LOG("RELIGHT COMPLETE: System prompt restored at position %d (%d%% of sequence capacity)",
+          governor->current_kv_pos, percent);
   
   } // End manual RELIGHT (!kv_cache_loaded)
 
@@ -5225,7 +5354,7 @@ ethervox_result_t ethervox_governor_summarize_and_clear_cache(ethervox_governor_
 
   llama_memory_t mem = llama_get_memory(governor->llm_ctx);
   int32_t max_pos = llama_memory_seq_pos_max(mem, 0);
-  int n_ctx = llama_n_ctx(governor->llm_ctx);
+  int percent = 0;  // Reusable for percentage calculations
 
   // Check if we need to clear
   if (!force_clear && max_pos <= governor->system_prompt_token_count) {
@@ -5234,14 +5363,17 @@ ethervox_result_t ethervox_governor_summarize_and_clear_cache(ethervox_governor_
     return ETHERVOX_SUCCESS;
   }
 
-  if (!force_clear && max_pos <= (n_ctx / 2)) {
+  uint32_t capacity = get_ctx_seq_capacity(governor->llm_ctx);
+  if (!force_clear && max_pos <= (int32_t)(capacity / 2)) {
+    percent = get_ctx_seq_percent(max_pos, governor->llm_ctx);
     GOV_LOG("Cache only at %d%% capacity - not clearing (use force_clear=true to override)",
-            (max_pos * 100 / n_ctx));
+            percent);
     return ETHERVOX_SUCCESS;
   }
 
-  GOV_LOG("Manual cache summarization: max_pos=%d, system_prompt=%d (%d%% full)", max_pos,
-          governor->system_prompt_token_count, (max_pos * 100 / n_ctx));
+  percent = get_ctx_seq_percent(max_pos, governor->llm_ctx);
+  GOV_LOG("Manual cache summarization: max_pos=%d, system_prompt=%d (%d%% of sequence capacity)", max_pos,
+          governor->system_prompt_token_count, percent);
 
   // Build conversation context from history
   char conversation_context[4096] = {0};
@@ -5388,10 +5520,11 @@ ethervox_result_t ethervox_governor_summarize_and_clear_cache(ethervox_governor_
 
   if (memory_tool && llm_summary[0] != '\0') {
     char summary_content[2048];
+    percent = get_ctx_seq_percent(max_pos, governor->llm_ctx);
     snprintf(summary_content, sizeof(summary_content),
              "[Manual Cache Clear - Context Summary]\n\n%s\n\n"
              "Turn count: %u. Cache cleared manually at %d%% capacity.",
-             llm_summary, governor->turn_counter, (max_pos * 100 / n_ctx));
+             llm_summary, governor->turn_counter, percent);
 
     // Escape for JSON
     char escaped_summary[4096];
@@ -5433,8 +5566,9 @@ ethervox_result_t ethervox_governor_summarize_and_clear_cache(ethervox_governor_
   llama_memory_seq_rm(mem, 0, governor->system_prompt_token_count, -1);
   governor->current_kv_pos = governor->system_prompt_token_count;
 
-  GOV_LOG("Cache cleared: now at position %d (%d%% full)", governor->current_kv_pos,
-          (governor->current_kv_pos * 100 / n_ctx));
+  percent = get_ctx_seq_percent(governor->current_kv_pos, governor->llm_ctx);
+  GOV_LOG("Cache cleared: now at position %d (%d%% of sequence capacity)", 
+          governor->current_kv_pos, percent);
 
   return ETHERVOX_SUCCESS;
 #endif

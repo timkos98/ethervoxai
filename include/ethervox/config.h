@@ -299,6 +299,11 @@ extern "C" {
 #define ETHERVOX_GOVERNOR_MAX_ITERATIONS 10  // Maximum reasoning iterations
 #endif
 
+// Context restoration after KV cache clear
+#ifndef ETHERVOX_GOVERNOR_MAX_CONTEXT_RESTORE_TURNS
+#define ETHERVOX_GOVERNOR_MAX_CONTEXT_RESTORE_TURNS 10  // Max conversation turns to restore after clear
+#endif
+
 #ifndef ETHERVOX_GOVERNOR_TIMEOUT_SECONDS
 #define ETHERVOX_GOVERNOR_TIMEOUT_SECONDS 300  // Maximum execution time
 #endif

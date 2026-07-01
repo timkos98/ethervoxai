@@ -160,21 +160,21 @@ ethervox_result_t ethervox_kv_cache_save(
     }
     
     // Use llama.cpp's sequence-based state save function
-    // This saves ONLY sequence 1 (system prompt) to separate file
+    // This saves ONLY sequence 0 (system prompt + conversation) to cache file
     size_t bytes_written = llama_state_seq_save_file(
         ctx, 
         cache_path,
-        1,  // Save sequence 1 (system prompt)
+        0,  // Save sequence 0 (contains system prompt)
         tokens, 
         (size_t)token_count
     );
     
     if (bytes_written == 0) {
-        ETHERVOX_LOG_ERROR("llama_state_seq_save_file() failed for sequence 1");
+        ETHERVOX_LOG_ERROR("llama_state_seq_save_file() failed for sequence 0");
         return ETHERVOX_ERROR_FILE_WRITE;
     }
     
-    ETHERVOX_LOG_INFO("✓ KV cache saved: %d tokens + KV state (seq 1) to %s (%zu bytes)", 
+    ETHERVOX_LOG_INFO("✓ KV cache saved: %d tokens + KV state (seq 0) to %s (%zu bytes)", 
                      token_count, cache_path, bytes_written);
     
     return ETHERVOX_SUCCESS;
@@ -228,19 +228,19 @@ ethervox_result_t ethervox_kv_cache_load(
     }
     
     // Use llama.cpp's sequence-based state load function
-    // This loads ONLY sequence 1 (system prompt) into the context
+    // This loads ONLY sequence 0 (system prompt) into the context
     size_t n_tokens_loaded = 0;
     size_t bytes_read = llama_state_seq_load_file(
         ctx, 
         cache_path,
-        1,  // Load into sequence 1 (system prompt)
+        0,  // Load into sequence 0 (system prompt lives here)
         tokens, 
         max_tokens, 
         &n_tokens_loaded
     );
     
     if (bytes_read == 0) {
-        ETHERVOX_LOG_ERROR("llama_state_seq_load_file() failed for sequence 1");
+        ETHERVOX_LOG_ERROR("llama_state_seq_load_file() failed for sequence 0");
         ETHERVOX_LOG_WARN("Deleting incompatible cache file");
         unlink(cache_path);  // Delete incompatible cache
         free(tokens);
@@ -251,12 +251,10 @@ ethervox_result_t ethervox_kv_cache_load(
     if (n_tokens_loaded == 0 || n_tokens_loaded < 100) {
         ETHERVOX_LOG_ERROR("Invalid token count loaded: %zu (expected >= 100)", n_tokens_loaded);
         
-        // CRITICAL: Clear sequence 1 to avoid leaving it in a corrupt state
-        // If we don't do this, the next system prompt generation will fail
-        // because sequence 1 has tokens but we try to start from position 0
+        // CRITICAL: Clear sequence 0 to avoid leaving it in a corrupt state
         llama_memory_t mem = llama_get_memory(ctx);
-        llama_memory_seq_rm(mem, 1, -1, -1);  // Clear all of sequence 1
-        ETHERVOX_LOG_WARN("Cleared corrupt sequence 1 from partial cache load");
+        llama_memory_seq_rm(mem, 0, -1, -1);  // Clear all of sequence 0
+        ETHERVOX_LOG_WARN("Cleared corrupt sequence 0 from partial cache load");
         
         // Delete the invalid cache file
         unlink(cache_path);
@@ -269,7 +267,7 @@ ethervox_result_t ethervox_kv_cache_load(
     // Store loaded tokens in governor for recovery/reset
     ethervox_governor_set_system_tokens(governor, tokens, (int)n_tokens_loaded);
     
-    ETHERVOX_LOG_INFO("✓ KV cache loaded instantly: %zu tokens + KV state (seq 1) ready (%zu bytes)", 
+    ETHERVOX_LOG_INFO("✓ KV cache loaded instantly: %zu tokens + KV state (seq 0) ready (%zu bytes)", 
                      n_tokens_loaded, bytes_read);
     
     return ETHERVOX_SUCCESS;
