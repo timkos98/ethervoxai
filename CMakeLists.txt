@@ -386,52 +386,11 @@ if(WITH_LLAMA AND LLAMA_CPP_SOURCE_DIR)
         set(LLAMA_OPENBLAS OFF CACHE BOOL "" FORCE)
         set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
         
-        # Vulkan GPU acceleration with custom Vulkan-Hpp C++ bindings
-        # Using downloaded vulkan.hpp v1.3.275 in external/vulkan-hpp/
-        set(GGML_VULKAN ON CACHE BOOL "" FORCE)
-        
-        # Disable advanced Vulkan features not supported on mobile GPUs
-        # These are datacenter-GPU features that cause shader compilation errors on Android
-        set(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT OFF CACHE BOOL "" FORCE)
-        set(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT OFF CACHE BOOL "" FORCE)
-        set(GGML_VULKAN_COOPMAT2_DECODE_VECTOR_GLSLC_SUPPORT OFF CACHE BOOL "" FORCE)
-        message(STATUS "Disabled advanced coopmat features for mobile GPU compatibility")
-        
-        # Add Vulkan-Hpp include path (before llama.cpp)
-        include_directories(${CMAKE_CURRENT_SOURCE_DIR}/external/vulkan-hpp)
-        
-        # Add SPIRV-Headers from Android NDK
-        if(ANDROID_NDK)
-            set(SPIRV_HEADERS_BASE "${ANDROID_NDK}/sources/third_party/shaderc/third_party/spirv-tools/external/spirv-headers")
-            set(SPIRV_HEADERS_INCLUDE_DIR "${SPIRV_HEADERS_BASE}/include")
-            
-            # Create SPIRV-Headers target for llama.cpp's find_package
-            if(NOT TARGET SPIRV-Headers)
-                add_library(SPIRV-Headers INTERFACE IMPORTED)
-                set_target_properties(SPIRV-Headers PROPERTIES
-                    INTERFACE_INCLUDE_DIRECTORIES "${SPIRV_HEADERS_INCLUDE_DIR}"
-                )
-            endif()
-            
-            # Set variables that find_package would set
-            set(SPIRV-Headers_FOUND TRUE CACHE BOOL "" FORCE)
-            set(SPIRV-Headers_INCLUDE_DIRS "${SPIRV_HEADERS_INCLUDE_DIR}" CACHE STRING "" FORCE)
-            
-            include_directories(${SPIRV_HEADERS_INCLUDE_DIR})
-            message(STATUS "Added SPIRV-Headers from NDK: ${SPIRV_HEADERS_INCLUDE_DIR}")
-        endif()
-        
-        # Point CMake to host system's glslc for cross-compilation shader builds
-        # (Android NDK doesn't include glslc, only libshaderc for runtime compilation)
-        find_program(HOST_GLSLC glslc PATHS /opt/homebrew/bin /usr/local/bin NO_DEFAULT_PATH)
-        if(HOST_GLSLC)
-            set(Vulkan_GLSLC_EXECUTABLE ${HOST_GLSLC} CACHE FILEPATH "Path to glslc shader compiler" FORCE)
-            message(STATUS "Found host glslc for shader compilation: ${HOST_GLSLC}")
-        else()
-            message(WARNING "glslc not found - Vulkan shaders may not compile. Install with: brew install shaderc")
-        endif()
-        
-        message(STATUS "Enabled Vulkan GPU acceleration with custom Vulkan-Hpp bindings (mobile-optimized)")
+        # Vulkan GPU acceleration disabled on Android for CI/CD compatibility
+        # Most Android devices don't support the required Vulkan features anyway
+        # (storageBuffer16BitAccess, Vulkan 1.2, etc.)
+        set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
+        message(STATUS "Vulkan GPU disabled on Android (limited device support, CI build compatibility)")
         
         # Disable NEON for ARM processors to fix SIGILL crash
         if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm" OR CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR ANDROID_ABI STREQUAL "arm64-v8a")
