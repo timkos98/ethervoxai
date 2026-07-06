@@ -1773,8 +1773,20 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
       if (ethervox_is_success(load_result)) {
         cache_loaded = true;
         
-        // System prompt is already in sequence 0 (no copy needed with 2-sequence architecture)
-        GOV_LOG("System prompt loaded in sequence 0 from cache");
+        // KV cache loaded system prompt into sequence 0
+        // Now we need to copy it to sequence 1 to establish the master copy for 2-sequence architecture
+        // Seq 1 = master (never cleared), Seq 0 = working copy (cleared + re-copied from seq 1)
+        llama_memory_t mem = llama_get_memory(governor->llm_ctx);
+        llama_memory_seq_cp(mem, 0, 1, 0, -1);  // Copy all of seq 0 to seq 1
+        
+        int32_t seq1_max = llama_memory_seq_pos_max(mem, 1);
+        if (seq1_max >= 0) {
+          GOV_LOG("✓ System prompt copied to seq 1 (master) from cache (0-%d)", seq1_max);
+        } else {
+          GOV_ERROR("Failed to copy system prompt to seq 1 after cache load");
+        }
+        
+        GOV_LOG("System prompt loaded in sequence 0 from cache and copied to seq 1 (master)");
         
         if (progress_callback) {
           progress_callback("processing_prompt", 1.0f, 

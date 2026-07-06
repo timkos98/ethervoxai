@@ -49,8 +49,8 @@ static const model_definition_t GOVERNOR_MODELS[] = {
     {
         "granite-4.0-h-1b-Q4_K_M.gguf",
         "IBM Granite 4.0 1B (Recommended) - 4-bit quantized, very fast, compact",
-        "https://huggingface.co/bartowski/granite-4.0-h-1b-GGUF/resolve/main/granite-4.0-h-1b-Q4_K_M.gguf",
-        900000000,  // ~900MB
+        "https://huggingface.co/ibm-granite/granite-4.0-h-1b-GGUF/resolve/main/granite-4.0-h-1b-Q4_K_M.gguf",
+        901162208,  // ~901MB (official IBM model, matches asset pack)
         true
     },
     {

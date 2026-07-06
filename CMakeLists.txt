@@ -374,10 +374,39 @@ if(WITH_LLAMA AND LLAMA_CPP_SOURCE_DIR)
         set(LLAMA_OPENBLAS OFF CACHE BOOL "" FORCE)
         set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
         
-        # Vulkan GPU acceleration is complex on Android and requires device-specific setup
-        # Currently disabled - relying on ARM NEON optimizations instead
-        # Future: Enable with proper Android Vulkan SDK integration
-        set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
+        # Vulkan GPU acceleration with custom Vulkan-Hpp C++ bindings
+        # Using downloaded vulkan.hpp v1.3.275 in external/vulkan-hpp/
+        set(GGML_VULKAN ON CACHE BOOL "" FORCE)
+        
+        # Disable advanced Vulkan features not supported on mobile GPUs
+        # These are datacenter-GPU features that cause shader compilation errors on Android
+        set(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT OFF CACHE BOOL "" FORCE)
+        set(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT OFF CACHE BOOL "" FORCE)
+        set(GGML_VULKAN_COOPMAT2_DECODE_VECTOR_GLSLC_SUPPORT OFF CACHE BOOL "" FORCE)
+        message(STATUS "Disabled advanced coopmat features for mobile GPU compatibility")
+        
+        # Add Vulkan-Hpp include path (before llama.cpp)
+        include_directories(${CMAKE_CURRENT_SOURCE_DIR}/external/vulkan-hpp)
+        
+        # Add SPIRV-Headers include path from Android NDK
+        if(ANDROID_NDK)
+            set(SPIRV_HEADERS_DIR "${ANDROID_NDK}/sources/third_party/shaderc/third_party/spirv-tools/external/spirv-headers/include")
+            include_directories(${SPIRV_HEADERS_DIR})
+            list(APPEND CMAKE_PREFIX_PATH "${ANDROID_NDK}/sources/third_party/shaderc/third_party/spirv-tools/external/spirv-headers")
+            message(STATUS "Added SPIRV-Headers from NDK: ${SPIRV_HEADERS_DIR}")
+        endif()
+        
+        # Point CMake to host system's glslc for cross-compilation shader builds
+        # (Android NDK doesn't include glslc, only libshaderc for runtime compilation)
+        find_program(HOST_GLSLC glslc PATHS /opt/homebrew/bin /usr/local/bin NO_DEFAULT_PATH)
+        if(HOST_GLSLC)
+            set(Vulkan_GLSLC_EXECUTABLE ${HOST_GLSLC} CACHE FILEPATH "Path to glslc shader compiler" FORCE)
+            message(STATUS "Found host glslc for shader compilation: ${HOST_GLSLC}")
+        else()
+            message(WARNING "glslc not found - Vulkan shaders may not compile. Install with: brew install shaderc")
+        endif()
+        
+        message(STATUS "Enabled Vulkan GPU acceleration with custom Vulkan-Hpp bindings (mobile-optimized)")
         
         # Disable NEON for ARM processors to fix SIGILL crash
         if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm" OR CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR ANDROID_ABI STREQUAL "arm64-v8a")
@@ -845,6 +874,19 @@ if(WITH_LLAMA)
         )
         target_link_libraries(ethervoxai PUBLIC llama)
         message(STATUS "Linked llama.cpp library to ethervoxai")
+        
+        # Link Vulkan backend if enabled and available
+        if(GGML_VULKAN AND TARGET ggml-vulkan)
+            target_link_libraries(ethervoxai PUBLIC ggml-vulkan)
+            message(STATUS "Linked ggml-vulkan backend for GPU acceleration")
+        endif()
+        
+        # Link OpenCL backend if enabled and available
+        # NOTE: Excluded from APK by default (most devices don't support OpenCL)
+        if(GGML_OPENCL AND TARGET ggml-opencl)
+            target_link_libraries(ethervoxai PUBLIC ggml-opencl)
+            message(STATUS "Linked ggml-opencl backend for GPU acceleration")
+        endif()
     else()
         message(WARNING "llama target not found - checking for ggml and llama-base")
         if(TARGET ggml AND TARGET llama-base)
@@ -854,10 +896,41 @@ if(WITH_LLAMA)
             )
             target_link_libraries(ethervoxai PUBLIC ggml llama-base)
             message(STATUS "Linked ggml and llama-base libraries to ethervoxai")
+            
+            # Link Vulkan backend if enabled and available
+            if(GGML_VULKAN AND TARGET ggml-vulkan)
+                target_link_libraries(ethervoxai PUBLIC ggml-vulkan)
+                message(STATUS "Linked ggml-vulkan backend for GPU acceleration")
+            endif()
+            
+            # Link OpenCL backend if enabled and available
+            # NOTE: Excluded from APK by default (most devices don't support OpenCL)
+            if(GGML_OPENCL AND TARGET ggml-opencl)
+                target_link_libraries(ethervoxai PUBLIC ggml-opencl)
+                message(STATUS "Linked ggml-opencl backend for GPU acceleration")
+            endif()
         else()
             message(WARNING "No llama.cpp targets found - LLM will not be available")
         endif()
     endif()
+endif()
+
+# Link Vulkan library on Android when GPU acceleration is enabled
+if(ANDROID AND GGML_VULKAN)
+    find_library(VULKAN_LIB vulkan REQUIRED)
+    target_link_libraries(ethervoxai PUBLIC ${VULKAN_LIB})
+    message(STATUS "Linked Vulkan library for GPU acceleration: ${VULKAN_LIB}")
+endif()
+
+# Link OpenCL library on Android when OpenCL acceleration is enabled
+if(ANDROID AND GGML_OPENCL)
+    # On Android, OpenCL is a system library available at runtime
+    # Link it directly - symbols will be resolved from system libOpenCL.so if available
+    target_link_libraries(ethervoxai PUBLIC OpenCL)
+    message(STATUS "Linked OpenCL library for GPU acceleration (runtime resolution)")
+    
+    # Note: The library is excluded from APK packaging by default
+    # since most Android devices don't have OpenCL support
 endif()
 
 # Link whisper.cpp if available
