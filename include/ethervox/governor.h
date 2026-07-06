@@ -140,6 +140,7 @@ typedef struct {
   char name[64];                      // Tool name (e.g., "calculator_compute")
   char description[256];              // Human-readable description
   char parameters_json_schema[1024];  // JSON schema for parameters
+  char test_scenario[512];            // Test prompt that should trigger this tool
 
   ethervox_tool_execute_fn execute;  // Execution function
 
@@ -245,6 +246,7 @@ typedef enum {
   ETHERVOX_GOVERNOR_EVENT_CONFIDENCE_UPDATE,    // Confidence level changed
   ETHERVOX_GOVERNOR_EVENT_CONTEXT_SUMMARIZING,  // Context being summarized before clearing
   ETHERVOX_GOVERNOR_EVENT_CONTEXT_CLEARED,      // Context cleared, summary stored in memory
+  ETHERVOX_GOVERNOR_EVENT_CONTEXT_RESTORING,    // Restoring conversation context after clear
   ETHERVOX_GOVERNOR_EVENT_MANIFEST_LOADING,     // Manifest system initializing
   ETHERVOX_GOVERNOR_EVENT_MANIFEST_READY,       // Manifest loaded successfully (optimal state)
   ETHERVOX_GOVERNOR_EVENT_MANIFEST_FALLBACK_LEVEL_1,  // Binary manifest one-liners (good fallback)
@@ -440,6 +442,38 @@ char* ethervox_governor_get_kv_cache_contents(ethervox_governor_t* governor);
 char* ethervox_governor_get_system_prompt_content(ethervox_governor_t* governor);
 
 /**
+ * Get model file path from governor
+ *
+ * @param governor Governor instance
+ * @return Model path string (empty string if not loaded, never NULL)
+ */
+const char* ethervox_governor_get_model_path(struct ethervox_governor* governor);
+
+/**
+ * Get llama model pointer from governor (for internal use)
+ *
+ * @param governor Governor instance
+ * @return llama_model pointer, or NULL if not loaded
+ */
+struct llama_model* ethervox_governor_get_llm_model(ethervox_governor_t* governor);
+
+/**
+ * Get llama context pointer from governor (for internal use)
+ *
+ * @param governor Governor instance
+ * @return llama_context pointer, or NULL if not loaded
+ */
+struct llama_context* ethervox_governor_get_llm_context(ethervox_governor_t* governor);
+
+/**
+ * Get current KV cache position
+ *
+ * @param governor Governor instance
+ * @return Current KV position, or -1 if not loaded
+ */
+int32_t ethervox_governor_get_kv_pos(ethervox_governor_t* governor);
+
+/**
  * Execute user query with tool orchestration
  *
  * @param governor Governor instance
@@ -537,7 +571,7 @@ static inline ethervox_governor_config_t ethervox_governor_default_config(void) 
       .timeout_seconds = 30,
       .max_tokens_per_response = 192,  // Conservative limit for voice assistant responses (was 2048 - too verbose)
       .gpu_layers = 999,     // Full GPU offload by default (overridden by settings)
-      .context_size = 768,   // Optimized for mobile (was 8192 - too high for 350M models)
+      .context_size = 16384, // Increased for multi-sequence KV cache (n_seq_max=3: 16384/3=5461 per seq, needed for 4101-token system prompt)
       .n_threads = 8,        // 8 threads by default (overridden by settings)
       .temperature = 0.7f,   // Balanced creativity (overridden by settings)
       .system_prompt_mode = ETHERVOX_GOVERNOR_MODE_FULL,  // Default to full capabilities

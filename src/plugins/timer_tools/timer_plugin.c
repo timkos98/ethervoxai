@@ -336,7 +336,8 @@ static ethervox_tool_t timer_create_tool = {
         "\"label\":{\"type\":\"string\",\"description\":\"Optional label/name for the timer\"}"
         "},"
         "\"required\":[\"duration_seconds\"]}",
-    .execute = timer_create_execute,
+    .test_scenario = "Set a timer for 5 minutes",
+        .execute = timer_create_execute,
     .is_deterministic = false,
     .requires_confirmation = false,
     .is_stateful = true,
@@ -352,7 +353,8 @@ static ethervox_tool_t timer_cancel_tool = {
         "\"timer_id\":{\"type\":\"integer\",\"description\":\"ID of timer to cancel\"}"
         "},"
         "\"required\":[\"timer_id\"]}",
-    .execute = timer_cancel_execute,
+    .test_scenario = "Cancel my timer",
+        .execute = timer_cancel_execute,
     .is_deterministic = false,
     .requires_confirmation = false,
     .is_stateful = true,
@@ -365,7 +367,8 @@ static ethervox_tool_t timer_list_tool = {
     .parameters_json_schema = 
         "{\"type\":\"object\","
         "\"properties\":{}}",
-    .execute = timer_list_execute,
+    .test_scenario = "What timers are running?",
+        .execute = timer_list_execute,
     .is_deterministic = false,
     .requires_confirmation = false,
     .is_stateful = true,
@@ -383,7 +386,8 @@ static ethervox_tool_t alarm_create_tool = {
         "\"label\":{\"type\":\"string\",\"description\":\"Optional label/name for the alarm\"}"
         "},"
         "\"required\":[\"hour\",\"minute\"]}",
-    .execute = alarm_create_execute,
+    .test_scenario = "Set an alarm for 7am tomorrow",
+        .execute = alarm_create_execute,
     .is_deterministic = false,
     .requires_confirmation = false,
     .is_stateful = true,

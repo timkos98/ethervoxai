@@ -272,6 +272,7 @@ ethervox_tool_t* ethervox_tool_speak_create(void) {
             "\"wait_for_response\":{\"type\":\"boolean\",\"description\":\"If true, automatically open microphone after speaking to listen for user's response (turn-taking)\"},"
             "\"allow_interrupt\":{\"type\":\"boolean\",\"description\":\"If true, user can interrupt by speaking during playback (default: true)\"}"
             "},\"required\":[\"text\"]}",
+        .test_scenario = "Say hello out loud",
         .execute = tool_speak_wrapper,
         .is_deterministic = false,      // TTS playback state varies
         .requires_confirmation = false,  // No confirmation needed for speaking

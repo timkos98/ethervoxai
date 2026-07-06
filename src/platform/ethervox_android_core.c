@@ -39,6 +39,7 @@
 #include "ethervox/timer_tools.h"
 #include "ethervox/tool_manifest.h"
 #include "ethervox/kv_cache_persistence.h"  // KV cache save/load for fast startup
+#include "ethervox/conversation_summary.h"  // Conversation summarization for KV cache
 #include "ethervox/tool_prompt_optimizer.h"
 #include "ethervox/unit_conversion.h"
 #include "ethervox/voice_tools.h"
@@ -442,13 +443,22 @@ Java_com_droid_ethervox_1core_NativeLib_clearKvCache(JNIEnv* env, jobject thiz) 
     return JNI_FALSE;
   }
 
-  LOGI("[JNI] Clearing KV cache - will reset on next generation");
+  LOGI("[JNI] Clearing KV cache (force clear with summarization)");
   
-  // Note: KV cache will be implicitly cleared on next generation
-  // as the model will start fresh without previous context.
-  // The conversation memory is preserved in the memory store files.
+  // Actually clear the KV cache using the summarize_and_clear_cache function
+  // This will:
+  // 1. Generate a summary of the conversation
+  // 2. Store it in memory with context_summary tag
+  // 3. Clear conversation tokens from KV cache (keeping system prompt)
+  ethervox_result_t result = ethervox_governor_summarize_and_clear_cache(g_governor, true);
   
-  return JNI_TRUE;
+  if (ethervox_is_success(result)) {
+    LOGI("[JNI] KV cache cleared successfully - context will be restored on next message");
+    return JNI_TRUE;
+  } else {
+    LOGE("[JNI] Failed to clear KV cache");
+    return JNI_FALSE;
+  }
 }
 
 JNIEXPORT jboolean JNICALL
@@ -628,6 +638,34 @@ JNIEXPORT jstring JNICALL Java_com_droid_ethervox_1core_NativeLib_getSystemPromp
   free(contents);
   
   return result;
+}
+
+JNIEXPORT jstring JNICALL Java_com_droid_ethervox_1core_NativeLib_triggerConversationSummary(JNIEnv* env,
+                                                                                              jobject thiz) {
+  (void)thiz;
+
+  if (!g_governor || !ethervox_governor_is_loaded(g_governor)) {
+    return (*env)->NewStringUTF(env, "Error: Governor not loaded");
+  }
+
+  if (!g_memory_store || !g_memory_store->is_initialized) {
+    return (*env)->NewStringUTF(env, "Error: Memory store not initialized");
+  }
+
+  // Allocate buffer for summary output
+  char summary_buffer[2048];
+  
+  // Call the conversation summary generation function
+  ethervox_result_t result = ethervox_generate_conversation_summary(g_governor, g_memory_store, summary_buffer, sizeof(summary_buffer));
+  
+  if (result == ETHERVOX_SUCCESS) {
+    return (*env)->NewStringUTF(env, "Conversation summary generated successfully");
+  } else {
+    // Get error message based on result code
+    char error_msg[256];
+    snprintf(error_msg, sizeof(error_msg), "Error generating summary: code %d", result);
+    return (*env)->NewStringUTF(env, error_msg);
+  }
 }
 
 JNIEXPORT jobjectArray JNICALL
@@ -2803,4 +2841,88 @@ JNIEXPORT jboolean JNICALL Java_com_droid_ethervox_1core_NativeLib_loadGovernorM
     LOGE("Failed to load Governor model");
     return JNI_FALSE;
   }
+}
+
+// ============================================================================
+// Additional Conversation Summary JNI Functions
+// ============================================================================
+
+/**
+ * Get the last generated conversation summary text for UI display
+ */
+JNIEXPORT jstring JNICALL
+Java_com_droid_ethervox_1core_NativeLib_getLastSummary(
+    JNIEnv* env, jobject thiz
+) {
+    (void)thiz;
+    const char* summary = ethervox_get_last_summary();
+    return (*env)->NewStringUTF(env, summary);
+}
+
+/**
+ * Restore conversation context from memory
+ */
+JNIEXPORT jboolean JNICALL
+Java_com_droid_ethervox_1core_NativeLib_restoreContextFromMemory(
+    JNIEnv* env, jobject thiz
+) {
+    (void)thiz;
+    (void)env;
+    
+    if (!g_governor || !g_memory_store) {
+        LOGE("[JNI] Governor or memory store not initialized");
+        return JNI_FALSE;
+    }
+    
+    LOGI("[JNI] Restoring conversation context from memory...");
+    
+    ethervox_result_t result = ethervox_restore_context_from_memory(
+        g_governor,
+        g_memory_store
+    );
+    
+    return ethervox_is_success(result) ? JNI_TRUE : JNI_FALSE;
+}
+
+/**
+ * Load conversation summary from KV cache file (if exists)
+ */
+JNIEXPORT jboolean JNICALL
+Java_com_droid_ethervox_1core_NativeLib_loadConversationSummary(
+    JNIEnv* env, jobject thiz
+) {
+    (void)thiz;
+    (void)env;
+    
+    if (!g_governor) {
+        LOGE("[JNI] Governor not initialized");
+        return JNI_FALSE;
+    }
+    
+    if (g_android_files_dir[0] == '\0') {
+        LOGE("[JNI] Android files directory not set");
+        return JNI_FALSE;
+    }
+    
+    char cache_dir[512];
+    snprintf(cache_dir, sizeof(cache_dir), "%s/cache", g_android_files_dir);
+    
+    LOGI("[JNI] Loading conversation summary from: %s", cache_dir);
+    
+    ethervox_result_t result = ethervox_load_conversation_summary(
+        g_governor,
+        cache_dir
+    );
+    
+    if (!ethervox_is_success(result)) {
+        LOGE("[JNI] Failed to load conversation summary: %d", result);
+        return JNI_FALSE;
+    }
+    
+    // After loading summary, restore recent context from memory
+    if (g_memory_store) {
+        ethervox_restore_context_from_memory(g_governor, g_memory_store);
+    }
+    
+    return JNI_TRUE;
 }

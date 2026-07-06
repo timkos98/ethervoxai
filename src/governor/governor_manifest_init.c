@@ -240,14 +240,23 @@ ethervox_result_t ethervox_governor_build_system_prompt_with_manifest(
     
     // Start with chat template system marker (e.g., "<|system|>\n")
     if (chat_template && chat_template->system_start) {
+        ETHERVOX_LOGI("Adding system_start: '%s'", chat_template->system_start);
         offset = snprintf(output, output_size, "%s", chat_template->system_start);
         if (offset < 0 || (size_t)offset >= output_size) {
+            ETHERVOX_LOGE("system_start snprintf failed: offset=%d, size=%zu", offset, output_size);
             return ETHERVOX_ERROR_INVALID_ARGUMENT;
         }
+        ETHERVOX_LOGI("After system_start: offset=%d", offset);
+    } else {
+        ETHERVOX_LOGW("No chat_template or system_start (template=%p, system_start=%p)", 
+                     (void*)chat_template, 
+                     chat_template ? (void*)chat_template->system_start : NULL);
     }
     
     // Add tool section - the manifest builder will add the Granite-formatted tools
     if (manifest_registry && manifest_registry->tools_available) {
+        ETHERVOX_LOGI("Calling ethervox_tool_build_minimal_system_prompt with offset=%d, size=%zu", 
+                     offset, output_size - offset);
         int tool_prompt_len = ethervox_tool_build_minimal_system_prompt(
             manifest_registry,
             output + offset,
@@ -255,10 +264,24 @@ ethervox_result_t ethervox_governor_build_system_prompt_with_manifest(
             255  // Include all tools
         );
         
+        ETHERVOX_LOGI("ethervox_tool_build_minimal_system_prompt returned: %d", tool_prompt_len);
+        
         if (tool_prompt_len > 0) {
             offset += tool_prompt_len;
+        } else {
+            ETHERVOX_LOGW("Tool prompt generation returned %d - using fallback", tool_prompt_len);
+            // Fallback to simple prompt
+            int written = snprintf(output + offset, output_size - offset,
+                "You are Ethervox, a helpful AI assistant with %u tools. Respond naturally.\n",
+                manifest_registry->header.tool_count);
+            if (written > 0) {
+                offset += written;
+            }
         }
     } else {
+        ETHERVOX_LOGW("Manifest registry not available or tools_available=false (registry=%p, tools_available=%d)",
+                     (void*)manifest_registry, 
+                     manifest_registry ? manifest_registry->tools_available : 0);
         // Level 2/3: No dynamic tools - simple assistant prompt
         int written = snprintf(output + offset, output_size - offset,
             "You are Ethervox, a helpful AI assistant. Respond naturally and conversationally.\n");
@@ -270,14 +293,27 @@ ethervox_result_t ethervox_governor_build_system_prompt_with_manifest(
     
     // End with chat template system end marker (e.g., "<|end|>\n")
     if (chat_template && chat_template->system_end) {
+        ETHERVOX_LOGI("Adding system_end: '%s'", chat_template->system_end);
         int written = snprintf(output + offset, output_size - offset, "%s", chat_template->system_end);
         if (written < 0 || (size_t)(offset + written) >= output_size) {
+            ETHERVOX_LOGE("system_end snprintf failed: written=%d, offset=%d, size=%zu", 
+                         written, offset, output_size);
             return ETHERVOX_ERROR_INVALID_ARGUMENT;
         }
         offset += written;
+        ETHERVOX_LOGI("After system_end: offset=%d", offset);
+    } else {
+        ETHERVOX_LOGW("No system_end (template=%p, system_end=%p)", 
+                     (void*)chat_template, 
+                     chat_template ? (void*)chat_template->system_end : NULL);
     }
     
     ETHERVOX_LOGI("System prompt generated: %d bytes (with chat template markers)", offset);
+    
+    // Log the actual content if it's suspiciously small
+    if (offset < 100) {
+        ETHERVOX_LOGW("⚠️  System prompt is very small (%d bytes): '%s'", offset, output);
+    }
     
     return offset;
 }

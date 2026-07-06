@@ -170,6 +170,7 @@ ethervox_result_t ethervox_unit_conversion_register(void* registry_ptr) {
             "\"to\":{\"type\":\"string\",\"description\":\"Target unit (e.g., 'fahrenheit', 'km', 'pound')\"},"
             "\"to_unit\":{\"type\":\"string\",\"description\":\"Target unit (alternative to 'to')\"}"
             "},\"required\":[\"value\"]}",
+        .test_scenario = "Convert 10 miles to kilometers",
         .execute = tool_unit_convert_wrapper,
         .is_deterministic = true,         // Same inputs always produce same outputs
         .requires_confirmation = false,    // Silent conversion

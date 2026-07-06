@@ -25,6 +25,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <errno.h>
+#include <unistd.h>  // For unlink()
 
 #if defined(ETHERVOX_WITH_LLAMA) && defined(LLAMA_CPP_AVAILABLE) && LLAMA_CPP_AVAILABLE
 #include <llama.h>
@@ -158,16 +159,23 @@ ethervox_result_t ethervox_kv_cache_save(
         }
     }
     
-    // Use llama.cpp's built-in state save function
-    // This saves both tokens AND the complete KV cache state
-    bool success = llama_state_save_file(ctx, cache_path, tokens, (size_t)token_count);
+    // Use llama.cpp's sequence-based state save function
+    // This saves ONLY sequence 0 (system prompt + conversation) to cache file
+    size_t bytes_written = llama_state_seq_save_file(
+        ctx, 
+        cache_path,
+        0,  // Save sequence 0 (contains system prompt)
+        tokens, 
+        (size_t)token_count
+    );
     
-    if (!success) {
-        ETHERVOX_LOG_ERROR("llama_state_save_file() failed");
+    if (bytes_written == 0) {
+        ETHERVOX_LOG_ERROR("llama_state_seq_save_file() failed for sequence 0");
         return ETHERVOX_ERROR_FILE_WRITE;
     }
     
-    ETHERVOX_LOG_INFO("✓ KV cache saved: %d tokens + KV state to %s", token_count, cache_path);
+    ETHERVOX_LOG_INFO("✓ KV cache saved: %d tokens + KV state (seq 0) to %s (%zu bytes)", 
+                     token_count, cache_path, bytes_written);
     
     return ETHERVOX_SUCCESS;
 #endif
@@ -188,6 +196,22 @@ ethervox_result_t ethervox_kv_cache_load(
     
     ETHERVOX_LOG_INFO("Loading KV cache from: %s", cache_path);
     
+    // Check for old (non-sequence) format and delete if found
+    // Magic number for old format: "ggsn" (0x6767736e)
+    FILE* check_file = fopen(cache_path, "rb");
+    if (check_file) {
+        uint32_t magic = 0;
+        if (fread(&magic, sizeof(magic), 1, check_file) == 1) {
+            if (magic == 0x6767736e) {  // Old general state format
+                fclose(check_file);
+                ETHERVOX_LOG_WARN("Detected old (non-sequence) cache format - deleting for regeneration");
+                unlink(cache_path);
+                return ETHERVOX_ERROR_FILE_READ;  // Trigger regeneration
+            }
+        }
+        fclose(check_file);
+    }
+    
     // Get llama context
     struct llama_context* ctx = ethervox_governor_get_context(governor);
     if (!ctx) {
@@ -203,13 +227,39 @@ ethervox_result_t ethervox_kv_cache_load(
         return ETHERVOX_ERROR_OUT_OF_MEMORY;
     }
     
-    // Use llama.cpp's built-in state load function
-    // This loads both tokens AND the complete KV cache state (instant!)
+    // Use llama.cpp's sequence-based state load function
+    // This loads ONLY sequence 0 (system prompt) into the context
     size_t n_tokens_loaded = 0;
-    bool success = llama_state_load_file(ctx, cache_path, tokens, max_tokens, &n_tokens_loaded);
+    size_t bytes_read = llama_state_seq_load_file(
+        ctx, 
+        cache_path,
+        0,  // Load into sequence 0 (system prompt lives here)
+        tokens, 
+        max_tokens, 
+        &n_tokens_loaded
+    );
     
-    if (!success) {
-        ETHERVOX_LOG_ERROR("llama_state_load_file() failed");
+    if (bytes_read == 0) {
+        ETHERVOX_LOG_ERROR("llama_state_seq_load_file() failed for sequence 0");
+        ETHERVOX_LOG_WARN("Deleting incompatible cache file");
+        unlink(cache_path);  // Delete incompatible cache
+        free(tokens);
+        return ETHERVOX_ERROR_FILE_READ;
+    }
+    
+    // Validate loaded token count
+    if (n_tokens_loaded == 0 || n_tokens_loaded < 100) {
+        ETHERVOX_LOG_ERROR("Invalid token count loaded: %zu (expected >= 100)", n_tokens_loaded);
+        
+        // CRITICAL: Clear sequence 0 to avoid leaving it in a corrupt state
+        llama_memory_t mem = llama_get_memory(ctx);
+        llama_memory_seq_rm(mem, 0, -1, -1);  // Clear all of sequence 0
+        ETHERVOX_LOG_WARN("Cleared corrupt sequence 0 from partial cache load");
+        
+        // Delete the invalid cache file
+        unlink(cache_path);
+        ETHERVOX_LOG_WARN("Deleted invalid cache file (will regenerate)");
+        
         free(tokens);
         return ETHERVOX_ERROR_FILE_READ;
     }
@@ -217,7 +267,8 @@ ethervox_result_t ethervox_kv_cache_load(
     // Store loaded tokens in governor for recovery/reset
     ethervox_governor_set_system_tokens(governor, tokens, (int)n_tokens_loaded);
     
-    ETHERVOX_LOG_INFO("✓ KV cache loaded instantly: %zu tokens + KV state ready", n_tokens_loaded);
+    ETHERVOX_LOG_INFO("✓ KV cache loaded instantly: %zu tokens + KV state (seq 0) ready (%zu bytes)", 
+                     n_tokens_loaded, bytes_read);
     
     return ETHERVOX_SUCCESS;
 #endif

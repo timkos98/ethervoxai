@@ -271,6 +271,7 @@ ethervox_result_t ethervox_weather_tools_register(void* governor_registry) {
             "\"forecast_type\":{\"type\":\"string\",\"enum\":[\"current\",\"hourly\",\"daily\",\"7-day\"],\"description\":\"Type of forecast: 'current' for current conditions, 'hourly' for 24-hour forecast, 'daily' or '7-day' for multi-day forecast\",\"default\":\"current\"},"
             "\"days_ahead\":{\"type\":\"integer\",\"description\":\"For daily forecast: number of days ahead (1-7)\",\"minimum\":1,\"maximum\":7,\"default\":1}"
             "},\"required\":[\"location\"]}",
+        .test_scenario = "What's the weather forecast for this weekend?",
         .execute = tool_weather_forecast_wrapper,
         .is_deterministic = false,         // Weather changes over time
         .requires_confirmation = false,    // No user confirmation needed

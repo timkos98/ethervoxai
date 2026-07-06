@@ -217,6 +217,7 @@ ethervox_tool_t* ethervox_tool_train_pronunciation_create(void) {
             "\"audio_path\":{\"type\":\"string\",\"description\":\"Path to user's audio recording (WAV format)\"},"
             "\"save_to_overrides\":{\"type\":\"boolean\",\"description\":\"Save best match to override database (default: true)\"}"
             "},\"required\":[\"word\",\"audio_path\"]}",
+        .test_scenario = "Help me pronounce entrepreneur",
         .execute = tool_train_pronunciation_wrapper,
         .is_deterministic = false,       // Audio comparison varies
         .requires_confirmation = false,  // Auto-save approved corrections

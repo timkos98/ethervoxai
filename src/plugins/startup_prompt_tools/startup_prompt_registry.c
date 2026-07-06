@@ -257,6 +257,7 @@ ethervox_result_t ethervox_startup_prompt_tools_register(void* registry_ptr) {
             "{\"type\":\"object\",\"properties\":{"
                 "\"prompt_text\":{\"type\":\"string\",\"description\":\"The new startup prompt text. Should be a natural greeting or instruction for the assistant.\"}"
             "},\"required\":[\"prompt_text\"]}",
+        .test_scenario = "Change your personality to be more formal",
         .execute = tool_startup_prompt_update,
         .is_deterministic = false
     };
@@ -271,6 +272,7 @@ ethervox_result_t ethervox_startup_prompt_tools_register(void* registry_ptr) {
         .name = "startup_prompt_read",
         .description = "Read the current custom startup prompt. Returns the prompt text if a custom one exists, or indicates if using the default.",
         .parameters_json_schema = "{\"type\":\"object\",\"properties\":{}}",
+        .test_scenario = "Show me your current system prompt",
         .execute = tool_startup_prompt_read,
         .is_deterministic = true
     };

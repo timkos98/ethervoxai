@@ -779,6 +779,7 @@ ethervox_result_t ethervox_file_tools_register(
             "\"path\":{\"type\":\"string\",\"description\":\"Directory path to list (alternative to 'directory')\"},"
             "\"recursive\":{\"type\":\"boolean\",\"description\":\"Recurse into subdirectories\"}"
             "}}",
+        .test_scenario = "Show me files in my downloads folder",
         .execute = tool_file_list_wrapper,
         .is_deterministic = true,
         .requires_confirmation = false,
@@ -797,6 +798,7 @@ ethervox_result_t ethervox_file_tools_register(
             "\"path\":{\"type\":\"string\",\"description\":\"Path to file to read\"},"
             "\"file_path\":{\"type\":\"string\",\"description\":\"Path to file to read (alternative to 'path')\"}"
             "}}",
+        .test_scenario = "Read the contents of notes.txt",
         .execute = tool_file_read_wrapper,
         .is_deterministic = true,
         .requires_confirmation = false,
@@ -815,6 +817,7 @@ ethervox_result_t ethervox_file_tools_register(
             "\"directory\":{\"type\":\"string\",\"description\":\"Directory to search in\"},"
             "\"pattern\":{\"type\":\"string\",\"description\":\"Text pattern to search for\"}"
             "},\"required\":[\"directory\",\"pattern\"]}",
+        .test_scenario = "Find my resume file",
         .execute = tool_file_search_wrapper,
         .is_deterministic = true,
         .requires_confirmation = false,
@@ -834,7 +837,8 @@ ethervox_result_t ethervox_file_tools_register(
                 "\"file_path\":{\"type\":\"string\",\"description\":\"Path to file to write. Use relative paths like './notes.md' or './output.txt'. File must have an allowed extension (.txt, .md, .org, .c, .cpp, .h, .sh)\"},"
                 "\"content\":{\"type\":\"string\",\"description\":\"The complete text content to write to the file. Can be markdown, code, plain text, or any supported format.\"}"
                 "},\"required\":[\"file_path\",\"content\"]}",
-            .execute = tool_file_write_wrapper,
+            .test_scenario = "Create a file called todo.txt with my tasks",
+        .execute = tool_file_write_wrapper,
             .is_deterministic = false,
             .requires_confirmation = true,
             .is_stateful = true,
@@ -853,7 +857,8 @@ ethervox_result_t ethervox_file_tools_register(
                 "\"file_path\":{\"type\":\"string\",\"description\":\"Path to file to append to (alternative to 'path')\"},"
                 "\"content\":{\"type\":\"string\",\"description\":\"The text content to append to the file. Can include newlines.\"}"
                 "},\"required\":[\"content\"]}",
-            .execute = tool_file_append_wrapper,
+            .test_scenario = "Add this line to my todo list",
+        .execute = tool_file_append_wrapper,
             .is_deterministic = false,
             .requires_confirmation = false,
             .is_stateful = true,
@@ -891,6 +896,7 @@ ethervox_result_t ethervox_path_config_register(
         .name = "path_list",
         .description = "List all configured user paths (Documents, Notes, etc.). Shows which paths are verified and accessible. Use this to discover where the user keeps important files.",
         .parameters_json_schema = "{\"type\":\"object\",\"properties\":{}}",
+        .test_scenario = "What storage locations are available?",
         .execute = tool_path_list_wrapper,
         .is_deterministic = true,
         .requires_confirmation = false,
@@ -908,6 +914,7 @@ ethervox_result_t ethervox_path_config_register(
             "{\"type\":\"object\",\"properties\":{"
             "\"label\":{\"type\":\"string\",\"description\":\"Path label to retrieve (e.g., 'Notes', 'Documents')\"}"
             "},\"required\":[\"label\"]}",
+        .test_scenario = "Show details for the Downloads folder",
         .execute = tool_path_get_wrapper,
         .is_deterministic = true,
         .requires_confirmation = false,
@@ -927,6 +934,7 @@ ethervox_result_t ethervox_path_config_register(
             "\"path\":{\"type\":\"string\",\"description\":\"Absolute directory path\"},"
             "\"description\":{\"type\":\"string\",\"description\":\"Optional description of what this path contains\"}"
             "},\"required\":[\"label\",\"path\"]}",
+        .test_scenario = "Set working directory to Documents",
         .execute = tool_path_set_wrapper,
         .is_deterministic = false,
         .requires_confirmation = false,
@@ -941,6 +949,7 @@ ethervox_result_t ethervox_path_config_register(
         .name = "path_check_unverified",
         .description = "Check for unverified paths (default paths that don't exist on this system). Use this to discover which paths need configuration and proactively ask the user for the correct locations.",
         .parameters_json_schema = "{\"type\":\"object\",\"properties\":{}}",
+        .test_scenario = "Check if this path exists",
         .execute = tool_path_check_unverified_wrapper,
         .is_deterministic = true,
         .requires_confirmation = false,
@@ -958,6 +967,7 @@ ethervox_result_t ethervox_path_config_register(
             "{\"type\":\"object\",\"properties\":{"
             "\"enable\":{\"type\":\"boolean\",\"description\":\"true to enable read-only safe mode, false to allow writes\"}"
             "},\"required\":[\"enable\"]}",
+        .test_scenario = "Enable safe mode for file operations",
         .execute = tool_file_set_safe_mode_wrapper,
         .is_deterministic = false,
         .requires_confirmation = false,

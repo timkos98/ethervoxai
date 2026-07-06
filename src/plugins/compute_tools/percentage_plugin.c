@@ -139,7 +139,8 @@ static ethervox_tool_t percentage_tool = {
         "\"decimal_places\":{\"type\":\"integer\",\"description\":\"Number of decimal places (0-15, default: 2)\",\"default\":2}"
         "},"
         "\"required\":[\"value\",\"percentage\",\"operation\"]}",
-    .execute = percentage_execute,
+    .test_scenario = "What's 15% of 200?",
+        .execute = percentage_execute,
     .is_deterministic = true,
     .requires_confirmation = false,
     .is_stateful = false,

@@ -53,6 +53,9 @@ static char* build_tool_schema_json(const char* tool_name) {
     off += snprintf(json + off, 4096 - off, "\"name\":\"%s\",", tool_name);
     off += snprintf(json + off, 4096 - off, "\"description\":\"%s\",", optimized_desc);
     
+    // Note: test_scenario not available in current tool_detail_header_t structure
+    // Could be added in future version if needed
+    
     // Add parameters in JSON Schema format
     off += snprintf(json + off, 4096 - off, "\"parameters\":{\"type\":\"object\",\"properties\":{");
     for (uint8_t i = 0; i < param_count; i++) {

@@ -92,8 +92,13 @@ ethervox_result_t ethervox_tool_build_minimal_system_prompt(
     uint8_t min_priority
 ) {
     if (!registry || !output || output_size == 0) {
+        ETHERVOX_LOGE("Invalid arguments: registry=%p, output=%p, size=%zu", 
+                     (void*)registry, (void*)output, output_size);
         return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
+    
+    ETHERVOX_LOGI("Building tool prompt: registry=%p, tools_available=%d, tool_count=%u, min_priority=%u",
+                 (void*)registry, registry->tools_available, registry->header.tool_count, min_priority);
     
     int offset = 0;
     
@@ -108,7 +113,7 @@ ethervox_result_t ethervox_tool_build_minimal_system_prompt(
     }
     
     // IBM Granite 4.0 preamble - Clear guidance on tool usage and assistant behavior
-    offset = snprintf(output, output_size,
+    int preamble_len = snprintf(output, output_size,
         "You are Ethervox, a helpful AI assistant with access to real-time tools and capabilities.\n\n"
         "=== YOUR ROLE ===\n"
         "• Be conversational, friendly, and genuinely helpful\n"
@@ -127,15 +132,35 @@ ethervox_result_t ethervox_tool_build_minimal_system_prompt(
         "• Explanations, definitions, or educational content\n"
         "• Advice, recommendations, or creative tasks\n"
         "• Follow-up clarifications or conversational responses\n\n"
+        "=== CRITICAL: MEMORY AND PERSONAL INFORMATION ===\n"
+        "ALWAYS store personal information the user shares about themselves:\n"
+        "• Use memory_store whenever the user mentions: their name, occupation, location, family, pets, preferences, allergies, schedule, habits, or ANY biographical detail\n"
+        "• Store information EVEN IF the user doesn't explicitly say 'remember this'\n"
+        "• Triggers: 'my name is...', 'I am...', 'I work at...', 'I live in...', 'I like...', 'I have a...', 'my birthday is...'\n"
+        "• Building a long-term understanding of the user is ESSENTIAL - store everything personal they mention\n"
+        "• Use memory_search BEFORE answering questions if stored context could improve your response\n"
+        "• Use memory_reminder_create for tasks, todos, or time-based requests\n\n"
+        "Examples requiring memory_store:\n"
+        "User: \"My name is Sarah\" → IMMEDIATELY call memory_store with the name\n"
+        "User: \"I'm a software engineer\" → IMMEDIATELY store occupation\n"
+        "User: \"I have a dog named Max\" → IMMEDIATELY store pet information\n"
+        "User: \"I'm allergic to peanuts\" → IMMEDIATELY store health information\n\n"
         "=== AVAILABLE TOOLS ===\n"
         "<tools>\n");
     
+    ETHERVOX_LOGI("Preamble snprintf returned: %d (output_size=%zu)", preamble_len, output_size);
+    offset = preamble_len;
+    
     if (offset < 0 || (size_t)offset >= output_size) {
+        ETHERVOX_LOGE("Preamble error: offset=%d, output_size=%zu", offset, output_size);
         return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
+    ETHERVOX_LOGI("After preamble: offset=%d", offset);
+    
     // Generate tool entries in Granite JSON format
     // Each tool is: {"type": "function", "function": {"name": "...", "description": "...", "parameters": {...}}}
+    int tools_processed = 0;
     for (uint32_t i = 0; i < registry->header.tool_count && offset < (int)output_size - 500; i++) {
         const tool_index_entry_t* entry = &registry->index[i];
         
@@ -170,13 +195,20 @@ ethervox_result_t ethervox_tool_build_minimal_system_prompt(
         }
         
         // Write tool entry in Granite JSON format (one line per tool)
-        int written = snprintf(output + offset, output_size - offset,
+        int tool_written = snprintf(output + offset, output_size - offset,
             "{\"type\": \"function\", \"function\": {\"name\": \"%s\", \"description\": \"%s\", \"parameters\": %s}}\n",
             entry->name, desc, params_json);
         
-        if (written < 0 || (size_t)(offset + written) >= output_size) break;
-        offset += written;
+        if (tool_written < 0 || (size_t)(offset + tool_written) >= output_size) {
+            ETHERVOX_LOGW("Tool overflow at tool %u (%s): tool_written=%d, offset=%d, output_size=%zu",
+                         i, entry->name, tool_written, offset, output_size);
+            break;
+        }
+        offset += tool_written;
+        tools_processed++;
     }
+    
+    ETHERVOX_LOGI("After processing %d tools: offset=%d", tools_processed, offset);
     
     // Close tools XML with clear, balanced instructions
     int written = snprintf(output + offset, output_size - offset,
@@ -204,26 +236,41 @@ ethervox_result_t ethervox_tool_build_minimal_system_prompt(
         "</tool_call>\n"
         "[After tool returns \"16:30\"]\n"
         "You: \"It's 4:30 PM right now.\"\n\n"
-        "Example 2: General knowledge (ANSWER DIRECTLY)\n"
+        "Example 2: Storing personal information (CRITICAL - USE MEMORY_STORE)\n"
+        "User: \"My name is John and I work as a teacher in Boston\"\n"
+        "You: <tool_call>\n"
+        "{\"name\": \"memory_store\", \"arguments\": {\"key\": \"name\", \"value\": \"John\", \"tags\": [\"personal_info\"]}}\n"
+        "</tool_call>\n"
+        "<tool_call>\n"
+        "{\"name\": \"memory_store\", \"arguments\": {\"key\": \"occupation\", \"value\": \"teacher\", \"tags\": [\"personal_info\", \"work\"]}}\n"
+        "</tool_call>\n"
+        "<tool_call>\n"
+        "{\"name\": \"memory_store\", \"arguments\": {\"key\": \"location\", \"value\": \"Boston\", \"tags\": [\"personal_info\"]}}\n"
+        "</tool_call>\n"
+        "[After storing]\n"
+        "You: \"Nice to meet you, John! I've noted that you're a teacher in Boston. How can I help you today?\"\n\n"
+        "Example 3: General knowledge (ANSWER DIRECTLY)\n"
         "User: \"What's the capital of France?\"\n"
         "You: \"The capital of France is Paris. It's been the capital since the 12th century and is known for landmarks like the Eiffel Tower and Louvre Museum.\"\n\n"
-        "Example 3: Weather with tool\n"
+        "Example 4: Weather with tool\n"
         "User: \"How's the weather today?\"\n"
         "You: <tool_call>\n"
         "{\"name\": \"get_weather_forecast\", \"arguments\": {\"location\": \"current\", \"days\": 1}}\n"
         "</tool_call>\n"
         "[After tool returns weather data]\n"
         "You: \"Currently it's partly cloudy and 72°F. The high today will be around 78°F with a slight chance of rain this afternoon.\"\n\n"
-        "Example 4: Creative request (ANSWER DIRECTLY)\n"
+        "Example 5: Creative request (ANSWER DIRECTLY)\n"
         "User: \"Tell me a joke about programming.\"\n"
         "You: \"Why do programmers prefer dark mode? Because light attracts bugs!\"\n\n"
         "=== RESPONSE WORKFLOW ===\n"
         "1. Understand what the user needs\n"
-        "2. Decide: Does this need real-time data or external action?\n"
+        "2. FIRST: If the user shared personal information, IMMEDIATELY call memory_store\n"
+        "3. SECOND: Check if you need to search memory for context using memory_search\n"
+        "4. THIRD: Decide if real-time data or external action is needed\n"
         "   • YES → Call the appropriate tool first, then explain the result\n"
         "   • NO → Answer naturally using your knowledge\n"
-        "3. Always be helpful and provide context with your answers\n"
-        "4. If a tool call fails, acknowledge it and offer alternatives\n\n"
+        "5. Always be helpful and provide context with your answers\n"
+        "6. If a tool call fails, acknowledge it and offer alternatives\n\n"
         "=== BEST PRACTICES ===\n"
         "• Be concise but informative\n"
         "• Explain technical details when relevant\n"
@@ -232,7 +279,12 @@ ethervox_result_t ethervox_tool_build_minimal_system_prompt(
         "• Admit when you don't know something or when a tool isn't available\n"
         "• Stay in character as Ethervox - a capable, friendly assistant\n");
     
+    ETHERVOX_LOGI("Instructions section: written=%d, offset=%d, output_size=%zu, offset+written=%zu", 
+                 written, offset, output_size, (size_t)(offset + written));
+    
     if (written < 0 || (size_t)(offset + written) >= output_size) {
+        ETHERVOX_LOGE("Instructions section error: written=%d, offset=%d, output_size=%zu", 
+                     written, offset, output_size);
         return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     offset += written;
@@ -256,6 +308,7 @@ ethervox_result_t ethervox_tool_build_minimal_system_prompt(
     
     ETHERVOX_LOGI("===== END SYSTEM PROMPT =====");
     
+    ETHERVOX_LOGI("Returning system prompt: %d bytes", offset);
     return offset;
 }
 
