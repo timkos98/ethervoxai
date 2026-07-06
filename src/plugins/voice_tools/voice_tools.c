@@ -51,6 +51,12 @@ extern const char* ethervox_get_android_files_dir(void);
  * Attempt to download Whisper model using download script
  */
 static int download_whisper_model(const char* model_name, const char* dest_dir) {
+#if defined(TARGET_OS_IPHONE) || defined(__ANDROID__)
+  // Model downloading not supported on mobile - models should be bundled with app
+  LOG_ERROR("Model downloading is not supported on mobile platforms");
+  LOG_ERROR("Models must be bundled with the app or preloaded");
+  return ETHERVOX_ERROR_NOT_SUPPORTED;
+#else
   char script_path[1024];
   char command[2048];
 
@@ -97,6 +103,7 @@ static int download_whisper_model(const char* model_name, const char* dest_dir) 
 
   LOG_INFO("Model download completed successfully");
   return ETHERVOX_SUCCESS;
+#endif  // !TARGET_OS_IPHONE && !__ANDROID__
 }
 
 // Global session pointer for tool wrappers

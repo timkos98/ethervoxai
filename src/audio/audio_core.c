@@ -215,8 +215,8 @@ ethervox_result_t ethervox_tts_synthesize(ethervox_audio_runtime_t* runtime,
   ETHERVOX_CHECK_PTR(request);
   ETHERVOX_CHECK_PTR(output);
 
-#ifdef __APPLE__
-  // Use macOS `say` command for TTS
+#if defined(__APPLE__) && !TARGET_OS_IPHONE && !TARGET_IPHONE_SIMULATOR
+  // Use macOS `say` command for TTS (not available on iOS)
   // Build command with proper escaping
   char command[2048];
   
