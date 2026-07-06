@@ -388,12 +388,25 @@ if(WITH_LLAMA AND LLAMA_CPP_SOURCE_DIR)
         # Add Vulkan-Hpp include path (before llama.cpp)
         include_directories(${CMAKE_CURRENT_SOURCE_DIR}/external/vulkan-hpp)
         
-        # Add SPIRV-Headers include path from Android NDK
+        # Add SPIRV-Headers from Android NDK
         if(ANDROID_NDK)
-            set(SPIRV_HEADERS_DIR "${ANDROID_NDK}/sources/third_party/shaderc/third_party/spirv-tools/external/spirv-headers/include")
-            include_directories(${SPIRV_HEADERS_DIR})
-            list(APPEND CMAKE_PREFIX_PATH "${ANDROID_NDK}/sources/third_party/shaderc/third_party/spirv-tools/external/spirv-headers")
-            message(STATUS "Added SPIRV-Headers from NDK: ${SPIRV_HEADERS_DIR}")
+            set(SPIRV_HEADERS_BASE "${ANDROID_NDK}/sources/third_party/shaderc/third_party/spirv-tools/external/spirv-headers")
+            set(SPIRV_HEADERS_INCLUDE_DIR "${SPIRV_HEADERS_BASE}/include")
+            
+            # Create SPIRV-Headers target for llama.cpp's find_package
+            if(NOT TARGET SPIRV-Headers)
+                add_library(SPIRV-Headers INTERFACE IMPORTED)
+                set_target_properties(SPIRV-Headers PROPERTIES
+                    INTERFACE_INCLUDE_DIRECTORIES "${SPIRV_HEADERS_INCLUDE_DIR}"
+                )
+            endif()
+            
+            # Set variables that find_package would set
+            set(SPIRV-Headers_FOUND TRUE CACHE BOOL "" FORCE)
+            set(SPIRV-Headers_INCLUDE_DIRS "${SPIRV_HEADERS_INCLUDE_DIR}" CACHE STRING "" FORCE)
+            
+            include_directories(${SPIRV_HEADERS_INCLUDE_DIR})
+            message(STATUS "Added SPIRV-Headers from NDK: ${SPIRV_HEADERS_INCLUDE_DIR}")
         endif()
         
         # Point CMake to host system's glslc for cross-compilation shader builds
