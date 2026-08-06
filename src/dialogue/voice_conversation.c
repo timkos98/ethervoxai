@@ -2,26 +2,16 @@
  * @file voice_conversation.c
  * @brief Real-time voice conversation implementation
  *
- * Manages background thread for wake word → Granite Speech STT → Governor → Piper TTS
+ * Manages background thread for wake word → Granite Speech STT → Governor →
+ * TTS (desktop Piper, blocking; mobile platform-native, async via
+ * conversation_on_speak's on_speak_request callback + notify_speaking_done)
  * conversation flow. Separate from transcription pipeline.
  *
- * ARCHITECTURE CHANGE (Granite Speech integration): this is the desktop
- * reference implementation of the Mode 1 (voice conversation) state machine,
- * but it is NOT currently reachable from Android - src/platform/
- * ethervox_android_core.c talks to the Governor/registry directly and has its
- * own note ("dialogue.h removed - using direct governor/registry
- * architecture"). Two options going forward, pick one deliberately instead of
- * letting the split continue by accident:
- *   (a) Make this file the single, platform-agnostic Mode 1/2/4 orchestrator
- *       (STT -> Governor -> TTS -> barge-in) and have ethervox_android_core.c
- *       call into it through a thin JNI shim, OR
- *   (b) Keep this as the desktop-only reference and re-implement the same
- *       state machine directly in ethervox_android_core.c for mobile.
- * (a) avoids maintaining the barge-in/interrupt logic twice and is the
- * "clean" option now that backward compat with the old split isn't required.
- * Whichever is chosen, the STT backend swap below (Vosk/Whisper -> Granite
- * Speech) and the TTS split (desktop Piper vs. platform-native mobile TTS,
- * see conversation_on_speak below) apply the same way.
+ * This is the single, platform-agnostic Mode 1/2/4 orchestrator (STT ->
+ * Governor -> TTS -> barge-in). src/platform/ethervox_android_core.c calls
+ * into it through a thin JNI shim (ethervox_conversation_init/start/stop/
+ * interrupt/notify_speaking_done) rather than re-implementing the state
+ * machine - this avoids maintaining the barge-in/interrupt logic twice.
  */
 
 #include "ethervox/conversation.h"
