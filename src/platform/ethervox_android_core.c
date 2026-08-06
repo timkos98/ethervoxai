@@ -6,6 +6,24 @@
  *
  * This file is part of EthervoxAI, licensed under CC BY-NC-SA 4.0.
  * SPDX-License-Identifier: CC-BY-NC-SA-4.0
+ *
+ * ARCHITECTURE CHANGE (Granite Speech integration): today this file exposes
+ * three independent, uncoordinated pipelines to Kotlin: (1) wakeWord*, (2)
+ * sttInit/Whisper for the Transcription feature only, and (3)
+ * processDialogue*/cancelProcessing straight into the Governor. There is no
+ * unified 4-mode session concept at the JNI boundary at all - Mode 1 (voice
+ * conversation) is currently built entirely in Kotlin using Android's
+ * SpeechRecognizer + Governor + Android TextToSpeech, none of which touches
+ * this file's ASR code. Target state: add Granite Speech ASR (BASE + PLUS,
+ * see ethervox/stt.h) as new JNI entry points here, and route Mode 1/2/4
+ * through them consistently, so "which ASR backend is active" is decided in
+ * one place (this file / NativeLib.kt) instead of being split between a
+ * Kotlin-only path (SpeechRecognizer) and a JNI-only path (sttInit/Whisper)
+ * that don't share code today. See src/dialogue/voice_conversation.c for the
+ * more complete (desktop-only, not currently linked from here) reference
+ * state-machine design this should either call into or mirror - pick one
+ * approach deliberately (see that file's header comment) rather than growing
+ * a third, slightly-different implementation here.
  */
 
 #include <android/log.h>
@@ -1616,6 +1634,23 @@ JNIEXPORT void JNICALL Java_com_droid_ethervox_1core_NativeLib_wakeWordCleanup(J
 
 // ===========================================================================
 // Speech-to-Text
+//
+// ARCHITECTURE CHANGE (Granite Speech integration): sttInit/whisper-backed
+// functions in this section are used only by the separate "Transcription"
+// feature today (startVoiceTranscription/stopVoiceTranscription in
+// NativeLib.kt); the live "Talk" conversation mode does NOT go through this
+// JNI path at all - it uses android.speech.SpeechRecognizer directly from
+// Kotlin (EthervoxViewModel.kt), bypassing the C backend's ASR entirely. Both
+// call sites need to move onto Granite Speech, but onto the two different
+// variants: this Mode-2/transcription path should call ethervox_stt_init
+// with ETHERVOX_STT_BACKEND_GRANITE_SPEECH_PLUS (SAA-tagged output, see
+// ethervox/stt.h), while a NEW JNI entry point needs to be added for Mode 1
+// (voice conversation) and Mode 4 (voice-to-text) using
+// ETHERVOX_STT_BACKEND_GRANITE_SPEECH (BASE) - there is currently no JNI
+// function backing live voice conversation with the C backend's own ASR at
+// all, only with the Governor once Android's SpeechRecognizer has already
+// produced text. See NativeLib.kt for the corresponding new
+// graniteSpeechInit/voiceConversationStart exports this section should grow.
 // ===========================================================================
 
 JNIEXPORT jint JNICALL Java_com_droid_ethervox_1core_NativeLib_sttInit(JNIEnv* env, jobject thiz,

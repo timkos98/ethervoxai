@@ -4,6 +4,24 @@
  *
  * Manages background thread for wake word → Vosk STT → Governor → Piper TTS
  * conversation flow. Separate from transcription pipeline.
+ *
+ * ARCHITECTURE CHANGE (Granite Speech integration): this is the desktop
+ * reference implementation of the Mode 1 (voice conversation) state machine,
+ * but it is NOT currently reachable from Android - src/platform/
+ * ethervox_android_core.c talks to the Governor/registry directly and has its
+ * own note ("dialogue.h removed - using direct governor/registry
+ * architecture"). Two options going forward, pick one deliberately instead of
+ * letting the split continue by accident:
+ *   (a) Make this file the single, platform-agnostic Mode 1/2/4 orchestrator
+ *       (STT -> Governor -> TTS -> barge-in) and have ethervox_android_core.c
+ *       call into it through a thin JNI shim, OR
+ *   (b) Keep this as the desktop-only reference and re-implement the same
+ *       state machine directly in ethervox_android_core.c for mobile.
+ * (a) avoids maintaining the barge-in/interrupt logic twice and is the
+ * "clean" option now that backward compat with the old split isn't required.
+ * Whichever is chosen, the STT backend swap below (Vosk/Whisper -> Granite
+ * Speech) and the TTS split (desktop Piper vs. platform-native mobile TTS,
+ * see conversation_on_speak below) apply the same way.
  */
 
 #include "ethervox/conversation.h"
@@ -117,6 +135,18 @@ static uint64_t get_time_ms(void) {
 
 /**
  * @brief Callback for speak tool - handles TTS synthesis and playback
+ *
+ * ARCHITECTURE CHANGE (Granite Speech integration): this is desktop-only
+ * (g_global_tts is the Piper backend, only linked when
+ * NOT TARGET_PLATFORM STREQUAL "IOS" AND NOT ANDROID, see CMakeLists.txt) -
+ * confirmed intentional, matching the product decision to use platform-native
+ * TTS (Android TextToSpeech / iOS AVSpeechSynthesizer) everywhere, so this is
+ * NOT something to "fix" by porting Piper to mobile. On mobile, `on_speak`
+ * should instead hand the text (and, longer-term, the `emotion` parameter
+ * currently computed but unused in speak.c's speaker_id mapping - see that
+ * file) to the platform layer, which invokes the native TTS engine and
+ * reports back speaking-started/interrupted through the same callback shape
+ * used here, so the Governor and barge-in state machine stay platform-agnostic.
  */
 static int conversation_on_speak(const char* text, const char* language,
                                   bool wait_for_response, bool allow_interrupt, 
@@ -555,6 +585,20 @@ static void* conversation_thread(void* arg) {
         }
         
         // Streaming audio capture: continuously feed to Whisper
+        // ARCHITECTURE CHANGE (Granite Speech integration): this whole
+        // capture loop currently free-runs Whisper per 100ms chunk and trusts
+        // its own VAD/is_final flag to find utterance boundaries (see below).
+        // Granite Speech is NOT a streaming/chunk-native ASR model - IBM's
+        // usage pattern is "accumulate one bounded utterance, transcribe
+        // once". Keep this loop's VAD/chunking responsibility exactly as-is
+        // (it decides *when* an utterance ends), but change what happens at
+        // that boundary: buffer the accumulated PCM for the utterance and
+        // call granite_speech_transcribe_chunk(pcm, len, ASR_PROMPT, NULL)
+        // once, instead of feeding every 100ms chunk into Whisper
+        // incrementally. Partial/live-caption text (line ~613, `is_partial`)
+        // has no Granite Speech equivalent - either drop partial captions in
+        // Mode 1, or keep a cheap local VAD-only "listening..." indicator
+        // with no transcript until the utterance is finalized.
         uint64_t listen_start = get_time_ms();
         
         while (!speech_detected && !session->thread_should_exit) {
@@ -578,6 +622,23 @@ static void* conversation_thread(void* arg) {
             
             // Apply AEC to remove speaker output from microphone input
             // AEC requires 10ms frames (160 samples at 16kHz), so process in chunks
+            //
+            // ARCHITECTURE CHANGE (barge-in, Granite Speech integration): this
+            // Speex-based AEC path (src/audio/aec_speex.c + reference_buffer.c)
+            // is real infrastructure but is desktop-only by build config -
+            // CMakeLists.txt explicitly skips Speex DSP on Android ("Android
+            // uses platform audio processing") and there is no iOS AEC path
+            // either. For Mode 1 barge-in on mobile, don't assume this AEC
+            // path is available: either (a) integrate Android's built-in
+            // android.media.audiofx.AcousticEchoCanceler /
+            // AutomaticGainControl platform effects and an iOS-side
+            // equivalent (AVAudioEngine voice-processing I/O unit), wired in
+            // per-platform, or (b) start simpler and half-duplex-gate the mic
+            // (mute capture while platform-native TTS is speaking, with an
+            // explicit tap-to-interrupt affordance as the primary barge-in
+            // path instead of true full-duplex VAD) - see plan.md Open
+            // Questions for the tradeoff. Don't silently ship Mode 1 assuming
+            // this Speex block runs on phones; it won't.
             if (session->aec_initialized && session->aec_context) {
                 const size_t aec_frame_size = 160;  // 10ms at 16kHz
                 size_t offset = 0;

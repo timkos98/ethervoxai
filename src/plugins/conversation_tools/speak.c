@@ -221,6 +221,19 @@ static int tool_speak_wrapper(
     }
     // Note: speaker_id mapping is currently not passed to TTS backend
     // TODO: Add speaker_id parameter to on_speak callback signature
+    //
+    // ARCHITECTURE CHANGE (Granite Speech integration): finishing this TODO
+    // only matters for desktop builds (Piper is the only backend with a
+    // speaker_id concept, and Piper is deliberately not linked on
+    // Android/iOS - see CMakeLists.txt). Don't plumb speaker_id through the
+    // on_speak signature as if it were a cross-platform mechanism - it isn't.
+    // The cross-platform version of "emotion" here is the `emotion` string
+    // itself (already parsed above), not the speaker_id derived from it:
+    // platform-native TTS (Android TextToSpeech / iOS AVSpeechSynthesizer)
+    // has no per-utterance emotion control at all today, so on mobile this
+    // parameter is currently a no-op by design, not a bug - see plan.md's
+    // "Open Questions" long-term roadmap item for what it would take to
+    // change that (a custom-trained voice, not a TTS-engine swap).
     
     LOG_INFO("speak tool: text='%s', language='%s', emotion='%s' (speaker_id=%d), wait_for_response=%d, allow_interrupt=%d",
              text, language ? language : "auto", emotion, speaker_id, wait_for_response, allow_interrupt);

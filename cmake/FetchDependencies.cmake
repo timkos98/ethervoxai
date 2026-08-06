@@ -45,6 +45,16 @@ function(fetch_llama_cpp)
         
         set(FETCHCONTENT_QUIET OFF)
         
+        # ARCHITECTURE CHANGE (Granite Speech integration):
+        # Granite Speech's GGUF is a multimodal (mtmd) checkpoint - audio encoder +
+        # projector + Granite LLM decoder in one file. llama.cpp only gained mtmd
+        # audio-input support (clip.cpp audio path, `--mmproj`) in recent history;
+        # floating on `master` is not safe for this feature - pin to the first
+        # tag/commit confirmed to load `granite-speech-4.1-2b(-plus)-GGUF` via
+        # `llama-mtmd-cli` / `libmtmd`, and re-pin deliberately (not "master") so a
+        # future upstream change can't silently break ASR. Verify on both the BASE
+        # and PLUS variants - the PLUS variant's speaker-attributed-ASR (SAA) output
+        # depends on the same mtmd audio path, not a separate code path.
         if(ETHERVOX_FETCH_SHALLOW)
             FetchContent_Declare(
                 llama_cpp

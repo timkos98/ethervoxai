@@ -21,6 +21,29 @@ extern "C" {
 
 /**
  * STT backend types
+ *
+ * ARCHITECTURE CHANGE (Granite Speech integration): Vosk and Whisper are being
+ * replaced, not extended, for the voice-conversation (Mode 1/4) and
+ * transcription (Mode 2) pipelines - no backward-compat path is needed.
+ * Add two new backends here:
+ *   ETHERVOX_STT_BACKEND_GRANITE_SPEECH        - granite-speech-4.1-2b (BASE)
+ *       Punctuated, capitalized ASR + AST. Used by Mode 1 (voice conversation)
+ *       and Mode 4 (voice-to-text). Never given tool-calling/conversational
+ *       prompts - IBM's model card confirms unfamiliar prompts just fall back
+ *       to plain transcription, so prompting is ASR-only by construction.
+ *   ETHERVOX_STT_BACKEND_GRANITE_SPEECH_PLUS   - granite-speech-4.1-2b-plus
+ *       Adds built-in Speaker-Attributed ASR (SAA): prompted with
+ *       "Speaker attribution: ... adding [Speaker 1]: and [Speaker 2]: tags"
+ *       to get native speaker-tagged output - replaces Whisper AND any
+ *       separate diarization heuristic in one step. Used by Mode 2
+ *       (transcription) exclusively. Supports `prefix_text`-based incremental
+ *       decoding for long recordings (see ethervox_stt_config_t below).
+ * Both variants load via llama.cpp's mtmd (multimodal) GGUF path, not a
+ * bespoke runtime - see cmake/FetchDependencies.cmake for the required
+ * llama.cpp version pin. Once added, ethervox_stt_get_default_config() and
+ * every `switch(backend)`/`if (backend == ...)` dispatch site in
+ * src/stt/stt_core.c must add a case for both - grep for
+ * ETHERVOX_STT_BACKEND_WHISPER in stt_core.c to find every site.
  */
 typedef enum {
   ETHERVOX_STT_BACKEND_VOSK,     // Vosk (lightweight, offline)
@@ -40,6 +63,14 @@ typedef struct {
   bool enable_punctuation;      // Add punctuation to results
   float vad_threshold;          // Voice activity detection threshold
   bool translate_to_english;    // Translate non-English speech to English (Whisper only)
+  // ARCHITECTURE CHANGE (Granite Speech integration): add
+  //   const char* prefix_text;
+  // Granite Speech Plus supports incremental decoding: pass the
+  // previously-decoded transcript segment back in as `prefix_text` so a long
+  // Mode 2 recording can be chunked (~30-60s segments) without re-decoding
+  // earlier audio and without losing consistent [Speaker N]: numbering across
+  // chunk boundaries. Leave NULL for Mode 1/4 (single-utterance BASE variant
+  // calls) and for the first chunk of a Mode 2 session.
 } ethervox_stt_config_t;
 
 /**
