@@ -71,6 +71,57 @@ typedef struct {
 } ethervox_piper_config_t;
 
 /**
+ * @brief Platform-native TTS callback (Android TextToSpeech / iOS
+ * AVSpeechSynthesizer). Set ethervox_conversation_config_t.on_speak_request
+ * to receive the assistant's utterances instead of the desktop Piper path -
+ * see conversation_on_speak in voice_conversation.c. The callback is
+ * fire-and-forget: it should hand `text` off to the platform TTS engine and
+ * return immediately (mobile TTS engines report completion asynchronously
+ * via their own listener, not by blocking this call) and honors
+ * `allow_interrupt` on its own (i.e. keep listening for a barge-in tap while
+ * speaking). `speaker_id` is the Governor's emotion-derived hint (see
+ * src/plugins/conversation_tools/speak.c) - platform TTS APIs generally
+ * don't support per-utterance speaker/voice switching, so implementations
+ * are free to ignore it.
+ */
+typedef void (*ethervox_conversation_speak_cb)(const char* text, const char* language,
+                                                int speaker_id, bool allow_interrupt,
+                                                void* user_data);
+
+/**
+ * @brief State-change notification callback - fired every time the session
+ * transitions between IDLE/LISTENING/PROCESSING/SPEAKING/ERROR states, so a
+ * UI layer doesn't have to poll ethervox_conversation_get_state().
+ */
+typedef void (*ethervox_conversation_state_cb)(ethervox_conversation_state_t state,
+                                                void* user_data);
+
+/**
+ * @brief Fired once per finalized user utterance (after Granite Speech
+ * completes transcription, before the Governor is invoked) - lets a UI show
+ * the user's own recognized text (e.g. as a chat bubble / live caption).
+ */
+typedef void (*ethervox_conversation_transcript_cb)(const char* text, const char* language,
+                                                     void* user_data);
+
+/**
+ * @brief Fired once per assistant utterance the Governor produced via the
+ * `speak` tool, independent of whether it is actually synthesized to audio.
+ * Always fires (even when tts_enabled is false, i.e. Mode 4 voice-to-text),
+ * so a UI can show/caption the response text; on_speak_request is the
+ * separate, TTS-gated hook that additionally triggers audio playback.
+ */
+typedef void (*ethervox_conversation_response_cb)(const char* text, const char* language,
+                                                   void* user_data);
+
+/**
+ * @brief Fired on unrecoverable session errors (STT/audio init failures,
+ * Governor errors) - complements the ETHERVOX_CONV_STATE_ERROR state with a
+ * human-readable message for UI display.
+ */
+typedef void (*ethervox_conversation_error_cb)(const char* message, void* user_data);
+
+/**
  * @brief Conversation session configuration
  */
 typedef struct {
@@ -83,7 +134,30 @@ typedef struct {
     
     bool enable_beep_on_wake;          // Play feedback when wake word detected
     bool enable_beep_on_listen_end;    // Play feedback when listening ends
-    bool always_listening;             // Continuously transcribe without wake word (desktop mode)
+    bool always_listening;             // Continuously transcribe without wake word - this is
+                                        // what Mode 1/4 (manual "Talk"/"Voice query" button, no
+                                        // wake-word gating) sets on every platform, not just desktop;
+                                        // the get_default_config() platform ifdef only controls the
+                                        // *default*, callers are expected to override it explicitly.
+
+    // Mode 4 (voice-to-text): set false to suppress all speech output while
+    // still running the full ASR -> Governor pipeline; the response is only
+    // ever delivered via on_user_transcript/on_speak_request's text
+    // parameter for display, never synthesized. Defaults to true.
+    bool tts_enabled;
+
+    // Platform-native TTS + UI notification hooks (all optional, NULL = no-op
+    // for the notification callbacks; on_speak_request NULL means "use the
+    // desktop Piper path" - see conversation_on_speak). Mobile platforms
+    // (Android/iOS JNI/bridge layers) are expected to set at least
+    // on_speak_request; desktop callers may leave all four NULL to get the
+    // original Piper + console-only behavior unchanged.
+    ethervox_conversation_speak_cb on_speak_request;
+    ethervox_conversation_state_cb on_state_change;
+    ethervox_conversation_transcript_cb on_user_transcript;
+    ethervox_conversation_response_cb on_response_text;
+    ethervox_conversation_error_cb on_error;
+    void* callback_user_data;           // Passed through to all four callbacks above
 } ethervox_conversation_config_t;
 
 /**
@@ -154,6 +228,42 @@ ethervox_result_t ethervox_conversation_trigger(ethervox_conversation_session_t*
  */
 ethervox_conversation_state_t ethervox_conversation_get_state(
     const ethervox_conversation_session_t* session
+);
+
+/**
+ * @brief Explicit barge-in / interrupt trigger
+ *
+ * Cancels an in-flight Governor generation (ETHERVOX_CONV_STATE_PROCESSING)
+ * or in-progress speech (ETHERVOX_CONV_STATE_SPEAKING) and returns the
+ * session to LISTENING as soon as the current step notices the request.
+ * Safe to call from any thread - this is the primary barge-in mechanism for
+ * platforms without full-duplex echo cancellation (see
+ * src/dialogue/voice_conversation.c's AEC note): a UI "tap to interrupt"
+ * affordance should call this directly rather than waiting for VAD.
+ *
+ * @param session Session handle
+ * @return ETHERVOX_SUCCESS on success, error code otherwise
+ */
+ethervox_result_t ethervox_conversation_interrupt(
+    ethervox_conversation_session_t* session
+);
+
+/**
+ * @brief Report that platform-native TTS playback finished (or failed)
+ *
+ * Mobile TTS engines (Android TextToSpeech / iOS AVSpeechSynthesizer) report
+ * playback completion asynchronously through their own listener interface,
+ * unlike desktop Piper which this session plays and blocks on directly.
+ * Callers using on_speak_request must call this once per utterance when
+ * their platform TTS listener fires (onDone()/onError() or equivalent), or
+ * the conversation thread will stall in ETHERVOX_CONV_STATE_SPEAKING
+ * waiting for it (bounded by an internal safety-net timeout either way).
+ *
+ * @param session Session handle
+ * @return ETHERVOX_SUCCESS on success, error code otherwise
+ */
+ethervox_result_t ethervox_conversation_notify_speaking_done(
+    ethervox_conversation_session_t* session
 );
 
 /**

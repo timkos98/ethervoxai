@@ -91,6 +91,22 @@ struct ethervox_conversation_session {
     ethervox_conversation_state_t state;
     uint64_t conversation_start_time_ms;
     uint64_t last_audio_time_ms;
+
+    // Explicit barge-in flag - set by ethervox_conversation_interrupt(), checked
+    // by conversation_on_speak (desktop Piper playback wait loop) and
+    // conversation_on_interrupt (Governor listen/speak tool interrupt check).
+    // Cleared at the start of each new listening turn.
+    bool interrupt_requested;
+
+    // Mobile TTS completion signal - platform-native TTS (Android
+    // TextToSpeech / iOS AVSpeechSynthesizer) reports playback completion
+    // asynchronously via its own listener, unlike desktop Piper which blocks
+    // this thread directly on the audio ring buffer. conversation_on_speak's
+    // mobile branch (config.on_speak_request set) waits on this condition
+    // variable instead, and ethervox_conversation_notify_speaking_done() (the
+    // JNI/bridge-callable counterpart of onDone()/onError()) signals it.
+    pthread_cond_t speaking_done_cond;
+    bool speaking_done;
     
     // STT runtime (Granite Speech BASE backend)
     ethervox_stt_runtime_t stt_runtime;
@@ -129,6 +145,166 @@ static uint64_t get_time_ms(void) {
     return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
 }
 
+/**
+ * @brief Transition session state and notify the optional on_state_change
+ * callback. Caller must already hold session->mutex (matches every existing
+ * call site, which set session->state directly under the lock before this
+ * helper existed).
+ */
+static void conversation_set_state(ethervox_conversation_session_t* session,
+                                    ethervox_conversation_state_t new_state) {
+    session->state = new_state;
+    if (session->config.on_state_change) {
+        session->config.on_state_change(new_state, session->config.callback_user_data);
+    }
+}
+
+/**
+ * @brief Report an unrecoverable error via the optional on_error callback
+ * (in addition to the existing LOG_ERROR calls at each call site).
+ */
+static void conversation_notify_error(ethervox_conversation_session_t* session,
+                                      const char* message) {
+    if (session->config.on_error) {
+        session->config.on_error(message, session->config.callback_user_data);
+    }
+}
+
+/**
+ * @brief Capture one utterance using RMS-energy silence detection, then
+ * finalize() it through Granite Speech.
+ *
+ * ARCHITECTURE CHANGE (Granite Speech integration): this consolidates two
+ * previously-duplicated (and, in the main conversation_thread loop's copy,
+ * actually broken) implementations. Granite Speech's ethervox_stt_process()
+ * always returns is_final=false (see stt/granite_speech_backend.c) - it only
+ * accumulates audio; the transcript is only produced by
+ * ethervox_stt_finalize(), which decodes once. Whisper's process() used to
+ * emit is_final=true at sentence boundaries, and conversation_thread()'s
+ * capture loop still trusted that pattern - dead code today, since Granite
+ * Speech never sets that flag, so the loop only ever produced a result via
+ * the 30s hard timeout. conversation_on_listen()'s own copy of this logic
+ * (used for the Governor's `listen` tool) was already correct. Both call
+ * sites now share this one, correct, energy-VAD + finalize() implementation.
+ *
+ * @param session Conversation session (STT/audio runtimes must already be
+ *                started - see ethervox_stt_start()/audio_runtime.driver.start_capture())
+ * @param timeout_ms Maximum time to wait for speech before giving up
+ * @param text_out Receives a strdup'd transcript on success (caller frees),
+ *                 or NULL if no speech was detected before timeout
+ * @return ETHERVOX_SUCCESS always (matches conversation_on_listen's original
+ *         "timeout is not an error" contract) - check *text_out for NULL to
+ *         distinguish "nothing said" from "something transcribed"
+ */
+static ethervox_result_t capture_utterance_with_vad(ethervox_conversation_session_t* session,
+                                                     int timeout_ms, char** text_out) {
+    *text_out = NULL;
+
+    uint64_t start_time = get_time_ms();
+    bool speech_detected = false;
+    int silence_frames = 0;
+    const int silence_threshold = 10;  // frames of silence before considering speech ended
+    const float energy_threshold = 0.02f;  // TODO: make configurable (see plan.md Open Question 1)
+
+    while ((get_time_ms() - start_time) < (uint64_t)timeout_ms) {
+        // Explicit barge-in / stop check - bail immediately rather than
+        // waiting out the rest of the timeout.
+        pthread_mutex_lock(&session->mutex);
+        bool should_stop = session->thread_should_exit || session->interrupt_requested;
+        pthread_mutex_unlock(&session->mutex);
+        if (should_stop) {
+            break;
+        }
+
+        ethervox_audio_buffer_t audio_chunk = {0};
+        ethervox_result_t audio_result = ethervox_audio_read(&session->audio_runtime, &audio_chunk);
+        if (ethervox_is_error(audio_result) || audio_chunk.size == 0) {
+            continue;
+        }
+
+        // Apply AEC to remove speaker output from microphone input, if
+        // available (desktop-only Speex backend - see the file header's
+        // barge-in note; a no-op when aec_initialized is false, e.g. on
+        // Android/iOS). AEC requires exact 10ms frames (160 samples at
+        // 16kHz); partial trailing frames are skipped and picked up whole
+        // on the next read. audio_chunk.size is a SAMPLE count, not a byte
+        // count (see ethervox_audio_buffer_t in audio.h).
+        if (session->aec_initialized && session->aec_context) {
+            const size_t aec_frame_size = 160;
+            size_t offset = 0;
+            while (offset + aec_frame_size <= audio_chunk.size) {
+                ethervox_result_t aec_result = ethervox_aec_process(
+                    session->aec_context, audio_chunk.data + offset, aec_frame_size);
+                if (ethervox_is_error(aec_result)) {
+                    ETHERVOX_LOG_WARN("AEC processing failed at offset %zu: %d", offset, aec_result);
+                    break;
+                }
+                offset += aec_frame_size;
+            }
+        }
+
+        float energy = ethervox_audio_calculate_rms_energy(audio_chunk.data, audio_chunk.size);
+
+        if (energy > energy_threshold) {
+            speech_detected = true;
+            silence_frames = 0;
+
+            ethervox_stt_result_t stt_result = {0};
+            ethervox_result_t stt_ret = ethervox_stt_process(&session->stt_runtime, &audio_chunk, &stt_result);
+            // Granite Speech's process() never sets is_final (see doc comment
+            // above) - this branch is effectively unreachable for it today,
+            // kept only in case a future backend does support incremental
+            // finalization mid-utterance.
+            if (ethervox_is_success(stt_ret) && stt_result.is_final && stt_result.text &&
+                strlen(stt_result.text) > 0) {
+                *text_out = strdup(stt_result.text);
+                if (stt_result.language && strlen(stt_result.language) > 0) {
+                    strncpy(session->last_detected_language, stt_result.language,
+                            sizeof(session->last_detected_language) - 1);
+                    session->last_detected_language[sizeof(session->last_detected_language) - 1] = '\0';
+                }
+                ethervox_stt_result_free(&stt_result);
+                ethervox_audio_buffer_free(&audio_chunk);
+                return ETHERVOX_SUCCESS;
+            }
+            ethervox_stt_result_free(&stt_result);
+        } else if (speech_detected) {
+            silence_frames++;
+            if (silence_frames >= silence_threshold) {
+                ethervox_stt_result_t final_result = {0};
+                if (ethervox_stt_finalize(&session->stt_runtime, &final_result) == 0) {
+                    if (final_result.text && strlen(final_result.text) > 0) {
+                        *text_out = strdup(final_result.text);
+                        if (final_result.language && strlen(final_result.language) > 0) {
+                            strncpy(session->last_detected_language, final_result.language,
+                                    sizeof(session->last_detected_language) - 1);
+                            session->last_detected_language[sizeof(session->last_detected_language) - 1] = '\0';
+                        }
+                    }
+                    ethervox_stt_result_free(&final_result);
+                }
+                ethervox_audio_buffer_free(&audio_chunk);
+                return ETHERVOX_SUCCESS;
+            }
+        }
+
+        ethervox_audio_buffer_free(&audio_chunk);
+    }
+
+    // Timeout reached - finalize whatever was accumulated as a best effort.
+    if (speech_detected) {
+        ethervox_stt_result_t final_result = {0};
+        if (ethervox_stt_finalize(&session->stt_runtime, &final_result) == 0) {
+            if (final_result.text && strlen(final_result.text) > 0) {
+                *text_out = strdup(final_result.text);
+            }
+            ethervox_stt_result_free(&final_result);
+        }
+    }
+
+    return ETHERVOX_SUCCESS;
+}
+
 // ============================================================================
 // Conversation Tool Callbacks
 // ============================================================================
@@ -136,17 +312,18 @@ static uint64_t get_time_ms(void) {
 /**
  * @brief Callback for speak tool - handles TTS synthesis and playback
  *
- * ARCHITECTURE CHANGE (Granite Speech integration): this is desktop-only
- * (g_global_tts is the Piper backend, only linked when
- * NOT TARGET_PLATFORM STREQUAL "IOS" AND NOT ANDROID, see CMakeLists.txt) -
- * confirmed intentional, matching the product decision to use platform-native
- * TTS (Android TextToSpeech / iOS AVSpeechSynthesizer) everywhere, so this is
- * NOT something to "fix" by porting Piper to mobile. On mobile, `on_speak`
- * should instead hand the text (and, longer-term, the `emotion` parameter
- * speak.c's speaker_id mapping is derived from - see that file) to the
- * platform layer, which invokes the native TTS engine and reports back
- * speaking-started/interrupted through the same callback shape used here,
- * so the Governor and barge-in state machine stay platform-agnostic.
+ * Dispatches to one of three paths, decided once per call:
+ *   1. tts_enabled == false (Mode 4, voice-to-text): no audio at all, just
+ *      report the text via on_response_text for display/captions.
+ *   2. config.on_speak_request set (mobile/platform-native TTS): hand the
+ *      text off to the platform's TTS engine and block this thread until
+ *      ethervox_conversation_notify_speaking_done() is called (mirrors the
+ *      desktop Piper wait-for-playback-empty loop below, just signaled by
+ *      the platform's async TTS completion instead of polling a ring buffer).
+ *   3. Neither of the above (desktop, unchanged): synthesize and play
+ *      through the existing Piper + AEC + CoreAudio/ALSA/etc. path.
+ * This keeps the Governor and barge-in state machine platform-agnostic -
+ * see conversation.h's on_speak_request doc comment for the callback shape.
  */
 static int conversation_on_speak(const char* text, const char* language,
                                   bool wait_for_response, bool allow_interrupt,
@@ -160,10 +337,50 @@ static int conversation_on_speak(const char* text, const char* language,
                       text, language ? language : "auto", wait_for_response, allow_interrupt, speaker_id);
     
     pthread_mutex_lock(&session->mutex);
-    session->state = ETHERVOX_CONV_STATE_SPEAKING;
+    conversation_set_state(session, ETHERVOX_CONV_STATE_SPEAKING);
     pthread_mutex_unlock(&session->mutex);
+
+    // Response text is reported for display regardless of whether it ends up
+    // synthesized to audio (Mode 4 shows it but never speaks it).
+    if (session->config.on_response_text) {
+        session->config.on_response_text(text, language, session->config.callback_user_data);
+    }
+
+    if (!session->config.tts_enabled) {
+        ETHERVOX_LOG_INFO("[Speak Tool] tts_enabled=false (Mode 4/voice-to-text), text-only");
+        return ETHERVOX_SUCCESS;
+    }
+
+    // Mobile/platform-native TTS path - fire the callback, then block until
+    // the platform reports completion (or we're interrupted/timed out).
+    if (session->config.on_speak_request) {
+        pthread_mutex_lock(&session->mutex);
+        session->speaking_done = false;
+        pthread_mutex_unlock(&session->mutex);
+
+        session->config.on_speak_request(text, language, speaker_id, allow_interrupt,
+                                          session->config.callback_user_data);
+
+        pthread_mutex_lock(&session->mutex);
+        struct timespec deadline;
+        clock_gettime(CLOCK_REALTIME, &deadline);
+        deadline.tv_sec += 30;  // Safety net - never hang forever if the platform
+                                 // TTS listener callback is dropped/never fires
+        while (!session->speaking_done && !session->interrupt_requested &&
+               !session->thread_should_exit) {
+            int wait_ret = pthread_cond_timedwait(&session->speaking_done_cond, &session->mutex,
+                                                   &deadline);
+            if (wait_ret == ETIMEDOUT) {
+                ETHERVOX_LOG_WARN("[Speak Tool] Timed out waiting for platform TTS completion");
+                break;
+            }
+        }
+        pthread_mutex_unlock(&session->mutex);
+
+        return ETHERVOX_SUCCESS;
+    }
     
-    // Use explicit language if provided, otherwise auto-detect from text
+    // Desktop path (Piper). Use explicit language if provided, otherwise auto-detect from text
     const char* target_language = language;
     if (!target_language) {
         // Auto-detect from assistant's text when language not specified
@@ -263,7 +480,8 @@ static int conversation_on_speak(const char* text, const char* language,
                                 // Check for interruption if allowed (user speaking detected)
                                 if (allow_interrupt && poll_count % 10 == 0) {
                                     pthread_mutex_lock(&session->mutex);
-                                    bool should_stop = session->thread_should_exit;
+                                    bool should_stop =
+                                        session->thread_should_exit || session->interrupt_requested;
                                     pthread_mutex_unlock(&session->mutex);
                                     
                                     if (should_stop) {
@@ -319,7 +537,7 @@ static int conversation_on_listen(char** user_input, int timeout_ms,
                       timeout_ms, prompt_hint ? prompt_hint : "none");
     
     pthread_mutex_lock(&session->mutex);
-    session->state = ETHERVOX_CONV_STATE_LISTENING;
+    conversation_set_state(session, ETHERVOX_CONV_STATE_LISTENING);
     pthread_mutex_unlock(&session->mutex);
     
     if (prompt_hint) {
@@ -334,104 +552,26 @@ static int conversation_on_listen(char** user_input, int timeout_ms,
         return ETHERVOX_ERROR_INVALID_ARGUMENT;  // Failure - no STT available
     }
     
-    // Start audio capture with timeout
-    uint64_t start_time = get_time_ms();
-    ethervox_audio_buffer_t audio_chunk = {0};
-    
-    // Use the existing STT system to capture and transcribe speech
-    // This is the same flow used in the main conversation loop
     printf("🎤 Listening");
     fflush(stdout);
-    
-    // Accumulate audio until speech detected or timeout
-    ethervox_audio_buffer_t accumulated_audio = {0};
-    bool speech_detected = false;
-    int silence_frames = 0;
-    const int silence_threshold = 10;  // frames of silence before considering speech ended
-    
-    while ((get_time_ms() - start_time) < (uint64_t)timeout_ms) {
-        ethervox_result_t audio_result = ethervox_audio_read(&session->audio_runtime, &audio_chunk);
-        if (ethervox_is_error(audio_result) || audio_chunk.size == 0) {
-            break;
+
+    char* text = NULL;
+    capture_utterance_with_vad(session, timeout_ms, &text);
+
+    if (text) {
+        *user_input = text;  // Ownership transfers to the caller (strdup'd)
+        ETHERVOX_LOG_INFO("Transcribed from listen tool: %s", *user_input);
+        printf(" [OK]\n");
+        if (session->config.on_user_transcript) {
+            session->config.on_user_transcript(
+                *user_input, session->last_detected_language[0] ? session->last_detected_language : NULL,
+                session->config.callback_user_data);
         }
-        
-        // Check for voice activity using RMS energy
-        float energy = ethervox_audio_calculate_rms_energy(
-            audio_chunk.data, audio_chunk.size / sizeof(int16_t)
-        );
-        
-        // Use a reasonable default threshold (TODO: get from settings)
-        const float energy_threshold = 0.02f;
-        if (energy > energy_threshold) {
-            speech_detected = true;
-            silence_frames = 0;
-            printf(".");
-            fflush(stdout);
-            
-            // Process audio chunk through STT
-            ethervox_stt_result_t stt_result;
-            ethervox_result_t stt_ret = ethervox_stt_process(&session->stt_runtime, &audio_chunk, &stt_result);
-            if (ethervox_is_success(stt_ret) && stt_result.is_final && stt_result.text && strlen(stt_result.text) > 0) {
-                // Got final transcription
-                *user_input = strdup(stt_result.text);
-                ETHERVOX_LOG_INFO("Transcribed from listen tool: %s", *user_input);
-                
-                // Capture detected language from Granite Speech STT for multilingual TTS
-                if (stt_result.language && strlen(stt_result.language) > 0) {
-                    strncpy(session->last_detected_language, stt_result.language, 
-                           sizeof(session->last_detected_language) - 1);
-                    session->last_detected_language[sizeof(session->last_detected_language) - 1] = '\0';
-                    ETHERVOX_LOG_INFO("[Language Detection] STT detected language: %s", 
-                                     session->last_detected_language);
-                }
-                
-                printf(" [OK]\n");
-                ethervox_audio_buffer_free(&audio_chunk);
-                return ETHERVOX_SUCCESS;
-            }
-        } else if (speech_detected) {
-            silence_frames++;
-            if (silence_frames >= silence_threshold) {
-                printf(" [OK]\n");
-                // Speech ended - finalize transcription
-                ethervox_stt_result_t final_result;
-                if (ethervox_stt_finalize(&session->stt_runtime, &final_result) == 0) {
-                    if (final_result.text && strlen(final_result.text) > 0) {
-                        *user_input = strdup(final_result.text);
-                        ETHERVOX_LOG_INFO("Finalized transcription: %s", *user_input);
-                        
-                        // Capture detected language
-                        if (final_result.language && strlen(final_result.language) > 0) {
-                            strncpy(session->last_detected_language, final_result.language,
-                                   sizeof(session->last_detected_language) - 1);
-                            session->last_detected_language[sizeof(session->last_detected_language) - 1] = '\0';
-                            ETHERVOX_LOG_INFO("[Language Detection] Finalized STT language: %s",
-                                             session->last_detected_language);
-                        }
-                    }
-                }
-                ethervox_audio_buffer_free(&audio_chunk);
-                return ETHERVOX_SUCCESS;
-            }
-        }
-        
-        ethervox_audio_buffer_free(&audio_chunk);
+    } else {
+        printf(" ⏱️\n");
+        ETHERVOX_LOG_INFO("Listen timeout reached after %dms", timeout_ms);
     }
     
-    printf(" ⏱️\n");
-    
-    // Timeout reached - try to get partial transcription
-    if (speech_detected) {
-        ethervox_stt_result_t final_result;
-        if (ethervox_stt_finalize(&session->stt_runtime, &final_result) == 0) {
-            if (final_result.text && strlen(final_result.text) > 0) {
-                *user_input = strdup(final_result.text);
-                ETHERVOX_LOG_INFO("Partial transcription on timeout: %s", *user_input);
-            }
-        }
-    }
-    
-    ETHERVOX_LOG_INFO("Listen timeout reached after %dms", timeout_ms);
     return ETHERVOX_SUCCESS;  // Return 0 for success even on timeout
 }
 
@@ -444,9 +584,10 @@ static int conversation_on_interrupt(void* user_data) {
         return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
-    // Check if thread should exit or conversation should stop
+    // Check if thread should exit, an explicit barge-in was requested
+    // (ethervox_conversation_interrupt()), or conversation should stop
     pthread_mutex_lock(&session->mutex);
-    bool should_interrupt = session->thread_should_exit;
+    bool should_interrupt = session->thread_should_exit || session->interrupt_requested;
     pthread_mutex_unlock(&session->mutex);
     
     if (should_interrupt) {
@@ -549,10 +690,10 @@ static void* conversation_thread(void* arg) {
         
         if (always_listening) {
             // Always-listening mode: immediate listening state
-            session->state = ETHERVOX_CONV_STATE_LISTENING;
+            conversation_set_state(session, ETHERVOX_CONV_STATE_LISTENING);
         } else {
             // Wake word mode: wait for trigger
-            session->state = ETHERVOX_CONV_STATE_IDLE;
+            conversation_set_state(session, ETHERVOX_CONV_STATE_IDLE);
             
             while (!session->thread_should_exit && session->state == ETHERVOX_CONV_STATE_IDLE) {
                 pthread_cond_wait(&session->trigger_cond, &session->mutex);
@@ -563,24 +704,32 @@ static void* conversation_thread(void* arg) {
                 break;
             }
             
-            session->state = ETHERVOX_CONV_STATE_LISTENING;
+            conversation_set_state(session, ETHERVOX_CONV_STATE_LISTENING);
             printf("\n🎤 Wake word detected, listening...\n");
         }
         
+        // Reset per-turn interrupt flag now that we're about to start a new
+        // listening turn; a barge-in interrupt from the *previous* turn must
+        // not leak into this one.
+        session->interrupt_requested = false;
+        
         pthread_mutex_unlock(&session->mutex);
         
-        // Simple audio capture loop - continuously listen and transcribe
+        // Listen for one utterance, using the shared RMS-energy VAD +
+        // Granite Speech finalize() helper (see capture_utterance_with_vad's
+        // doc comment for why the old per-chunk is_final-trusting loop that
+        // used to live here never actually worked with Granite Speech).
         printf("🎤 Listening");
         fflush(stdout);
-        
-        char recognized_text[1024] = {0};
-        bool speech_detected = false;
-        
+
+        char* recognized_text = NULL;
+
         // Start STT and audio capture
         if (ethervox_stt_start(&session->stt_runtime) != 0) {
             ETHERVOX_LOG_ERROR("Failed to start STT");
+            conversation_notify_error(session, "Failed to start speech recognition");
             pthread_mutex_lock(&session->mutex);
-            session->state = ETHERVOX_CONV_STATE_IDLE;
+            conversation_set_state(session, ETHERVOX_CONV_STATE_IDLE);
             pthread_mutex_unlock(&session->mutex);
             usleep(100000);
             continue;
@@ -588,167 +737,64 @@ static void* conversation_thread(void* arg) {
         
         if (session->audio_runtime.driver.start_capture(&session->audio_runtime) != 0) {
             ETHERVOX_LOG_ERROR("Failed to start audio capture");
+            conversation_notify_error(session, "Failed to start microphone capture");
             ethervox_stt_stop(&session->stt_runtime);
             pthread_mutex_lock(&session->mutex);
-            session->state = ETHERVOX_CONV_STATE_IDLE;
+            conversation_set_state(session, ETHERVOX_CONV_STATE_IDLE);
             pthread_mutex_unlock(&session->mutex);
             usleep(100000);
             continue;
         }
-        
-        // Streaming audio capture: continuously feed to Granite Speech
-        // ARCHITECTURE CHANGE (Granite Speech integration): this whole
-        // capture loop currently free-runs Granite Speech per 100ms chunk and trusts
-        // its own VAD/is_final flag to find utterance boundaries (see below).
-        // Granite Speech is NOT a streaming/chunk-native ASR model - IBM's
-        // usage pattern is "accumulate one bounded utterance, transcribe
-        // once". Keep this loop's VAD/chunking responsibility exactly as-is
-        // (it decides *when* an utterance ends), but change what happens at
-        // that boundary: buffer the accumulated PCM for the utterance and
-        // call granite_speech_transcribe_chunk(pcm, len, ASR_PROMPT, NULL)
-        // once, instead of feeding every 100ms chunk into Granite Speech
-        // incrementally. Partial/live-caption text (line ~613, `is_partial`)
-        // has no Granite Speech equivalent - either drop partial captions in
-        // Mode 1, or keep a cheap local VAD-only "listening..." indicator
-        // with no transcript until the utterance is finalized.
-        uint64_t listen_start = get_time_ms();
-        
-        while (!speech_detected && !session->thread_should_exit) {
-            ethervox_audio_buffer_t audio_chunk;
-            audio_chunk.size = 1600;  // 100ms at 16kHz
-            audio_chunk.channels = 1;
-            audio_chunk.data = (float*)calloc(audio_chunk.size, sizeof(float));
-            
-            if (!audio_chunk.data) {
-                break;
-            }
-            
-            ethervox_result_t read_result = session->audio_runtime.driver.read_audio(&session->audio_runtime, &audio_chunk);
-            if (ethervox_is_error(read_result) || audio_chunk.size == 0) {
-                free(audio_chunk.data);
-                usleep(10000);  // Wait and try again
-                continue;
-            }
-            
-            int samples_read = (int)audio_chunk.size;
-            
-            // Apply AEC to remove speaker output from microphone input
-            // AEC requires 10ms frames (160 samples at 16kHz), so process in chunks
-            //
-            // ARCHITECTURE CHANGE (barge-in, Granite Speech integration): this
-            // Speex-based AEC path (src/audio/aec_speex.c + reference_buffer.c)
-            // is real infrastructure but is desktop-only by build config -
-            // CMakeLists.txt explicitly skips Speex DSP on Android ("Android
-            // uses platform audio processing") and there is no iOS AEC path
-            // either. For Mode 1 barge-in on mobile, don't assume this AEC
-            // path is available: either (a) integrate Android's built-in
-            // android.media.audiofx.AcousticEchoCanceler /
-            // AutomaticGainControl platform effects and an iOS-side
-            // equivalent (AVAudioEngine voice-processing I/O unit), wired in
-            // per-platform, or (b) start simpler and half-duplex-gate the mic
-            // (mute capture while platform-native TTS is speaking, with an
-            // explicit tap-to-interrupt affordance as the primary barge-in
-            // path instead of true full-duplex VAD) - see plan.md Open
-            // Questions for the tradeoff. Don't silently ship Mode 1 assuming
-            // this Speex block runs on phones; it won't.
-            if (session->aec_initialized && session->aec_context) {
-                const size_t aec_frame_size = 160;  // 10ms at 16kHz
-                size_t offset = 0;
-                
-                while (offset < samples_read) {
-                    size_t frame_samples = (offset + aec_frame_size <= samples_read) ? 
-                                          aec_frame_size : (samples_read - offset);
-                    
-                    // Only process full frames (AEC needs exact frame size)
-                    if (frame_samples == aec_frame_size) {
-                        ethervox_result_t aec_result = ethervox_aec_process(session->aec_context, 
-                                                              audio_chunk.data + offset, 
-                                                              frame_samples);
-                        if (ethervox_is_error(aec_result)) {
-                            ETHERVOX_LOG_WARN("AEC processing failed at offset %zu: %d", offset, aec_result);
-                            break;  // Stop processing on error
-                        }
-                    }
-                    // else: partial frame at end, skip AEC (will be processed with next chunk)
-                    
-                    offset += frame_samples;
-                }
-            }
-            
-            // Feed all audio to Granite Speech - let it decide on VAD and boundaries
-            ethervox_stt_result_t stt_result = {0};
-            ethervox_result_t stt_ret = ethervox_stt_process(&session->stt_runtime, &audio_chunk, &stt_result);
-            
-            // Check for results (Granite Speech returns is_final when it detects sentence boundary)
-            if (ethervox_is_success(stt_ret) && stt_result.text && strlen(stt_result.text) > 3) {
-                // Show partial results
-                if (stt_result.is_partial) {
-                    printf("\r🎤 %s", stt_result.text);
-                    fflush(stdout);
-                }
-                
-                // Trust Granite Speech's is_final flag - it knows speech boundaries
-                if (stt_result.is_final) {
-                    // Filter Granite Speech hallucinations
-                    if (strstr(stt_result.text, "Transcribed by") == NULL &&
-                        strstr(stt_result.text, "R.A.R.E.") == NULL &&
-                        strstr(stt_result.text, "Thank you") != stt_result.text) {
-                        
-                        strncpy(recognized_text, stt_result.text, sizeof(recognized_text) - 1);
-                        speech_detected = true;
-                        printf("\r[OK] Final: %s\n", stt_result.text);
-                        
-                        // Capture detected language from Granite Speech
-                        if (stt_result.language && strlen(stt_result.language) > 0) {
-                            strncpy(session->last_detected_language, stt_result.language,
-                                   sizeof(session->last_detected_language) - 1);
-                            session->last_detected_language[sizeof(session->last_detected_language) - 1] = '\0';
-                            ETHERVOX_LOG_INFO("[Language Detection] Granite Speech detected: %s",
-                                             session->last_detected_language);
-                        }
-                    }
-                }
-                
-                // Free STT result memory
-                ethervox_stt_result_free(&stt_result);
-            }
-            
-            free(audio_chunk.data);
-            
-            // Timeout check (30 seconds max)
-            if (get_time_ms() - listen_start > 30000) {
-                printf("\r⏱️  Timeout\n");
-                break;
-            }
-            
-            usleep(10000);  // 10ms sleep
-        }
-        
+
+        // ARCHITECTURE CHANGE (barge-in, Granite Speech integration): the
+        // Speex-based AEC path applied inside capture_utterance_with_vad is
+        // real infrastructure but is desktop-only by build config -
+        // CMakeLists.txt explicitly skips Speex DSP on Android ("Android
+        // uses platform audio processing") and there is no iOS AEC path
+        // either. For Mode 1 barge-in on mobile, don't assume this AEC path
+        // is available: either (a) integrate Android's built-in
+        // android.media.audiofx.AcousticEchoCanceler / AutomaticGainControl
+        // platform effects and an iOS-side equivalent (AVAudioEngine
+        // voice-processing I/O unit), wired in per-platform, or (b) start
+        // simpler and half-duplex-gate the mic (mute capture while
+        // platform-native TTS is speaking, with an explicit tap-to-interrupt
+        // affordance as the primary barge-in path instead of true
+        // full-duplex VAD) - see plan.md Open Questions for the tradeoff.
+        capture_utterance_with_vad(session, 30000, &recognized_text);
+
         ethervox_stt_stop(&session->stt_runtime);
         session->audio_runtime.driver.stop_capture(&session->audio_runtime);
         
         pthread_mutex_lock(&session->mutex);
         
-        if (!speech_detected || strlen(recognized_text) == 0) {
+        if (!recognized_text || recognized_text[0] == '\0') {
+            free(recognized_text);
             // No speech detected in always-listening mode - keep looping
             if (always_listening) {
-                session->state = ETHERVOX_CONV_STATE_LISTENING;
+                conversation_set_state(session, ETHERVOX_CONV_STATE_LISTENING);
                 pthread_mutex_unlock(&session->mutex);
                 usleep(100000);  // 100ms sleep to avoid tight loop
                 continue;
             }
             // In wake word mode, return to idle
-            session->state = ETHERVOX_CONV_STATE_IDLE;
+            conversation_set_state(session, ETHERVOX_CONV_STATE_IDLE);
             pthread_mutex_unlock(&session->mutex);
             continue;
         }
         
         // Speech detected - process with Governor
-        session->state = ETHERVOX_CONV_STATE_PROCESSING;
+        conversation_set_state(session, ETHERVOX_CONV_STATE_PROCESSING);
         pthread_mutex_unlock(&session->mutex);
         
         printf("\n👤 User: %s\n", recognized_text);
         ETHERVOX_LOG_INFO("Processing user input with Governor: %s", recognized_text);
+
+        if (session->config.on_user_transcript) {
+            session->config.on_user_transcript(
+                recognized_text,
+                session->last_detected_language[0] ? session->last_detected_language : NULL,
+                session->config.callback_user_data);
+        }
         
         // Send to Governor with execution context for tool-based conversational AI
         if (session->governor) {
@@ -823,18 +869,20 @@ static void* conversation_thread(void* arg) {
         // Return to appropriate state based on mode
         if (always_listening) {
             // In always-listening mode, immediately go back to listening
-            session->state = ETHERVOX_CONV_STATE_LISTENING;
+            conversation_set_state(session, ETHERVOX_CONV_STATE_LISTENING);
             pthread_mutex_unlock(&session->mutex);
             ETHERVOX_LOG_DEBUG("Continuing in always-listening mode...");
         } else {
             // In wake word mode, return to idle and wait for next trigger
-            session->state = ETHERVOX_CONV_STATE_IDLE;
+            conversation_set_state(session, ETHERVOX_CONV_STATE_IDLE);
             pthread_mutex_unlock(&session->mutex);
         }
+
+        free(recognized_text);
     }
     
     pthread_mutex_lock(&session->mutex);
-    session->state = ETHERVOX_CONV_STATE_UNINITIALIZED;
+    conversation_set_state(session, ETHERVOX_CONV_STATE_UNINITIALIZED);
     session->thread_running = false;
     pthread_mutex_unlock(&session->mutex);
     
@@ -863,6 +911,12 @@ ethervox_conversation_config_t ethervox_conversation_get_default_config(void) {
     // Audio feedback
     config.enable_beep_on_wake = true;
     config.enable_beep_on_listen_end = true;
+    
+    // TTS is enabled by default (Mode 1 conversation). Mode 4 (voice-to-text)
+    // callers should explicitly set this to false so conversation_on_speak()
+    // skips synthesis entirely and just reports response text via
+    // on_response_text.
+    config.tts_enabled = true;
     
     // Always-listening mode (enabled on desktop platforms with sufficient resources)
 #if defined(ETHERVOX_PLATFORM_MACOS) || defined(ETHERVOX_PLATFORM_LINUX) || defined(ETHERVOX_PLATFORM_WINDOWS)
@@ -897,8 +951,11 @@ ethervox_conversation_session_t* ethervox_conversation_init(
     // Initialize threading primitives
     pthread_mutex_init(&session->mutex, NULL);
     pthread_cond_init(&session->trigger_cond, NULL);
+    pthread_cond_init(&session->speaking_done_cond, NULL);
     session->thread_running = false;
     session->thread_should_exit = false;
+    session->interrupt_requested = false;
+    session->speaking_done = false;
     session->state = ETHERVOX_CONV_STATE_UNINITIALIZED;
     
     // Initialize STT and audio
@@ -1075,7 +1132,7 @@ ethervox_result_t ethervox_conversation_trigger(ethervox_conversation_session_t*
     
     // Only trigger if idle
     if (session->state == ETHERVOX_CONV_STATE_IDLE) {
-        session->state = ETHERVOX_CONV_STATE_LISTENING;
+        conversation_set_state(session, ETHERVOX_CONV_STATE_LISTENING);
         pthread_cond_signal(&session->trigger_cond);
         ETHERVOX_LOG_DEBUG("Conversation triggered by wake word");
     } else {
@@ -1086,6 +1143,56 @@ ethervox_result_t ethervox_conversation_trigger(ethervox_conversation_session_t*
     
     return ETHERVOX_SUCCESS;
 }
+
+ethervox_result_t ethervox_conversation_interrupt(ethervox_conversation_session_t* session) {
+    if (!session) {
+        ETHERVOX_LOG_ERROR("conversation_interrupt: NULL session");
+        return -EINVAL;
+    }
+    
+    pthread_mutex_lock(&session->mutex);
+    
+    if (!session->thread_running) {
+        pthread_mutex_unlock(&session->mutex);
+        ETHERVOX_LOG_WARN("conversation_interrupt: thread not running");
+        return -EINVAL;
+    }
+    
+    session->interrupt_requested = true;
+    
+    // Cancel any in-flight Governor generation (Mode 1/4 barge-in during
+    // THINKING); this is a no-op if the Governor isn't currently generating.
+    if (session->governor) {
+        ethervox_governor_request_interrupt(session->governor);
+    }
+    
+    // Wake anything blocked on speaking_done_cond (mobile TTS wait in
+    // conversation_on_speak()) and trigger_cond (wake-word wait) so the
+    // interrupt takes effect immediately instead of waiting for a timeout.
+    pthread_cond_broadcast(&session->speaking_done_cond);
+    pthread_cond_broadcast(&session->trigger_cond);
+    
+    ETHERVOX_LOG_INFO("Conversation interrupted (barge-in)");
+    
+    pthread_mutex_unlock(&session->mutex);
+    
+    return ETHERVOX_SUCCESS;
+}
+
+ethervox_result_t ethervox_conversation_notify_speaking_done(ethervox_conversation_session_t* session) {
+    if (!session) {
+        ETHERVOX_LOG_ERROR("conversation_notify_speaking_done: NULL session");
+        return -EINVAL;
+    }
+    
+    pthread_mutex_lock(&session->mutex);
+    session->speaking_done = true;
+    pthread_cond_broadcast(&session->speaking_done_cond);
+    pthread_mutex_unlock(&session->mutex);
+    
+    return ETHERVOX_SUCCESS;
+}
+
 
 ethervox_conversation_state_t ethervox_conversation_get_state(
     const ethervox_conversation_session_t* session
@@ -1164,6 +1271,7 @@ void ethervox_conversation_cleanup(ethervox_conversation_session_t* session) {
     // Destroy threading primitives
     pthread_mutex_destroy(&session->mutex);
     pthread_cond_destroy(&session->trigger_cond);
+    pthread_cond_destroy(&session->speaking_done_cond);
     
     free(session);
     
