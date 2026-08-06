@@ -653,17 +653,28 @@ static void* conversation_thread(void* arg) {
         // capitalized ASR, never speaker-attributed (that's Mode 2/PLUS only).
         stt_config.backend = ETHERVOX_STT_BACKEND_GRANITE_SPEECH;
 
-        // Granite Speech ships as a (model, mmproj) GGUF pair - both required.
-        const char* home = getenv("HOME");
+        // Prefer the model/mmproj paths the caller resolved and passed in via
+        // ethervox_conversation_config_t.stt (e.g. Android JNI resolves these
+        // against the app's files dir, since getenv("HOME") is not a usable
+        // model location on Android/iOS). Only fall back to the desktop
+        // convenience default (~/.ethervox/models/granite-speech/) when the
+        // caller left both NULL, matching this field's documented behavior
+        // in conversation.h.
         static char granite_speech_model_path[512];
         static char granite_speech_mmproj_path[512];
-        if (home) {
-            snprintf(granite_speech_model_path, sizeof(granite_speech_model_path),
-                     "%s/.ethervox/models/granite-speech/granite-speech-4.1-2b.Q4_K_M.gguf", home);
-            snprintf(granite_speech_mmproj_path, sizeof(granite_speech_mmproj_path),
-                     "%s/.ethervox/models/granite-speech/mmproj-granite-speech-4.1-2b-Q4_K_M.gguf", home);
-            stt_config.model_path = granite_speech_model_path;
-            stt_config.mmproj_path = granite_speech_mmproj_path;
+        if (session->config.stt.model_path && session->config.stt.mmproj_path) {
+            stt_config.model_path = session->config.stt.model_path;
+            stt_config.mmproj_path = session->config.stt.mmproj_path;
+        } else {
+            const char* home = getenv("HOME");
+            if (home) {
+                snprintf(granite_speech_model_path, sizeof(granite_speech_model_path),
+                         "%s/.ethervox/models/granite-speech/granite-speech-4.1-2b.Q4_K_M.gguf", home);
+                snprintf(granite_speech_mmproj_path, sizeof(granite_speech_mmproj_path),
+                         "%s/.ethervox/models/granite-speech/mmproj-granite-speech-4.1-2b-Q4_K_M.gguf", home);
+                stt_config.model_path = granite_speech_model_path;
+                stt_config.mmproj_path = granite_speech_mmproj_path;
+            }
         }
         
         if (ethervox_stt_init(&session->stt_runtime, &stt_config) == 0) {
