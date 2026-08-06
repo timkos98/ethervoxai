@@ -1162,6 +1162,31 @@ void* ethervox_tts_piper_get_phonemizer(void* piper_impl) {
     return piper->phonemizer;
 }
 
+/**
+ * Set the active speaker_id for the next synthesis call.
+ *
+ * Wires the Governor's "speak" tool emotion->speaker_id mapping (see
+ * src/plugins/conversation_tools/speak.c) through to actual TTS output -
+ * previously computed but never applied (tracked as a TODO there). Only
+ * meaningful for multi-speaker models (e.g. de_DE-thorsten_emotional /
+ * en_US-libritts_r); single-speaker models silently ignore the sid input at
+ * synthesis time regardless; has_speaker_id_input governs whether the ONNX
+ * tensor is even constructed (see ethervox_tts_piper_synthesize above).
+ */
+ethervox_result_t ethervox_tts_piper_set_speaker_id(void* piper_impl, int speaker_id) {
+    piper_context_t* piper = (piper_context_t*)piper_impl;
+    if (!piper) {
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
+    if (!piper->has_speaker_id_input) {
+        ETHERVOX_LOG_DEBUG("[Piper] set_speaker_id(%d): loaded model has no 'sid' input, ignoring",
+                            speaker_id);
+        return ETHERVOX_ERROR_NOT_SUPPORTED;
+    }
+    piper->config.speaker_id = speaker_id;
+    return ETHERVOX_SUCCESS;
+}
+
 void ethervox_tts_piper_destroy(ethervox_tts_context_t* ctx) {
     piper_context_t* piper = (piper_context_t*)ctx;
     if (!piper) return;

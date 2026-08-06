@@ -1,16 +1,18 @@
 /**
  * @file conversation.h
- * @brief Real-time voice conversation system with Vosk STT and Piper TTS
+ * @brief Real-time voice conversation system with Granite Speech ASR and
+ *        platform-native TTS (desktop: Piper; Android/iOS: OS TTS)
  *
  * Provides lightweight voice interaction for LLM conversations, triggered by
- * wake word detection. Separate from transcription pipeline (Whisper-based)
- * which is for meeting notes and long-form dictation.
+ * wake word detection. Separate from transcription pipeline (also Granite
+ * Speech-based, PLUS variant) which is for meeting notes and long-form
+ * dictation with speaker attribution.
  *
  * Architecture:
  * - Wake word detection → Signal conversation thread
- * - Vosk STT (real-time, ~0.3x latency) → Process speech
+ * - Granite Speech BASE ASR (one-shot per utterance) → Process speech
  * - Send to Governor → Get response
- * - Piper TTS → Speak response
+ * - TTS (desktop: Piper, mobile: platform-native) → Speak response
  * - Return to wake word listening
  *
  * Thread model: Background thread waits on condition variable, processes
@@ -45,17 +47,21 @@ typedef enum {
 } ethervox_conversation_state_t;
 
 /**
- * @brief Vosk STT configuration
+ * @brief Granite Speech ASR configuration (subset relevant to Mode 1
+ * conversation; see ethervox/stt.h's ethervox_stt_config_t for the full,
+ * authoritative config used to actually initialize the backend - these
+ * fields exist for API-level documentation/defaults only)
  */
 typedef struct {
-    const char* model_path;            // Path to Vosk model directory
-    uint32_t sample_rate;              // Audio sample rate (16000 Hz typical)
-    uint32_t max_alternatives;         // Number of recognition alternatives
-    bool partial_results;              // Get interim results while speaking
-} ethervox_vosk_config_t;
+    const char* model_path;            // Path to Granite Speech GGUF (BASE variant)
+    const char* mmproj_path;           // Path to companion mmproj GGUF (audio projector)
+    uint32_t sample_rate;              // Audio sample rate (16000 Hz, fixed by the encoder)
+} ethervox_granite_speech_config_t;
 
 /**
- * @brief Piper TTS configuration
+ * @brief Piper TTS configuration (desktop only - Android/iOS use platform-
+ * native TTS, which has no equivalent model-path config; see
+ * src/dialogue/voice_conversation.c's conversation_on_speak)
  */
 typedef struct {
     const char* model_path;            // Path to Piper .onnx model
@@ -68,8 +74,8 @@ typedef struct {
  * @brief Conversation session configuration
  */
 typedef struct {
-    ethervox_vosk_config_t vosk;       // STT configuration
-    ethervox_piper_config_t piper;     // TTS configuration
+    ethervox_granite_speech_config_t stt;  // ASR configuration (BASE variant)
+    ethervox_piper_config_t piper;         // TTS configuration (desktop only)
     
     int listen_timeout_ms;             // Silence timeout to stop listening
     int conversation_timeout_ms;       // Max conversation duration

@@ -15,6 +15,7 @@ extern ethervox_result_t ethervox_tts_piper_synthesize(ethervox_tts_context_t* c
 extern ethervox_result_t ethervox_tts_piper_synthesize_ipa(ethervox_tts_context_t* ctx, const char* ipa_phonemes, ethervox_tts_audio_t* output);
 extern void ethervox_tts_piper_destroy(ethervox_tts_context_t* ctx);
 extern void* ethervox_tts_piper_get_phonemizer(void* piper_impl);
+extern ethervox_result_t ethervox_tts_piper_set_speaker_id(void* piper_impl, int speaker_id);
 
 // Context structure
 struct ethervox_tts_context {
@@ -128,6 +129,23 @@ ethervox_result_t ethervox_tts_synthesize_ipa(ethervox_tts_context_t* ctx,
 
 bool ethervox_tts_is_ready(const ethervox_tts_context_t* ctx) {
     return ctx != NULL && ctx->impl != NULL;
+}
+
+ethervox_result_t ethervox_tts_set_speaker_id(ethervox_tts_context_t* ctx, int speaker_id) {
+    if (!ctx || !ctx->impl) {
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
+    if (ctx->backend != ETHERVOX_TTS_BACKEND_PIPER) {
+        // Platform-native TTS (Android TextToSpeech / iOS AVSpeechSynthesizer)
+        // has no per-utterance speaker/emotion concept - documented no-op,
+        // not a missing feature (see tts.h doc comment).
+        return ETHERVOX_ERROR_NOT_SUPPORTED;
+    }
+#ifdef HAVE_PIPER_TTS
+    return ethervox_tts_piper_set_speaker_id(ctx->impl, speaker_id);
+#else
+    return ETHERVOX_ERROR_NOT_SUPPORTED;
+#endif
 }
 
 ethervox_tts_backend_t ethervox_tts_get_backend(const ethervox_tts_context_t* ctx) {

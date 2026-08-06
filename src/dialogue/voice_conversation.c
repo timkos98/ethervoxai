@@ -2,7 +2,7 @@
  * @file voice_conversation.c
  * @brief Real-time voice conversation implementation
  *
- * Manages background thread for wake word → Vosk STT → Governor → Piper TTS
+ * Manages background thread for wake word → Granite Speech STT → Governor → Piper TTS
  * conversation flow. Separate from transcription pipeline.
  *
  * ARCHITECTURE CHANGE (Granite Speech integration): this is the desktop
@@ -92,7 +92,7 @@ struct ethervox_conversation_session {
     uint64_t conversation_start_time_ms;
     uint64_t last_audio_time_ms;
     
-    // Vosk STT runtime
+    // STT runtime (Granite Speech BASE backend)
     ethervox_stt_runtime_t stt_runtime;
     bool stt_initialized;
     
@@ -143,21 +143,21 @@ static uint64_t get_time_ms(void) {
  * TTS (Android TextToSpeech / iOS AVSpeechSynthesizer) everywhere, so this is
  * NOT something to "fix" by porting Piper to mobile. On mobile, `on_speak`
  * should instead hand the text (and, longer-term, the `emotion` parameter
- * currently computed but unused in speak.c's speaker_id mapping - see that
- * file) to the platform layer, which invokes the native TTS engine and
- * reports back speaking-started/interrupted through the same callback shape
- * used here, so the Governor and barge-in state machine stay platform-agnostic.
+ * speak.c's speaker_id mapping is derived from - see that file) to the
+ * platform layer, which invokes the native TTS engine and reports back
+ * speaking-started/interrupted through the same callback shape used here,
+ * so the Governor and barge-in state machine stay platform-agnostic.
  */
 static int conversation_on_speak(const char* text, const char* language,
-                                  bool wait_for_response, bool allow_interrupt, 
-                                  void* user_data) {
+                                  bool wait_for_response, bool allow_interrupt,
+                                  int speaker_id, void* user_data) {
     ethervox_conversation_session_t* session = (ethervox_conversation_session_t*)user_data;
     if (!session || !text) {
         return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
-    ETHERVOX_LOG_INFO("[Speak Tool] Synthesizing: %s (language=%s, wait=%d, interrupt=%d)",
-                      text, language ? language : "auto", wait_for_response, allow_interrupt);
+    ETHERVOX_LOG_INFO("[Speak Tool] Synthesizing: %s (language=%s, wait=%d, interrupt=%d, speaker_id=%d)",
+                      text, language ? language : "auto", wait_for_response, allow_interrupt, speaker_id);
     
     pthread_mutex_lock(&session->mutex);
     session->state = ETHERVOX_CONV_STATE_SPEAKING;
@@ -184,6 +184,14 @@ static int conversation_on_speak(const char* text, const char* language,
     
     // Synthesize and play audio with Piper TTS
     if (session->tts_initialized && session->tts_context) {
+        // Apply the emotion-derived speaker_id before synthesis (desktop/Piper
+        // only - a documented no-op on any other backend, see tts.h). Voice
+        // switching above (ethervox_switch_to_language) may have swapped the
+        // underlying model, so this must happen after it, not before.
+        if (speaker_id >= 0) {
+            ethervox_tts_set_speaker_id(session->tts_context, speaker_id);
+        }
+
         ethervox_tts_audio_t tts_output = {0};
         ethervox_result_t result = ethervox_tts_synthesize_text(session->tts_context, text, &tts_output);
         
@@ -320,8 +328,7 @@ static int conversation_on_listen(char** user_input, int timeout_ms,
     
     *user_input = NULL;
     
-    // TODO: Implement actual STT capture with Vosk
-    // For now, return placeholder
+    // Audio is fed to Granite Speech below; finalize() produces the transcript.
     if (!session->stt_initialized) {
         ETHERVOX_LOG_WARN("STT not initialized, cannot capture audio");
         return ETHERVOX_ERROR_INVALID_ARGUMENT;  // Failure - no STT available
@@ -369,7 +376,7 @@ static int conversation_on_listen(char** user_input, int timeout_ms,
                 *user_input = strdup(stt_result.text);
                 ETHERVOX_LOG_INFO("Transcribed from listen tool: %s", *user_input);
                 
-                // Capture detected language from Whisper STT for multilingual TTS
+                // Capture detected language from Granite Speech STT for multilingual TTS
                 if (stt_result.language && strlen(stt_result.language) > 0) {
                     strncpy(session->last_detected_language, stt_result.language, 
                            sizeof(session->last_detected_language) - 1);
@@ -496,21 +503,26 @@ static void* conversation_thread(void* arg) {
     }
     
     if (!session->stt_initialized) {
-        printf("🗣️  Initializing speech recognition (Whisper)...\n");
+        printf("🗣️  Initializing speech recognition (Granite Speech)...\n");
         ethervox_stt_config_t stt_config = ethervox_stt_get_default_config();
         stt_config.sample_rate = 16000;
-        stt_config.enable_partial_results = true;
-        
-        // Use Whisper streaming (already compiled in)
-        stt_config.backend = ETHERVOX_STT_BACKEND_WHISPER;
-        
-        // Set Whisper model path
+        stt_config.enable_partial_results = false;  // Granite Speech is one-shot per utterance, no partials
+
+        // Mode 1 (voice conversation) always uses the BASE variant - punctuated,
+        // capitalized ASR, never speaker-attributed (that's Mode 2/PLUS only).
+        stt_config.backend = ETHERVOX_STT_BACKEND_GRANITE_SPEECH;
+
+        // Granite Speech ships as a (model, mmproj) GGUF pair - both required.
         const char* home = getenv("HOME");
-        static char whisper_model_path[512];
+        static char granite_speech_model_path[512];
+        static char granite_speech_mmproj_path[512];
         if (home) {
-            snprintf(whisper_model_path, sizeof(whisper_model_path), 
-                     "%s/.ethervox/models/whisper/base.bin", home);
-            stt_config.model_path = whisper_model_path;
+            snprintf(granite_speech_model_path, sizeof(granite_speech_model_path),
+                     "%s/.ethervox/models/granite-speech/granite-speech-4.1-2b.Q4_K_M.gguf", home);
+            snprintf(granite_speech_mmproj_path, sizeof(granite_speech_mmproj_path),
+                     "%s/.ethervox/models/granite-speech/mmproj-granite-speech-4.1-2b-Q4_K_M.gguf", home);
+            stt_config.model_path = granite_speech_model_path;
+            stt_config.mmproj_path = granite_speech_mmproj_path;
         }
         
         if (ethervox_stt_init(&session->stt_runtime, &stt_config) == 0) {
@@ -584,9 +596,9 @@ static void* conversation_thread(void* arg) {
             continue;
         }
         
-        // Streaming audio capture: continuously feed to Whisper
+        // Streaming audio capture: continuously feed to Granite Speech
         // ARCHITECTURE CHANGE (Granite Speech integration): this whole
-        // capture loop currently free-runs Whisper per 100ms chunk and trusts
+        // capture loop currently free-runs Granite Speech per 100ms chunk and trusts
         // its own VAD/is_final flag to find utterance boundaries (see below).
         // Granite Speech is NOT a streaming/chunk-native ASR model - IBM's
         // usage pattern is "accumulate one bounded utterance, transcribe
@@ -594,7 +606,7 @@ static void* conversation_thread(void* arg) {
         // (it decides *when* an utterance ends), but change what happens at
         // that boundary: buffer the accumulated PCM for the utterance and
         // call granite_speech_transcribe_chunk(pcm, len, ASR_PROMPT, NULL)
-        // once, instead of feeding every 100ms chunk into Whisper
+        // once, instead of feeding every 100ms chunk into Granite Speech
         // incrementally. Partial/live-caption text (line ~613, `is_partial`)
         // has no Granite Speech equivalent - either drop partial captions in
         // Mode 1, or keep a cheap local VAD-only "listening..." indicator
@@ -663,11 +675,11 @@ static void* conversation_thread(void* arg) {
                 }
             }
             
-            // Feed all audio to Whisper - let it decide on VAD and boundaries
+            // Feed all audio to Granite Speech - let it decide on VAD and boundaries
             ethervox_stt_result_t stt_result = {0};
             ethervox_result_t stt_ret = ethervox_stt_process(&session->stt_runtime, &audio_chunk, &stt_result);
             
-            // Check for results (Whisper returns is_final when it detects sentence boundary)
+            // Check for results (Granite Speech returns is_final when it detects sentence boundary)
             if (ethervox_is_success(stt_ret) && stt_result.text && strlen(stt_result.text) > 3) {
                 // Show partial results
                 if (stt_result.is_partial) {
@@ -675,9 +687,9 @@ static void* conversation_thread(void* arg) {
                     fflush(stdout);
                 }
                 
-                // Trust Whisper's is_final flag - it knows speech boundaries
+                // Trust Granite Speech's is_final flag - it knows speech boundaries
                 if (stt_result.is_final) {
-                    // Filter Whisper hallucinations
+                    // Filter Granite Speech hallucinations
                     if (strstr(stt_result.text, "Transcribed by") == NULL &&
                         strstr(stt_result.text, "R.A.R.E.") == NULL &&
                         strstr(stt_result.text, "Thank you") != stt_result.text) {
@@ -686,12 +698,12 @@ static void* conversation_thread(void* arg) {
                         speech_detected = true;
                         printf("\r[OK] Final: %s\n", stt_result.text);
                         
-                        // Capture detected language from Whisper
+                        // Capture detected language from Granite Speech
                         if (stt_result.language && strlen(stt_result.language) > 0) {
                             strncpy(session->last_detected_language, stt_result.language,
                                    sizeof(session->last_detected_language) - 1);
                             session->last_detected_language[sizeof(session->last_detected_language) - 1] = '\0';
-                            ETHERVOX_LOG_INFO("[Language Detection] Whisper detected: %s",
+                            ETHERVOX_LOG_INFO("[Language Detection] Granite Speech detected: %s",
                                              session->last_detected_language);
                         }
                     }
@@ -832,13 +844,12 @@ static void* conversation_thread(void* arg) {
 ethervox_conversation_config_t ethervox_conversation_get_default_config(void) {
     ethervox_conversation_config_t config = {0};
     
-    // Vosk configuration
-    config.vosk.model_path = NULL; // Will auto-detect in ~/.ethervox/models/vosk/
-    config.vosk.sample_rate = 16000;
-    config.vosk.max_alternatives = 1;
-    config.vosk.partial_results = true;
+    // Granite Speech ASR configuration (BASE variant - Mode 1 conversation)
+    config.stt.model_path = NULL; // Will auto-detect in ~/.ethervox/models/granite-speech/
+    config.stt.mmproj_path = NULL; // Will auto-detect alongside model_path
+    config.stt.sample_rate = 16000;
     
-    // Piper configuration
+    // Piper configuration (desktop only - see ethervox_piper_config_t doc comment)
     config.piper.model_path = NULL; // Will auto-detect in ~/.ethervox/models/piper/
     config.piper.config_path = NULL;
     config.piper.speed = 1.0f;

@@ -1,6 +1,6 @@
 /**
  * @file voice_tools.h
- * @brief Voice tools interface for Governor
+ * @brief Voice tools interface for Governor (Mode 2: Transcription, Granite Speech Plus/SAA)
  *
  * Copyright (c) 2024-2025 EthervoxAI Team
  * SPDX-License-Identifier: CC-BY-NC-SA-4.0
@@ -11,6 +11,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <time.h>
 #include "ethervox/stt.h"
 #include "ethervox/audio.h"
 #include "ethervox/memory_tools.h"
@@ -20,6 +21,23 @@
 extern "C" {
 #endif
 
+// Granite Speech Plus's finalize() is one-shot per call (see
+// granite_speech_backend.c) - there is no VAD-driven segment boundary like
+// Whisper had. Mode 2's capture thread instead accumulates audio for
+// GRANITE_SPEECH_CHUNK_SECONDS, calls finalize() to transcribe that chunk,
+// carries a bounded tail of the transcript forward as prefix_text (for
+// consistent [Speaker N]: numbering across chunks), then starts the next
+// chunk. Kept comfortably under the 60s accumulator cap (see stt_core.c)
+// to leave margin for the audio_capture_thread's own read/scheduling
+// latency.
+#define GRANITE_SPEECH_CHUNK_SECONDS 45
+// Upper bound on how much of the running transcript is carried forward as
+// prefix_text between chunks. Full-transcript carry-forward would keep
+// speaker numbering perfectly consistent but risks exceeding the model's
+// prompt budget (4096 ctx, shared with audio tokens) on long sessions - a
+// bounded tail is a pragmatic trade-off pending real on-device tuning.
+#define GRANITE_SPEECH_PREFIX_CARRY_MAX_CHARS 1500
+
 /**
  * Voice recording session state
  */
@@ -28,12 +46,14 @@ typedef struct {
     bool is_initialized;
     bool stop_requested;
     
-    // STT runtime
+    // STT runtime (always Granite Speech Plus/SAA for this mode)
     ethervox_stt_runtime_t stt_runtime;
     ethervox_audio_runtime_t audio_runtime;
     
-    // Model configuration
-    char* model_path;  // Allocated path to Whisper model
+    // Model configuration - Granite Speech ships as a (model, mmproj) GGUF
+    // pair; both paths are heap-allocated and owned by the session.
+    char* model_path;   // Path to granite-speech-4.1-2b-plus GGUF
+    char* mmproj_path;  // Path to the companion mmproj (audio projector) GGUF
     
     // Accumulated transcript
     char* full_transcript;
@@ -53,15 +73,25 @@ typedef struct {
     // Background processing thread
     void* capture_thread;  // pthread_t*
     
-    // Speaker tracking
-    int max_speaker_id;  // Highest speaker ID encountered in this session
-    char** speaker_names;  // Array of speaker names (NULL if anonymous)
+    // Chunked-decoding state (see GRANITE_SPEECH_CHUNK_SECONDS above):
+    // tracks when the current chunk started so audio_capture_thread knows
+    // when to finalize() and start the next chunk, and holds the bounded
+    // transcript tail passed back in as config.prefix_text.
+    time_t chunk_start_time;
+    char prefix_carry[GRANITE_SPEECH_PREFIX_CARRY_MAX_CHARS];
+    
+    // Speaker tracking. Granite Speech Plus's native SAA tags are
+    // 1-indexed ("[Speaker 1]: ..."), unlike the old 0-indexed heuristic
+    // format - max_speaker_id IS the speaker count directly (no +1).
+    int max_speaker_id;  // Highest speaker ID encountered in this session (0 = none yet)
+    char** speaker_names;  // Array of speaker names, 1-indexed (index 0 unused), NULL if anonymous
     int speaker_names_capacity;  // Allocated capacity for speaker_names array
     
     // Summarization state
     bool needs_summarization;  // Flag to trigger LLM summarization
     
 } ethervox_voice_session_t;
+
 
 /**
  * Initialize voice tools

@@ -106,12 +106,12 @@ static bool g_streaming_enabled = true;  // Token streaming enabled by default
 static bool g_engineering_mode = false;  // Engineering mode disabled by default
 
 // Voice system: Two separate pipelines
-// 1. Transcription pipeline (Whisper STT) - for meeting transcription, dictation
+// 1. Transcription pipeline (Granite Speech Plus STT) - for meeting transcription, dictation
 //    Triggered manually with /transcribe command, high-accuracy but slower
 static ethervox_voice_session_t* g_transcription_session = NULL;
 static volatile sig_atomic_t g_sigint_stop_transcribe = 0;
 
-// 2. Conversation pipeline (Vosk STT + Piper TTS) - for natural LLM interaction
+// 2. Conversation pipeline (Granite Speech BASE STT + Piper TTS) - for natural LLM interaction
 //    Triggered by wake word detection, real-time and responsive
 static ethervox_conversation_session_t* g_conversation_session = NULL;
 
@@ -119,7 +119,7 @@ static ethervox_conversation_session_t* g_conversation_session = NULL;
 static ethervox_governor_t* g_governor = NULL;
 static pthread_mutex_t g_governor_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-// Global persistent settings (Whisper/conversation/wake word)
+// Global persistent settings (Granite Speech/conversation/wake word)
 static ethervox_persistent_settings_t g_settings;
 
 // Global TTS instance (for standalone speak tool, shared with conversation)
@@ -164,7 +164,7 @@ static void stream_token_callback(const char* token, void* user_data) {
  */
 static ethervox_result_t standalone_speak_callback(const char* text, const char* language,
                                                    bool wait_for_response, bool allow_interrupt,
-                                                   void* user_data) {
+                                                   int speaker_id, void* user_data) {
   (void)language;
   (void)wait_for_response;
   (void)allow_interrupt;
@@ -184,6 +184,12 @@ static ethervox_result_t standalone_speak_callback(const char* text, const char*
     printf("🤖 Assistant: %s\n", text);
     printf("========================================================\n\n");
     return ETHERVOX_SUCCESS;
+  }
+
+  // Apply the emotion-derived speaker_id before synthesis (desktop/Piper
+  // only - a documented no-op on any other backend, see tts.h).
+  if (speaker_id >= 0) {
+    ethervox_tts_set_speaker_id(g_global_tts, speaker_id);
   }
 
   printf("\n🔊 Synthesizing: \"%s\"\n", text);
@@ -386,7 +392,7 @@ static void* wake_word_listen_thread(void* arg) {
 #if defined(__APPLE__) || defined(__linux__)
 // Command completion for readline
 static const char* commands[] = {"/help",          "/test",           "/test_voices",
-                                 "/testllm",       "/testwhisper",    "/optimize_tool_prompts",
+                                 "/testllm",       "/optimize_tool_prompts",
                                  "/load",          "/tools",          "/search",
                                  "/summary",       "/summarizeCache", "/export",
                                  "/archive",       "/stats",          "/startup",
@@ -532,7 +538,7 @@ static void init_menu_settings(ethervox_settings_t* settings, const char* model_
              getenv("HOME") ? getenv("HOME") : ".");
   }
 
-  // Copy Whisper model path from voice session or persistent settings
+  // Copy Granite Speech model path from voice session or persistent settings
   if (g_transcription_session && g_transcription_session->model_path) {
     strncpy(settings->whisper_model_path, g_transcription_session->model_path,
             sizeof(settings->whisper_model_path) - 1);
@@ -609,7 +615,7 @@ static void print_help(void) {
   printf("  /help              Show this help message\n");
   printf("  /settings          Open interactive settings menu\n");
   printf(
-      "  /config            View/manage persistent configuration (Whisper, conversation, wake "
+      "  /config            View/manage persistent configuration (Granite Speech, conversation, wake "
       "word)\n");
   printf("  /report            Submit bug report or feature request to GitHub\n");
   printf("  /test              Run comprehensive integration tests\n");
@@ -628,8 +634,7 @@ static void print_help(void) {
   printf("  /paths             List configured user paths\n");
   printf("  /setpath <label> <path>  Set a user path (e.g., /setpath Notes ~/Notes)\n");
   printf("  /safemode          Toggle file write permissions (safe mode on/off)\n");
-  printf("  /testwhisper       Test Whisper with JFK sample audio\n");
-  printf("  /transcribe        Start voice recording with Whisper STT\n");
+  printf("  /transcribe        Start voice recording with Granite Speech STT\n");
   printf(
       "  /stoptranscribe    Stop recording and get transcript (saves to "
       "~/.ethervox/transcripts/)\n");
@@ -641,14 +646,14 @@ static void print_help(void) {
   printf("  /wakeoff           Disable wake word detection\n");
   printf("  /wakerecord        Record a wake word template for better accuracy\n");
   printf("  /conversation      Show voice conversation status\n");
-  printf("  /convon            Enable voice conversation (Vosk + Piper)\n");
+  printf("  /convon            Enable voice conversation (Granite Speech + Piper)\n");
   printf("  /convoff           Disable voice conversation\n");
   printf("  /convtrigger       Manually trigger a conversation (for testing)\n");
   printf(
       "  /voice_training    Interactive pronunciation training (LLM generates text, you speak, "
       "system learns)\n");
   printf("  /models            List all available models and their status\n");
-  printf("  /modelstatus <type> Check status of models (governor/whisper/vosk/piper)\n");
+  printf("  /modelstatus <type> Check status of models (governor/granite-speech/granite-speech-plus/piper)\n");
   printf("  /modeldownload <type> <name> Download a specific model\n");
   printf("  /modeldelete <type> <name>   Delete a model to free disk space\n");
   printf("  /stats             Show memory statistics\n");
@@ -1235,7 +1240,7 @@ static void handle_pending_sigint_stop(void) {
     printf("\n\nShutting down gracefully...\n");
     return;
   }
-  printf("\n⏹️  Ctrl+C detected - stopping recording and transcribing with Whisper...\n\n");
+  printf("\n⏹️  Ctrl+C detected - stopping recording and transcribing with Granite Speech...\n\n");
   if (!stop_transcription_and_show(g_transcription_session)) {
     printf("[FAIL] Failed to stop recording after Ctrl+C\n");
   } else {
@@ -1689,31 +1694,6 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
   }
 
   // Voice commands
-  if (strcmp(line, "/testwhisper") == 0) {
-    // Test Whisper infrastructure with JFK sample
-    printf("\n🧪 Testing Whisper Infrastructure...\n\n");
-
-    if (!voice_session) {
-      printf("❌ Voice tools not initialized\n");
-      printf("   This should have been initialized at startup.\n");
-      printf("   Check the startup logs for errors.\n");
-      return;
-    }
-
-    ethervox_voice_session_t* session = (ethervox_voice_session_t*)voice_session;
-    ethervox_result_t test_result = ethervox_whisper_test_jfk(&session->stt_runtime);
-
-    if (ethervox_is_success(test_result)) {
-      printf("\n✅ Whisper test PASSED!\n");
-      printf("   The STT infrastructure is working correctly.\n");
-      printf("   You can now use /transcribe for live recording.\n");
-    } else {
-      printf("\n❌ Whisper test FAILED\n");
-      printf("   Check the logs above for details.\n");
-    }
-    return;
-  }
-
   if (strcmp(line, "/transcribe") == 0) {
     if (!voice_session) {
       printf("[FAIL] Voice tools not initialized\n");
@@ -1725,7 +1705,7 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
       return;
     }
 
-    printf("🎤 Starting voice recording with Whisper STT...\n");
+    printf("🎤 Starting voice recording with Granite Speech STT...\n");
     printf("   Speak now. Use /stoptranscribe when finished.\n");
     printf("   (Speaker detection enabled - pauses and energy shifts tracked)\n\n");
 
@@ -1815,7 +1795,7 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
       return;
     }
 
-    printf("⏹️  Stopping recording and transcribing with Whisper...\n\n");
+    printf("⏹️  Stopping recording and transcribing with Granite Speech...\n\n");
     ethervox_voice_session_t* session = (ethervox_voice_session_t*)voice_session;
     if (!stop_transcription_and_show(session)) {
       printf("⚠️  Not currently recording. Use /transcribe to start.\n");
@@ -1992,7 +1972,7 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
       printf("Status: Not initialized\n\n");
       printf("Voice conversation provides real-time interaction with the LLM:\n");
       printf("  • Wake word detection → Triggers listening\n");
-      printf("  • Vosk STT → Processes speech in real-time (<500ms)\n");
+      printf("  • Granite Speech STT → Processes speech per utterance\n");
       printf("  • Governor → Generates response\n");
       printf("  • Piper TTS → Speaks response naturally\n\n");
       printf("💡 Use /convon to enable voice conversation\n");
@@ -2024,7 +2004,7 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
       printf("Status: %s\n", state_str);
       printf("Active: %s\n", is_active ? "Yes" : "No");
       printf("\nConfiguration:\n");
-      printf("  STT Backend: Vosk (real-time)\n");
+      printf("  STT Backend: Granite Speech (BASE)\n");
       printf("  TTS Backend: Piper (neural)\n");
       printf("  Listen timeout: %d ms\n", 5000);  // From default config
       printf("  Conversation timeout: %d ms\n", 30000);
@@ -2103,7 +2083,7 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
     printf("\n🎤 Manually triggering conversation...\n");
     printf("========================================================\n");
     printf("Speak now! The system will listen for 5 seconds.\n");
-    printf("(Vosk STT will process your speech in real-time)\n");
+    printf("(Granite Speech STT will process your speech)\n");
     printf("========================================================\n\n");
 
     ethervox_result_t result = ethervox_conversation_trigger(g_conversation_session);
@@ -2369,9 +2349,10 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
     }
 
     // Check all model types
-    const char* model_types[] = {"Governor LLM", "Whisper STT", "Vosk STT", "Piper TTS"};
-    ethervox_model_type_t types[] = {ETHERVOX_MODEL_TYPE_GOVERNOR, ETHERVOX_MODEL_TYPE_WHISPER,
-                                     ETHERVOX_MODEL_TYPE_VOSK, ETHERVOX_MODEL_TYPE_PIPER};
+    const char* model_types[] = {"Governor LLM", "Granite Speech (BASE)", "Granite Speech (PLUS)",
+                                 "Piper TTS"};
+    ethervox_model_type_t types[] = {ETHERVOX_MODEL_TYPE_GOVERNOR, ETHERVOX_MODEL_TYPE_GRANITE_SPEECH,
+                                     ETHERVOX_MODEL_TYPE_GRANITE_SPEECH_PLUS, ETHERVOX_MODEL_TYPE_PIPER};
 
     for (int i = 0; i < 4; i++) {
       printf("=== %s ===\n", model_types[i]);
@@ -2413,7 +2394,7 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
     printf("  /modelstatus <type>            Check specific model type\n");
     printf("  /modeldownload <type> <name>   Download a model\n");
     printf("  /modeldelete <type> <name>     Delete a model\n");
-    printf("\nTypes: g_governor, whisper, vosk, piper\n\n");
+    printf("\nTypes: governor, granite-speech, granite-speech-plus, piper\n\n");
     return;
   }
 
@@ -2423,15 +2404,15 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
     ethervox_model_type_t type;
     if (strcmp(type_str, "governor") == 0) {
       type = ETHERVOX_MODEL_TYPE_GOVERNOR;
-    } else if (strcmp(type_str, "whisper") == 0) {
-      type = ETHERVOX_MODEL_TYPE_WHISPER;
-    } else if (strcmp(type_str, "vosk") == 0) {
-      type = ETHERVOX_MODEL_TYPE_VOSK;
+    } else if (strcmp(type_str, "granite-speech") == 0) {
+      type = ETHERVOX_MODEL_TYPE_GRANITE_SPEECH;
+    } else if (strcmp(type_str, "granite-speech-plus") == 0) {
+      type = ETHERVOX_MODEL_TYPE_GRANITE_SPEECH_PLUS;
     } else if (strcmp(type_str, "piper") == 0) {
       type = ETHERVOX_MODEL_TYPE_PIPER;
     } else {
       printf("❌ Unknown model type: %s\n", type_str);
-      printf("Valid types: g_governor, whisper, vosk, piper\n");
+      printf("Valid types: governor, granite-speech, granite-speech-plus, piper\n");
       return;
     }
 
@@ -2476,8 +2457,8 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
     if (!name_start) {
       printf("Usage: /modeldownload <type> <name>\n");
       printf("Example: /modeldownload governor granite-3.0-2b-instruct-Q4_K_M.gguf\n");
-      printf("         /modeldownload whisper ggml-base.en.bin\n");
-      printf("         /modeldownload vosk vosk-model-small-en-us-0.15\n");
+      printf("         /modeldownload granite-speech granite-speech-4.1-2b.Q4_K_M.gguf\n");
+      printf("         /modeldownload granite-speech-plus granite-speech-4.1-2b-plus.Q4_K_M.gguf\n");
       return;
     }
 
@@ -2491,10 +2472,10 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
     ethervox_model_type_t type;
     if (strcmp(type_str, "governor") == 0) {
       type = ETHERVOX_MODEL_TYPE_GOVERNOR;
-    } else if (strcmp(type_str, "whisper") == 0) {
-      type = ETHERVOX_MODEL_TYPE_WHISPER;
-    } else if (strcmp(type_str, "vosk") == 0) {
-      type = ETHERVOX_MODEL_TYPE_VOSK;
+    } else if (strcmp(type_str, "granite-speech") == 0) {
+      type = ETHERVOX_MODEL_TYPE_GRANITE_SPEECH;
+    } else if (strcmp(type_str, "granite-speech-plus") == 0) {
+      type = ETHERVOX_MODEL_TYPE_GRANITE_SPEECH_PLUS;
     } else if (strcmp(type_str, "piper") == 0) {
       type = ETHERVOX_MODEL_TYPE_PIPER;
     } else {
@@ -2558,10 +2539,10 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
     ethervox_model_type_t type;
     if (strcmp(type_str, "governor") == 0) {
       type = ETHERVOX_MODEL_TYPE_GOVERNOR;
-    } else if (strcmp(type_str, "whisper") == 0) {
-      type = ETHERVOX_MODEL_TYPE_WHISPER;
-    } else if (strcmp(type_str, "vosk") == 0) {
-      type = ETHERVOX_MODEL_TYPE_VOSK;
+    } else if (strcmp(type_str, "granite-speech") == 0) {
+      type = ETHERVOX_MODEL_TYPE_GRANITE_SPEECH;
+    } else if (strcmp(type_str, "granite-speech-plus") == 0) {
+      type = ETHERVOX_MODEL_TYPE_GRANITE_SPEECH_PLUS;
     } else if (strcmp(type_str, "piper") == 0) {
       type = ETHERVOX_MODEL_TYPE_PIPER;
     } else {
@@ -2812,7 +2793,7 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
     const char* model_path = line + 6;
     printf("Loading model: %s\n", model_path);
 
-    ethervox_result_t ret = ethervox_governor_load_model(g_governor, model_path, NULL, NULL);
+    ethervox_result_t ret = ethervox_governor_load_model(g_governor, model_path, NULL, NULL, NULL);
     if (ethervox_is_success(ret)) {
       snprintf(g_loaded_model_path, sizeof(g_loaded_model_path), "%s", model_path);
 
@@ -4088,7 +4069,7 @@ file_tools_cleanup:
       voice_session = &voice_state;
       g_transcription_session = &voice_state;
       if (g_debug_enabled) {
-        printf("Voice Tools: Registered with Governor (Whisper STT with speaker detection)\n");
+        printf("Voice Tools: Registered with Governor (Granite Speech STT with speaker detection)\n");
         printf("             Use /transcribe and /stoptranscribe commands\n");
       }
     } else {
@@ -4220,7 +4201,7 @@ file_tools_cleanup:
       fprintf(stderr, "[ERROR] Model file not found or not readable: %s\n", resolved_path);
       fprintf(stderr, "[INFO] Run './scripts/download-governor-model.sh' to download it\n");
     } else {
-      ethervox_result_t ret = ethervox_governor_load_model(g_governor, resolved_path, NULL, NULL);
+      ethervox_result_t ret = ethervox_governor_load_model(g_governor, resolved_path, NULL, NULL, NULL);
       if (ethervox_is_success(ret)) {
         snprintf(g_loaded_model_path, sizeof(g_loaded_model_path), "%s", resolved_path);
 

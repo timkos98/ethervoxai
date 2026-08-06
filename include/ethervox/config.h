@@ -70,8 +70,8 @@ extern "C" {
 // Model type subdirectories (appended to ETHERVOX_MODELS_SUBDIR)
 // Used by model_downloader.c to organize models by type
 #define ETHERVOX_GOVERNOR_SUBDIR "governor"
-#define ETHERVOX_WHISPER_SUBDIR "whisper"
-#define ETHERVOX_VOSK_SUBDIR "vosk"
+#define ETHERVOX_GRANITE_SPEECH_SUBDIR "granite-speech"  // Shared by BASE and PLUS variants
+                                                          // (distinguished by filename, not subdir)
 #define ETHERVOX_PIPER_SUBDIR "piper"
 #define ETHERVOX_WAKE_TEMPLATE_SUBDIR "wake_templates"
 

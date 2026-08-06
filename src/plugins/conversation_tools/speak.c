@@ -219,29 +219,27 @@ static int tool_speak_wrapper(
     } else if (strcmp(emotion, "serious") == 0 || strcmp(emotion, "grave") == 0) {
         speaker_id = 34;  // Deep, deliberate speaker
     }
-    // Note: speaker_id mapping is currently not passed to TTS backend
-    // TODO: Add speaker_id parameter to on_speak callback signature
-    //
-    // ARCHITECTURE CHANGE (Granite Speech integration): finishing this TODO
-    // only matters for desktop builds (Piper is the only backend with a
-    // speaker_id concept, and Piper is deliberately not linked on
-    // Android/iOS - see CMakeLists.txt). Don't plumb speaker_id through the
-    // on_speak signature as if it were a cross-platform mechanism - it isn't.
-    // The cross-platform version of "emotion" here is the `emotion` string
-    // itself (already parsed above), not the speaker_id derived from it:
-    // platform-native TTS (Android TextToSpeech / iOS AVSpeechSynthesizer)
-    // has no per-utterance emotion control at all today, so on mobile this
-    // parameter is currently a no-op by design, not a bug - see plan.md's
-    // "Open Questions" long-term roadmap item for what it would take to
-    // change that (a custom-trained voice, not a TTS-engine swap).
-    
+    // Note: speaker_id mapping is now passed through to the on_speak
+    // callback below. Only meaningful for desktop builds (Piper is the
+    // only backend with a speaker_id concept, and Piper is deliberately
+    // not linked on Android/iOS - see CMakeLists.txt). The cross-platform
+    // version of "emotion" here is the `emotion` string itself (already
+    // parsed above, and included in this log line); platform-native TTS
+    // (Android TextToSpeech / iOS AVSpeechSynthesizer) has no per-utterance
+    // emotion control today, so on mobile this parameter is a documented
+    // no-op (see ethervox_tts_set_speaker_id()'s doc comment in tts.h) -
+    // not a bug. See plan.md's "Open Questions" long-term roadmap item for
+    // what it would take to change that (a custom-trained voice, not a
+    // TTS-engine swap).
+
     LOG_INFO("speak tool: text='%s', language='%s', emotion='%s' (speaker_id=%d), wait_for_response=%d, allow_interrupt=%d",
              text, language ? language : "auto", emotion, speaker_id, wait_for_response, allow_interrupt);
     
     free(emotion);
     
     // Call the callback (typically implemented in voice_conversation.c)
-    int ret = g_callbacks->on_speak(text, language, wait_for_response, allow_interrupt, g_callbacks->user_data);
+    int ret = g_callbacks->on_speak(text, language, wait_for_response, allow_interrupt, speaker_id,
+                                     g_callbacks->user_data);
     
     free(text);
     if (language) free(language);

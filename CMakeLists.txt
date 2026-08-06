@@ -336,7 +336,7 @@ if(WITH_TINYLLAMA)
 endif()
 
 # ============================================================================
-# Dependency Management - llama.cpp and whisper.cpp
+# Dependency Management - llama.cpp (+ mtmd/Granite Speech)
 # ============================================================================
 # Automatically fetches dependencies if not present as git submodules
 # Users can:
@@ -347,15 +347,11 @@ endif()
 
 include(cmake/FetchDependencies.cmake)
 
-# Fetch llama.cpp
+# Fetch llama.cpp (also provides mtmd - the multimodal library used to load
+# Granite Speech's audio-in GGUF pair. whisper.cpp has been removed entirely;
+# there is no WITH_WHISPER option anymore.)
 if(WITH_LLAMA)
     fetch_llama_cpp()
-endif()
-
-# Fetch whisper.cpp  
-option(WITH_WHISPER "Enable whisper.cpp for speech-to-text" ON)
-if(WITH_WHISPER)
-    fetch_whisper_cpp()
 endif()
 
 # Print summary
@@ -433,64 +429,65 @@ if(WITH_LLAMA AND LLAMA_CPP_SOURCE_DIR)
     
     # Add llama.cpp as subdirectory
     add_subdirectory(${LLAMA_CPP_SOURCE_DIR})
-    
+
+    # ------------------------------------------------------------------------
+    # mtmd (multimodal library) - required for Granite Speech's audio-in GGUF.
+    # llama.cpp's own tools/CMakeLists.txt (add_subdirectory(tools) at the top
+    # level, gated behind LLAMA_BUILD_TOOLS) would also build llama-server,
+    # llama-cli, rpc, etc. - unnecessary weight and platform risk (server
+    # networking code, RPC sockets) for a mobile/embedded STT dependency. mtmd
+    # itself deliberately does not depend on llama-common (enforced by its own
+    # CMakeLists.txt), so it is added directly here instead, pulling in only
+    # `libmtmd` (ggml + llama only) and nothing else from tools/.
+    # ------------------------------------------------------------------------
+    if(COMMAND llama_add_compile_flags)
+        llama_add_compile_flags()
+    endif()
+    # LLAMA_INSTALL_VERSION is normally set by llama.cpp's own top-level
+    # CMakeLists.txt (cmake/build-info.cmake), but that scope isn't visible
+    # here since mtmd is added directly rather than through llama.cpp's own
+    # tools/CMakeLists.txt. mtmd/CMakeLists.txt's set_target_properties()
+    # call needs it defined, so provide the same default it would otherwise
+    # compute (exact version number doesn't matter for our use - this is not
+    # a public install target).
+    if(NOT DEFINED LLAMA_INSTALL_VERSION)
+        set(LLAMA_INSTALL_VERSION "0.0.0")
+    endif()
+    # EXCLUDE_FROM_ALL: mtmd/CMakeLists.txt unconditionally also defines
+    # llama-mtmd-cli/llama-mtmd-debug executables that link against
+    # llama-common (arg.h, etc.), which we deliberately don't build here (see
+    # comment above - avoiding the full tools/ tree). EXCLUDE_FROM_ALL keeps
+    # those extra targets out of the default build; the `mtmd` library target
+    # itself still builds because ethervoxai links against it directly below.
+    add_subdirectory(${LLAMA_CPP_SOURCE_DIR}/tools/mtmd mtmd_build EXCLUDE_FROM_ALL)
+    if(TARGET mtmd)
+        add_definitions(-DMTMD_AVAILABLE=1)
+        message(STATUS "✓ mtmd (Granite Speech audio support) successfully configured")
+    else()
+        add_definitions(-DMTMD_AVAILABLE=0)
+        message(WARNING "mtmd target not found after add_subdirectory - Granite Speech STT will not be available")
+    endif()
+
     add_definitions(-DLLAMA_CPP_AVAILABLE=1)
     message(STATUS "✓ llama.cpp successfully configured")
 elseif(WITH_LLAMA)
     message(WARNING "llama.cpp not available - LLM features will be limited")
     message(WARNING "To enable: git submodule update --init or set ETHERVOX_AUTO_FETCH_DEPS=ON")
     add_definitions(-DLLAMA_CPP_AVAILABLE=0)
+    add_definitions(-DMTMD_AVAILABLE=0)
 else()
     add_definitions(-DLLAMA_CPP_AVAILABLE=0)
+    add_definitions(-DMTMD_AVAILABLE=0)
 endif()
 
 # ============================================================================
-# whisper.cpp Integration
+# mtmd / Granite Speech Integration (see llama.cpp block above)
 # ============================================================================
 
-if(WITH_WHISPER AND WHISPER_CPP_SOURCE_DIR)
-    message(STATUS "Configuring whisper.cpp from: ${WHISPER_CPP_SOURCE_DIR}")
-    
-    # whisper.cpp build options
-    set(WHISPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-    set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-    set(WHISPER_BUILD_SERVER OFF CACHE BOOL "" FORCE)
-    set(BUILD_SHARED_LIBS ON CACHE BOOL "" FORCE)
-    
-    # Match llama.cpp settings for consistency
-    set(GGML_CPU ON CACHE BOOL "" FORCE)
-    set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
-    
-    # Android-specific settings
-    if(ANDROID)
-        set(WHISPER_METAL OFF CACHE BOOL "" FORCE)
-        set(WHISPER_CUBLAS OFF CACHE BOOL "" FORCE)
-        set(WHISPER_CLBLAST OFF CACHE BOOL "" FORCE)
-        set(WHISPER_OPENBLAS OFF CACHE BOOL "" FORCE)
-        
-        # Disable NEON for ARM processors to fix SIGILL crash
-        if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm" OR CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR ANDROID_ABI STREQUAL "arm64-v8a")
-            set(GGML_CPU_ARM_NEON OFF CACHE BOOL "" FORCE)
-            message(STATUS "Disabled ARM NEON optimizations for whisper.cpp (fixing SIGILL crash)")
-        endif()
-        
-        # Android 15+ 16KB page size compatibility
-        set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-z,max-page-size=16384")
-        message(STATUS "Applied 16KB page alignment to whisper.cpp libraries for Android 15+ compatibility")
-    endif()
-    
-    # Add whisper.cpp as subdirectory
-    add_subdirectory(${WHISPER_CPP_SOURCE_DIR})
-    
-    add_definitions(-DWHISPER_CPP_AVAILABLE=1)
-    message(STATUS "✓ whisper.cpp successfully configured")
-elseif(WITH_WHISPER)
-    message(WARNING "whisper.cpp not available - Voice features will be disabled")
-    message(WARNING "To enable: git submodule update --init or set ETHERVOX_AUTO_FETCH_DEPS=ON")
-    add_definitions(-DWHISPER_CPP_AVAILABLE=0)
-else()
-    add_definitions(-DWHISPER_CPP_AVAILABLE=0)
-endif()
+# ============================================================================
+# whisper.cpp has been removed entirely - see mtmd setup above (Granite
+# Speech replaces it for all STT, both BASE and PLUS/SAA variants).
+# ============================================================================
 
 # Include directories
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -763,6 +760,14 @@ endif()
 # Desktop: requires libcurl, Android: uses JNI HTTP client
 if(ANDROID OR HAVE_LIBCURL OR CURL_FOUND)
     file(GLOB WEATHER_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/weather_tools/*.c")
+    if(NOT ANDROID)
+        # weather_http_android.c depends on <android/log.h> and <jni.h> and
+        # only makes sense on Android - exclude it from non-Android builds
+        # (this glob previously pulled it in unconditionally, breaking desktop
+        # builds; unrelated to the Granite Speech work but found while
+        # verifying this branch compiles).
+        list(FILTER WEATHER_TOOLS_SOURCES EXCLUDE REGEX ".*weather_http_android\\.c$")
+    endif()
     list(APPEND ETHERVOXAI_CORE_SOURCES ${WEATHER_TOOLS_SOURCES})
     if(ANDROID)
         message(STATUS "Weather tools plugin sources included (Android JNI HTTP)")
@@ -952,17 +957,16 @@ if(ANDROID AND GGML_OPENCL)
     # since most Android devices don't have OpenCL support
 endif()
 
-# Link whisper.cpp if available
-if(WITH_WHISPER)
-    if(TARGET whisper)
-        target_include_directories(ethervoxai PRIVATE 
-            ${CMAKE_CURRENT_SOURCE_DIR}/external/whisper.cpp/include
-            ${CMAKE_CURRENT_SOURCE_DIR}/external/whisper.cpp/src
+# Link mtmd (Granite Speech audio support) if available
+if(WITH_LLAMA)
+    if(TARGET mtmd)
+        target_include_directories(ethervoxai PRIVATE
+            ${LLAMA_CPP_SOURCE_DIR}/tools/mtmd
         )
-        target_link_libraries(ethervoxai PUBLIC whisper)
-        message(STATUS "Linked whisper.cpp library to ethervoxai")
+        target_link_libraries(ethervoxai PUBLIC mtmd)
+        message(STATUS "Linked mtmd library to ethervoxai (Granite Speech STT)")
     else()
-        message(WARNING "whisper target not found - Voice features will be limited")
+        message(WARNING "mtmd target not found - Granite Speech STT will not be available")
     endif()
 endif()
 
