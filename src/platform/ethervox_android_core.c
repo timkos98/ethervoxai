@@ -7,23 +7,24 @@
  * This file is part of EthervoxAI, licensed under CC BY-NC-SA 4.0.
  * SPDX-License-Identifier: CC-BY-NC-SA-4.0
  *
- * ARCHITECTURE CHANGE (Granite Speech integration): today this file exposes
- * three independent, uncoordinated pipelines to Kotlin: (1) wakeWord*, (2)
- * sttInit/Whisper for the Transcription feature only, and (3)
- * processDialogue*/cancelProcessing straight into the Governor. There is no
- * unified 4-mode session concept at the JNI boundary at all - Mode 1 (voice
- * conversation) is currently built entirely in Kotlin using Android's
- * SpeechRecognizer + Governor + Android TextToSpeech, none of which touches
- * this file's ASR code. Target state: add Granite Speech ASR (BASE + PLUS,
- * see ethervox/stt.h) as new JNI entry points here, and route Mode 1/2/4
- * through them consistently, so "which ASR backend is active" is decided in
- * one place (this file / NativeLib.kt) instead of being split between a
- * Kotlin-only path (SpeechRecognizer) and a JNI-only path (sttInit/Whisper)
- * that don't share code today. See src/dialogue/voice_conversation.c for the
- * more complete (desktop-only, not currently linked from here) reference
- * state-machine design this should either call into or mirror - pick one
- * approach deliberately (see that file's header comment) rather than growing
- * a third, slightly-different implementation here.
+ * Granite Speech integration: Mode 1 (voice conversation), Mode 2
+ * (transcription), and Mode 4 (voice-to-text) each go through their own
+ * dedicated JNI entry points, all backed by Granite Speech ASR
+ * (see ethervox/stt.h) instead of Whisper/SpeechRecognizer:
+ *   - Mode 1/4: voiceConversationStart/Stop/Interrupt and
+ *     voiceQueryStart/Stop (see the "Voice Conversation" section below) both
+ *     wrap ethervox_conversation_init/start (src/dialogue/voice_conversation.c),
+ *     the single, platform-agnostic Mode 1/4 orchestrator - Android supplies
+ *     platform-native TTS via the on_speak_request callback and resolves the
+ *     Granite Speech BASE model path against the app's files dir; the
+ *     underlying state machine, VAD, and barge-in logic are unchanged from
+ *     desktop.
+ *   - Mode 2: startVoiceTranscription/stopVoiceTranscription (see "Voice
+ *     Tools / Transcription" below) wrap ethervox_voice_tools_init/
+ *     start_listen/stop_listen, which initialize Granite Speech Plus (SAA)
+ *     internally.
+ * "Which ASR backend is active" is therefore decided in exactly one place
+ * per mode, not split between a Kotlin-only path and a JNI-only path.
  */
 
 #include <android/log.h>
@@ -44,6 +45,7 @@
 // NOTE: dialogue.h removed - using direct governor/registry architecture
 #include "ethervox/compute_tools.h"
 #include "ethervox/config.h"
+#include "ethervox/conversation.h"
 #include "ethervox/conversation_tools.h"
 #include "ethervox/device_profile.h"
 #include "ethervox/get_tool_info.h"
@@ -1633,24 +1635,23 @@ JNIEXPORT void JNICALL Java_com_droid_ethervox_1core_NativeLib_wakeWordCleanup(J
 }
 
 // ===========================================================================
-// Speech-to-Text
+// Speech-to-Text (generic, currently unused)
 //
-// ARCHITECTURE CHANGE (Granite Speech integration): sttInit/whisper-backed
-// functions in this section are used only by the separate "Transcription"
-// feature today (startVoiceTranscription/stopVoiceTranscription in
-// NativeLib.kt); the live "Talk" conversation mode does NOT go through this
-// JNI path at all - it uses android.speech.SpeechRecognizer directly from
-// Kotlin (EthervoxViewModel.kt), bypassing the C backend's ASR entirely. Both
-// call sites need to move onto Granite Speech, but onto the two different
-// variants: this Mode-2/transcription path should call ethervox_stt_init
-// with ETHERVOX_STT_BACKEND_GRANITE_SPEECH_PLUS (SAA-tagged output, see
-// ethervox/stt.h), while a NEW JNI entry point needs to be added for Mode 1
-// (voice conversation) and Mode 4 (voice-to-text) using
-// ETHERVOX_STT_BACKEND_GRANITE_SPEECH (BASE) - there is currently no JNI
-// function backing live voice conversation with the C backend's own ASR at
-// all, only with the Governor once Android's SpeechRecognizer has already
-// produced text. See NativeLib.kt for the corresponding new
-// graniteSpeechInit/voiceConversationStart exports this section should grow.
+// NOTE (Granite Speech integration): sttInit/sttStart/sttCleanup below are a
+// generic, backend-selectable STT session that predates the Granite Speech
+// work and is not currently called by any Android flow:
+//   - Mode 2 (Transcription) uses ethervox_voice_tools_init/start_listen
+//     directly (see "Voice Tools / Transcription" section below), which
+//     already initializes Granite Speech Plus (SAA) internally - it does not
+//     go through sttInit at all.
+//   - Mode 1 (voice conversation) and Mode 4 (voice-to-text) now go through
+//     ethervox_conversation_init/start (see "Voice Conversation" section
+//     below), which resolves and initializes the Granite Speech BASE variant
+//     internally via voice_conversation.c - they also do not go through
+//     sttInit.
+// This generic path is left in place only in case a future feature needs a
+// standalone STT session outside of either orchestrator; it is not part of
+// the Mode 1/2/4 JNI surface NativeLib.kt should call.
 // ===========================================================================
 
 JNIEXPORT jint JNICALL Java_com_droid_ethervox_1core_NativeLib_sttInit(JNIEnv* env, jobject thiz,
@@ -2639,7 +2640,8 @@ JNIEXPORT void JNICALL Java_com_droid_ethervox_1core_NativeLib_setAndroidFilesDi
     (*env)->ReleaseStringUTFChars(env, filesDir, dir);
 
     LOGI("[Android] Files directory set to: %s", g_android_files_dir);
-    LOGI("[Android] Whisper models: %s/models/whisper/", g_android_files_dir);
+    LOGI("[Android] Granite Speech models: %s/models/%s/", g_android_files_dir,
+         ETHERVOX_GRANITE_SPEECH_SUBDIR);
     LOGI("[Android] Transcripts: %s/transcripts/", g_android_files_dir);
   }
 }
@@ -2676,14 +2678,14 @@ Java_com_droid_ethervox_1core_NativeLib_startVoiceTranscription(JNIEnv* env, job
     int ret = ethervox_voice_tools_init(g_voice_session, g_memory_store);
     if (ret != 0) {
       LOGE("[Voice] [FAIL] ERROR: Failed to initialize voice tools: %d", ret);
-      LOGE("[Voice] This usually means Whisper model not found!");
-      LOGE("[Voice] Check Settings → Whisper Model section to download");
+      LOGE("[Voice] This usually means the Granite Speech Plus model was not found!");
+      LOGE("[Voice] Check Settings → Granite Speech Plus Model section to download");
       free(g_voice_session);
       g_voice_session = NULL;
       return ret;
     }
     LOGI("[Voice] [OK] Voice tools initialized successfully!");
-    LOGI("[Voice] [OK] Whisper model loaded and ready");
+    LOGI("[Voice] [OK] Granite Speech Plus model loaded and ready");
   } else {
     LOGI("[Voice] Voice session already initialized (is_initialized=%d)",
          g_voice_session->is_initialized);
@@ -2778,6 +2780,320 @@ Java_com_droid_ethervox_1core_NativeLib_isVoiceTranscribing(JNIEnv* env, jobject
   }
 
   return g_voice_session->is_recording ? JNI_TRUE : JNI_FALSE;
+}
+
+// ===========================================================================
+// Voice Conversation (Mode 1: full-duplex conversation, Mode 4: voice-to-text)
+//
+// Both modes are driven by the same cross-platform orchestrator
+// (ethervox_conversation_t, src/dialogue/voice_conversation.c) - the only
+// difference is tts_enabled, which controls whether conversation_on_speak()
+// hands text to onSpeakRequest (Mode 1) or just reports it via
+// onResponseText for display (Mode 4, no audio at all). Only one such
+// session can be active at a time (Mode 1 and Mode 4 are mutually
+// exclusive, same as Mode 2's Base/Plus exclusivity above).
+//
+// Callbacks fire from voice_conversation.c's own background pthread, not
+// this JNI-calling thread, so every callback below must attach/detach from
+// the JVM itself (see conversation_attach_env/conversation_detach_env),
+// following the same pattern as java_log_callback_wrapper further down this
+// file.
+// ===========================================================================
+
+static ethervox_conversation_session_t* g_conversation_session = NULL;
+static jobject g_conversation_callback_obj = NULL;
+static jmethodID g_conv_on_state_changed = NULL;
+static jmethodID g_conv_on_user_transcript = NULL;
+static jmethodID g_conv_on_response_text = NULL;
+static jmethodID g_conv_on_speak_request = NULL;
+static jmethodID g_conv_on_error = NULL;
+
+static JNIEnv* conversation_attach_env(bool* needs_detach) {
+  *needs_detach = false;
+  if (!g_jvm) {
+    return NULL;
+  }
+
+  JNIEnv* env = NULL;
+  jint result = (*g_jvm)->GetEnv(g_jvm, (void**)&env, JNI_VERSION_1_6);
+  if (result == JNI_EDETACHED) {
+    if ((*g_jvm)->AttachCurrentThread(g_jvm, &env, NULL) != JNI_OK) {
+      return NULL;
+    }
+    *needs_detach = true;
+  }
+  return env;
+}
+
+static void conversation_detach_env(bool needs_detach) {
+  if (needs_detach && g_jvm) {
+    (*g_jvm)->DetachCurrentThread(g_jvm);
+  }
+}
+
+static void jni_conversation_on_state_change(ethervox_conversation_state_t state, void* user_data) {
+  (void)user_data;
+  if (!g_conversation_callback_obj || !g_conv_on_state_changed) {
+    return;
+  }
+
+  bool detach = false;
+  JNIEnv* env = conversation_attach_env(&detach);
+  if (!env) {
+    return;
+  }
+
+  (*env)->CallVoidMethod(env, g_conversation_callback_obj, g_conv_on_state_changed, (jint)state);
+  conversation_detach_env(detach);
+}
+
+static void jni_conversation_on_user_transcript(const char* text, const char* language,
+                                                 void* user_data) {
+  (void)user_data;
+  if (!g_conversation_callback_obj || !g_conv_on_user_transcript) {
+    return;
+  }
+
+  bool detach = false;
+  JNIEnv* env = conversation_attach_env(&detach);
+  if (!env) {
+    return;
+  }
+
+  jstring jText = create_jstring(env, text ? text : "");
+  jstring jLanguage = language ? create_jstring(env, language) : NULL;
+  (*env)->CallVoidMethod(env, g_conversation_callback_obj, g_conv_on_user_transcript, jText,
+                         jLanguage);
+  if (jText) (*env)->DeleteLocalRef(env, jText);
+  if (jLanguage) (*env)->DeleteLocalRef(env, jLanguage);
+  conversation_detach_env(detach);
+}
+
+static void jni_conversation_on_response_text(const char* text, const char* language,
+                                               void* user_data) {
+  (void)user_data;
+  if (!g_conversation_callback_obj || !g_conv_on_response_text) {
+    return;
+  }
+
+  bool detach = false;
+  JNIEnv* env = conversation_attach_env(&detach);
+  if (!env) {
+    return;
+  }
+
+  jstring jText = create_jstring(env, text ? text : "");
+  jstring jLanguage = language ? create_jstring(env, language) : NULL;
+  (*env)->CallVoidMethod(env, g_conversation_callback_obj, g_conv_on_response_text, jText,
+                         jLanguage);
+  if (jText) (*env)->DeleteLocalRef(env, jText);
+  if (jLanguage) (*env)->DeleteLocalRef(env, jLanguage);
+  conversation_detach_env(detach);
+}
+
+// Mode 1 only (tts_enabled=true) - hands the Governor's response text off to
+// the platform TTS engine (Android TextToSpeech). Fire-and-forget: Kotlin
+// must call voiceConversationNotifySpeakingDone() from its
+// UtteranceProgressListener.onDone()/onError() once playback finishes, or
+// the conversation thread stalls in SPEAKING until its internal 30s
+// safety-net timeout (see ethervox_conversation_notify_speaking_done's doc
+// comment in conversation.h).
+static void jni_conversation_on_speak_request(const char* text, const char* language,
+                                               int speaker_id, bool allow_interrupt,
+                                               void* user_data) {
+  (void)user_data;
+  if (!g_conversation_callback_obj || !g_conv_on_speak_request) {
+    return;
+  }
+
+  bool detach = false;
+  JNIEnv* env = conversation_attach_env(&detach);
+  if (!env) {
+    return;
+  }
+
+  jstring jText = create_jstring(env, text ? text : "");
+  jstring jLanguage = language ? create_jstring(env, language) : NULL;
+  (*env)->CallVoidMethod(env, g_conversation_callback_obj, g_conv_on_speak_request, jText,
+                         jLanguage, (jint)speaker_id, (jboolean)allow_interrupt);
+  if (jText) (*env)->DeleteLocalRef(env, jText);
+  if (jLanguage) (*env)->DeleteLocalRef(env, jLanguage);
+  conversation_detach_env(detach);
+}
+
+static void jni_conversation_on_error(const char* message, void* user_data) {
+  (void)user_data;
+  if (!g_conversation_callback_obj || !g_conv_on_error) {
+    return;
+  }
+
+  bool detach = false;
+  JNIEnv* env = conversation_attach_env(&detach);
+  if (!env) {
+    return;
+  }
+
+  jstring jMessage = create_jstring(env, message ? message : "");
+  (*env)->CallVoidMethod(env, g_conversation_callback_obj, g_conv_on_error, jMessage);
+  (*env)->DeleteLocalRef(env, jMessage);
+  conversation_detach_env(detach);
+}
+
+// Shared start/stop logic for both voiceConversationStart (Mode 1) and
+// voiceQueryStart (Mode 4); tts_enabled is the only difference between them.
+static jint start_voice_conversation_session(JNIEnv* env, jobject callback, bool tts_enabled) {
+  if (g_conversation_session) {
+    LOGW("[VoiceConversation] Session already active - stop it before starting a new one");
+    return -1;
+  }
+
+  if (!g_governor) {
+    LOGE("[VoiceConversation] Governor not initialized");
+    return -1;
+  }
+
+  if (!g_jvm) {
+    (*env)->GetJavaVM(env, &g_jvm);
+  }
+
+  g_conversation_callback_obj = (*env)->NewGlobalRef(env, callback);
+  jclass callbackClass = (*env)->GetObjectClass(env, callback);
+  g_conv_on_state_changed = (*env)->GetMethodID(env, callbackClass, "onStateChanged", "(I)V");
+  g_conv_on_user_transcript = (*env)->GetMethodID(
+      env, callbackClass, "onUserTranscript", "(Ljava/lang/String;Ljava/lang/String;)V");
+  g_conv_on_response_text = (*env)->GetMethodID(
+      env, callbackClass, "onResponseText", "(Ljava/lang/String;Ljava/lang/String;)V");
+  g_conv_on_speak_request = (*env)->GetMethodID(
+      env, callbackClass, "onSpeakRequest", "(Ljava/lang/String;Ljava/lang/String;IZ)V");
+  g_conv_on_error = (*env)->GetMethodID(env, callbackClass, "onError", "(Ljava/lang/String;)V");
+
+  if ((*env)->ExceptionCheck(env)) {
+    (*env)->ExceptionClear(env);
+  }
+
+  ethervox_conversation_config_t config = ethervox_conversation_get_default_config();
+  // Mode 1/4 are both manually triggered (a "Talk"/"Voice query" button, not
+  // a wake word), so always_listening=true regardless of the desktop-only
+  // default in get_default_config().
+  config.always_listening = true;
+  config.tts_enabled = tts_enabled;
+  config.on_state_change = jni_conversation_on_state_change;
+  config.on_user_transcript = jni_conversation_on_user_transcript;
+  config.on_response_text = jni_conversation_on_response_text;
+  config.on_error = jni_conversation_on_error;
+  if (tts_enabled) {
+    config.on_speak_request = jni_conversation_on_speak_request;
+  }
+
+  // Resolve Granite Speech BASE model paths against the Android app files
+  // dir (same convention ethervox_voice_tools_init uses for the PLUS variant
+  // in src/plugins/voice_tools/voice_tools.c) - conversation_thread() honors
+  // these directly rather than falling back to its getenv("HOME") desktop
+  // default (see the fix in voice_conversation.c).
+  static char base_model_path[512];
+  static char base_mmproj_path[512];
+  const char* files_dir = ethervox_get_android_files_dir();
+  if (files_dir) {
+    snprintf(base_model_path, sizeof(base_model_path), "%s/models/%s/granite-speech-4.1-2b.Q4_K_M.gguf",
+             files_dir, ETHERVOX_GRANITE_SPEECH_SUBDIR);
+    snprintf(base_mmproj_path, sizeof(base_mmproj_path),
+             "%s/models/%s/mmproj-granite-speech-4.1-2b-Q4_K_M.gguf", files_dir,
+             ETHERVOX_GRANITE_SPEECH_SUBDIR);
+    config.stt.model_path = base_model_path;
+    config.stt.mmproj_path = base_mmproj_path;
+    LOGI("[VoiceConversation] Granite Speech BASE model path: %s", base_model_path);
+  } else {
+    LOGW("[VoiceConversation] Android files dir not set - falling back to desktop model path");
+  }
+
+  g_conversation_session = ethervox_conversation_init(&config, g_governor);
+  if (!g_conversation_session) {
+    LOGE("[VoiceConversation] ethervox_conversation_init failed");
+    (*env)->DeleteGlobalRef(env, g_conversation_callback_obj);
+    g_conversation_callback_obj = NULL;
+    return -1;
+  }
+
+  ethervox_result_t result = ethervox_conversation_start(g_conversation_session);
+  if (ethervox_is_error(result)) {
+    LOGE("[VoiceConversation] ethervox_conversation_start failed: %d", result);
+    ethervox_conversation_cleanup(g_conversation_session);
+    g_conversation_session = NULL;
+    (*env)->DeleteGlobalRef(env, g_conversation_callback_obj);
+    g_conversation_callback_obj = NULL;
+    return -1;
+  }
+
+  LOGI("[VoiceConversation] Session started (tts_enabled=%d)", tts_enabled);
+  return 0;
+}
+
+static void stop_voice_conversation_session(JNIEnv* env) {
+  if (!g_conversation_session) {
+    return;
+  }
+
+  ethervox_conversation_stop(g_conversation_session);
+  ethervox_conversation_cleanup(g_conversation_session);
+  g_conversation_session = NULL;
+
+  if (g_conversation_callback_obj) {
+    (*env)->DeleteGlobalRef(env, g_conversation_callback_obj);
+    g_conversation_callback_obj = NULL;
+  }
+  g_conv_on_state_changed = NULL;
+  g_conv_on_user_transcript = NULL;
+  g_conv_on_response_text = NULL;
+  g_conv_on_speak_request = NULL;
+  g_conv_on_error = NULL;
+
+  LOGI("[VoiceConversation] Session stopped");
+}
+
+JNIEXPORT jint JNICALL Java_com_droid_ethervox_1core_NativeLib_voiceConversationStart(
+    JNIEnv* env, jobject thiz, jobject callback) {
+  (void)thiz;
+  return start_voice_conversation_session(env, callback, /*tts_enabled=*/true);
+}
+
+JNIEXPORT void JNICALL Java_com_droid_ethervox_1core_NativeLib_voiceConversationStop(JNIEnv* env,
+                                                                                      jobject thiz) {
+  (void)thiz;
+  stop_voice_conversation_session(env);
+}
+
+JNIEXPORT void JNICALL Java_com_droid_ethervox_1core_NativeLib_voiceConversationInterrupt(
+    JNIEnv* env, jobject thiz) {
+  (void)env;
+  (void)thiz;
+  if (g_conversation_session) {
+    ethervox_conversation_interrupt(g_conversation_session);
+  }
+}
+
+// Called from Kotlin's UtteranceProgressListener.onDone()/onError() once
+// platform TTS finishes playing an onSpeakRequest utterance - see the doc
+// comment on jni_conversation_on_speak_request above.
+JNIEXPORT void JNICALL Java_com_droid_ethervox_1core_NativeLib_voiceConversationNotifySpeakingDone(
+    JNIEnv* env, jobject thiz) {
+  (void)env;
+  (void)thiz;
+  if (g_conversation_session) {
+    ethervox_conversation_notify_speaking_done(g_conversation_session);
+  }
+}
+
+JNIEXPORT jint JNICALL Java_com_droid_ethervox_1core_NativeLib_voiceQueryStart(JNIEnv* env,
+                                                                                jobject thiz,
+                                                                                jobject callback) {
+  (void)thiz;
+  return start_voice_conversation_session(env, callback, /*tts_enabled=*/false);
+}
+
+JNIEXPORT void JNICALL Java_com_droid_ethervox_1core_NativeLib_voiceQueryStop(JNIEnv* env,
+                                                                               jobject thiz) {
+  (void)thiz;
+  stop_voice_conversation_session(env);
 }
 
 // ===========================================================================
