@@ -146,6 +146,56 @@ typedef struct {
     // parameter for display, never synthesized. Defaults to true.
     bool tts_enabled;
 
+    // --- Barge-in (VAD-based interrupt during THINKING/SPEAKING) ---
+    // See plan.md Open Question 1 for the full design rationale. This is
+    // additive to, not a replacement for, the explicit
+    // ethervox_conversation_interrupt() call (manual "tap to interrupt" UI
+    // action) - that path keeps working unconditionally regardless of these
+    // settings, since VAD reliability depends on echo cancellation quality
+    // that varies by OEM/device and can never be guaranteed.
+
+    // Master switch. Defaults to false (see
+    // ethervox_conversation_get_default_config()) - the caller (JNI/platform
+    // bridge layer) is expected to set this only after an actual platform
+    // AEC capability check (e.g. Android's
+    // android.media.audiofx.AcousticEchoCanceler.isAvailable()), not
+    // unconditionally, since a device with no real echo cancellation will
+    // produce constant false triggers from its own TTS output. When true,
+    // this also switches the Android capture stream to
+    // AAUDIO_INPUT_PRESET_VOICE_COMMUNICATION (see
+    // ethervox_audio_config_t.enable_echo_cancellation and
+    // src/audio/platform_android.c) to get platform AEC/NS/AGC in the first
+    // place - without it, sensitivity tuning alone can't compensate for a
+    // raw, uncancelled echo signal.
+    bool barge_in_enabled;
+
+    // RMS energy threshold above which incoming audio is treated as
+    // "possible speech" while THINKING/SPEAKING. Deliberately higher than
+    // capture_utterance_with_vad's plain-listening threshold (0.02f, see
+    // voice_conversation.c) because this must reject AEC residual/echo
+    // bleed from the device's own TTS output, not just room noise. Default
+    // 0.05f - a starting point requiring on-device tuning, not a validated
+    // value (see plan.md Open Question 1).
+    float barge_in_energy_threshold;
+
+    // Hysteresis: consecutive milliseconds of energy above
+    // barge_in_energy_threshold required before a barge-in is committed.
+    // Rejects single-frame transients (echo spikes, clicks/pops, coughs).
+    // Default 300ms.
+    int barge_in_min_speech_ms;
+
+    // Grace period (ms) after the SPEAKING state begins during which
+    // barge-in detection is suppressed entirely - covers the TTS onset
+    // transient and gives platform AEC time to converge. Not applied during
+    // THINKING (no audio is being output yet, so there is nothing
+    // acoustically to guard against). Default 400ms.
+    int barge_in_grace_period_ms;
+
+    // How many milliseconds of audio immediately preceding a committed
+    // barge-in to retain and hand to the next listening turn, so the user's
+    // interrupting speech isn't clipped at the start. Default 500ms.
+    int barge_in_preroll_ms;
+
     // Platform-native TTS + UI notification hooks (all optional, NULL = no-op
     // for the notification callbacks; on_speak_request NULL means "use the
     // desktop Piper path" - see conversation_on_speak). Mobile platforms

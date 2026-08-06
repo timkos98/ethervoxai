@@ -2941,7 +2941,11 @@ static void jni_conversation_on_error(const char* message, void* user_data) {
 
 // Shared start/stop logic for both voiceConversationStart (Mode 1) and
 // voiceQueryStart (Mode 4); tts_enabled is the only difference between them.
-static jint start_voice_conversation_session(JNIEnv* env, jobject callback, bool tts_enabled) {
+// barge_in_enabled comes from Kotlin's AcousticEchoCanceler.isAvailable()
+// check (see NativeLib.kt's doc comments) - the C side does not attempt its
+// own AEC capability detection.
+static jint start_voice_conversation_session(JNIEnv* env, jobject callback, bool tts_enabled,
+                                              bool barge_in_enabled) {
   if (g_conversation_session) {
     LOGW("[VoiceConversation] Session already active - stop it before starting a new one");
     return -1;
@@ -2977,6 +2981,7 @@ static jint start_voice_conversation_session(JNIEnv* env, jobject callback, bool
   // default in get_default_config().
   config.always_listening = true;
   config.tts_enabled = tts_enabled;
+  config.barge_in_enabled = barge_in_enabled;
   config.on_state_change = jni_conversation_on_state_change;
   config.on_user_transcript = jni_conversation_on_user_transcript;
   config.on_response_text = jni_conversation_on_response_text;
@@ -3051,9 +3056,10 @@ static void stop_voice_conversation_session(JNIEnv* env) {
 }
 
 JNIEXPORT jint JNICALL Java_com_droid_ethervox_1core_NativeLib_voiceConversationStart(
-    JNIEnv* env, jobject thiz, jobject callback) {
+    JNIEnv* env, jobject thiz, jobject callback, jboolean bargeInEnabled) {
   (void)thiz;
-  return start_voice_conversation_session(env, callback, /*tts_enabled=*/true);
+  return start_voice_conversation_session(env, callback, /*tts_enabled=*/true,
+                                           /*barge_in_enabled=*/bargeInEnabled);
 }
 
 JNIEXPORT void JNICALL Java_com_droid_ethervox_1core_NativeLib_voiceConversationStop(JNIEnv* env,
@@ -3085,9 +3091,11 @@ JNIEXPORT void JNICALL Java_com_droid_ethervox_1core_NativeLib_voiceConversation
 
 JNIEXPORT jint JNICALL Java_com_droid_ethervox_1core_NativeLib_voiceQueryStart(JNIEnv* env,
                                                                                 jobject thiz,
-                                                                                jobject callback) {
+                                                                                jobject callback,
+                                                                                jboolean bargeInEnabled) {
   (void)thiz;
-  return start_voice_conversation_session(env, callback, /*tts_enabled=*/false);
+  return start_voice_conversation_session(env, callback, /*tts_enabled=*/false,
+                                           /*barge_in_enabled=*/bargeInEnabled);
 }
 
 JNIEXPORT void JNICALL Java_com_droid_ethervox_1core_NativeLib_voiceQueryStop(JNIEnv* env,

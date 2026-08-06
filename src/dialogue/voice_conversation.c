@@ -117,6 +117,30 @@ struct ethervox_conversation_session {
     // Audio capture
     ethervox_audio_buffer_t* audio_buffer;
     bool audio_capture_active;
+
+    // Barge-in monitor (VAD-based interrupt during THINKING/SPEAKING) - see
+    // conversation.h's barge_in_* config fields and plan.md Open Question 1.
+    // Runs as a separate thread reading the continuously-open mic (see
+    // conversation_thread()'s capture-lifecycle note) concurrently with
+    // Governor generation / TTS playback, since both block the main
+    // conversation thread and can't poll audio themselves.
+    pthread_t barge_in_thread;
+    bool barge_in_thread_active;     // A monitor thread currently exists for this turn
+    bool barge_in_stop_requested;    // Ask the monitor to exit cleanly (turn ended, no barge-in)
+
+    // Pre-roll ring buffer: continuously retains the last
+    // config.barge_in_preroll_ms of raw audio while the monitor runs, so the
+    // syllables that triggered a barge-in aren't lost - handed to the next
+    // capture_utterance_with_vad() call as a synthetic head start.
+    float* preroll_ring;
+    size_t preroll_ring_capacity;    // Samples
+    size_t preroll_ring_write_pos;
+    size_t preroll_ring_filled;      // Samples written so far, capped at capacity
+
+    // Snapshot of the ring above, taken when a barge-in commits; consumed
+    // and freed at the start of the next capture_utterance_with_vad() call.
+    float* pending_preroll_audio;
+    size_t pending_preroll_samples;
     
     // Always-listening mode (desktop only)
     bool always_listening;
@@ -195,6 +219,33 @@ static ethervox_result_t capture_utterance_with_vad(ethervox_conversation_sessio
     int silence_frames = 0;
     const int silence_threshold = 10;  // frames of silence before considering speech ended
     const float energy_threshold = 0.02f;  // TODO: make configurable (see plan.md Open Question 1)
+
+    // If a barge-in monitor just interrupted THINKING/SPEAKING, it left the
+    // audio that triggered it here (see run_barge_in_monitor()) - feed it
+    // into the STT accumulator before the real-time read loop below, so the
+    // user's interrupting speech isn't clipped at the start just because
+    // this new listening turn started a beat after they began talking.
+    pthread_mutex_lock(&session->mutex);
+    float* preroll_audio = session->pending_preroll_audio;
+    size_t preroll_samples = session->pending_preroll_samples;
+    session->pending_preroll_audio = NULL;
+    session->pending_preroll_samples = 0;
+    pthread_mutex_unlock(&session->mutex);
+
+    if (preroll_audio && preroll_samples > 0) {
+        ETHERVOX_LOG_INFO("[Barge-in] Seeding %zu pre-roll samples into new listening turn",
+                          preroll_samples);
+        ethervox_audio_buffer_t preroll_buffer = {
+            .data = preroll_audio,
+            .size = (uint32_t)preroll_samples,
+            .channels = 1
+        };
+        ethervox_stt_result_t discard_result = {0};
+        ethervox_stt_process(&session->stt_runtime, &preroll_buffer, &discard_result);
+        ethervox_stt_result_free(&discard_result);
+        speech_detected = true;  // We already know the user was talking
+    }
+    free(preroll_audio);
 
     while ((get_time_ms() - start_time) < (uint64_t)timeout_ms) {
         // Explicit barge-in / stop check - bail immediately rather than
@@ -588,6 +639,179 @@ static int conversation_on_interrupt(void* user_data) {
     return ETHERVOX_ERROR_INVALID_ARGUMENT;  // No interrupt
 }
 
+// ============================================================================
+// Barge-in monitor (VAD-based interrupt during THINKING/SPEAKING)
+// ============================================================================
+
+/**
+ * @brief Background thread: polls the continuously-open mic for sustained
+ * speech energy while the Governor is generating (THINKING) or platform TTS
+ * is playing (SPEAKING) - both block conversation_thread() directly via a
+ * synchronous call, so this is the only way to notice new user speech
+ * during those states. See conversation.h's barge_in_* config fields and
+ * plan.md Open Question 1 for the full design rationale.
+ *
+ * Requires config.barge_in_enabled and that the caller has NOT stopped
+ * audio capture between LISTENING and this turn's PROCESSING/SPEAKING (see
+ * conversation_thread()'s capture-lifecycle note) - this thread does not
+ * start or stop the mic itself, only reads from it.
+ *
+ * A grace period (config.barge_in_grace_period_ms) is applied only once
+ * this thread observes session->state == ETHERVOX_CONV_STATE_SPEAKING -
+ * THINKING has no simultaneous audio output, so there is nothing acoustically
+ * to guard against there and detection is immediate.
+ *
+ * On a committed trigger (config.barge_in_min_speech_ms of consecutive
+ * energy above config.barge_in_energy_threshold), snapshots the pre-roll
+ * ring buffer into session->pending_preroll_audio and calls the existing
+ * ethervox_conversation_interrupt() - the exact same path as the manual
+ * "tap to interrupt" UI action - so barge-in is additive to, not a
+ * reimplementation of, that mechanism.
+ */
+static void* run_barge_in_monitor(void* arg) {
+    ethervox_conversation_session_t* session = (ethervox_conversation_session_t*)arg;
+
+    const float threshold = session->config.barge_in_energy_threshold;
+    const int min_speech_ms = session->config.barge_in_min_speech_ms;
+    const int grace_ms = session->config.barge_in_grace_period_ms;
+    const uint32_t sample_rate =
+        session->audio_runtime.config.sample_rate > 0 ? session->audio_runtime.config.sample_rate : 16000;
+
+    int consecutive_speech_ms = 0;
+    uint64_t speaking_started_at_ms = 0;  // 0 == SPEAKING not yet observed this turn
+
+    for (;;) {
+        pthread_mutex_lock(&session->mutex);
+        bool stop = session->barge_in_stop_requested || session->thread_should_exit ||
+                    session->interrupt_requested;
+        ethervox_conversation_state_t current_state = session->state;
+        pthread_mutex_unlock(&session->mutex);
+        if (stop) {
+            break;
+        }
+
+        ethervox_audio_buffer_t chunk = {0};
+        chunk.data = (float*)malloc(1024 * sizeof(float));
+        chunk.size = chunk.data ? 1024 : 0;
+        chunk.channels = 1;
+        if (!chunk.data || ethervox_is_error(ethervox_audio_read(&session->audio_runtime, &chunk)) ||
+            chunk.size == 0) {
+            free(chunk.data);
+            usleep(20000);  // ~20ms - avoid a tight spin when nothing is buffered yet
+            continue;
+        }
+
+        // Always maintain the pre-roll ring, even during the grace period,
+        // so a barge-in right at the edge of the grace window still has its
+        // leading syllables available.
+        if (session->preroll_ring && session->preroll_ring_capacity > 0) {
+            pthread_mutex_lock(&session->mutex);
+            for (uint32_t i = 0; i < chunk.size; i++) {
+                session->preroll_ring[session->preroll_ring_write_pos] = chunk.data[i];
+                session->preroll_ring_write_pos =
+                    (session->preroll_ring_write_pos + 1) % session->preroll_ring_capacity;
+                if (session->preroll_ring_filled < session->preroll_ring_capacity) {
+                    session->preroll_ring_filled++;
+                }
+            }
+            pthread_mutex_unlock(&session->mutex);
+        }
+
+        if (current_state == ETHERVOX_CONV_STATE_SPEAKING) {
+            if (speaking_started_at_ms == 0) {
+                speaking_started_at_ms = get_time_ms();
+            }
+            if ((get_time_ms() - speaking_started_at_ms) < (uint64_t)grace_ms) {
+                free(chunk.data);
+                continue;  // Still within the TTS-onset/AEC-convergence grace window
+            }
+        }
+
+        float energy = ethervox_audio_calculate_rms_energy(chunk.data, chunk.size);
+        int chunk_ms = (int)((uint64_t)chunk.size * 1000ULL / sample_rate);
+        free(chunk.data);
+
+        if (energy > threshold) {
+            consecutive_speech_ms += chunk_ms > 0 ? chunk_ms : 1;
+        } else {
+            consecutive_speech_ms = 0;
+        }
+
+        if (consecutive_speech_ms >= min_speech_ms) {
+            ETHERVOX_LOG_INFO("[Barge-in] Sustained speech detected (%dms) during %s - interrupting",
+                              consecutive_speech_ms,
+                              current_state == ETHERVOX_CONV_STATE_SPEAKING ? "SPEAKING" : "THINKING");
+
+            pthread_mutex_lock(&session->mutex);
+            size_t samples = session->preroll_ring_filled;
+            free(session->pending_preroll_audio);
+            session->pending_preroll_audio = samples > 0 ? (float*)malloc(samples * sizeof(float)) : NULL;
+            if (session->pending_preroll_audio) {
+                // Ring buffer read-out in chronological order.
+                size_t start = (session->preroll_ring_write_pos + session->preroll_ring_capacity - samples) %
+                               session->preroll_ring_capacity;
+                for (size_t i = 0; i < samples; i++) {
+                    session->pending_preroll_audio[i] =
+                        session->preroll_ring[(start + i) % session->preroll_ring_capacity];
+                }
+                session->pending_preroll_samples = samples;
+            } else {
+                session->pending_preroll_samples = 0;
+            }
+            pthread_mutex_unlock(&session->mutex);
+
+            ethervox_conversation_interrupt(session);
+            break;
+        }
+    }
+
+    return NULL;
+}
+
+/**
+ * @brief Start the barge-in monitor thread for this turn (THINKING and/or
+ * SPEAKING). No-op if barge-in is disabled or a monitor is already running.
+ * Must be paired with stop_barge_in_monitor() before the next
+ * capture_utterance_with_vad() call - see that function's caller in
+ * conversation_thread().
+ */
+static void start_barge_in_monitor(ethervox_conversation_session_t* session) {
+    if (!session->config.barge_in_enabled || session->barge_in_thread_active) {
+        return;
+    }
+
+    pthread_mutex_lock(&session->mutex);
+    session->barge_in_stop_requested = false;
+    session->preroll_ring_write_pos = 0;
+    session->preroll_ring_filled = 0;
+    pthread_mutex_unlock(&session->mutex);
+
+    if (pthread_create(&session->barge_in_thread, NULL, run_barge_in_monitor, session) == 0) {
+        session->barge_in_thread_active = true;
+    } else {
+        ETHERVOX_LOG_WARN("[Barge-in] Failed to start monitor thread - falling back to "
+                           "tap-to-interrupt only for this turn");
+    }
+}
+
+/**
+ * @brief Stop and join the barge-in monitor thread if one is running. Safe
+ * to call even if barge-in is disabled or the monitor already self-
+ * terminated (e.g. because it just triggered a barge-in).
+ */
+static void stop_barge_in_monitor(ethervox_conversation_session_t* session) {
+    if (!session->barge_in_thread_active) {
+        return;
+    }
+
+    pthread_mutex_lock(&session->mutex);
+    session->barge_in_stop_requested = true;
+    pthread_mutex_unlock(&session->mutex);
+
+    pthread_join(session->barge_in_thread, NULL);
+    session->barge_in_thread_active = false;
+}
+
 /**
  * @brief Conversation processing thread
  */
@@ -622,6 +846,14 @@ static void* conversation_thread(void* arg) {
         audio_config.channels = 1;
         audio_config.bits_per_sample = 16;
         audio_config.buffer_size = 4096;
+        // Reused as the barge-in capability signal for the Android AAudio
+        // driver: true switches its input stream to
+        // AAUDIO_INPUT_PRESET_VOICE_COMMUNICATION for platform AEC/NS/AGC
+        // (see platform_android.c); false (default) keeps
+        // AAUDIO_INPUT_PRESET_VOICE_RECOGNITION, today's unchanged behavior.
+        // Desktop's real Speex AEC (session->aec_context, set up separately
+        // below) is unaffected either way.
+        audio_config.enable_echo_cancellation = session->config.barge_in_enabled;
         
         if (ethervox_audio_register_platform_driver(&session->audio_runtime) == 0 &&
             session->audio_runtime.driver.init(&session->audio_runtime, &audio_config) == 0) {
@@ -736,7 +968,7 @@ static void* conversation_thread(void* arg) {
             continue;
         }
         
-        if (session->audio_runtime.driver.start_capture(&session->audio_runtime) != 0) {
+        if (ethervox_audio_start_capture(&session->audio_runtime) != 0) {
             ETHERVOX_LOG_ERROR("Failed to start audio capture");
             conversation_notify_error(session, "Failed to start microphone capture");
             ethervox_stt_stop(&session->stt_runtime);
@@ -747,24 +979,27 @@ static void* conversation_thread(void* arg) {
             continue;
         }
 
-        // ARCHITECTURE CHANGE (barge-in, Granite Speech integration): the
-        // Speex-based AEC path applied inside capture_utterance_with_vad is
-        // real infrastructure but is desktop-only by build config -
-        // CMakeLists.txt explicitly skips Speex DSP on Android ("Android
-        // uses platform audio processing") and there is no iOS AEC path
-        // either. For Mode 1 barge-in on mobile, don't assume this AEC path
-        // is available: either (a) integrate Android's built-in
-        // android.media.audiofx.AcousticEchoCanceler / AutomaticGainControl
-        // platform effects and an iOS-side equivalent (AVAudioEngine
-        // voice-processing I/O unit), wired in per-platform, or (b) start
-        // simpler and half-duplex-gate the mic (mute capture while
-        // platform-native TTS is speaking, with an explicit tap-to-interrupt
-        // affordance as the primary barge-in path instead of true
-        // full-duplex VAD) - see plan.md Open Questions for the tradeoff.
+        // Barge-in support: when config.barge_in_enabled, keep the mic
+        // stream open continuously through PROCESSING/SPEAKING instead of
+        // stopping it here - run_barge_in_monitor() (started below, right
+        // before the Governor call) polls it concurrently with Governor
+        // generation and TTS playback, both of which block this thread via
+        // a synchronous call and can't watch the mic themselves. See
+        // conversation.h's barge_in_* config fields and plan.md Open
+        // Question 1. When barge-in is disabled (default, or on a device
+        // without real platform AEC - see platform_android.c's
+        // AAUDIO_INPUT_PRESET_VOICE_COMMUNICATION wiring), capture stops
+        // here exactly as before; tap-to-interrupt remains the sole
+        // barge-in mechanism in that case. ethervox_audio_start_capture()
+        // above is the is_capturing-guarded wrapper (not the raw
+        // driver.start_capture), since with barge-in enabled this call
+        // re-runs every turn on a stream that may already be open.
         capture_utterance_with_vad(session, 30000, &recognized_text);
 
         ethervox_stt_stop(&session->stt_runtime);
-        session->audio_runtime.driver.stop_capture(&session->audio_runtime);
+        if (!session->config.barge_in_enabled) {
+            ethervox_audio_stop_capture(&session->audio_runtime);
+        }
         
         pthread_mutex_lock(&session->mutex);
         
@@ -797,6 +1032,13 @@ static void* conversation_thread(void* arg) {
                 session->config.callback_user_data);
         }
         
+        // Barge-in monitor spans this Governor call (THINKING) and, from
+        // inside it, conversation_on_speak()'s TTS wait (SPEAKING) - both
+        // are synchronous from this thread's point of view, so the monitor
+        // is what actually notices new speech during either state. No-op
+        // when config.barge_in_enabled is false.
+        start_barge_in_monitor(session);
+
         // Send to Governor with execution context for tool-based conversational AI
         if (session->governor) {
             char* llm_response = NULL;
@@ -849,10 +1091,17 @@ static void* conversation_thread(void* arg) {
                     ETHERVOX_LOG_INFO("Governor executed successfully (tools used)");
                 }
             } else if (status == ETHERVOX_GOVERNOR_INTERRUPTED) {
-                ETHERVOX_LOG_INFO("Conversation interrupted by user");
+                // Barge-in (VAD-triggered or manual tap-to-interrupt) -
+                // return to LISTENING/IDLE below like any other completed
+                // turn instead of ending the whole session (previously this
+                // `break`d out of conversation_thread entirely, contradicting
+                // interruptVoiceConversation()'s documented "returns to
+                // LISTENING without ending it" contract on the Kotlin side).
+                // Any pre-roll audio the monitor captured is picked up by
+                // the next capture_utterance_with_vad() call automatically.
+                ETHERVOX_LOG_INFO("Conversation interrupted by user (barge-in)");
                 if (llm_response) free(llm_response);
                 if (error_msg) free(error_msg);
-                break;  // Exit conversation thread
             } else {
                 ETHERVOX_LOG_WARN("Governor execution failed: %s", 
                                 error_msg ? error_msg : "unknown error");
@@ -864,6 +1113,10 @@ static void* conversation_thread(void* arg) {
             ETHERVOX_LOG_WARN("No Governor instance available");
             printf("❌ Governor not initialized\n");
         }
+
+        // Must be stopped/joined before the next capture_utterance_with_vad()
+        // call - both would otherwise read the mic concurrently.
+        stop_barge_in_monitor(session);
         
         pthread_mutex_lock(&session->mutex);
         
@@ -886,6 +1139,13 @@ static void* conversation_thread(void* arg) {
     conversation_set_state(session, ETHERVOX_CONV_STATE_UNINITIALIZED);
     session->thread_running = false;
     pthread_mutex_unlock(&session->mutex);
+
+    // With barge_in_enabled, capture is left open across turns (see the
+    // per-turn stop_capture guard above) - make sure it's actually released
+    // when the session ends, not just when barge-in is disabled.
+    if (session->config.barge_in_enabled) {
+        ethervox_audio_stop_capture(&session->audio_runtime);
+    }
     
     return NULL;
 }
@@ -918,6 +1178,17 @@ ethervox_conversation_config_t ethervox_conversation_get_default_config(void) {
     // skips synthesis entirely and just reports response text via
     // on_response_text.
     config.tts_enabled = true;
+
+    // Barge-in defaults to OFF - see conversation.h's barge_in_enabled doc
+    // comment. Callers must explicitly enable it after checking real
+    // platform AEC availability; the numeric defaults below are best-effort
+    // starting points only (plan.md Open Question 1 - "needs on-device
+    // testing"), not validated against real hardware.
+    config.barge_in_enabled = false;
+    config.barge_in_energy_threshold = 0.05f;
+    config.barge_in_min_speech_ms = 300;
+    config.barge_in_grace_period_ms = 400;
+    config.barge_in_preroll_ms = 500;
     
     // Always-listening mode (enabled on desktop platforms with sufficient resources)
 #if defined(ETHERVOX_PLATFORM_MACOS) || defined(ETHERVOX_PLATFORM_LINUX) || defined(ETHERVOX_PLATFORM_WINDOWS)
@@ -966,6 +1237,26 @@ ethervox_conversation_session_t* ethervox_conversation_init(
     memset(&session->audio_runtime, 0, sizeof(ethervox_audio_runtime_t));
     session->audio_buffer = NULL;
     session->audio_capture_active = false;
+
+    // Barge-in monitor state + pre-roll ring buffer (see conversation.h's
+    // barge_in_* config fields). Sized from barge_in_preroll_ms at 16kHz
+    // mono, matching the fixed capture sample rate used throughout this
+    // file. Allocated unconditionally (cheap, a few hundred KB at most) so
+    // toggling barge_in_enabled doesn't require a session re-init.
+    session->barge_in_thread_active = false;
+    session->barge_in_stop_requested = false;
+    int preroll_ms = config->barge_in_preroll_ms > 0 ? config->barge_in_preroll_ms : 500;
+    session->preroll_ring_capacity = (size_t)(16000 * preroll_ms / 1000);
+    session->preroll_ring = (float*)calloc(session->preroll_ring_capacity, sizeof(float));
+    session->preroll_ring_write_pos = 0;
+    session->preroll_ring_filled = 0;
+    session->pending_preroll_audio = NULL;
+    session->pending_preroll_samples = 0;
+    if (!session->preroll_ring) {
+        ETHERVOX_LOG_WARN("Failed to allocate barge-in pre-roll buffer - "
+                           "barge-in will still interrupt but without pre-roll audio");
+        session->preroll_ring_capacity = 0;
+    }
     
     // Always-listening mode
     session->always_listening = config->always_listening;
@@ -1268,6 +1559,13 @@ void ethervox_conversation_cleanup(ethervox_conversation_session_t* session) {
         free(session->audio_buffer->data);
         session->audio_buffer = NULL;
     }
+
+    // Free barge-in pre-roll buffers (the monitor thread itself is always
+    // stopped/joined by ethervox_conversation_stop() above before we get here)
+    free(session->preroll_ring);
+    session->preroll_ring = NULL;
+    free(session->pending_preroll_audio);
+    session->pending_preroll_audio = NULL;
     
     // Destroy threading primitives
     pthread_mutex_destroy(&session->mutex);
