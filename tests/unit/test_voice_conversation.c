@@ -17,6 +17,125 @@
 #include "ethervox/governor.h"
 
 /**
+ * Test: Barge-in hysteresis detector (ethervox_barge_in_detector_process)
+ *
+ * Pure, allocation-free, no threading/audio hardware - see conversation.h's
+ * doc comments and voice_conversation.c's run_barge_in_monitor() for the
+ * production caller. Exercises the exact boundary conditions that were
+ * previously unverifiable (only reachable via real thread timing).
+ */
+static int test_barge_in_detector_hysteresis(void) {
+    printf("  - test_barge_in_detector_hysteresis... ");
+
+    ethervox_barge_in_detector_t det;
+    ethervox_barge_in_detector_init(&det, /*energy_threshold=*/0.05f, /*min_speech_ms=*/300,
+                                     /*grace_period_ms=*/400);
+
+    // Below threshold never accumulates, regardless of duration.
+    assert(!ethervox_barge_in_detector_process(&det, 0.01f, 100, /*is_speaking=*/false, 1000));
+    assert(det.consecutive_speech_ms == 0);
+    assert(!ethervox_barge_in_detector_process(&det, 0.01f, 500, /*is_speaking=*/false, 1500));
+    assert(det.consecutive_speech_ms == 0);
+
+    // Above threshold accumulates; exactly reaching min_speech_ms triggers,
+    // one chunk short does not (boundary correctness).
+    assert(!ethervox_barge_in_detector_process(&det, 0.10f, 100, /*is_speaking=*/false, 2000));
+    assert(det.consecutive_speech_ms == 100);
+    assert(!ethervox_barge_in_detector_process(&det, 0.10f, 100, /*is_speaking=*/false, 2100));
+    assert(det.consecutive_speech_ms == 200);
+    assert(!ethervox_barge_in_detector_process(&det, 0.10f, 99, /*is_speaking=*/false, 2199));
+    assert(det.consecutive_speech_ms == 299);
+    assert(ethervox_barge_in_detector_process(&det, 0.10f, 1, /*is_speaking=*/false, 2200));
+    assert(det.consecutive_speech_ms == 300);
+
+    // A drop below threshold resets the hysteresis counter to zero, not
+    // just pausing it - a single quiet chunk shouldn't let two separate
+    // bursts of speech add up to a false trigger.
+    ethervox_barge_in_detector_init(&det, 0.05f, 300, 400);
+    assert(!ethervox_barge_in_detector_process(&det, 0.10f, 250, false, 1000));
+    assert(det.consecutive_speech_ms == 250);
+    assert(!ethervox_barge_in_detector_process(&det, 0.01f, 100, false, 1250));
+    assert(det.consecutive_speech_ms == 0);
+    assert(!ethervox_barge_in_detector_process(&det, 0.10f, 250, false, 1350));
+    assert(det.consecutive_speech_ms == 250);  // Not 500 - reset, not paused
+
+    printf("PASS\n");
+    return ETHERVOX_SUCCESS;
+}
+
+/**
+ * Test: Barge-in grace period, applied only while is_speaking is true.
+ */
+static int test_barge_in_detector_grace_period(void) {
+    printf("  - test_barge_in_detector_grace_period... ");
+
+    ethervox_barge_in_detector_t det;
+    ethervox_barge_in_detector_init(&det, 0.05f, /*min_speech_ms=*/100, /*grace_period_ms=*/400);
+
+    // SPEAKING starts at t=1000. Loud energy at t=1399 (399ms in) must still
+    // be suppressed by the grace window; at t=1401 (401ms in) it must not.
+    assert(!ethervox_barge_in_detector_process(&det, 0.10f, 100, /*is_speaking=*/true, 1000));
+    assert(det.consecutive_speech_ms == 0);  // Grace window - not even accumulated
+    assert(!ethervox_barge_in_detector_process(&det, 0.10f, 100, /*is_speaking=*/true, 1399));
+    assert(det.consecutive_speech_ms == 0);
+    assert(!ethervox_barge_in_detector_process(&det, 0.10f, 100, /*is_speaking=*/true, 1401));
+    assert(det.consecutive_speech_ms == 100);  // Grace window over - now accumulating
+
+    // THINKING (is_speaking=false) must never apply a grace period,
+    // regardless of timestamps - detection is immediate.
+    ethervox_barge_in_detector_init(&det, 0.05f, 100, 400);
+    assert(ethervox_barge_in_detector_process(&det, 0.10f, 100, /*is_speaking=*/false, 5000));
+    assert(det.consecutive_speech_ms == 100);
+
+    printf("PASS\n");
+    return ETHERVOX_SUCCESS;
+}
+
+/**
+ * Test: Pre-roll ring buffer write/snapshot (ethervox_preroll_ring_write /
+ * ethervox_preroll_ring_snapshot) - pure array/index math, no session
+ * struct or malloc required.
+ */
+static int test_preroll_ring_buffer(void) {
+    printf("  - test_preroll_ring_buffer... ");
+
+    const size_t capacity = 5;
+    float ring[5] = {0};
+    size_t write_pos = 0, filled = 0;
+
+    // Partial fill (less than capacity): snapshot should return exactly the
+    // samples written, in chronological order.
+    float chunk1[3] = {1.0f, 2.0f, 3.0f};
+    ethervox_preroll_ring_write(ring, capacity, &write_pos, &filled, chunk1, 3);
+    assert(filled == 3);
+    assert(write_pos == 3);
+
+    float out[5] = {0};
+    size_t n = ethervox_preroll_ring_snapshot(ring, capacity, write_pos, filled, out, 5);
+    assert(n == 3);
+    assert(out[0] == 1.0f && out[1] == 2.0f && out[2] == 3.0f);
+
+    // Wraparound: writing past capacity must overwrite the oldest samples
+    // first and the snapshot must still come out in chronological order.
+    float chunk2[4] = {4.0f, 5.0f, 6.0f, 7.0f};
+    ethervox_preroll_ring_write(ring, capacity, &write_pos, &filled, chunk2, 4);
+    assert(filled == capacity);  // Capped at capacity, not 7
+    n = ethervox_preroll_ring_snapshot(ring, capacity, write_pos, filled, out, 5);
+    assert(n == 5);
+    // Last 5 samples written were 3,4,5,6,7 in that order (1,2 overwritten).
+    assert(out[0] == 3.0f && out[1] == 4.0f && out[2] == 5.0f && out[3] == 6.0f && out[4] == 7.0f);
+
+    // Snapshot output buffer smaller than filled: truncate to out_capacity,
+    // still chronological (most-recent-fitting samples), no overflow.
+    float small_out[2] = {0};
+    n = ethervox_preroll_ring_snapshot(ring, capacity, write_pos, filled, small_out, 2);
+    assert(n == 2);
+
+    printf("PASS\n");
+    return ETHERVOX_SUCCESS;
+}
+
+/**
  * Test: Conversation configuration
  */
 static int test_conversation_config(void) {
@@ -308,6 +427,9 @@ int main(void) {
     failed += test_multiple_sessions();
     failed += test_conversation_timeouts();
     failed += test_conversation_barge_in_session();
+    failed += test_barge_in_detector_hysteresis();
+    failed += test_barge_in_detector_grace_period();
+    failed += test_preroll_ring_buffer();
     
     printf("\n");
     if (failed == 0) {

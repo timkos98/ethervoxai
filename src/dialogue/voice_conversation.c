@@ -640,6 +640,75 @@ static int conversation_on_interrupt(void* user_data) {
 }
 
 // ============================================================================
+// Barge-in detection primitives (pure, allocation-free) - declared in
+// conversation.h specifically so they're unit-testable independent of real
+// audio hardware/threading. See tests/unit/test_voice_conversation.c.
+// ============================================================================
+
+void ethervox_barge_in_detector_init(ethervox_barge_in_detector_t* detector,
+                                      float energy_threshold, int min_speech_ms,
+                                      int grace_period_ms) {
+    if (!detector) return;
+    detector->energy_threshold = energy_threshold;
+    detector->min_speech_ms = min_speech_ms;
+    detector->grace_period_ms = grace_period_ms;
+    detector->consecutive_speech_ms = 0;
+    detector->speaking_started_at_ms = 0;
+}
+
+bool ethervox_barge_in_detector_process(ethervox_barge_in_detector_t* detector,
+                                         float energy, int chunk_ms,
+                                         bool is_speaking, uint64_t now_ms) {
+    if (!detector) return false;
+
+    if (is_speaking) {
+        if (detector->speaking_started_at_ms == 0) {
+            detector->speaking_started_at_ms = now_ms;
+        }
+        if ((now_ms - detector->speaking_started_at_ms) < (uint64_t)detector->grace_period_ms) {
+            return false;  // Still within the TTS-onset/AEC-convergence grace window
+        }
+    }
+
+    if (energy > detector->energy_threshold) {
+        detector->consecutive_speech_ms += chunk_ms > 0 ? chunk_ms : 1;
+    } else {
+        detector->consecutive_speech_ms = 0;
+    }
+
+    return detector->consecutive_speech_ms >= detector->min_speech_ms;
+}
+
+void ethervox_preroll_ring_write(float* ring, size_t capacity, size_t* write_pos,
+                                  size_t* filled, const float* samples, size_t count) {
+    if (!ring || capacity == 0 || !write_pos || !filled || !samples) return;
+
+    for (size_t i = 0; i < count; i++) {
+        ring[*write_pos] = samples[i];
+        *write_pos = (*write_pos + 1) % capacity;
+        if (*filled < capacity) {
+            (*filled)++;
+        }
+    }
+}
+
+size_t ethervox_preroll_ring_snapshot(const float* ring, size_t capacity, size_t write_pos,
+                                       size_t filled, float* out, size_t out_capacity) {
+    if (!ring || capacity == 0 || !out || out_capacity == 0) return 0;
+
+    size_t samples = filled < out_capacity ? filled : out_capacity;
+    if (samples == 0) return 0;
+
+    // Chronological (oldest-first) read-out: the oldest retained sample is
+    // `samples` slots behind the current write position.
+    size_t start = (write_pos + capacity - samples) % capacity;
+    for (size_t i = 0; i < samples; i++) {
+        out[i] = ring[(start + i) % capacity];
+    }
+    return samples;
+}
+
+// ============================================================================
 // Barge-in monitor (VAD-based interrupt during THINKING/SPEAKING)
 // ============================================================================
 
@@ -656,14 +725,16 @@ static int conversation_on_interrupt(void* user_data) {
  * conversation_thread()'s capture-lifecycle note) - this thread does not
  * start or stop the mic itself, only reads from it.
  *
- * A grace period (config.barge_in_grace_period_ms) is applied only once
- * this thread observes session->state == ETHERVOX_CONV_STATE_SPEAKING -
- * THINKING has no simultaneous audio output, so there is nothing acoustically
- * to guard against there and detection is immediate.
+ * The actual trigger decision (hysteresis + grace period) is delegated to
+ * ethervox_barge_in_detector_process() and the pre-roll ring bookkeeping to
+ * ethervox_preroll_ring_write()/ethervox_preroll_ring_snapshot() - both pure
+ * functions unit-tested directly in test_voice_conversation.c. This thread
+ * is just the (untestable-without-hardware) glue: mutex-guarded state
+ * reads, blocking audio I/O, and calling ethervox_conversation_interrupt()
+ * on a committed trigger.
  *
- * On a committed trigger (config.barge_in_min_speech_ms of consecutive
- * energy above config.barge_in_energy_threshold), snapshots the pre-roll
- * ring buffer into session->pending_preroll_audio and calls the existing
+ * On a committed trigger, snapshots the pre-roll ring buffer into
+ * session->pending_preroll_audio and calls the existing
  * ethervox_conversation_interrupt() - the exact same path as the manual
  * "tap to interrupt" UI action - so barge-in is additive to, not a
  * reimplementation of, that mechanism.
@@ -671,14 +742,13 @@ static int conversation_on_interrupt(void* user_data) {
 static void* run_barge_in_monitor(void* arg) {
     ethervox_conversation_session_t* session = (ethervox_conversation_session_t*)arg;
 
-    const float threshold = session->config.barge_in_energy_threshold;
-    const int min_speech_ms = session->config.barge_in_min_speech_ms;
-    const int grace_ms = session->config.barge_in_grace_period_ms;
     const uint32_t sample_rate =
         session->audio_runtime.config.sample_rate > 0 ? session->audio_runtime.config.sample_rate : 16000;
 
-    int consecutive_speech_ms = 0;
-    uint64_t speaking_started_at_ms = 0;  // 0 == SPEAKING not yet observed this turn
+    ethervox_barge_in_detector_t detector;
+    ethervox_barge_in_detector_init(&detector, session->config.barge_in_energy_threshold,
+                                     session->config.barge_in_min_speech_ms,
+                                     session->config.barge_in_grace_period_ms);
 
     for (;;) {
         pthread_mutex_lock(&session->mutex);
@@ -706,55 +776,32 @@ static void* run_barge_in_monitor(void* arg) {
         // leading syllables available.
         if (session->preroll_ring && session->preroll_ring_capacity > 0) {
             pthread_mutex_lock(&session->mutex);
-            for (uint32_t i = 0; i < chunk.size; i++) {
-                session->preroll_ring[session->preroll_ring_write_pos] = chunk.data[i];
-                session->preroll_ring_write_pos =
-                    (session->preroll_ring_write_pos + 1) % session->preroll_ring_capacity;
-                if (session->preroll_ring_filled < session->preroll_ring_capacity) {
-                    session->preroll_ring_filled++;
-                }
-            }
+            ethervox_preroll_ring_write(session->preroll_ring, session->preroll_ring_capacity,
+                                        &session->preroll_ring_write_pos,
+                                        &session->preroll_ring_filled, chunk.data, chunk.size);
             pthread_mutex_unlock(&session->mutex);
         }
 
-        if (current_state == ETHERVOX_CONV_STATE_SPEAKING) {
-            if (speaking_started_at_ms == 0) {
-                speaking_started_at_ms = get_time_ms();
-            }
-            if ((get_time_ms() - speaking_started_at_ms) < (uint64_t)grace_ms) {
-                free(chunk.data);
-                continue;  // Still within the TTS-onset/AEC-convergence grace window
-            }
-        }
-
+        bool is_speaking = (current_state == ETHERVOX_CONV_STATE_SPEAKING);
         float energy = ethervox_audio_calculate_rms_energy(chunk.data, chunk.size);
         int chunk_ms = (int)((uint64_t)chunk.size * 1000ULL / sample_rate);
         free(chunk.data);
 
-        if (energy > threshold) {
-            consecutive_speech_ms += chunk_ms > 0 ? chunk_ms : 1;
-        } else {
-            consecutive_speech_ms = 0;
-        }
+        bool triggered =
+            ethervox_barge_in_detector_process(&detector, energy, chunk_ms, is_speaking, get_time_ms());
 
-        if (consecutive_speech_ms >= min_speech_ms) {
+        if (triggered) {
             ETHERVOX_LOG_INFO("[Barge-in] Sustained speech detected (%dms) during %s - interrupting",
-                              consecutive_speech_ms,
-                              current_state == ETHERVOX_CONV_STATE_SPEAKING ? "SPEAKING" : "THINKING");
+                              detector.consecutive_speech_ms, is_speaking ? "SPEAKING" : "THINKING");
 
             pthread_mutex_lock(&session->mutex);
-            size_t samples = session->preroll_ring_filled;
+            size_t capacity = session->preroll_ring_filled;
             free(session->pending_preroll_audio);
-            session->pending_preroll_audio = samples > 0 ? (float*)malloc(samples * sizeof(float)) : NULL;
+            session->pending_preroll_audio = capacity > 0 ? (float*)malloc(capacity * sizeof(float)) : NULL;
             if (session->pending_preroll_audio) {
-                // Ring buffer read-out in chronological order.
-                size_t start = (session->preroll_ring_write_pos + session->preroll_ring_capacity - samples) %
-                               session->preroll_ring_capacity;
-                for (size_t i = 0; i < samples; i++) {
-                    session->pending_preroll_audio[i] =
-                        session->preroll_ring[(start + i) % session->preroll_ring_capacity];
-                }
-                session->pending_preroll_samples = samples;
+                session->pending_preroll_samples = ethervox_preroll_ring_snapshot(
+                    session->preroll_ring, session->preroll_ring_capacity, session->preroll_ring_write_pos,
+                    session->preroll_ring_filled, session->pending_preroll_audio, capacity);
             } else {
                 session->pending_preroll_samples = 0;
             }
@@ -767,6 +814,7 @@ static void* run_barge_in_monitor(void* arg) {
 
     return NULL;
 }
+
 
 /**
  * @brief Start the barge-in monitor thread for this turn (THINKING and/or

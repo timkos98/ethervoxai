@@ -24,6 +24,7 @@
 
 #include <pthread.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include "ethervox/error.h"
 
@@ -214,6 +215,87 @@ typedef struct {
  * @brief Opaque conversation session runtime
  */
 typedef struct ethervox_conversation_session ethervox_conversation_session_t;
+
+// ============================================================================
+// Barge-in detection primitives (pure, allocation-free, no threading/audio
+// I/O) - extracted out of the internal monitor thread specifically so the
+// hysteresis/grace-period decision logic and pre-roll ring-buffer math can
+// be unit tested directly with synthetic inputs, independent of real audio
+// hardware or thread timing. See src/dialogue/voice_conversation.c's
+// run_barge_in_monitor() for the only production caller, and
+// tests/unit/test_voice_conversation.c for the unit tests exercising these
+// directly.
+// ============================================================================
+
+/**
+ * @brief Hysteresis + grace-period state for one barge-in monitoring turn.
+ * Reset (via ethervox_barge_in_detector_init) at the start of each
+ * THINKING/SPEAKING span.
+ */
+typedef struct {
+    float energy_threshold;
+    int min_speech_ms;
+    int grace_period_ms;
+    int consecutive_speech_ms;       // Running hysteresis counter
+    uint64_t speaking_started_at_ms; // 0 == SPEAKING not yet observed this turn
+} ethervox_barge_in_detector_t;
+
+/**
+ * @brief Initialize/reset a detector for a new THINKING/SPEAKING turn.
+ */
+void ethervox_barge_in_detector_init(ethervox_barge_in_detector_t* detector,
+                                      float energy_threshold, int min_speech_ms,
+                                      int grace_period_ms);
+
+/**
+ * @brief Feed one audio chunk's measured RMS energy through the detector.
+ *
+ * @param detector State to update in place.
+ * @param energy RMS energy of this chunk (see ethervox_audio_calculate_rms_energy).
+ * @param chunk_ms Duration of this chunk in milliseconds.
+ * @param is_speaking Whether the conversation state is currently SPEAKING (TTS
+ *   playing). THINKING callers pass false - there is no output audio to
+ *   guard against, so no grace period applies and detection is immediate.
+ * @param now_ms Monotonic timestamp of this chunk (e.g. get_time_ms()); only
+ *   used to time the grace period once is_speaking first becomes true.
+ * @return true exactly once - on the chunk that pushes consecutive
+ *   above-threshold time past min_speech_ms. The caller should act on the
+ *   trigger and stop feeding this detector for the turn (it is not reset
+ *   automatically after triggering).
+ */
+bool ethervox_barge_in_detector_process(ethervox_barge_in_detector_t* detector,
+                                         float energy, int chunk_ms,
+                                         bool is_speaking, uint64_t now_ms);
+
+/**
+ * @brief Write samples into a caller-owned ring buffer, advancing
+ * *write_pos and *filled in place. Pure index/array math - no allocation,
+ * no session/thread dependency.
+ *
+ * @param ring Ring buffer storage, capacity elements.
+ * @param capacity Total capacity of ring, in samples.
+ * @param write_pos In/out: next write index, wrapped into [0, capacity).
+ * @param filled In/out: samples written so far, capped at capacity.
+ * @param samples Samples to write.
+ * @param count Number of samples to write.
+ */
+void ethervox_preroll_ring_write(float* ring, size_t capacity, size_t* write_pos,
+                                  size_t* filled, const float* samples, size_t count);
+
+/**
+ * @brief Read out the ring buffer's contents in chronological order (oldest
+ * first) into a caller-owned output buffer.
+ *
+ * @param ring Ring buffer storage, capacity elements.
+ * @param capacity Total capacity of ring, in samples.
+ * @param write_pos Current write index (as maintained by ethervox_preroll_ring_write).
+ * @param filled Samples currently valid in ring (as maintained by ethervox_preroll_ring_write).
+ * @param out Output buffer, at least out_capacity elements.
+ * @param out_capacity Capacity of out.
+ * @return Number of samples written to out (min(filled, out_capacity)).
+ */
+size_t ethervox_preroll_ring_snapshot(const float* ring, size_t capacity, size_t write_pos,
+                                       size_t filled, float* out, size_t out_capacity);
 
 /**
  * @brief Get default conversation configuration
