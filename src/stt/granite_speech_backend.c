@@ -42,34 +42,17 @@
 #include "ethervox/error.h"
 #include "ethervox/logging.h"
 #include "ethervox/chat_template.h"
+#include "ethervox/granite_speech_decode.h"
 
 #if defined(LLAMA_CPP_AVAILABLE) && LLAMA_CPP_AVAILABLE && defined(MTMD_AVAILABLE) && MTMD_AVAILABLE
 
 #include "llama.h"
 #include "ggml.h"
 #include "mtmd.h"
-#include "mtmd-helper.h"
 
 #define LOG_ERROR(...) ethervox_log(ETHERVOX_LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__, __VA_ARGS__)
 #define LOG_WARN(...)  ethervox_log(ETHERVOX_LOG_LEVEL_WARN, __FILE__, __LINE__, __func__, __VA_ARGS__)
 #define LOG_INFO(...)  ethervox_log(ETHERVOX_LOG_LEVEL_INFO, __FILE__, __LINE__, __func__, __VA_ARGS__)
-
-// ----------------------------------------------------------------------------
-// Fixed prompts, verbatim from IBM's granite-speech-4.1-2b-plus model card.
-// Mode switching is entirely prompt-driven - there is no separate API flag,
-// and no per-variant code path beyond "which of these two strings is used".
-// ----------------------------------------------------------------------------
-#define GRANITE_SPEECH_ASR_PROMPT \
-  "<|audio|> can you transcribe the speech into a written format?"
-#define GRANITE_SPEECH_SAA_PROMPT \
-  "<|audio|> Speaker attribution: Transcribe and denote who is speaking by adding " \
-  "[Speaker 1]: and [Speaker 2]: tags before speaker turns."
-#define GRANITE_SPEECH_SYSTEM_PROMPT \
-  "You are Granite, developed by IBM. You are a helpful AI assistant"
-
-#define GRANITE_SPEECH_ASR_MAX_TOKENS 256
-#define GRANITE_SPEECH_SAA_MAX_TOKENS 1024
-#define GRANITE_SPEECH_PROMPT_BUF_SIZE 2048
 
 static bool g_granite_llama_backend_initialized = false;
 
@@ -248,123 +231,15 @@ ethervox_result_t ethervox_stt_granite_speech_finalize(ethervox_stt_runtime_t* r
   }
 
   bool is_plus = (runtime->config.backend == ETHERVOX_STT_BACKEND_GRANITE_SPEECH_PLUS);
-  const char* task_prompt = is_plus ? GRANITE_SPEECH_SAA_PROMPT : GRANITE_SPEECH_ASR_PROMPT;
-  uint32_t max_tokens = runtime->config.max_transcript_tokens != 0
-                            ? runtime->config.max_transcript_tokens
-                            : (is_plus ? GRANITE_SPEECH_SAA_MAX_TOKENS : GRANITE_SPEECH_ASR_MAX_TOKENS);
 
-  // Build the full prompt: system + user (containing the "<|audio|>" marker)
-  // + assistant generation-prompt tag (+ prefix_text, if carrying forward a
-  // Mode 2 incremental-decoding session - matches the model's own Jinja
-  // template, which appends prefix_text immediately after the assistant tag).
-  char prompt[GRANITE_SPEECH_PROMPT_BUF_SIZE];
-  int written = snprintf(prompt, sizeof(prompt), "%s%s%s%s%s%s%s%s",
-                          gs->tmpl->system_start, GRANITE_SPEECH_SYSTEM_PROMPT, gs->tmpl->system_end,
-                          gs->tmpl->user_start, task_prompt, gs->tmpl->user_end,
-                          gs->tmpl->assistant_start,
-                          runtime->config.prefix_text ? runtime->config.prefix_text : "");
-  if (written < 0 || (size_t)written >= sizeof(prompt)) {
-    LOG_ERROR("Granite Speech: prompt buffer too small (needed %d bytes)", written);
-    return ETHERVOX_ERROR_INVALID_ARGUMENT;
-  }
-
-  mtmd_bitmap* bitmap = mtmd_bitmap_init_from_audio(runtime->accumulator_write_pos, runtime->audio_accumulator);
-  if (!bitmap) {
-    LOG_ERROR("Granite Speech: failed to construct audio bitmap from %u samples",
-              runtime->accumulator_write_pos);
-    return ETHERVOX_ERROR_INVALID_ARGUMENT;
-  }
-
-  mtmd_input_text input_text = {.text = prompt, .add_special = true, .parse_special = true};
-  mtmd_input_chunks* chunks = mtmd_input_chunks_init();
-  const mtmd_bitmap* bitmaps[1] = {bitmap};
-  int32_t tok_rc = mtmd_tokenize(gs->mctx, chunks, &input_text, bitmaps, 1);
-  if (tok_rc != 0) {
-    LOG_ERROR("Granite Speech: mtmd_tokenize failed (rc=%d)", tok_rc);
-    mtmd_input_chunks_free(chunks);
-    mtmd_bitmap_free(bitmap);
-    return ETHERVOX_ERROR_INVALID_ARGUMENT;
-  }
-
-  llama_pos new_n_past = 0;
-  int32_t eval_rc = mtmd_helper_eval_chunks(gs->mctx, gs->ctx, chunks, /*n_past=*/0, /*seq_id=*/0,
-                                            /*n_batch=*/512, /*logits_last=*/true, &new_n_past);
-  mtmd_input_chunks_free(chunks);
-  mtmd_bitmap_free(bitmap);
-  if (eval_rc != 0) {
-    LOG_ERROR("Granite Speech: mtmd_helper_eval_chunks failed (rc=%d)", eval_rc);
-    return ETHERVOX_ERROR_INVALID_ARGUMENT;
-  }
-
-  // Autoregressive greedy decoding of the transcript, one token at a time -
-  // mirrors the pattern used for the Governor's own generation loop in
-  // src/governor/governor.c. Greedy (temp=0) matches the decoding IBM/
-  // llama.cpp validated their token-for-token reference match against.
-  const struct llama_vocab* vocab = llama_model_get_vocab(gs->model);
-  struct llama_sampler* sampler = llama_sampler_chain_init(llama_sampler_chain_default_params());
-  llama_sampler_chain_add(sampler, llama_sampler_init_temp(0.0f));
-  llama_sampler_chain_add(sampler, llama_sampler_init_dist(0));
-
-  char* transcript = (char*)calloc(1, 8192);
-  size_t transcript_len = 0;
-  size_t transcript_cap = 8192;
-  llama_pos pos = new_n_past;
-
-  for (uint32_t i = 0; i < max_tokens; i++) {
-    llama_token next_token = llama_sampler_sample(sampler, gs->ctx, -1);
-    if (llama_vocab_is_eog(vocab, next_token)) {
-      break;
-    }
-
-    char piece[128];
-    int n_chars = llama_token_to_piece(vocab, next_token, piece, sizeof(piece), 0, false);
-    if (n_chars > 0) {
-      if (transcript_len + (size_t)n_chars + 1 > transcript_cap) {
-        transcript_cap *= 2;
-        char* grown = (char*)realloc(transcript, transcript_cap);
-        if (!grown) {
-          LOG_ERROR("Granite Speech: out of memory growing transcript buffer");
-          break;
-        }
-        transcript = grown;
-      }
-      memcpy(transcript + transcript_len, piece, (size_t)n_chars);
-      transcript_len += (size_t)n_chars;
-      transcript[transcript_len] = '\0';
-
-      if (chat_template_has_stop_sequence(gs->tmpl, transcript)) {
-        break;
-      }
-    }
-
-    llama_batch batch = llama_batch_init(1, 0, 1);
-    batch.n_tokens = 1;
-    batch.token[0] = next_token;
-    batch.pos[0] = pos;
-    batch.n_seq_id[0] = 1;
-    batch.seq_id[0][0] = 0;
-    batch.logits[0] = true;
-    int decode_rc = llama_decode(gs->ctx, batch);
-    llama_batch_free(batch);
-    if (decode_rc != 0) {
-      LOG_ERROR("Granite Speech: llama_decode failed during generation (rc=%d)", decode_rc);
-      break;
-    }
-    pos++;
-  }
-
-  llama_sampler_free(sampler);
-
-  // Strip any trailing stop-sequence text that leaked into the buffer before
-  // the check above caught it (e.g. "<|end_of_text|>" itself is 1-3 tokens).
-  for (int i = 0; i < gs->tmpl->stop_sequence_count; i++) {
-    const char* stop = gs->tmpl->stop_sequences[i];
-    if (!stop) continue;
-    char* found = strstr(transcript, stop);
-    if (found) {
-      *found = '\0';
-      transcript_len = strlen(transcript);
-    }
+  char* transcript = NULL;
+  ethervox_result_t decode_result = granite_speech_decode(
+      gs->model, gs->ctx, gs->mctx, gs->tmpl, /*seq_id=*/0,
+      runtime->audio_accumulator, runtime->accumulator_write_pos,
+      /*is_saa=*/is_plus, /*prefix_text=*/runtime->config.prefix_text,
+      /*max_tokens=*/runtime->config.max_transcript_tokens, &transcript);
+  if (!ethervox_is_success(decode_result)) {
+    return decode_result;
   }
 
   result->text = transcript;  // ownership transferred to caller (ethervox_stt_result_free)
