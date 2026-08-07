@@ -2,6 +2,14 @@ cmake_minimum_required(VERSION 3.16)
 
 project(EthervoxAI VERSION 0.0.5 LANGUAGES C CXX)
 
+# Enable Objective-C for Apple-platform-specific shims (e.g. weather_http_ios.m,
+# and the future AVAudioSession audio HAL shim for iOS voice capture) - the
+# C/CXX languages declared above do not include OBJC by default, and CMake
+# will fail to compile any .m/.mm source without this.
+if(APPLE)
+    enable_language(OBJC)
+endif()
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
@@ -208,6 +216,10 @@ elseif(TARGET_PLATFORM STREQUAL "IOS" OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
     set(ETHERVOX_PLATFORM_IOS 1)
     set(ETHERVOX_PLATFORM_MACOS 1)  # For platform_utils_unix.c
     set(ETHERVOX_PLATFORM_MOBILE 1)
+
+    # iOS requires all libraries to be static (no dylibs in app bundles)
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build static libraries for iOS" FORCE)
+    message(STATUS "Forcing static libraries for iOS platform")
 endif()
 
 # Show which platform macros are defined
@@ -257,6 +269,7 @@ message(STATUS "Runtime directory base configured for ${TARGET_PLATFORM}")
 # Build configuration
 option(BUILD_TESTS "Build test suite" ON)
 option(BUILD_EXAMPLES "Build example applications" ON)
+option(BUILD_EXECUTABLES "Build CLI executables (main app and tools)" ON)
 option(ENABLE_DEBUG "Enable debug logging" OFF)
 option(WITH_LLAMA "Enable Llama.cpp backend support" ON)
 option(WITH_TINYLLAMA "Enable TinyLlama backend support" ON)
@@ -368,7 +381,13 @@ if(WITH_LLAMA AND LLAMA_CPP_SOURCE_DIR)
     set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
     set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
     set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
-    set(BUILD_SHARED_LIBS ON CACHE BOOL "" FORCE)
+    # iOS/Android require static linking - dynamic libs not supported in app bundles
+    if(IOS OR CMAKE_SYSTEM_NAME STREQUAL "iOS" OR TARGET_PLATFORM STREQUAL "IOS" OR ANDROID)
+        set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+        message(STATUS "Using static libraries for mobile platform")
+    else()
+        set(BUILD_SHARED_LIBS ON CACHE BOOL "" FORCE)
+    endif()
     
     # Enable CPU backend optimizations
     set(GGML_CPU ON CACHE BOOL "" FORCE)
@@ -757,8 +776,8 @@ if(NOT ANDROID)
 endif()
 
 # Add weather tools plugin sources (Open-Meteo API integration)
-# Desktop: requires libcurl, Android: uses JNI HTTP client
-if(ANDROID OR HAVE_LIBCURL OR CURL_FOUND)
+# Desktop: requires libcurl, Android: uses JNI HTTP client, iOS: uses NSURLSession
+if(ANDROID OR TARGET_PLATFORM STREQUAL "IOS" OR CMAKE_SYSTEM_NAME STREQUAL "iOS" OR HAVE_LIBCURL OR CURL_FOUND)
     file(GLOB WEATHER_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/weather_tools/*.c")
     if(NOT ANDROID)
         # weather_http_android.c depends on <android/log.h> and <jni.h> and
@@ -768,9 +787,17 @@ if(ANDROID OR HAVE_LIBCURL OR CURL_FOUND)
         # verifying this branch compiles).
         list(FILTER WEATHER_TOOLS_SOURCES EXCLUDE REGEX ".*weather_http_android\\.c$")
     endif()
+    if(TARGET_PLATFORM STREQUAL "IOS" OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        # weather_http_ios.m is added explicitly below (Objective-C, not picked
+        # up by the *.c glob); nothing to exclude here since there's no
+        # weather_http_ios.c counterpart.
+        list(APPEND WEATHER_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/weather_tools/weather_http_ios.m")
+    endif()
     list(APPEND ETHERVOXAI_CORE_SOURCES ${WEATHER_TOOLS_SOURCES})
     if(ANDROID)
         message(STATUS "Weather tools plugin sources included (Android JNI HTTP)")
+    elseif(TARGET_PLATFORM STREQUAL "IOS" OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        message(STATUS "Weather tools plugin sources included (iOS NSURLSession)")
     else()
         message(STATUS "Weather tools plugin sources included (libcurl available)")
     endif()
@@ -807,6 +834,20 @@ elseif(WIN32 OR TARGET_PLATFORM STREQUAL "WINDOWS")
         src/audio/platform_windows.c
         src/platform/desktop_hal.c
         src/platform/windows_stubs.c  # Stubs for excluded features
+        src/platform/device_profile.c  # Hardware detection and adaptive configuration (needed for governor)
+        src/platform/gguf_config_helper.c  # GGUF metadata extraction and config calculation
+    )
+elseif(TARGET_PLATFORM STREQUAL "IOS" OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    # ARCHITECTURE CHANGE (Granite Speech / multiplatform voice integration):
+    # This branch MUST be checked before "APPLE OR MACOS" below - CMake's
+    # APPLE variable is also true when cross-compiling for iOS, so without
+    # this explicit branch iOS builds silently fell into the macOS platform
+    # sources and src/platform/ios_hal.c was never actually compiled in.
+    message(STATUS "Building for iOS - using iOS platform sources")
+    set(PLATFORM_SOURCES
+        src/audio/platform_ios.c
+        src/platform/ios_hal.c
+        src/platform/ios_avaudiosession.m  # ObjC shim: AVAudioSession category/mode config for mic capture
         src/platform/device_profile.c  # Hardware detection and adaptive configuration (needed for governor)
         src/platform/gguf_config_helper.c  # GGUF metadata extraction and config calculation
     )
@@ -1174,7 +1215,7 @@ endif()
 set_property(GLOBAL PROPERTY ETHERVOXAI_PLATFORM_LIBS "${ETHERVOXAI_PLATFORM_LIBS}")
 
 # CLI executable built on top of the reusable library (not for Android or Windows)
-if(NOT ANDROID AND NOT WIN32)
+if(BUILD_EXECUTABLES AND NOT ANDROID AND NOT WIN32)
     add_executable(ethervoxai_app src/main.c)
     target_link_libraries(ethervoxai_app PRIVATE ethervoxai)
     
@@ -1202,7 +1243,7 @@ if(NOT ANDROID AND NOT WIN32)
 endif()
 
 # Voice quality tuner tool (Unix only - uses termios.h)
-if(NOT ANDROID AND NOT WIN32)
+if(BUILD_EXECUTABLES AND NOT ANDROID AND NOT WIN32)
     add_executable(voice_tuner tools/voice_tuner.c)
     target_link_libraries(voice_tuner PRIVATE ethervoxai cjson)
     target_include_directories(voice_tuner PRIVATE 
@@ -1243,7 +1284,7 @@ endif()
 install(TARGETS ethervoxai
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib)
-if(NOT ANDROID AND NOT WIN32)
+if(BUILD_EXECUTABLES AND NOT ANDROID AND NOT WIN32)
     if(TARGET_PLATFORM STREQUAL "IOS" OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
         install(TARGETS ethervoxai_app 
             RUNTIME DESTINATION bin

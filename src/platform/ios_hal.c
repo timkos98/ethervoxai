@@ -12,7 +12,24 @@
  *
  * For full license terms, see: https://creativecommons.org/licenses/by-nc-sa/4.0/
  * SPDX-License-Identifier: CC-BY-NC-SA-4.0
+ *
+ * ARCHITECTURE CHANGE (Granite Speech / multiplatform voice integration):
+ * This file previously targeted a stale ethervox_platform_hal_t layout (field
+ * names like `.reset`/`.enter_sleep_mode`/`.get_battery_voltage_mv` and a
+ * `ethervox_platform_get_ios_hal()` accessor) that no longer matches
+ * include/ethervox/platform.h, and it was never actually reachable from
+ * platform_core.c's ethervox_platform_register_hal() dispatcher (which only
+ * knew about RPI/ESP32/Android/Desktop). Combined with the CMakeLists.txt
+ * PLATFORM_SOURCES bug (iOS builds fell into the macOS branch), this file was
+ * fully orphaned - written but never compiled or linked. Rewritten here to
+ * match the current interface (ethervox_result_t X_hal_register(platform)
+ * populating platform->hal.*), mirroring android_hal.c, and wired into
+ * platform_core.c's dispatcher.
  */
+
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
 
 #if defined(__APPLE__) && (TARGET_OS_IOS || TARGET_OS_MACCATALYST)
 
@@ -45,7 +62,7 @@ typedef struct {
 static ethervox_result_t ios_init(ethervox_platform_info_t* info) {
     LOGI("Initializing iOS platform HAL");
 
-    ios_platform_data_t* platform_data = 
+    ios_platform_data_t* platform_data =
         (ios_platform_data_t*)calloc(1, sizeof(ios_platform_data_t));
     if (!platform_data) {
         ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_OUT_OF_MEMORY, "Failed to allocate platform data");
@@ -54,10 +71,10 @@ static ethervox_result_t ios_init(ethervox_platform_info_t* info) {
     info->platform_specific_data = platform_data;
 
     // Get boot time
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    platform_data->boot_time_us = (uint64_t)ts.tv_sec * 1000000ULL + 
-                                   (uint64_t)ts.tv_nsec / 1000ULL;
+    struct timespec boot_ts;
+    clock_gettime(CLOCK_MONOTONIC, &boot_ts);
+    platform_data->boot_time_us = (uint64_t)boot_ts.tv_sec * 1000000ULL +
+                                   (uint64_t)boot_ts.tv_nsec / 1000ULL;
 
     // Set platform name
 #if TARGET_OS_MACCATALYST
@@ -71,7 +88,7 @@ static ethervox_result_t ios_init(ethervox_platform_info_t* info) {
 
     // Get CPU info
     size_t len;
-    
+
     // CPU model
     char cpu_brand[128] = {0};
     len = sizeof(cpu_brand);
@@ -136,7 +153,7 @@ static ethervox_result_t ios_init(ethervox_platform_info_t* info) {
 
 static void ios_cleanup(ethervox_platform_info_t* info) {
     LOGI("Cleaning up iOS platform HAL");
-    
+
     if (info && info->platform_specific_data) {
         free(info->platform_specific_data);
         info->platform_specific_data = NULL;
@@ -161,7 +178,20 @@ static bool ios_gpio_read(uint32_t pin) {
     return false;
 }
 
+static ethervox_result_t ios_gpio_set_pwm(uint32_t pin, uint32_t duty_cycle) {
+    (void)pin;
+    (void)duty_cycle;
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_SUPPORTED, "PWM not supported on iOS");
+}
+
 // I2C functions not available on iOS - return error
+static ethervox_result_t ios_i2c_init(uint32_t bus, uint32_t sda_pin, uint32_t scl_pin) {
+    (void)bus;
+    (void)sda_pin;
+    (void)scl_pin;
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_SUPPORTED, "I2C not supported on iOS");
+}
+
 static ethervox_result_t ios_i2c_write(uint32_t bus, uint8_t device_addr, const uint8_t* data, uint32_t len) {
     (void)bus;
     (void)device_addr;
@@ -178,13 +208,31 @@ static ethervox_result_t ios_i2c_read(uint32_t bus, uint8_t device_addr, uint8_t
     ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_SUPPORTED, "I2C not supported on iOS");
 }
 
+static void ios_i2c_cleanup(uint32_t bus) {
+    (void)bus;
+}
+
 // SPI functions not available on iOS - return error
+static ethervox_result_t ios_spi_init(uint32_t bus, uint32_t mosi_pin, uint32_t miso_pin,
+                                       uint32_t clk_pin, uint32_t cs_pin) {
+    (void)bus;
+    (void)mosi_pin;
+    (void)miso_pin;
+    (void)clk_pin;
+    (void)cs_pin;
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_SUPPORTED, "SPI not supported on iOS");
+}
+
 static ethervox_result_t ios_spi_transfer(uint32_t bus, const uint8_t* tx_data, uint8_t* rx_data, uint32_t len) {
     (void)bus;
     (void)tx_data;
     (void)rx_data;
     (void)len;
     ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_SUPPORTED, "SPI not supported on iOS");
+}
+
+static void ios_spi_cleanup(uint32_t bus) {
+    (void)bus;
 }
 
 // Timing functions
@@ -205,12 +253,12 @@ static uint64_t ios_get_timestamp_us(void) {
 }
 
 // System control functions
-static void ios_reset(void) {
+static void ios_system_reset(void) {
     LOGI("System reset not supported on iOS (sandboxed environment)");
     // iOS doesn't allow app-initiated system reset
 }
 
-static void ios_enter_sleep_mode(ethervox_sleep_mode_t mode) {
+static void ios_system_sleep(ethervox_sleep_mode_t mode) {
     // iOS manages power automatically, apps can't directly control sleep
     switch (mode) {
         case ETHERVOX_SLEEP_LIGHT:
@@ -222,6 +270,28 @@ static void ios_enter_sleep_mode(ethervox_sleep_mode_t mode) {
         default:
             break;
     }
+}
+
+static uint32_t ios_get_free_memory(void) {
+    mach_port_t host_port = mach_host_self();
+    mach_msg_type_number_t host_size = sizeof(vm_statistics_data_t) / sizeof(integer_t);
+    vm_size_t page_size;
+    vm_statistics_data_t vm_stat;
+
+    host_page_size(host_port, &page_size);
+
+    if (host_statistics(host_port, HOST_VM_INFO, (host_info_t)&vm_stat, &host_size) == KERN_SUCCESS) {
+        uint64_t free_mem = (uint64_t)vm_stat.free_count * page_size;
+        return (uint32_t)(free_mem / (1024 * 1024));  // Return MB
+    }
+
+    return 0;
+}
+
+static float ios_get_cpu_temperature(void) {
+    // iOS does not expose CPU temperature to sandboxed apps
+    LOGD("CPU temperature reading not available on iOS (sandboxed)");
+    return ETHERVOX_PLATFORM_DEFAULT_TEMP_C;
 }
 
 static uint32_t ios_get_free_heap_size(void) {
@@ -240,33 +310,84 @@ static uint32_t ios_get_free_heap_size(void) {
     return 0;
 }
 
-static uint32_t ios_get_battery_voltage_mv(void) {
-    // Battery voltage monitoring requires Swift/Objective-C bridge
-    // Return 0 to indicate unavailable
-    return 0;
+// Power management
+static ethervox_result_t ios_set_cpu_frequency(uint32_t frequency_mhz) {
+    (void)frequency_mhz;
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_SUPPORTED, "CPU frequency control managed by iOS");
 }
 
-// Platform HAL interface
-static const ethervox_platform_hal_t ios_hal = {
-    .init = ios_init,
-    .cleanup = ios_cleanup,
-    .gpio_configure = ios_gpio_configure,
-    .gpio_write = ios_gpio_write,
-    .gpio_read = ios_gpio_read,
-    .i2c_write = ios_i2c_write,
-    .i2c_read = ios_i2c_read,
-    .spi_transfer = ios_spi_transfer,
-    .delay_ms = ios_delay_ms,
-    .delay_us = ios_delay_us,
-    .get_timestamp_us = ios_get_timestamp_us,
-    .reset = ios_reset,
-    .enter_sleep_mode = ios_enter_sleep_mode,
-    .get_free_heap_size = ios_get_free_heap_size,
-    .get_battery_voltage_mv = ios_get_battery_voltage_mv
-};
+static ethervox_result_t ios_enable_power_saving(bool enable) {
+    (void)enable;
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_NOT_SUPPORTED, "Power saving mode managed by iOS (Low Power Mode)");
+}
 
-const ethervox_platform_hal_t* ethervox_platform_get_ios_hal(void) {
-    return &ios_hal;
+static float ios_get_battery_voltage(void) {
+    // Battery voltage monitoring requires a Swift/ObjC bridge (UIDevice); not
+    // read directly from C. Return 0 to indicate unavailable.
+    return 0.0f;
+}
+
+// Register iOS HAL implementation
+ethervox_result_t ethervox_platform_hal_register_ios(ethervox_platform_t* platform) {
+    ETHERVOX_CHECK_PTR(platform);
+
+    // Register HAL function pointers (init will be called by platform_init)
+    platform->hal.init = ios_init;
+    platform->hal.cleanup = ios_cleanup;
+
+    // GPIO operations (not supported)
+    platform->hal.gpio_configure = ios_gpio_configure;
+    platform->hal.gpio_write = ios_gpio_write;
+    platform->hal.gpio_read = ios_gpio_read;
+    platform->hal.gpio_set_pwm = ios_gpio_set_pwm;
+
+    // I2C operations (not supported)
+    platform->hal.i2c_init = ios_i2c_init;
+    platform->hal.i2c_write = ios_i2c_write;
+    platform->hal.i2c_read = ios_i2c_read;
+    platform->hal.i2c_cleanup = ios_i2c_cleanup;
+
+    // SPI operations (not supported)
+    platform->hal.spi_init = ios_spi_init;
+    platform->hal.spi_transfer = ios_spi_transfer;
+    platform->hal.spi_cleanup = ios_spi_cleanup;
+
+    // System operations
+    platform->hal.system_reset = ios_system_reset;
+    platform->hal.system_sleep = ios_system_sleep;
+    platform->hal.get_timestamp_us = ios_get_timestamp_us;
+    platform->hal.get_free_memory = ios_get_free_memory;
+    platform->hal.get_cpu_temperature = ios_get_cpu_temperature;
+    platform->hal.get_free_heap_size = ios_get_free_heap_size;
+
+    // Power management
+    platform->hal.set_cpu_frequency = ios_set_cpu_frequency;
+    platform->hal.enable_power_saving = ios_enable_power_saving;
+    platform->hal.get_battery_voltage = ios_get_battery_voltage;
+    platform->hal.delay_us = ios_delay_us;
+    platform->hal.delay_ms = ios_delay_ms;
+
+    LOGI("iOS HAL registered successfully");
+    return ETHERVOX_SUCCESS;
+}
+
+// ARCHITECTURE CHANGE (Granite Speech / multiplatform voice integration):
+// voice_tools.c and model_downloader.c call ethervox_get_android_files_dir()
+// unconditionally (their own `extern` declaration, not gated by
+// platform.h's `#ifdef __ANDROID__` guard around the same name) to resolve
+// where the Granite Speech GGUF pair lives on disk. Before the
+// PLATFORM_SOURCES fix above, iOS builds silently pulled in desktop_hal.c
+// (whose stub returns NULL, i.e. "not Android, use HOME instead" - wrong on
+// iOS's sandbox). Now that iOS has its own platform sources, this file must
+// provide that symbol itself. Forward to the iOS-app-supplied
+// ethervox_ios_get_files_dir() (see EthervoxBridge.mm in the ios app repo)
+// rather than inventing a second path-injection mechanism - this is the
+// exact same extern-declaration convention governor_manifest_init.c's
+// __APPLE__ branch already relies on for the same Documents-directory path.
+extern const char* ethervox_ios_get_files_dir(void);
+
+const char* ethervox_get_android_files_dir(void) {
+    return ethervox_ios_get_files_dir();
 }
 
 #endif // __APPLE__ && (TARGET_OS_IOS || TARGET_OS_MACCATALYST)
