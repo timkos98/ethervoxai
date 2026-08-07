@@ -1773,27 +1773,24 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
       if (ethervox_is_success(load_result)) {
         cache_loaded = true;
         
-        // KV cache loaded system prompt into sequence 0
-        // Now we need to copy it to sequence 1 to establish the master copy for 2-sequence architecture
-        // Seq 1 = master (never cleared), Seq 0 = working copy (cleared + re-copied from seq 1)
+        // KV cache loaded system prompt directly into sequence 1 (permanent master)
+        // No copy needed - seq 1 is the permanent home for system prompt
+        // During inference, seq 0 will be used for conversation and cleared as needed
         llama_memory_t mem = llama_get_memory(governor->llm_ctx);
-        llama_memory_seq_cp(mem, 0, 1, 0, -1);  // Copy all of seq 0 to seq 1
-        
         int32_t seq1_max = llama_memory_seq_pos_max(mem, 1);
-        if (seq1_max >= 0) {
-          GOV_LOG("✓ System prompt copied to seq 1 (master) from cache (0-%d)", seq1_max);
-        } else {
-          GOV_ERROR("Failed to copy system prompt to seq 1 after cache load");
-        }
         
-        GOV_LOG("System prompt loaded in sequence 0 from cache and copied to seq 1 (master)");
+        if (seq1_max >= 0) {
+          GOV_LOG("✓ System prompt loaded into seq 1 (permanent) from cache (positions 0-%d)", seq1_max);
+        } else {
+          GOV_ERROR("Failed to load system prompt into seq 1 from cache (seq1_max=%d)", seq1_max);
+        }
         
         if (progress_callback) {
           progress_callback("processing_prompt", 1.0f, 
                           "✓ System prompt ready (loaded from cache)", user_data);
         }
         
-        GOV_LOG("KV cache loaded successfully");
+        GOV_LOG("KV cache loaded successfully - system prompt ready in seq 1");
         GOV_LOG("Skipped system prompt generation");
       } else {
         GOV_LOG("KV cache load failed (code %d), will generate from scratch", load_result);
@@ -2080,21 +2077,38 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
   governor->model_path = strdup(model_path);
   
   // Save KV cache for next app launch
+  GOV_LOG("═══════════════════════════════════════════════════════");
+  GOV_LOG("SYSTEM PROMPT TOKENIZATION COMPLETE - ATTEMPTING SAVE");
+  GOV_LOG("cache_dir parameter: %s", cache_dir ? cache_dir : "❌ NULL");
+  GOV_LOG("═══════════════════════════════════════════════════════");
+  
   if (cache_dir) {
     char cache_path[512];
     ethervox_result_t cache_path_result = ethervox_kv_cache_get_path(
         model_path, cache_dir, cache_path, sizeof(cache_path)
     );
     
+    GOV_LOG("Cache path construction result: %d", cache_path_result);
+    
     if (ethervox_is_success(cache_path_result)) {
+      GOV_LOG("═══ SAVING KV CACHE ═══");
+      GOV_LOG("Cache path: %s", cache_path);
       ethervox_result_t save_result = ethervox_kv_cache_save(governor, cache_path);
       if (ethervox_is_success(save_result)) {
-        GOV_LOG("✓ KV cache saved to: %s", cache_path);
-        GOV_LOG("✓ Next app start will load from cache (~3-5 seconds)");
+        GOV_LOG("╔═══════════════════════════════════════════════════╗");
+        GOV_LOG("║  ✓ KV CACHE SAVED SUCCESSFULLY                    ║");
+        GOV_LOG("║  Path: %-40s  ║", cache_path);
+        GOV_LOG("║  Next startup will load instantly (~3-5 seconds)  ║");
+        GOV_LOG("╚═══════════════════════════════════════════════════╝");
       } else {
-        GOV_LOG("Failed to save KV cache (code %d) - next startup will regenerate", save_result);
+        GOV_LOG("❌ FAILED to save KV cache (error code %d)", save_result);
+        GOV_LOG("   Next startup will regenerate system prompt");
       }
+    } else {
+      GOV_LOG("❌ Failed to construct cache path (code %d)", cache_path_result);
     }
+  } else {
+    GOV_LOG("❌ KV cache NOT saved: cache_dir is NULL");
   }
   
   if (progress_callback) {

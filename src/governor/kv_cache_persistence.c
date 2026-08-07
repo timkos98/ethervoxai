@@ -25,7 +25,8 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <errno.h>
-#include <unistd.h>  // For unlink()
+#include <unistd.h>  // For unlink(), fsync(), usleep()
+#include <fcntl.h>   // For open(), O_RDONLY
 
 #if defined(ETHERVOX_WITH_LLAMA) && defined(LLAMA_CPP_AVAILABLE) && LLAMA_CPP_AVAILABLE
 #include <llama.h>
@@ -81,14 +82,21 @@ bool ethervox_kv_cache_exists(const char* cache_path, const char* model_path) {
         return false;
     }
     
-    // Check if it's a regular file and has reasonable size (> 1MB)
+    // Check if it's a regular file
     if (!S_ISREG(st.st_mode)) {
         ETHERVOX_LOG_WARN("KV cache path is not a regular file: %s", cache_path);
         return false;
     }
     
-    if (st.st_size < 1048576) {  // Less than 1MB is suspicious
-        ETHERVOX_LOG_WARN("KV cache file too small: %s (%lld bytes)", cache_path, (long long)st.st_size);
+    // Sanity check: File should be at least 1KB (bare minimum for any valid cache)
+    // System prompt caches can be small (15-20KB for 1B models)
+    const size_t min_size = 1024;  // 1KB minimum (just to catch empty/corrupted files)
+    
+    if (st.st_size < min_size) {
+        ETHERVOX_LOG_WARN("KV cache file suspiciously small: %s (%lld bytes)", 
+                         cache_path, (long long)st.st_size);
+        ETHERVOX_LOG_WARN("Deleting likely corrupted cache file");
+        unlink(cache_path);  // Delete corrupted cache
         return false;
     }
     
@@ -121,6 +129,8 @@ ethervox_result_t ethervox_kv_cache_save(
         return ETHERVOX_ERROR_NOT_INITIALIZED;
     }
     
+    ETHERVOX_LOG_INFO("System prompt tokens to save: %d", token_count);
+    
     // Get llama context
     struct llama_context* ctx = ethervox_governor_get_context(governor);
     if (!ctx) {
@@ -138,43 +148,131 @@ ethervox_result_t ethervox_kv_cache_save(
     if (last_slash) {
         *last_slash = '\0';  // Terminate at last slash to get directory
         
-        // Create directory if it doesn't exist (Android/Unix)
+        ETHERVOX_LOG_INFO("Checking cache directory: %s", dir_path);
+        
+        // Create directory if it doesn't exist
         struct stat st;
         if (stat(dir_path, &st) != 0) {
             // Directory doesn't exist, create it
-            #ifdef __ANDROID__
-            // Android: create with permissions 0755
-            if (mkdir(dir_path, 0755) != 0) {
-                ETHERVOX_LOG_ERROR("Failed to create cache directory: %s (errno: %d)", dir_path, errno);
+            ETHERVOX_LOG_WARN("Cache directory doesn't exist, creating: %s", dir_path);
+            
+            #if defined(__APPLE__)
+            // iOS/macOS: Directory should be created by Swift, but create if needed
+            if (mkdir(dir_path, 0755) != 0 && errno != EEXIST) {
+                ETHERVOX_LOG_ERROR("Failed to create cache directory: %s (errno=%d: %s)", 
+                                  dir_path, errno, strerror(errno));
                 return ETHERVOX_ERROR_PLATFORM_OPERATION_FAILED;
             }
+            ETHERVOX_LOG_INFO("Created cache directory: %s", dir_path);
+            #elif defined(__ANDROID__)
+            // Android: create with permissions 0755
+            if (mkdir(dir_path, 0755) != 0 && errno != EEXIST) {
+                ETHERVOX_LOG_ERROR("Failed to create cache directory: %s (errno=%d: %s)", 
+                                  dir_path, errno, strerror(errno));
+                return ETHERVOX_ERROR_PLATFORM_OPERATION_FAILED;
+            }
+            ETHERVOX_LOG_INFO("Created cache directory: %s", dir_path);
             #else
             // Other Unix systems
-            if (mkdir(dir_path, 0755) != 0) {
-                ETHERVOX_LOG_ERROR("Failed to create cache directory: %s (errno: %d)", dir_path, errno);
+            if (mkdir(dir_path, 0755) != 0 && errno != EEXIST) {
+                ETHERVOX_LOG_ERROR("Failed to create cache directory: %s (errno=%d: %s)", 
+                                  dir_path, errno, strerror(errno));
                 return ETHERVOX_ERROR_PLATFORM_OPERATION_FAILED;
             }
-            #endif
             ETHERVOX_LOG_INFO("Created cache directory: %s", dir_path);
+            #endif
+        } else {
+            ETHERVOX_LOG_INFO("Cache directory already exists: %s", dir_path);
         }
+    } else {
+        ETHERVOX_LOG_ERROR("Invalid cache path (no directory separator): %s", cache_path);
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
+    ETHERVOX_LOG_INFO("Calling llama_state_seq_save_file for sequence 1 (permanent)...");
+    
     // Use llama.cpp's sequence-based state save function
-    // This saves ONLY sequence 0 (system prompt + conversation) to cache file
+    // Save sequence 1 which contains the system prompt (generated in seq 1)
+    // NOTE: We generate system prompt into seq 1 (permanent), so we save from seq 1
     size_t bytes_written = llama_state_seq_save_file(
         ctx, 
         cache_path,
-        0,  // Save sequence 0 (contains system prompt)
+        1,  // Save sequence 1 (system prompt lives here after generation)
         tokens, 
         (size_t)token_count
     );
     
     if (bytes_written == 0) {
-        ETHERVOX_LOG_ERROR("llama_state_seq_save_file() failed for sequence 0");
+        ETHERVOX_LOG_ERROR("llama_state_seq_save_file() failed for sequence 0 (returned 0 bytes)");
+        ETHERVOX_LOG_ERROR("Check file permissions on: %s", cache_path);
         return ETHERVOX_ERROR_FILE_WRITE;
     }
     
-    ETHERVOX_LOG_INFO("✓ KV cache saved: %d tokens + KV state (seq 0) to %s (%zu bytes)", 
+    ETHERVOX_LOG_INFO("✓ llama_state_seq_save_file returned %zu bytes", bytes_written);
+    
+    // CRITICAL: Force flush to disk before verification (iOS file protection issue)
+    // llama_state_seq_save_file uses FILE* which is buffered - must sync to disk
+    ETHERVOX_LOG_INFO("Forcing file sync to disk...");
+    
+    #if defined(__APPLE__)
+    // iOS/macOS: Open file in write mode and call fsync() to force kernel to write all buffers to disk
+    // MUST use O_WRONLY or O_RDWR - O_RDONLY will not sync writes!
+    int fd = open(cache_path, O_WRONLY);
+    if (fd >= 0) {
+        if (fsync(fd) == 0) {
+            ETHERVOX_LOG_INFO("✓ File synced to disk successfully");
+        } else {
+            ETHERVOX_LOG_WARN("fsync() failed (errno=%d: %s) - file may not be fully written", 
+                             errno, strerror(errno));
+        }
+        close(fd);
+    } else {
+        ETHERVOX_LOG_WARN("Cannot open file for fsync (errno=%d: %s)", errno, strerror(errno));
+    }
+    #else
+    // Android/other: Use sync() as fallback
+    sync();
+    ETHERVOX_LOG_INFO("✓ Called sync() to flush buffers");
+    #endif
+    
+    // Small delay to let iOS/macOS file system stabilize (helps with file protection)
+    #if defined(__APPLE__)
+    usleep(200000);  // 200ms delay (increased from 100ms for better reliability)
+    #endif
+    
+    // Verify file was actually written to disk
+    struct stat verify_st;
+    if (stat(cache_path, &verify_st) == 0) {
+        ETHERVOX_LOG_INFO("✓ Verified file on disk: %lld bytes", (long long)verify_st.st_size);
+        
+        // Check if file size matches what we wrote
+        if ((size_t)verify_st.st_size != bytes_written) {
+            ETHERVOX_LOG_ERROR("Cache file size mismatch: disk=%lld bytes, expected=%zu bytes",
+                              (long long)verify_st.st_size, bytes_written);
+            
+            // Only fail if file is significantly smaller (>10% difference)
+            // Small differences might be due to file system alignment
+            size_t size_diff = bytes_written > (size_t)verify_st.st_size 
+                             ? bytes_written - (size_t)verify_st.st_size
+                             : (size_t)verify_st.st_size - bytes_written;
+            
+            if (size_diff > bytes_written / 10) {  // More than 10% difference
+                ETHERVOX_LOG_ERROR("File was not fully written - iOS buffering issue");
+                ETHERVOX_LOG_ERROR("Deleting incomplete cache file");
+                unlink(cache_path);  // Delete corrupted partial file
+                return ETHERVOX_ERROR_FILE_WRITE;
+            } else {
+                ETHERVOX_LOG_WARN("Minor file size difference (%zu bytes) - likely file system alignment",
+                                 size_diff);
+            }
+        }
+    } else {
+        ETHERVOX_LOG_ERROR("Failed to verify saved file: %s (errno=%d: %s)",
+                          cache_path, errno, strerror(errno));
+        return ETHERVOX_ERROR_FILE_WRITE;
+    }
+    
+    ETHERVOX_LOG_INFO("✓ KV cache saved: %d tokens + KV state (seq 1 permanent) to %s (%zu bytes)", 
                      token_count, cache_path, bytes_written);
     
     return ETHERVOX_SUCCESS;
@@ -228,19 +326,19 @@ ethervox_result_t ethervox_kv_cache_load(
     }
     
     // Use llama.cpp's sequence-based state load function
-    // This loads ONLY sequence 0 (system prompt) into the context
+    // Load into sequence 1 where system prompt belongs (permanent master)
     size_t n_tokens_loaded = 0;
     size_t bytes_read = llama_state_seq_load_file(
         ctx, 
         cache_path,
-        0,  // Load into sequence 0 (system prompt lives here)
+        1,  // Load into sequence 1 (system prompt permanent location)
         tokens, 
         max_tokens, 
         &n_tokens_loaded
     );
     
     if (bytes_read == 0) {
-        ETHERVOX_LOG_ERROR("llama_state_seq_load_file() failed for sequence 0");
+        ETHERVOX_LOG_ERROR("llama_state_seq_load_file() failed for sequence 1");
         ETHERVOX_LOG_WARN("Deleting incompatible cache file");
         unlink(cache_path);  // Delete incompatible cache
         free(tokens);
@@ -251,10 +349,10 @@ ethervox_result_t ethervox_kv_cache_load(
     if (n_tokens_loaded == 0 || n_tokens_loaded < 100) {
         ETHERVOX_LOG_ERROR("Invalid token count loaded: %zu (expected >= 100)", n_tokens_loaded);
         
-        // CRITICAL: Clear sequence 0 to avoid leaving it in a corrupt state
+        // CRITICAL: Clear sequence 1 to avoid leaving it in a corrupt state
         llama_memory_t mem = llama_get_memory(ctx);
-        llama_memory_seq_rm(mem, 0, -1, -1);  // Clear all of sequence 0
-        ETHERVOX_LOG_WARN("Cleared corrupt sequence 0 from partial cache load");
+        llama_memory_seq_rm(mem, 1, -1, -1);  // Clear all of sequence 1
+        ETHERVOX_LOG_WARN("Cleared corrupt sequence 1 from partial cache load");
         
         // Delete the invalid cache file
         unlink(cache_path);
@@ -267,7 +365,7 @@ ethervox_result_t ethervox_kv_cache_load(
     // Store loaded tokens in governor for recovery/reset
     ethervox_governor_set_system_tokens(governor, tokens, (int)n_tokens_loaded);
     
-    ETHERVOX_LOG_INFO("✓ KV cache loaded instantly: %zu tokens + KV state (seq 0) ready (%zu bytes)", 
+    ETHERVOX_LOG_INFO("✓ KV cache loaded instantly: %zu tokens + KV state (seq 1 permanent) ready (%zu bytes)", 
                      n_tokens_loaded, bytes_read);
     
     return ETHERVOX_SUCCESS;

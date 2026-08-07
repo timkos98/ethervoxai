@@ -99,14 +99,14 @@ chat_template_type_t chat_template_detect(const char* model_path);
 /**
  * Format a system message
  * 
- * @param template Chat template to use
+ * @param tmpl Chat template to use
  * @param content System message content
  * @param output Output buffer
  * @param output_size Size of output buffer
  * @return ETHERVOX_SUCCESS on success, error code on failure
  */
 ethervox_result_t chat_template_format_system(
-    const chat_template_t* template,
+    const chat_template_t* tmpl,
     const char* content,
     char* output,
     size_t output_size
@@ -115,14 +115,14 @@ ethervox_result_t chat_template_format_system(
 /**
  * Format a user message
  * 
- * @param template Chat template to use
+ * @param tmpl Chat template to use
  * @param content User message content
  * @param output Output buffer
  * @param output_size Size of output buffer
  * @return ETHERVOX_SUCCESS on success, error code on failure
  */
 ethervox_result_t chat_template_format_user(
-    const chat_template_t* template,
+    const chat_template_t* tmpl,
     const char* content,
     char* output,
     size_t output_size
@@ -131,13 +131,13 @@ ethervox_result_t chat_template_format_user(
 /**
  * Format an assistant message start (for generation)
  * 
- * @param template Chat template to use
+ * @param tmpl Chat template to use
  * @param output Output buffer
  * @param output_size Size of output buffer
  * @return ETHERVOX_SUCCESS on success, error code on failure
  */
 ethervox_result_t chat_template_format_assistant_start(
-    const chat_template_t* template,
+    const chat_template_t* tmpl,
     char* output,
     size_t output_size
 );
@@ -145,14 +145,14 @@ ethervox_result_t chat_template_format_assistant_start(
 /**
  * Format a tool result message
  * 
- * @param template Chat template to use
+ * @param tmpl Chat template to use
  * @param result Tool result content
  * @param output Output buffer
  * @param output_size Size of output buffer
  * @return ETHERVOX_SUCCESS on success, error code on failure
  */
 ethervox_result_t chat_template_format_tool_result(
-    const chat_template_t* template,
+    const chat_template_t* tmpl,
     const char* result,
     char* output,
     size_t output_size
@@ -161,23 +161,23 @@ ethervox_result_t chat_template_format_tool_result(
 /**
  * Check if text contains any stop sequence
  * 
- * @param template Chat template with stop sequences
+ * @param tmpl Chat template with stop sequences
  * @param text Text to check
  * @return true if stop sequence found, false otherwise
  */
 bool chat_template_has_stop_sequence(
-    const chat_template_t* template,
+    const chat_template_t* tmpl,
     const char* text
 );
 
 /**
  * Get the tool calling format for a chat template
  * 
- * @param template Chat template to query
+ * @param tmpl Chat template to query
  * @return Tool format type (TOOL_FORMAT_XML_ATTR, TOOL_FORMAT_JSON_IN_XML, etc.)
  */
 tool_format_type_t chat_template_get_tool_format(
-    const chat_template_t* template
+    const chat_template_t* tmpl
 );
 
 #ifdef __cplusplus

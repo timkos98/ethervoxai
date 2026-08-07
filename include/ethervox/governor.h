@@ -359,7 +359,7 @@ void ethervox_tool_registry_cleanup(ethervox_tool_registry_t* registry);
  *
  * @param governor Output: Governor instance (caller must free with cleanup)
  * @param config Governor configuration (NULL for defaults)
- * @param registry Tool registry
+ * @param tool_registry Tool registry
  * @return 0 on success, negative on error
  */
 ethervox_result_t ethervox_governor_init(ethervox_governor_t** governor,

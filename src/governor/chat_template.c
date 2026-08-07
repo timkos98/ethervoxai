@@ -202,66 +202,66 @@ const chat_template_t* chat_template_get(chat_template_type_t type, const char* 
 }
 
 ethervox_result_t chat_template_format_system(
-    const chat_template_t* template,
+    const chat_template_t* tmpl,
     const char* content,
     char* output,
     size_t output_size
 ) {
-    if (!template || !content || !output || output_size == 0) return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    if (!tmpl || !content || !output || output_size == 0) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     return snprintf(output, output_size, "%s%s%s",
-                   template->system_start,
+                   tmpl->system_start,
                    content,
-                   template->system_end);
+                   tmpl->system_end);
 }
 
 ethervox_result_t chat_template_format_user(
-    const chat_template_t* template,
+    const chat_template_t* tmpl,
     const char* content,
     char* output,
     size_t output_size
 ) {
-    if (!template || !content || !output || output_size == 0) return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    if (!tmpl || !content || !output || output_size == 0) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     return snprintf(output, output_size, "%s%s%s",
-                   template->user_start,
+                   tmpl->user_start,
                    content,
-                   template->user_end);
+                   tmpl->user_end);
 }
 
 ethervox_result_t chat_template_format_assistant_start(
-    const chat_template_t* template,
+    const chat_template_t* tmpl,
     char* output,
     size_t output_size
 ) {
-    if (!template || !output || output_size == 0) return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    if (!tmpl || !output || output_size == 0) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
-    return snprintf(output, output_size, "%s", template->assistant_start);
+    return snprintf(output, output_size, "%s", tmpl->assistant_start);
 }
 
 ethervox_result_t chat_template_format_tool_result(
-    const chat_template_t* template,
+    const chat_template_t* tmpl,
     const char* result,
     char* output,
     size_t output_size
 ) {
-    if (!template || !result || !output || output_size == 0) return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    if (!tmpl || !result || !output || output_size == 0) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
     return snprintf(output, output_size, "%s%s%s",
-                   template->tool_result_start,
+                   tmpl->tool_result_start,
                    result,
-                   template->tool_result_end);
+                   tmpl->tool_result_end);
 }
 
 bool chat_template_has_stop_sequence(
-    const chat_template_t* template,
+    const chat_template_t* tmpl,
     const char* text
 ) {
-    if (!template || !text) return false;
+    if (!tmpl || !text) return false;
     
     // Use the template's stop sequences directly
-    for (int i = 0; i < template->stop_sequence_count && template->stop_sequences[i] != NULL; i++) {
-        if (strstr(text, template->stop_sequences[i])) {
+    for (int i = 0; i < tmpl->stop_sequence_count && tmpl->stop_sequences[i] != NULL; i++) {
+        if (strstr(text, tmpl->stop_sequences[i])) {
             return true;
         }
     }
@@ -270,10 +270,10 @@ bool chat_template_has_stop_sequence(
 }
 
 tool_format_type_t chat_template_get_tool_format(
-    const chat_template_t* template
+    const chat_template_t* tmpl
 ) {
-    if (!template) {
+    if (!tmpl) {
         return TOOL_FORMAT_XML_ATTR;  // Default fallback
     }
-    return template->tool_format;
+    return tmpl->tool_format;
 }

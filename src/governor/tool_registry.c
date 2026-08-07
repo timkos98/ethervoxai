@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 
 ethervox_result_t ethervox_tool_registry_init(ethervox_tool_registry_t* registry, uint32_t initial_capacity) {
     if (!registry) {
@@ -100,7 +101,8 @@ ethervox_result_t ethervox_tool_registry_export_manifest(
     // Open output file
     FILE* fp = fopen(binary_path, "wb");
     if (!fp) {
-        fprintf(stderr, "Failed to create manifest: %s\n", binary_path);
+        fprintf(stderr, "Failed to create manifest: %s (errno=%d: %s)\n", 
+                binary_path, errno, strerror(errno));
         return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
