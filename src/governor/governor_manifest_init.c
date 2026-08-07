@@ -76,7 +76,7 @@ ethervox_result_t ethervox_governor_init_with_manifest(
     snprintf(manifest_path, sizeof(manifest_path),
             "%s/tools/tools.bin", android_files_dir);
     snprintf(tools_dir, sizeof(tools_dir), "%s/tools", android_files_dir);
-#elif defined(__APPLE__)
+#elif defined(ETHERVOX_PLATFORM_IOS)
     // On iOS and macOS, use app's Documents directory
     extern const char* ethervox_ios_get_files_dir(void);
     const char* ios_files_dir = ethervox_ios_get_files_dir();
@@ -103,7 +103,7 @@ ethervox_result_t ethervox_governor_init_with_manifest(
     
 #ifdef _WIN32
     _mkdir(tools_dir);
-#elif defined(__APPLE__)
+#elif defined(ETHERVOX_PLATFORM_IOS)
     // On iOS and macOS, directories should already be created by Swift/ObjC code
     // Just verify they exist
     struct stat st;
@@ -194,7 +194,7 @@ ethervox_result_t ethervox_governor_init_with_manifest(
              android_files_dir, model_name);
     optimized_found = (access(optimized_path, R_OK) == 0);
     
-#elif defined(__APPLE__)
+#elif defined(ETHERVOX_PLATFORM_IOS)
     // On iOS and macOS, check TWO locations:
     // 1. App bundle (pre-shipped optimized files in Resources/tools/optimized/)
     // 2. Documents directory (user-generated via optimization tool)
@@ -228,10 +228,10 @@ ethervox_result_t ethervox_governor_init_with_manifest(
     
 #else
     // Desktop: use ~/.ethervox/tools/optimized/
-    const char* home = getenv("HOME");
+    const char* optimized_home = getenv("HOME");
     snprintf(optimized_path, sizeof(optimized_path),
              "%s/.ethervox/tools/optimized/%s.json", 
-             home ? home : ".", model_name);
+             optimized_home ? optimized_home : ".", model_name);
     optimized_found = (access(optimized_path, R_OK) == 0);
 #endif
     

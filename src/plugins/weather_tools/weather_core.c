@@ -29,7 +29,7 @@ extern ethervox_result_t android_http_get_request(
     char** response_out,
     char** error_message_out);
 #define PLATFORM_HTTP_GET android_http_get_request
-#elif defined(ETHERVOX_PLATFORM_IOS) || defined(TARGET_OS_IPHONE)
+#elif defined(ETHERVOX_PLATFORM_IOS)
 // iOS: Use NSURLSession-based HTTP client (implemented in weather_http_ios.m)
 extern ethervox_result_t ios_http_get_request(
     const char* url,
@@ -159,7 +159,7 @@ static char* url_encode(const char* str) {
     return encoded;
 }
 
-#elif defined(ETHERVOX_PLATFORM_IOS) || defined(TARGET_OS_IPHONE)
+#elif defined(ETHERVOX_PLATFORM_IOS)
 /**
  * @brief Make HTTP GET request - iOS implementation (delegates to NSURLSession)
  */
@@ -1022,7 +1022,7 @@ ethervox_result_t ethervox_weather_init(const ethervox_weather_config_t* config)
         g_config = *config;
     }
     
-#if !defined(ETHERVOX_PLATFORM_ANDROID) && !defined(ETHERVOX_PLATFORM_IOS) && !defined(TARGET_OS_IPHONE)
+#if !defined(ETHERVOX_PLATFORM_ANDROID) && !defined(ETHERVOX_PLATFORM_IOS)
     // Initialize curl globally (not needed on Android/iOS - using native HTTP)
     curl_global_init(CURL_GLOBAL_DEFAULT);
 #endif
@@ -1044,7 +1044,7 @@ void ethervox_weather_cleanup(void) {
     
     weather_cache_clear();
     
-#if !defined(ETHERVOX_PLATFORM_ANDROID) && !defined(ETHERVOX_PLATFORM_IOS) && !defined(TARGET_OS_IPHONE)
+#if !defined(ETHERVOX_PLATFORM_ANDROID) && !defined(ETHERVOX_PLATFORM_IOS)
     curl_global_cleanup();
 #endif
     
