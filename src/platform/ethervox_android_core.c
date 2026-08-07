@@ -398,6 +398,110 @@ JNIEXPORT jboolean JNICALL Java_com_droid_ethervox_1core_NativeLib_loadGovernorM
   }
 }
 
+/**
+ * Load the Governor model with audio (Granite Speech) decode support
+ * attached, for the unified voice model architecture's voice screen (Mode
+ * 1/4) - see docs/UNIFIED_VOICE_MODEL_ARCHITECTURE.md. Mirrors
+ * loadGovernorModel() above (manifest setup, progress callback, KV cache
+ * dir) except it calls ethervox_governor_load_model_with_audio() with the
+ * Granite Speech Plus (model, mmproj) GGUF pair, attaching mtmd audio
+ * decode support so voiceConversationStart()/voiceQueryStart() (Mode 1/4)
+ * can transcribe on this same Governor instance instead of needing a
+ * second, separately-loaded Granite Speech model.
+ *
+ * Callers (Kotlin ViewModel) are responsible for calling
+ * unloadGovernorModel() first if a text-only Governor is currently loaded,
+ * and for calling it again (then loadGovernorModel()) when switching back
+ * to the text/chat screen - see ethervox_governor_unload_model()'s doc
+ * comment and section 4.3's screen-switch lifecycle note.
+ */
+JNIEXPORT jboolean JNICALL Java_com_droid_ethervox_1core_NativeLib_loadGovernorModelWithAudio(
+    JNIEnv* env, jobject thiz, jstring modelPath, jstring mmprojPath, jobject callback) {
+  (void)thiz;
+
+  if (!g_governor) {
+    LOGE("Cannot load audio-capable Governor model - governor not initialized");
+    g_last_governor_load_error = -1;
+    return JNI_FALSE;
+  }
+
+  const char* path = (*env)->GetStringUTFChars(env, modelPath, NULL);
+  const char* mmproj_path = (*env)->GetStringUTFChars(env, mmprojPath, NULL);
+
+  LOGI("[JNI] Loading audio-capable Governor model from: %s (mmproj=%s)", path, mmproj_path);
+
+  // === Tool Manifest System (same as loadGovernorModel) ===
+  if (!g_manifest_registry) {
+    LOGI("[JNI] Initializing manifest registry BEFORE model load (for optimized prompts)");
+    tool_manifest_registry_t* manifest = NULL;
+    ethervox_result_t manifest_result =
+        ethervox_governor_setup_manifest(g_governor, path, &manifest);
+    if (ethervox_is_success(manifest_result) && manifest) {
+      g_manifest_registry = manifest;
+      ethervox_governor_set_manifest(g_governor, manifest);
+      ethervox_get_tool_info_set_manifest(manifest);
+      LOGI("[JNI] Manifest initialized and attached to governor");
+    } else {
+      LOGW("Manifest initialization failed - will use legacy system prompt");
+    }
+  } else {
+    ethervox_governor_set_manifest(g_governor, g_manifest_registry);
+    ethervox_get_tool_info_set_manifest(g_manifest_registry);
+  }
+
+  // Setup progress callback if provided
+  jni_load_context_t load_ctx = {0};
+  ethervox_load_progress_callback progress_callback = NULL;
+  void* progress_user_data = NULL;
+
+  if (callback) {
+    jclass callback_class = (*env)->GetObjectClass(env, callback);
+    jmethodID on_governor_progress = (*env)->GetMethodID(env, callback_class, "onGovernorProgress",
+                                                        "(Ljava/lang/String;Ljava/lang/String;)V");
+    if (on_governor_progress) {
+      load_ctx.env = env;
+      load_ctx.callback_obj = callback;
+      load_ctx.on_governor_progress_method = on_governor_progress;
+      progress_callback = native_load_progress_callback;
+      progress_user_data = &load_ctx;
+    }
+  }
+
+  LOGI("[JNI] Loading audio-capable model (Governor will check for KV cache)...");
+  ethervox_result_t result = ethervox_governor_load_model_with_audio(
+      g_governor, path, mmproj_path, g_android_files_dir, progress_callback, progress_user_data
+  );
+
+  (*env)->ReleaseStringUTFChars(env, modelPath, path);
+  (*env)->ReleaseStringUTFChars(env, mmprojPath, mmproj_path);
+
+  g_last_governor_load_error = result;
+
+  if (ethervox_is_success(result)) {
+    LOGI("[JNI] Audio-capable Governor model loaded successfully");
+    return JNI_TRUE;
+  } else {
+    if (result == -2) {
+      LOGE("Failed to load audio-capable Governor model - likely corrupted");
+    } else {
+      LOGE("Failed to load audio-capable Governor model");
+    }
+    return JNI_FALSE;
+  }
+}
+
+/**
+ * @return true if the Governor is currently loaded with audio (Granite
+ *   Speech) decode support attached - see
+ *   ethervox_governor_has_audio_support().
+ */
+JNIEXPORT jboolean JNICALL
+Java_com_droid_ethervox_1core_NativeLib_isGovernorAudioCapable(JNIEnv* env, jobject thiz) {
+  (void)env;
+  (void)thiz;
+  return ethervox_governor_has_audio_support(g_governor) ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT jboolean JNICALL
 Java_com_droid_ethervox_1core_NativeLib_wasLastLoadCorrupted(JNIEnv* env, jobject thiz) {
   (void)env;
