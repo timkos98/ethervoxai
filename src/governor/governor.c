@@ -39,6 +39,14 @@
 #define LLAMA_HEADER_AVAILABLE 0
 #endif
 
+#if LLAMA_HEADER_AVAILABLE && defined(MTMD_AVAILABLE) && MTMD_AVAILABLE
+#include <mtmd.h>
+#include "ethervox/granite_speech_decode.h"
+#define GOVERNOR_MTMD_AVAILABLE 1
+#else
+#define GOVERNOR_MTMD_AVAILABLE 0
+#endif
+
 #define GOV_LOG(...) ETHERVOX_LOGI(__VA_ARGS__)
 #define GOV_ERROR(...) ETHERVOX_LOGE(__VA_ARGS__)
 
@@ -150,6 +158,27 @@ struct ethervox_governor {
   llama_pos system_prompt_token_count;  // Length of system prompt (for partial clearing)
   llama_pos current_kv_pos;  // Track current position in KV cache
   char* model_path;
+  char* cache_dir_saved;  // cache_dir used at first load, so reload_model()
+                          // can pass it instead of hardcoding NULL - see
+                          // docs/UNIFIED_VOICE_MODEL_ARCHITECTURE.md section 5.1
+
+  // Audio decode support (unified voice model architecture - see
+  // docs/UNIFIED_VOICE_MODEL_ARCHITECTURE.md). NULL unless loaded via
+  // ethervox_governor_load_model_with_audio(); when non-NULL,
+  // ethervox_governor_transcribe_audio() can decode audio on the dedicated
+  // ASR scratch sequence (seq 2) without disturbing conversation (seq 0) or
+  // the system-prompt master (seq 1).
+#if GOVERNOR_MTMD_AVAILABLE
+  mtmd_context* mtmd_ctx;
+#else
+  void* mtmd_ctx;  // Placeholder - mtmd not available in this build
+#endif
+  int audio_sample_rate;  // From mtmd_get_audio_sample_rate(), only
+                           // meaningful when mtmd_ctx != NULL
+  char* mmproj_path;       // Saved alongside model_path so
+                           // ethervox_governor_reload_model() can re-attach
+                           // mtmd on reload (NULL for text-only Governor
+                           // instances)
 
   // Saved system prompt for recovery after nuclear clear
   llama_token* system_prompt_tokens;
@@ -166,6 +195,10 @@ struct ethervox_governor {
   int32_t system_prompt_token_count;
   int32_t current_kv_pos;  // Track current position in KV cache
   char* model_path;
+  char* cache_dir_saved;
+  void* mtmd_ctx;
+  int audio_sample_rate;
+  char* mmproj_path;
 #endif
 
   // KV Cache Debugging - Track all tokens for full cache dumps
@@ -1469,8 +1502,9 @@ static int execute_tool_call(const char* tool_call_xml, ethervox_tool_registry_t
   return ret;
 }
 
-ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
+static ethervox_result_t governor_load_model_impl(ethervox_governor_t* governor,
                                                const char* model_path,
+                                               const char* mmproj_path,
                                                const char* cache_dir,
                                                ethervox_load_progress_callback progress_callback,
                                                void* user_data) {
@@ -1678,7 +1712,9 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
   // CRITICAL: Enable sequence-based KV cache (requires n_seq_max >= 2)
   // Sequence 0: System prompt + conversation (combined)
   // Sequence 1: Temporary workspace (summaries, tool operations)
-  ctx_params.n_seq_max = 2;
+  // Sequence 2 (audio-capable only): ASR decode scratch - see
+  // docs/UNIFIED_VOICE_MODEL_ARCHITECTURE.md section 2.2
+  ctx_params.n_seq_max = mmproj_path ? 3 : 2;
   GOV_LOG("[Governor] Enabled sequence-based KV cache with n_seq_max = %d", ctx_params.n_seq_max);
 
   // DEBUG: Log the context size that's about to be used
@@ -1691,10 +1727,15 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
   // System prompt is ~4543 tokens, needs buffer for conversation
   // Minimum: 8192 tokens/seq × 2 = 16384 total (gives ~3600 tokens for conversation)
   const uint32_t MIN_CONTEXT_FOR_SYSTEM_PROMPT = 16384;
-  if (ctx_params.n_ctx < MIN_CONTEXT_FOR_SYSTEM_PROMPT) {
+  // Audio-capable path uses n_seq_max=3 - keep the same ~8192 tokens/seq
+  // budget as the text-only path (16384/2), so scale up proportionally
+  // rather than let the 3rd sequence shrink everyone's share: 8192*3=24576.
+  const uint32_t MIN_CONTEXT_FOR_AUDIO_MODE = 24576;
+  const uint32_t min_context = mmproj_path ? MIN_CONTEXT_FOR_AUDIO_MODE : MIN_CONTEXT_FOR_SYSTEM_PROMPT;
+  if (ctx_params.n_ctx < min_context) {
     GOV_LOG("[Governor] WARNING: n_ctx (%d) < minimum (%d) for system prompt - increasing to %d",
-            ctx_params.n_ctx, MIN_CONTEXT_FOR_SYSTEM_PROMPT, MIN_CONTEXT_FOR_SYSTEM_PROMPT);
-    ctx_params.n_ctx = MIN_CONTEXT_FOR_SYSTEM_PROMPT;
+            ctx_params.n_ctx, min_context, min_context);
+    ctx_params.n_ctx = min_context;
   }
 
   // Adaptive batch size based on device tier
@@ -1742,6 +1783,60 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
   }
 
   GOV_LOG("Context created successfully");
+
+  // Attach mtmd (multimodal audio) context when loading with audio support -
+  // see docs/UNIFIED_VOICE_MODEL_ARCHITECTURE.md section 3.1. Must happen
+  // before any decode below, since ASR decode (seq 2) shares this same
+  // llama_context with chat generation (seq 0) / system prompt (seq 1).
+#if GOVERNOR_MTMD_AVAILABLE
+  if (mmproj_path) {
+    struct mtmd_context_params mtmd_params = mtmd_context_params_default();
+    mtmd_params.use_gpu = (governor->config.gpu_layers != 0);
+    mtmd_params.print_timings = false;
+    mtmd_params.n_threads = ctx_params.n_threads;
+    // media_marker left NULL: the mmproj GGUF's own metadata carries the
+    // "<|audio|>" marker used verbatim in granite_speech_decode.c's prompts.
+
+    governor->mtmd_ctx = mtmd_init_from_file(mmproj_path, governor->llm_model, mtmd_params);
+    if (!governor->mtmd_ctx) {
+      GOV_ERROR("Failed to load mmproj from %s - audio support unavailable", mmproj_path);
+      llama_free(governor->llm_ctx);
+      governor->llm_ctx = NULL;
+      llama_model_free(governor->llm_model);
+      governor->llm_model = NULL;
+      return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
+
+    if (!mtmd_support_audio(governor->mtmd_ctx)) {
+      GOV_ERROR("Loaded mmproj (%s) does not report audio support - wrong file?", mmproj_path);
+      mtmd_free(governor->mtmd_ctx);
+      governor->mtmd_ctx = NULL;
+      llama_free(governor->llm_ctx);
+      governor->llm_ctx = NULL;
+      llama_model_free(governor->llm_model);
+      governor->llm_model = NULL;
+      return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
+
+    governor->audio_sample_rate = mtmd_get_audio_sample_rate(governor->mtmd_ctx);
+    // Guard against mmproj_path aliasing governor->mmproj_path (reload_model()
+    // passes the saved pointer straight back in) - strdup a copy before freeing.
+    char* new_mmproj_path = strdup(mmproj_path);
+    free(governor->mmproj_path);
+    governor->mmproj_path = new_mmproj_path;
+    GOV_LOG("[Governor] Audio decode support attached (mmproj=%s, sample_rate=%d)",
+            mmproj_path, governor->audio_sample_rate);
+  }
+#else
+  if (mmproj_path) {
+    GOV_ERROR("Audio-capable load requested but mtmd is not available in this build");
+    llama_free(governor->llm_ctx);
+    governor->llm_ctx = NULL;
+    llama_model_free(governor->llm_model);
+    governor->llm_model = NULL;
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
+  }
+#endif
 
   // Get vocab early - needed for both cache load and normal generation paths
   const struct llama_vocab* vocab = llama_model_get_vocab(governor->llm_model);
@@ -1802,6 +1897,11 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
   if (cache_loaded) {
     // Set up essentials that would normally be set during system prompt processing
     governor->model_path = strdup(model_path);
+    // Guard against cache_dir aliasing governor->cache_dir_saved (reload_model()
+    // passes the saved pointer straight back in) - strdup a copy before freeing.
+    char* new_cache_dir_saved = cache_dir ? strdup(cache_dir) : NULL;
+    free(governor->cache_dir_saved);
+    governor->cache_dir_saved = new_cache_dir_saved;
     governor->tools_available = (governor->config.system_prompt_mode != ETHERVOX_GOVERNOR_MODE_MINIMAL);
     
     // System prompt token count and KV pos were restored by ethervox_kv_cache_load
@@ -2075,6 +2175,13 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
   governor->system_prompt_token_count = n_tokens;
   governor->current_kv_pos = n_tokens;  // Start after system prompt
   governor->model_path = strdup(model_path);
+  {
+    // Guard against cache_dir aliasing governor->cache_dir_saved (reload_model()
+    // passes the saved pointer straight back in) - strdup a copy before freeing.
+    char* new_cache_dir_saved = cache_dir ? strdup(cache_dir) : NULL;
+    free(governor->cache_dir_saved);
+    governor->cache_dir_saved = new_cache_dir_saved;
+  }
   
   // Save KV cache for next app launch
   GOV_LOG("═══════════════════════════════════════════════════════");
@@ -2203,6 +2310,90 @@ setup_tool_wrappers:
 }
 
 /**
+ * Load the Governor model (text-only, no audio decode support) - existing
+ * public entry point, now a thin wrapper over governor_load_model_impl()
+ * with mmproj_path=NULL. Behavior is unchanged from before this refactor.
+ */
+ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
+                                               const char* model_path,
+                                               const char* cache_dir,
+                                               ethervox_load_progress_callback progress_callback,
+                                               void* user_data) {
+  return governor_load_model_impl(governor, model_path, /*mmproj_path=*/NULL, cache_dir,
+                                   progress_callback, user_data);
+}
+
+/**
+ * Load the Governor model with audio (Granite Speech) decode support
+ * attached - see docs/UNIFIED_VOICE_MODEL_ARCHITECTURE.md.
+ */
+ethervox_result_t ethervox_governor_load_model_with_audio(ethervox_governor_t* governor,
+                                                          const char* model_path,
+                                                          const char* mmproj_path,
+                                                          const char* cache_dir,
+                                                          ethervox_load_progress_callback progress_callback,
+                                                          void* user_data) {
+  if (!mmproj_path || mmproj_path[0] == '\0') {
+    GOV_ERROR("ethervox_governor_load_model_with_audio: mmproj_path is required");
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
+  }
+  return governor_load_model_impl(governor, model_path, mmproj_path, cache_dir,
+                                   progress_callback, user_data);
+}
+
+/**
+ * @return true if this Governor instance was loaded via
+ *   ethervox_governor_load_model_with_audio() and still has its mtmd
+ *   context attached.
+ */
+bool ethervox_governor_has_audio_support(ethervox_governor_t* governor) {
+#if GOVERNOR_MTMD_AVAILABLE
+  return governor && governor->mtmd_ctx != NULL;
+#else
+  (void)governor;
+  return false;
+#endif
+}
+
+/**
+ * Transcribe one utterance's worth of accumulated audio using the
+ * Governor's own loaded model - see
+ * docs/UNIFIED_VOICE_MODEL_ARCHITECTURE.md section 3.3. Runs entirely on
+ * the dedicated ASR scratch sequence (seq 2), never touching the
+ * conversation (seq 0) or system-prompt-master (seq 1) sequences.
+ */
+ethervox_result_t ethervox_governor_transcribe_audio(ethervox_governor_t* governor,
+                                                     const float* samples,
+                                                     uint32_t n_samples,
+                                                     char** out_text) {
+  if (!governor || !samples || n_samples == 0 || !out_text)
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
+
+#if !GOVERNOR_MTMD_AVAILABLE
+  GOV_ERROR("ethervox_governor_transcribe_audio: mtmd not available in this build");
+  return ETHERVOX_ERROR_NOT_INITIALIZED;
+#else
+  if (!governor->mtmd_ctx) {
+    GOV_ERROR("ethervox_governor_transcribe_audio: Governor was not loaded with audio support "
+              "(see ethervox_governor_load_model_with_audio)");
+    return ETHERVOX_ERROR_NOT_INITIALIZED;
+  }
+  if (!governor->llm_ctx || !governor->llm_model) {
+    return ETHERVOX_ERROR_NOT_INITIALIZED;
+  }
+
+  llama_memory_t mem = llama_get_memory(governor->llm_ctx);
+  llama_memory_seq_rm(mem, /*seq_id=*/2, -1, -1);  // Clear ASR scratch only
+
+  return granite_speech_decode(
+      governor->llm_model, governor->llm_ctx, governor->mtmd_ctx,
+      governor->chat_template, /*seq_id=*/2,
+      samples, n_samples, /*is_saa=*/false, /*prefix_text=*/NULL,
+      /*max_tokens=*/0, out_text);
+#endif
+}
+
+/**
  * Unload the Governor model to free memory
  */
 ethervox_result_t ethervox_governor_unload_model(ethervox_governor_t* governor) {
@@ -2219,6 +2410,17 @@ ethervox_result_t ethervox_governor_unload_model(ethervox_governor_t* governor) 
   return ETHERVOX_ERROR_INVALID_ARGUMENT;
 #else
   GOV_LOG("[Governor] Unloading model to free memory (keeping model path for reload)");
+
+  // Free mtmd audio-decode context, if this Governor was loaded with audio
+  // support (see ethervox_governor_load_model_with_audio()). Keep
+  // mmproj_path (like model_path) so reload_model() can re-attach it.
+#if GOVERNOR_MTMD_AVAILABLE
+  if (governor->mtmd_ctx) {
+    mtmd_free(governor->mtmd_ctx);
+    governor->mtmd_ctx = NULL;
+  }
+#endif
+  governor->audio_sample_rate = 0;
 
   // Free LLM context and model
   if (governor->llm_ctx) {
@@ -2275,11 +2477,41 @@ ethervox_result_t ethervox_governor_reload_model(ethervox_governor_t* governor) 
     return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
 
-  GOV_LOG("[Governor] Reloading model from: %s", governor->model_path);
+  GOV_LOG("[Governor] Reloading model from: %s (cache_dir=%s)", governor->model_path,
+          governor->cache_dir_saved ? governor->cache_dir_saved : "(none)");
 
-  // Use the existing load_model function with the saved path
-  // Note: cache_dir=NULL for reload (don't save/load cache on explicit reload)
-  return ethervox_governor_load_model(governor, governor->model_path, NULL, NULL, NULL);
+  // Use the saved cache_dir from the original load - previously this always
+  // passed NULL, which unconditionally skipped the KV-cache-check branch in
+  // governor_load_model_impl() on every reload, silently regenerating the
+  // system prompt from scratch (~5 min) even when a valid cache file
+  // existed on disk. See docs/UNIFIED_VOICE_MODEL_ARCHITECTURE.md section 5.1.
+  //
+  // IMPORTANT: pass local strdup'd copies, not governor->cache_dir_saved/
+  // mmproj_path directly - governor_load_model_impl() frees and reassigns
+  // those exact struct fields partway through, which would otherwise leave
+  // this function's own arguments (and impl's local parameter copies of
+  // them) as dangling pointers for the remainder of the call.
+  char* model_path_copy = strdup(governor->model_path);
+  char* cache_dir_copy = governor->cache_dir_saved ? strdup(governor->cache_dir_saved) : NULL;
+  ethervox_result_t result;
+
+  // If this Governor was loaded with audio support (mmproj_path set),
+  // restore it via load_model_with_audio() instead of the text-only path.
+#if GOVERNOR_MTMD_AVAILABLE
+  if (governor->mmproj_path) {
+    char* mmproj_path_copy = strdup(governor->mmproj_path);
+    result = ethervox_governor_load_model_with_audio(
+        governor, model_path_copy, mmproj_path_copy, cache_dir_copy, NULL, NULL);
+    free(mmproj_path_copy);
+    free(model_path_copy);
+    free(cache_dir_copy);
+    return result;
+  }
+#endif
+  result = ethervox_governor_load_model(governor, model_path_copy, cache_dir_copy, NULL, NULL);
+  free(model_path_copy);
+  free(cache_dir_copy);
+  return result;
 }
 
 /**
@@ -5024,6 +5256,20 @@ void ethervox_governor_cleanup(ethervox_governor_t* governor) {
     return;
 
 #if defined(ETHERVOX_WITH_LLAMA) && LLAMA_HEADER_AVAILABLE
+#if GOVERNOR_MTMD_AVAILABLE
+  if (governor->mtmd_ctx) {
+    mtmd_free(governor->mtmd_ctx);
+    governor->mtmd_ctx = NULL;
+  }
+#endif
+  if (governor->mmproj_path) {
+    free(governor->mmproj_path);
+    governor->mmproj_path = NULL;
+  }
+  if (governor->cache_dir_saved) {
+    free(governor->cache_dir_saved);
+    governor->cache_dir_saved = NULL;
+  }
   if (governor->llm_ctx) {
     llama_free(governor->llm_ctx);
     governor->llm_ctx = NULL;

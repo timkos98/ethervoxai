@@ -395,6 +395,72 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
                                                void* user_data);
 
 /**
+ * Load the Governor model with audio (Granite Speech) decode support
+ * attached, for the unified voice-model architecture (Mode 1 voice screen).
+ * See docs/UNIFIED_VOICE_MODEL_ARCHITECTURE.md for full design rationale.
+ *
+ * Identical to ethervox_governor_load_model() except:
+ *  - Also loads mmproj_path via mtmd_init_from_file() and attaches the
+ *    resulting mtmd_context to the Governor, enabling
+ *    ethervox_governor_transcribe_audio().
+ *  - Uses ctx_params.n_seq_max = 3 instead of 2 (adds a dedicated ASR
+ *    scratch sequence - see docs/UNIFIED_VOICE_MODEL_ARCHITECTURE.md
+ *    section 2.2). Context size budget is planned per 3-way split
+ *    (MIN_CONTEXT_FOR_AUDIO_MODE), not the existing 2-way split.
+ *  - model_path and mmproj_path must point at the SAME Granite Speech Plus
+ *    GGUF pair used to load Granite Speech elsewhere (Mode 1/2/4) - this is
+ *    a hard requirement, not validated at runtime beyond mtmd's own
+ *    mtmd_support_audio() check.
+ *
+ * @param governor Governor instance
+ * @param model_path Path to Granite Speech Plus GGUF (LLM decoder + Conformer weights)
+ * @param mmproj_path Path to companion mmproj GGUF (QFormer audio projector)
+ * @param cache_dir Directory to store/load KV cache (can be NULL to disable caching)
+ * @param progress_callback Optional progress callback (can be NULL)
+ * @param user_data User data for progress callback (can be NULL)
+ * @return ETHERVOX_SUCCESS on success, negative error code otherwise
+ */
+ethervox_result_t ethervox_governor_load_model_with_audio(
+    ethervox_governor_t* governor,
+    const char* model_path,
+    const char* mmproj_path,
+    const char* cache_dir,
+    ethervox_load_progress_callback progress_callback,
+    void* user_data);
+
+/**
+ * Transcribe one utterance's worth of accumulated audio using the
+ * Governor's own loaded model (must have been loaded via
+ * ethervox_governor_load_model_with_audio()). Runs entirely on the
+ * dedicated ASR scratch sequence (seq 2) - never touches the conversation
+ * (seq 0) or system-prompt-master (seq 1) sequences, so this can be called
+ * at any point without corrupting Governor chat state, including mid
+ * multi-turn conversation.
+ *
+ * @param governor Governor instance (must have been loaded with
+ *   ethervox_governor_load_model_with_audio - returns
+ *   ETHERVOX_ERROR_NOT_INITIALIZED otherwise)
+ * @param samples Raw float32 PCM audio samples, 16kHz mono (Granite
+ *   Speech's fixed encoder rate)
+ * @param n_samples Number of samples in `samples`
+ * @param out_text Output: malloc'd transcript string (caller must free),
+ *   set to NULL on failure
+ * @return ETHERVOX_SUCCESS on success, negative error code otherwise
+ */
+ethervox_result_t ethervox_governor_transcribe_audio(
+    ethervox_governor_t* governor,
+    const float* samples,
+    uint32_t n_samples,
+    char** out_text);
+
+/**
+ * @return true if this Governor instance was loaded via
+ *   ethervox_governor_load_model_with_audio() and still has its mtmd
+ *   context attached (i.e. ethervox_governor_transcribe_audio() is usable).
+ */
+bool ethervox_governor_has_audio_support(ethervox_governor_t* governor);
+
+/**
  * Unload the Governor model to free memory
  * Keeps the Governor structure intact so it can be reloaded later
  *
