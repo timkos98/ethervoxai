@@ -28,7 +28,67 @@ static int test_conversation_config(void) {
     assert(config.listen_timeout_ms > 0);
     assert(config.conversation_timeout_ms > 0);
     assert(config.audio_buffer_size > 0);
+
+    // Barge-in defaults (see conversation.h's barge_in_* doc comments and
+    // plan.md Open Question 1): OFF by default, non-zero tuning values so a
+    // caller that flips barge_in_enabled=true without touching the rest of
+    // the fields still gets sane hysteresis/grace/pre-roll behavior.
+    assert(config.barge_in_enabled == false);
+    assert(config.barge_in_energy_threshold > 0.0f);
+    assert(config.barge_in_min_speech_ms > 0);
+    assert(config.barge_in_grace_period_ms > 0);
+    assert(config.barge_in_preroll_ms > 0);
     
+    printf("PASS\n");
+    return ETHERVOX_SUCCESS;
+}
+
+/**
+ * Test: Barge-in enabled session lifecycle
+ *
+ * Whitebox coverage of run_barge_in_monitor()/start_barge_in_monitor()/
+ * stop_barge_in_monitor() isn't possible here - they're static in
+ * voice_conversation.c and this suite only links against the public
+ * ethervoxai library (see tests/CMakeLists.txt). This instead exercises the
+ * public API surface those internals depend on: a session can be
+ * initialized/started/stopped/cleaned up with barge_in_enabled=true without
+ * crashing or leaking (the pre-roll ring buffer allocation in
+ * ethervox_conversation_init() and its free in cleanup are the parts most
+ * likely to regress). Actual VAD-triggered barge-in behavior needs a real
+ * microphone + platform AEC and is out of scope for this desktop unit test -
+ * see plan.md Open Question 1's on-device testing note.
+ */
+static int test_conversation_barge_in_session(void) {
+    printf("  - test_conversation_barge_in_session... ");
+
+    ethervox_conversation_config_t config = ethervox_conversation_get_default_config();
+    config.barge_in_enabled = true;
+    config.barge_in_energy_threshold = 0.05f;
+    config.barge_in_min_speech_ms = 200;
+    config.barge_in_grace_period_ms = 200;
+    config.barge_in_preroll_ms = 250;
+
+    ethervox_conversation_session_t* session = ethervox_conversation_init(&config, NULL);
+    assert(session != NULL);
+
+    int result = ethervox_conversation_start(session);
+    assert(result == 0);
+
+    usleep(100000); // 100ms for thread to start
+
+    ethervox_conversation_state_t state = ethervox_conversation_get_state(session);
+    assert(state == ETHERVOX_CONV_STATE_IDLE || state == ETHERVOX_CONV_STATE_ERROR);
+
+    // Manual interrupt (ethervox_conversation_interrupt) must remain safe to
+    // call even with no monitor thread active yet (idle, pre-trigger) -
+    // barge-in is additive to this path, never a replacement for it.
+    ethervox_conversation_interrupt(session);
+
+    result = ethervox_conversation_stop(session);
+    assert(result == 0);
+
+    ethervox_conversation_cleanup(session);
+
     printf("PASS\n");
     return ETHERVOX_SUCCESS;
 }
@@ -247,6 +307,7 @@ int main(void) {
     failed += test_conversation_cleanup();
     failed += test_multiple_sessions();
     failed += test_conversation_timeouts();
+    failed += test_conversation_barge_in_session();
     
     printf("\n");
     if (failed == 0) {
