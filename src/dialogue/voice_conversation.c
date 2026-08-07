@@ -214,6 +214,31 @@ static ethervox_result_t capture_utterance_with_vad(ethervox_conversation_sessio
                                                      int timeout_ms, char** text_out) {
     *text_out = NULL;
 
+    // Unified voice model architecture (see
+    // docs/UNIFIED_VOICE_MODEL_ARCHITECTURE.md): when the Governor itself
+    // was loaded with audio support (ethervox_governor_load_model_with_audio,
+    // JNI/caller-side decision), skip the separate STT-runtime path entirely
+    // and decode audio directly on the Governor's own llama_context (ASR
+    // scratch sequence 2) via ethervox_governor_transcribe_audio(). The
+    // RMS-energy VAD logic below is identical either way - only the
+    // "what do I do with the accumulated audio" tail differs.
+    bool use_governor_audio = ethervox_governor_has_audio_support(session->governor);
+
+    // Raw audio accumulator for the Governor-audio path only (mirrors
+    // ethervox_stt_runtime_t's own accumulator sizing in stt_core.c: 30s at
+    // 16kHz comfortably covers one Mode 1 conversational turn).
+    float* gov_audio_accum = NULL;
+    size_t gov_audio_accum_capacity = 0;
+    size_t gov_audio_accum_len = 0;
+    if (use_governor_audio) {
+        gov_audio_accum_capacity = (size_t)session->config.stt.sample_rate * 30;
+        gov_audio_accum = (float*)malloc(gov_audio_accum_capacity * sizeof(float));
+        if (!gov_audio_accum) {
+            ETHERVOX_LOG_ERROR("Failed to allocate Governor audio accumulator");
+            return ETHERVOX_ERROR_OUT_OF_MEMORY;
+        }
+    }
+
     uint64_t start_time = get_time_ms();
     bool speech_detected = false;
     int silence_frames = 0;
@@ -235,14 +260,21 @@ static ethervox_result_t capture_utterance_with_vad(ethervox_conversation_sessio
     if (preroll_audio && preroll_samples > 0) {
         ETHERVOX_LOG_INFO("[Barge-in] Seeding %zu pre-roll samples into new listening turn",
                           preroll_samples);
-        ethervox_audio_buffer_t preroll_buffer = {
-            .data = preroll_audio,
-            .size = (uint32_t)preroll_samples,
-            .channels = 1
-        };
-        ethervox_stt_result_t discard_result = {0};
-        ethervox_stt_process(&session->stt_runtime, &preroll_buffer, &discard_result);
-        ethervox_stt_result_free(&discard_result);
+        if (use_governor_audio) {
+            size_t to_copy = preroll_samples < (gov_audio_accum_capacity - gov_audio_accum_len)
+                                 ? preroll_samples : (gov_audio_accum_capacity - gov_audio_accum_len);
+            memcpy(gov_audio_accum + gov_audio_accum_len, preroll_audio, to_copy * sizeof(float));
+            gov_audio_accum_len += to_copy;
+        } else {
+            ethervox_audio_buffer_t preroll_buffer = {
+                .data = preroll_audio,
+                .size = (uint32_t)preroll_samples,
+                .channels = 1
+            };
+            ethervox_stt_result_t discard_result = {0};
+            ethervox_stt_process(&session->stt_runtime, &preroll_buffer, &discard_result);
+            ethervox_stt_result_free(&discard_result);
+        }
         speech_detected = true;  // We already know the user was talking
     }
     free(preroll_audio);
@@ -290,41 +322,71 @@ static ethervox_result_t capture_utterance_with_vad(ethervox_conversation_sessio
             speech_detected = true;
             silence_frames = 0;
 
-            ethervox_stt_result_t stt_result = {0};
-            ethervox_result_t stt_ret = ethervox_stt_process(&session->stt_runtime, &audio_chunk, &stt_result);
-            // Granite Speech's process() never sets is_final (see doc comment
-            // above) - this branch is effectively unreachable for it today,
-            // kept only in case a future backend does support incremental
-            // finalization mid-utterance.
-            if (ethervox_is_success(stt_ret) && stt_result.is_final && stt_result.text &&
-                strlen(stt_result.text) > 0) {
-                *text_out = strdup(stt_result.text);
-                if (stt_result.language && strlen(stt_result.language) > 0) {
-                    strncpy(session->last_detected_language, stt_result.language,
-                            sizeof(session->last_detected_language) - 1);
-                    session->last_detected_language[sizeof(session->last_detected_language) - 1] = '\0';
+            if (use_governor_audio) {
+                size_t space_left = gov_audio_accum_capacity - gov_audio_accum_len;
+                size_t to_copy = audio_chunk.size < space_left ? audio_chunk.size : space_left;
+                if (to_copy > 0) {
+                    memcpy(gov_audio_accum + gov_audio_accum_len, audio_chunk.data,
+                           to_copy * sizeof(float));
+                    gov_audio_accum_len += to_copy;
+                }
+                if (to_copy < audio_chunk.size) {
+                    ETHERVOX_LOG_WARN("Governor audio accumulator full (%zu/%zu samples), "
+                                      "dropping %u samples", gov_audio_accum_len,
+                                      gov_audio_accum_capacity, audio_chunk.size - (uint32_t)to_copy);
+                }
+            } else {
+                ethervox_stt_result_t stt_result = {0};
+                ethervox_result_t stt_ret = ethervox_stt_process(&session->stt_runtime, &audio_chunk, &stt_result);
+                // Granite Speech's process() never sets is_final (see doc comment
+                // above) - this branch is effectively unreachable for it today,
+                // kept only in case a future backend does support incremental
+                // finalization mid-utterance.
+                if (ethervox_is_success(stt_ret) && stt_result.is_final && stt_result.text &&
+                    strlen(stt_result.text) > 0) {
+                    *text_out = strdup(stt_result.text);
+                    if (stt_result.language && strlen(stt_result.language) > 0) {
+                        strncpy(session->last_detected_language, stt_result.language,
+                                sizeof(session->last_detected_language) - 1);
+                        session->last_detected_language[sizeof(session->last_detected_language) - 1] = '\0';
+                    }
+                    ethervox_stt_result_free(&stt_result);
+                    ethervox_audio_buffer_free(&audio_chunk);
+                    free(gov_audio_accum);
+                    return ETHERVOX_SUCCESS;
                 }
                 ethervox_stt_result_free(&stt_result);
-                ethervox_audio_buffer_free(&audio_chunk);
-                return ETHERVOX_SUCCESS;
             }
-            ethervox_stt_result_free(&stt_result);
         } else if (speech_detected) {
             silence_frames++;
             if (silence_frames >= silence_threshold) {
-                ethervox_stt_result_t final_result = {0};
-                if (ethervox_stt_finalize(&session->stt_runtime, &final_result) == 0) {
-                    if (final_result.text && strlen(final_result.text) > 0) {
-                        *text_out = strdup(final_result.text);
-                        if (final_result.language && strlen(final_result.language) > 0) {
-                            strncpy(session->last_detected_language, final_result.language,
-                                    sizeof(session->last_detected_language) - 1);
-                            session->last_detected_language[sizeof(session->last_detected_language) - 1] = '\0';
+                if (use_governor_audio) {
+                    if (gov_audio_accum_len > 0) {
+                        char* transcript = NULL;
+                        if (ethervox_is_success(ethervox_governor_transcribe_audio(
+                                session->governor, gov_audio_accum, (uint32_t)gov_audio_accum_len,
+                                &transcript)) && transcript) {
+                            *text_out = transcript;
+                        } else {
+                            free(transcript);
                         }
                     }
-                    ethervox_stt_result_free(&final_result);
+                } else {
+                    ethervox_stt_result_t final_result = {0};
+                    if (ethervox_stt_finalize(&session->stt_runtime, &final_result) == 0) {
+                        if (final_result.text && strlen(final_result.text) > 0) {
+                            *text_out = strdup(final_result.text);
+                            if (final_result.language && strlen(final_result.language) > 0) {
+                                strncpy(session->last_detected_language, final_result.language,
+                                        sizeof(session->last_detected_language) - 1);
+                                session->last_detected_language[sizeof(session->last_detected_language) - 1] = '\0';
+                            }
+                        }
+                        ethervox_stt_result_free(&final_result);
+                    }
                 }
                 ethervox_audio_buffer_free(&audio_chunk);
+                free(gov_audio_accum);
                 return ETHERVOX_SUCCESS;
             }
         }
@@ -334,15 +396,29 @@ static ethervox_result_t capture_utterance_with_vad(ethervox_conversation_sessio
 
     // Timeout reached - finalize whatever was accumulated as a best effort.
     if (speech_detected) {
-        ethervox_stt_result_t final_result = {0};
-        if (ethervox_stt_finalize(&session->stt_runtime, &final_result) == 0) {
-            if (final_result.text && strlen(final_result.text) > 0) {
-                *text_out = strdup(final_result.text);
+        if (use_governor_audio) {
+            if (gov_audio_accum_len > 0) {
+                char* transcript = NULL;
+                if (ethervox_is_success(ethervox_governor_transcribe_audio(
+                        session->governor, gov_audio_accum, (uint32_t)gov_audio_accum_len,
+                        &transcript)) && transcript) {
+                    *text_out = transcript;
+                } else {
+                    free(transcript);
+                }
             }
-            ethervox_stt_result_free(&final_result);
+        } else {
+            ethervox_stt_result_t final_result = {0};
+            if (ethervox_stt_finalize(&session->stt_runtime, &final_result) == 0) {
+                if (final_result.text && strlen(final_result.text) > 0) {
+                    *text_out = strdup(final_result.text);
+                }
+                ethervox_stt_result_free(&final_result);
+            }
         }
     }
 
+    free(gov_audio_accum);
     return ETHERVOX_SUCCESS;
 }
 
@@ -913,7 +989,11 @@ static void* conversation_thread(void* arg) {
         }
     }
     
-    if (!session->stt_initialized) {
+    if (!session->stt_initialized && !ethervox_governor_has_audio_support(session->governor)) {
+        // Unified voice model architecture: when the Governor was loaded
+        // with audio support (see docs/UNIFIED_VOICE_MODEL_ARCHITECTURE.md),
+        // it decodes ASR directly on its own llama_context - no separate
+        // STT-runtime instance is initialized here at all.
         printf("🗣️  Initializing speech recognition (Granite Speech)...\n");
         ethervox_stt_config_t stt_config = ethervox_stt_get_default_config();
         stt_config.sample_rate = 16000;
@@ -1005,8 +1085,12 @@ static void* conversation_thread(void* arg) {
 
         char* recognized_text = NULL;
 
-        // Start STT and audio capture
-        if (ethervox_stt_start(&session->stt_runtime) != 0) {
+        // Start STT and audio capture. Skipped when the Governor itself has
+        // audio decode support (unified voice model architecture) - there is
+        // no separate stt_runtime to start in that case; see
+        // capture_utterance_with_vad()'s use_governor_audio branch.
+        bool has_governor_audio = ethervox_governor_has_audio_support(session->governor);
+        if (!has_governor_audio && ethervox_stt_start(&session->stt_runtime) != 0) {
             ETHERVOX_LOG_ERROR("Failed to start STT");
             conversation_notify_error(session, "Failed to start speech recognition");
             pthread_mutex_lock(&session->mutex);
@@ -1019,7 +1103,9 @@ static void* conversation_thread(void* arg) {
         if (ethervox_audio_start_capture(&session->audio_runtime) != 0) {
             ETHERVOX_LOG_ERROR("Failed to start audio capture");
             conversation_notify_error(session, "Failed to start microphone capture");
-            ethervox_stt_stop(&session->stt_runtime);
+            if (!has_governor_audio) {
+                ethervox_stt_stop(&session->stt_runtime);
+            }
             pthread_mutex_lock(&session->mutex);
             conversation_set_state(session, ETHERVOX_CONV_STATE_IDLE);
             pthread_mutex_unlock(&session->mutex);
@@ -1044,7 +1130,9 @@ static void* conversation_thread(void* arg) {
         // re-runs every turn on a stream that may already be open.
         capture_utterance_with_vad(session, 30000, &recognized_text);
 
-        ethervox_stt_stop(&session->stt_runtime);
+        if (!has_governor_audio) {
+            ethervox_stt_stop(&session->stt_runtime);
+        }
         if (!session->config.barge_in_enabled) {
             ethervox_audio_stop_capture(&session->audio_runtime);
         }
