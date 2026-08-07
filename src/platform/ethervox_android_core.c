@@ -16,9 +16,9 @@
  *     wrap ethervox_conversation_init/start (src/dialogue/voice_conversation.c),
  *     the single, platform-agnostic Mode 1/4 orchestrator - Android supplies
  *     platform-native TTS via the on_speak_request callback and resolves the
- *     Granite Speech BASE model path against the app's files dir; the
- *     underlying state machine, VAD, and barge-in logic are unchanged from
- *     desktop.
+ *     Granite Speech Plus model path against the app's files dir (ASR-only
+ *     prompt, same weights Mode 2 uses in SAA mode); the underlying state
+ *     machine, VAD, and barge-in logic are unchanged from desktop.
  *   - Mode 2: startVoiceTranscription/stopVoiceTranscription (see "Voice
  *     Tools / Transcription" below) wrap ethervox_voice_tools_init/
  *     start_listen/stop_listen, which initialize Granite Speech Plus (SAA)
@@ -1646,9 +1646,9 @@ JNIEXPORT void JNICALL Java_com_droid_ethervox_1core_NativeLib_wakeWordCleanup(J
 //     go through sttInit at all.
 //   - Mode 1 (voice conversation) and Mode 4 (voice-to-text) now go through
 //     ethervox_conversation_init/start (see "Voice Conversation" section
-//     below), which resolves and initializes the Granite Speech BASE variant
-//     internally via voice_conversation.c - they also do not go through
-//     sttInit.
+//     below), which resolves and initializes the Granite Speech Plus model
+//     (ASR-only prompt) internally via voice_conversation.c - they also do
+//     not go through sttInit.
 // This generic path is left in place only in case a future feature needs a
 // standalone STT session outside of either orchestrator; it is not part of
 // the Mode 1/2/4 JNI surface NativeLib.kt should call.
@@ -2990,23 +2990,29 @@ static jint start_voice_conversation_session(JNIEnv* env, jobject callback, bool
     config.on_speak_request = jni_conversation_on_speak_request;
   }
 
-  // Resolve Granite Speech BASE model paths against the Android app files
-  // dir (same convention ethervox_voice_tools_init uses for the PLUS variant
-  // in src/plugins/voice_tools/voice_tools.c) - conversation_thread() honors
+  // Resolve Granite Speech Plus model paths against the Android app files
+  // dir (same convention ethervox_voice_tools_init uses for Mode 2 in
+  // src/plugins/voice_tools/voice_tools.c) - conversation_thread() honors
   // these directly rather than falling back to its getenv("HOME") desktop
-  // default (see the fix in voice_conversation.c).
-  static char base_model_path[512];
-  static char base_mmproj_path[512];
+  // default (see the fix in voice_conversation.c). A single Plus (model,
+  // mmproj) pair now backs every voice mode: voice_conversation.c hardcodes
+  // stt_config.backend = ETHERVOX_STT_BACKEND_GRANITE_SPEECH (non-plus) for
+  // Mode 1/4, which selects the plain ASR-only prompt in
+  // granite_speech_backend.c - functionally equivalent to the old separate
+  // BASE model per IBM's model card, just running on the Plus weights.
+  static char speech_model_path[512];
+  static char speech_mmproj_path[512];
   const char* files_dir = ethervox_get_android_files_dir();
   if (files_dir) {
-    snprintf(base_model_path, sizeof(base_model_path), "%s/models/%s/granite-speech-4.1-2b.Q4_K_M.gguf",
-             files_dir, ETHERVOX_GRANITE_SPEECH_SUBDIR);
-    snprintf(base_mmproj_path, sizeof(base_mmproj_path),
-             "%s/models/%s/mmproj-granite-speech-4.1-2b-Q4_K_M.gguf", files_dir,
+    snprintf(speech_model_path, sizeof(speech_model_path),
+             "%s/models/%s/granite-speech-4.1-2b-plus.Q4_K_M.gguf", files_dir,
              ETHERVOX_GRANITE_SPEECH_SUBDIR);
-    config.stt.model_path = base_model_path;
-    config.stt.mmproj_path = base_mmproj_path;
-    LOGI("[VoiceConversation] Granite Speech BASE model path: %s", base_model_path);
+    snprintf(speech_mmproj_path, sizeof(speech_mmproj_path),
+             "%s/models/%s/mmproj-granite-speech-4.1-2b-plus-Q4_K_M.gguf", files_dir,
+             ETHERVOX_GRANITE_SPEECH_SUBDIR);
+    config.stt.model_path = speech_model_path;
+    config.stt.mmproj_path = speech_mmproj_path;
+    LOGI("[VoiceConversation] Granite Speech Plus model path: %s", speech_model_path);
   } else {
     LOGW("[VoiceConversation] Android files dir not set - falling back to desktop model path");
   }
