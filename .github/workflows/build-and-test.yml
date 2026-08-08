@@ -104,6 +104,41 @@ jobs:
         path: artifacts/
         retention-days: 30
 
+  workspace-network-symbol-check:
+    name: Workspace-shaped build has zero network symbols (TASK-C1.0)
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        fetch-depth: 0
+
+    - name: Setup CMake
+      uses: jwlawson/actions-setup-cmake@v2
+      with:
+        cmake-version: '3.20'
+
+    - name: Install Linux dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential libasound2-dev libssl-dev pkg-config ninja-build
+
+    - name: Configure with every network/mutating-file feature OFF
+      run: |
+        cmake -S . -B build-ws -G Ninja -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+          -DTARGET_PLATFORM=LINUX -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_EXECUTABLES=OFF \
+          -DETHERVOX_FEATURE_HTTP=OFF -DETHERVOX_FEATURE_DOWNLOADER=OFF \
+          -DETHERVOX_FEATURE_BUG_REPORT=OFF -DETHERVOX_FEATURE_WEATHER=OFF \
+          -DETHERVOX_FEATURE_FILE_TOOLS=OFF
+
+    - name: Build the library
+      run: cmake --build build-ws --config ${{ env.BUILD_TYPE }} --target ethervoxai
+
+    - name: Fail if any network symbol survives
+      run: scripts/check-no-network-symbols.sh build-ws/libethervoxai.a
+
   smoke:
     name: Quick smoke (fast fail)
     runs-on: ubuntu-latest
