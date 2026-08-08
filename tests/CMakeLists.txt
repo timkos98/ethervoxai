@@ -7,6 +7,13 @@ target_include_directories(test_error PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME ErrorHandling COMMAND test_error)
 set_tests_properties(ErrorHandling PROPERTIES TIMEOUT 30 LABELS "unit")
 
+# TTS host tests (TASK-C1.0)
+add_executable(test_tts_host unit/test_tts_host.c)
+target_link_libraries(test_tts_host ethervoxai)
+target_include_directories(test_tts_host PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME TtsHost COMMAND test_tts_host)
+set_tests_properties(TtsHost PROPERTIES TIMEOUT 30 LABELS "unit")
+
 # Context overflow management tests
 add_executable(test_context_overflow unit/test_context_overflow.c)
 target_link_libraries(test_context_overflow ethervoxai)

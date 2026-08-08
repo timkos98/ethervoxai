@@ -543,6 +543,7 @@ if(WIN32)
     list(APPEND COMMON_SOURCES
         src/audio/aec_speex.c
         src/tts/tts.c
+        src/tts/tts_host.c
         src/tts/text_normalizer.c
         src/tts/piper_backend.c
         src/tts/phonemizer/phonemizer.c
@@ -562,6 +563,7 @@ else()
         src/audio/aec_speex.c
         src/audio/audio_stream_player.c
         src/tts/tts.c
+        src/tts/tts_host.c
         src/tts/text_normalizer.c
         src/tts/piper_backend.c
         src/tts/phonemizer/phonemizer.c

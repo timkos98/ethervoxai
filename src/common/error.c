@@ -49,6 +49,7 @@ const char* ethervox_error_string(ethervox_result_t result) {
         case ETHERVOX_ERROR_FAILED: return "Operation failed";
         case ETHERVOX_ERROR_NOT_FOUND: return "Not found";
         case ETHERVOX_ERROR_FEATURE_DISABLED: return "Feature disabled in this build";
+        case ETHERVOX_ERROR_NO_TTS_HOST: return "No TTS host registered";
         
         // Platform/HAL errors
         case ETHERVOX_ERROR_PLATFORM_INIT: return "Platform initialization failed";

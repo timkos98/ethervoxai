@@ -33,6 +33,7 @@ typedef enum {
     ETHERVOX_ERROR_NOT_FOUND = -12,
     ETHERVOX_ERROR_INTERRUPTED = -13,  // Operation interrupted by user (e.g., Ctrl+C)
     ETHERVOX_ERROR_FEATURE_DISABLED = -14,  // Feature compiled out (ETHERVOX_FEATURE_* == 0)
+    ETHERVOX_ERROR_NO_TTS_HOST = -15,  // No ethervox_tts_host_t registered (ethervox_tts_set_host)
     
     // Platform/HAL errors (-100 to -199)
     ETHERVOX_ERROR_PLATFORM_INIT = -100,
