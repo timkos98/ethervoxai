@@ -3,7 +3,7 @@
  * @brief AVAudioSession configuration shim for iOS voice capture/playback
  *
  * Copyright (c) 2024-2025 EthervoxAI Team
- * Licensed under CC BY-NC-SA 4.0
+ * Proprietary and confidential. See LICENSE.
  *
  * ARCHITECTURE CHANGE (Granite Speech / multiplatform voice integration):
  * iOS has no equivalent of Android's AAudio input-preset mechanism for

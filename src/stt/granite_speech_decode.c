@@ -7,7 +7,7 @@
  * see granite_speech_decode.h for the shared-helper rationale.
  *
  * Copyright (c) 2024-2025 EthervoxAI Team
- * Licensed under CC BY-NC-SA 4.0
+ * Proprietary and confidential. See LICENSE.
  */
 
 #include "ethervox/granite_speech_decode.h"

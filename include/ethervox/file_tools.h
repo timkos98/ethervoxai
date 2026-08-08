@@ -6,7 +6,7 @@
  * Write access is configurable and disabled by default for safety.
  *
  * Copyright (c) 2024-2025 EthervoxAI Team
- * SPDX-License-Identifier: CC-BY-NC-SA-4.0
+ * SPDX-License-Identifier: LicenseRef-EthervoxAI-Proprietary
  */
 
 #ifndef ETHERVOX_FILE_TOOLS_H

@@ -14,7 +14,7 @@
  * - sp-/st- = /ʃp-/, /ʃt-/ word-initially
  * - German umlauts: ä, ö, ü
  * 
- * License: Part of EthervoxAI (CC BY-NC-SA 4.0)
+ * License: Proprietary (EthervoxAI internal use). See LICENSE.
  */
 
 #include "rules_de.h"

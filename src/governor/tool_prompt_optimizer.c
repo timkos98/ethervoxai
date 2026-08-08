@@ -7,7 +7,7 @@
  * Processes tools in batches to avoid KV cache overflow.
  *
  * Copyright (c) 2024-2025 EthervoxAI Team
- * SPDX-License-Identifier: CC-BY-NC-SA-4.0
+ * SPDX-License-Identifier: LicenseRef-EthervoxAI-Proprietary
  */
 
 #include <ctype.h>

@@ -5,7 +5,7 @@
  * Rule-based German G2P system leveraging German's regular orthography.
  * German spelling is highly predictable compared to English.
  * 
- * License: Part of EthervoxAI (CC BY-NC-SA 4.0)
+ * License: Proprietary (EthervoxAI internal use). See LICENSE.
  * No external dictionary dependencies - pure algorithmic approach.
  */
 

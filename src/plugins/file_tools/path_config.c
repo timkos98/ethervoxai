@@ -6,7 +6,7 @@
  * Paths are stored in memory with special tags and persisted across sessions.
  *
  * Copyright (c) 2024-2025 EthervoxAI Team
- * SPDX-License-Identifier: CC-BY-NC-SA-4.0
+ * SPDX-License-Identifier: LicenseRef-EthervoxAI-Proprietary
  */
 
 #include "ethervox/file_tools.h"

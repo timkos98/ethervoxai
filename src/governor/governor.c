@@ -7,7 +7,7 @@
  * until a complete response is generated or limits are reached.
  *
  * Copyright (c) 2024-2025 EthervoxAI Team
- * SPDX-License-Identifier: CC-BY-NC-SA-4.0
+ * SPDX-License-Identifier: LicenseRef-EthervoxAI-Proprietary
  */
 
 #include "ethervox/governor.h"

@@ -3,7 +3,7 @@
  * @brief Model download and status checking implementation
  *
  * Copyright (c) 2024-2025 EthervoxAI Team
- * Licensed under CC BY-NC-SA 4.0
+ * Proprietary and confidential. See LICENSE.
  */
 
 #include "ethervox/model_downloader.h"

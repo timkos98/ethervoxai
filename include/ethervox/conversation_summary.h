@@ -6,7 +6,7 @@
  * MVP: Simple, blocking, always regenerate from scratch.
  * 
  * Copyright (c) 2024-2026 EthervoxAI Team
- * SPDX-License-Identifier: CC-BY-NC-SA-4.0
+ * SPDX-License-Identifier: LicenseRef-EthervoxAI-Proprietary
  */
 
 #ifndef ETHERVOX_CONVERSATION_SUMMARY_H

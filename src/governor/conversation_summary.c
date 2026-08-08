@@ -5,7 +5,7 @@
  * MVP: Manual trigger, blocking operation, always regenerate from scratch
  * 
  * Copyright (c) 2024-2026 EthervoxAI Team
- * SPDX-License-Identifier: CC-BY-NC-SA-4.0
+ * SPDX-License-Identifier: LicenseRef-EthervoxAI-Proprietary
  */
 
 #include "ethervox/conversation_summary.h"

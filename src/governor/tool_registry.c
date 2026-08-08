@@ -5,7 +5,7 @@
  * Manages the catalog of available tools that can be invoked by the Governor.
  *
  * Copyright (c) 2024-2025 EthervoxAI Team
- * SPDX-License-Identifier: CC-BY-NC-SA-4.0
+ * SPDX-License-Identifier: LicenseRef-EthervoxAI-Proprietary
  */
 
 #include "ethervox/governor.h"

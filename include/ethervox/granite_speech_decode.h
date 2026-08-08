@@ -15,7 +15,7 @@
  * private granite_speech_context_t.
  *
  * Copyright (c) 2024-2025 EthervoxAI Team
- * Licensed under CC BY-NC-SA 4.0
+ * Proprietary and confidential. See LICENSE.
  */
 #ifndef ETHERVOX_GRANITE_SPEECH_DECODE_H
 #define ETHERVOX_GRANITE_SPEECH_DECODE_H

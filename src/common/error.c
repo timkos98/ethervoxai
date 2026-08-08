@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: CC-BY-NC-SA-4.0
+// SPDX-License-Identifier: LicenseRef-EthervoxAI-Proprietary
 
 // Windows-specific defines must come before any Windows headers
 #if defined(_WIN32)

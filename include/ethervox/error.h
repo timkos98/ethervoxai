@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: CC-BY-NC-SA-4.0
+// SPDX-License-Identifier: LicenseRef-EthervoxAI-Proprietary
 #ifndef ETHERVOX_ERROR_H
 #define ETHERVOX_ERROR_H
 
