@@ -13,7 +13,7 @@
 #include "ethervox/platform_utils.h"
 #include "ethervox/error.h"
 
-#if HAVE_LIBCURL
+#if HAVE_LIBCURL && ETHERVOX_FEATURE_HTTP
 #include "ethervox/platform_http.h"
 #endif
 
@@ -498,7 +498,7 @@ int ethervox_model_download(
     char output_path[1024];
     snprintf(output_path, sizeof(output_path), "%s/%s", model_dir, def->name);
     
-#if HAVE_LIBCURL
+#if HAVE_LIBCURL && ETHERVOX_FEATURE_HTTP
     // Use native C HTTP download
     ETHERVOX_LOG_INFO("Downloading %s...", def->name);
     ETHERVOX_LOG_DEBUG("URL: %s", def->url);

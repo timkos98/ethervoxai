@@ -647,11 +647,11 @@ if(ENABLE_ESPEAK_DICT)
 endif()
 
 # Add bug_reporter.c only for non-Android platforms (Android uses Kotlin BugReporter)
-if(NOT TARGET_PLATFORM STREQUAL "ANDROID" AND NOT WIN32)
+if(ETHERVOX_FEATURE_BUG_REPORT AND NOT TARGET_PLATFORM STREQUAL "ANDROID" AND NOT WIN32)
     list(APPEND COMMON_SOURCES src/common/bug_reporter.c)
     message(STATUS "Bug reporter enabled")
 else()
-    message(STATUS "Bug reporter disabled (Android or Windows)")
+    message(STATUS "Bug reporter disabled (ETHERVOX_FEATURE_BUG_REPORT=OFF, Android, or Windows)")
 endif()
 
 # Collect core source files (non-platform specific)
@@ -1140,7 +1140,7 @@ endif()
 
 # Add platform HTTP utilities (uses libcurl) - only on non-Android/iOS platforms with curl
 # Android uses Kotlin ModelDownloader.kt, iOS uses URLSession for HTTP downloads instead
-if(NOT ANDROID AND NOT TARGET_PLATFORM STREQUAL "IOS")
+if(ETHERVOX_FEATURE_HTTP AND NOT ANDROID AND NOT TARGET_PLATFORM STREQUAL "IOS")
     get_target_property(HAVE_CURL ethervoxai COMPILE_DEFINITIONS)
     if(HAVE_CURL MATCHES "HAVE_LIBCURL=1")
         target_sources(ethervoxai PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/common/platform_http.c)
@@ -1149,7 +1149,7 @@ if(NOT ANDROID AND NOT TARGET_PLATFORM STREQUAL "IOS")
         message(STATUS "⊘ Skipped platform_http.c (libcurl not available)")
     endif()
 else()
-    message(STATUS "⊘ Skipped platform_http.c (Android/iOS uses native HTTP)")
+    message(STATUS "⊘ Skipped platform_http.c (ETHERVOX_FEATURE_HTTP=OFF, or Android/iOS uses native HTTP)")
 endif()
 
 # Platform-specific linking for library consumers

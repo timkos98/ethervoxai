@@ -1387,6 +1387,10 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
   }
 
   if (strcmp(line, "/report") == 0) {
+#if !ETHERVOX_FEATURE_BUG_REPORT
+    printf("[FAIL] Bug reporting is disabled in this build (ETHERVOX_FEATURE_BUG_REPORT=OFF)\n");
+    return;
+#else
     printf("\n╔═══════════════════════════════════╗\n");
     printf("║  Bug & Feature Report Submission  ║\n");
     printf("╚═══════════════════════════════════╝\n\n");
@@ -1467,6 +1471,7 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
           "number.\n");
     }
     return;
+#endif
   }
 
   if (strcmp(line, "/archive") == 0) {
@@ -4022,7 +4027,7 @@ file_tools_cleanup:
   tool_reg_result_t tool_registrations[] = {
       {"Path Config", ethervox_path_config_register(&registry, &path_config)},
       {"Unit Conversion", ethervox_unit_conversion_register(&registry)},
-#if HAVE_LIBCURL
+#if HAVE_LIBCURL && ETHERVOX_FEATURE_WEATHER
       {"Weather Forecast", ethervox_weather_tools_register(&registry)},
 #endif
       {"Conversation", ethervox_conversation_tools_register(&registry)},
