@@ -38,15 +38,17 @@
 #ifdef _WIN32
 #include <wininet.h>
 #pragma comment(lib, "wininet.lib")
+#if ETHERVOX_FEATURE_DOWNLOADER
 #define USE_WININET
+#endif
 #elif defined(__linux__) || defined(__APPLE__)
 /* Check if curl/curl.h is available (may not be present in cross-compilation environments) */
-#if __has_include(<curl/curl.h>)
+#if __has_include(<curl/curl.h>) && ETHERVOX_FEATURE_DOWNLOADER
 #include <curl/curl.h>
 #define USE_LIBCURL
 #define CURL_AVAILABLE 1
 #else
-/* curl not available - HTTP download functionality will be disabled */
+/* curl not available, or ETHERVOX_FEATURE_DOWNLOADER=OFF - HTTP download functionality disabled */
 #ifdef _MSC_VER
 #pragma message("curl/curl.h not found - HTTP download functionality disabled")
 #else
