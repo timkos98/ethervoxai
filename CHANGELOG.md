@@ -36,6 +36,19 @@ All notable changes to this project are recorded here, following
   phonemiser are not yet deleted — both pending a follow-up session (barge-in needs verifying end
   to end before the old path can go).
 
+### Fixed
+- `tests/unit/test_tts_host.c` and `tests/unit/test_voice_conversation.c`: replaced `assert()`
+  with an explicit `CHECK()` macro — this test suite builds with `-DNDEBUG` (Release), which
+  turns `assert()` into a silent no-op, so every check in these two files (and likely the rest of
+  `tests/unit/`, not yet fixed — see BACKLOG-15) was passing vacuously regardless of correctness.
+  Fixing this in `test_voice_conversation.c` (the barge-in test coverage) surfaced two real,
+  previously-masked issues: a test-authoring bug in the grace-period exact-boundary case (the
+  detector itself was correct — `ethervox_barge_in_detector_process`'s documented `>=` semantics),
+  and a gap where `ethervox_conversation_init`/`start`'s background thread never reaches
+  `ETHERVOX_CONV_STATE_ERROR` when local STT/TTS model files are absent (stays at
+  `UNINITIALIZED` indefinitely instead) — worked around in the test (`SKIP` instead of fail), the
+  underlying `voice_conversation.c` gap itself is unfixed (BACKLOG-15).
+
 ### Changed
 - All CC BY-NC-SA 4.0 licence references in `src/` and `include/` (132 files: SPDX identifiers,
   "Licensed under…" lines) rewritten to reference the proprietary licence, authorized by
