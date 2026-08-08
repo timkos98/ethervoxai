@@ -32,6 +32,7 @@ typedef enum {
     ETHERVOX_ERROR_FAILED = -11,
     ETHERVOX_ERROR_NOT_FOUND = -12,
     ETHERVOX_ERROR_INTERRUPTED = -13,  // Operation interrupted by user (e.g., Ctrl+C)
+    ETHERVOX_ERROR_FEATURE_DISABLED = -14,  // Feature compiled out (ETHERVOX_FEATURE_* == 0)
     
     // Platform/HAL errors (-100 to -199)
     ETHERVOX_ERROR_PLATFORM_INIT = -100,

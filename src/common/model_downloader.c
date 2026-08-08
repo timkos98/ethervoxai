@@ -463,7 +463,12 @@ int ethervox_model_download(
 ) {
     (void)progress_callback;
     (void)user_data;
-    
+
+#if !ETHERVOX_FEATURE_DOWNLOADER
+    ETHERVOX_LOG_ERROR("Model downloading is disabled in this build (ETHERVOX_FEATURE_DOWNLOADER=OFF)");
+    ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_FEATURE_DISABLED, "Model downloading is disabled in this build");
+#endif
+
     const model_definition_t* def = get_model_definition(type, model_name, NULL);
     if (!def) {
         ETHERVOX_LOG_ERROR("Unknown model: %s", model_name ? model_name : "(default)");

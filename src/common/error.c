@@ -48,6 +48,7 @@ const char* ethervox_error_string(ethervox_result_t result) {
         case ETHERVOX_ERROR_NOT_IMPLEMENTED: return "Not implemented";
         case ETHERVOX_ERROR_FAILED: return "Operation failed";
         case ETHERVOX_ERROR_NOT_FOUND: return "Not found";
+        case ETHERVOX_ERROR_FEATURE_DISABLED: return "Feature disabled in this build";
         
         // Platform/HAL errors
         case ETHERVOX_ERROR_PLATFORM_INIT: return "Platform initialization failed";

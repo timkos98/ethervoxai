@@ -3939,8 +3939,15 @@ int main(int argc, char** argv) {
   }
 
   // Initialize and register file tools (read-only by default)
-  ethervox_file_tools_config_t file_config;
+  // Declared unconditionally: process_command() takes a pointer to this struct
+  // regardless of whether the feature is compiled in (REPL call sites below).
+  ethervox_file_tools_config_t file_config = {0};
 
+#if !ETHERVOX_FEATURE_FILE_TOOLS
+  if (g_debug_enabled) {
+    printf("File Tools: disabled in this build (ETHERVOX_FEATURE_FILE_TOOLS=OFF)\n");
+  }
+#else
   // Set allowed base paths for file access
   const char* home_dir = getenv("HOME");
   const char* base_paths[4] = {NULL, NULL, NULL, NULL};
@@ -4017,6 +4024,7 @@ file_tools_cleanup:
       free((void*)base_paths[i]);
     }
   }
+#endif  // ETHERVOX_FEATURE_FILE_TOOLS
 
   // Batch register optional tools
   typedef struct {
