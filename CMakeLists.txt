@@ -266,6 +266,10 @@ message(STATUS "Runtime directory base configured for ${TARGET_PLATFORM}")
 # Git info already extracted and defined above
 # GIT_COMMIT_HASH and GIT_BRANCH are already available
 
+# Optional network / mutating-file subsystems (TASK-C1.0) - defaults ON, all
+# guards live in cmake/EthervoxFeatures.cmake so profiles can compose them.
+include(cmake/EthervoxFeatures.cmake)
+
 # Build configuration
 option(BUILD_TESTS "Build test suite" ON)
 option(BUILD_EXAMPLES "Build example applications" ON)
@@ -777,7 +781,7 @@ endif()
 
 # Add weather tools plugin sources (Open-Meteo API integration)
 # Desktop: requires libcurl, Android: uses JNI HTTP client, iOS: uses NSURLSession
-if(ANDROID OR TARGET_PLATFORM STREQUAL "IOS" OR CMAKE_SYSTEM_NAME STREQUAL "iOS" OR HAVE_LIBCURL OR CURL_FOUND)
+if(ETHERVOX_FEATURE_WEATHER AND (ANDROID OR TARGET_PLATFORM STREQUAL "IOS" OR CMAKE_SYSTEM_NAME STREQUAL "iOS" OR HAVE_LIBCURL OR CURL_FOUND))
     file(GLOB WEATHER_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/weather_tools/*.c")
     if(NOT ANDROID)
         # weather_http_android.c depends on <android/log.h> and <jni.h> and
@@ -802,7 +806,7 @@ if(ANDROID OR TARGET_PLATFORM STREQUAL "IOS" OR CMAKE_SYSTEM_NAME STREQUAL "iOS"
         message(STATUS "Weather tools plugin sources included (libcurl available)")
     endif()
 else()
-    message(STATUS "Weather tools plugin SKIPPED (libcurl not available)")
+    message(STATUS "Weather tools plugin SKIPPED (ETHERVOX_FEATURE_WEATHER=OFF or libcurl not available)")
 endif()
 
 # Note: Dialogue sources already added via initial GLOB (lines 596-603)

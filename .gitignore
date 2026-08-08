@@ -134,6 +134,11 @@ Thumbs.db
 *.swo
 *~
 
+# Build cruft (C1.0 hygiene)
+main.c.bak
+tmp.txt
+src/tmp.txt
+
 # Debug scripts (personal/temporary)
 *.lldb
 debug_*.sh

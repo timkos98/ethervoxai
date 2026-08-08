@@ -723,7 +723,7 @@ ethervox_result_t ethervox_dialogue_init(ethervox_dialogue_engine_t* engine,
 #endif
     }
     
-#if HAVE_LIBCURL
+#if HAVE_LIBCURL && ETHERVOX_FEATURE_WEATHER
     // Register weather forecast tool (requires libcurl)
 #ifdef ETHERVOX_PLATFORM_ANDROID
     ETHERVOX_LOGI("Attempting to register weather tools...");

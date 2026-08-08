@@ -1378,7 +1378,7 @@ JNIEXPORT jint JNICALL Java_com_droid_ethervox_1core_NativeLib_platformInit(JNIE
     LOGI("Registered unit conversion tool");
   }
 
-#if HAVE_LIBCURL
+#if HAVE_LIBCURL && ETHERVOX_FEATURE_WEATHER
   // Register weather tools (requires libcurl - only available on desktop)
   ethervox_result_t weather_result = ethervox_weather_tools_register(g_registry);
   if (ethervox_is_success(weather_result)) {
@@ -1387,7 +1387,7 @@ JNIEXPORT jint JNICALL Java_com_droid_ethervox_1core_NativeLib_platformInit(JNIE
   } else {
     LOGW("Weather tools unavailable (libcurl failed: %d)", weather_result);
   }
-#elif defined(ETHERVOX_PLATFORM_ANDROID)
+#elif defined(ETHERVOX_PLATFORM_ANDROID) && ETHERVOX_FEATURE_WEATHER
   // Android: Register weather tools (uses JNI HTTP client)
   ethervox_result_t weather_result = ethervox_weather_tools_register(g_registry);
   if (ethervox_is_success(weather_result)) {
