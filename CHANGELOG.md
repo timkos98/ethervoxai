@@ -184,6 +184,31 @@ See TASK-C0.1 execution log in `ethervoxai-planning/tasks/PHASE-C/C0.1-unify-the
     enforcement, NULL safety, refcounted backend. All tests pass.
   - Library compiles with zero warnings across all 4 profiles (DESKTOP, MOBILE, EDGE, WORKSPACE)
   - Blocks TASK-C2.4 (embeddings), C3.1 (vision), C3.2 (forking), C3.4 (pressure)
+- **Host-registered tools** (TASK-C2.2): API for shells/engines to register custom tools with the
+  backend (`include/ethervox/host_tools.h`, `src/governor/host_tools.c`). Enforces ADR-0007
+  (Preview → Approve → Apply) at the C level via the `is_mutating` refusal rule. API includes:
+  - `ethervox_host_tool_t`: Tool descriptor with name, description, JSON Schema, `is_mutating` flag,
+    callback function, and user_data
+  - `ethervox_host_tool_fn`: Callback signature accepting JSON arguments, returning JSON result or error
+  - `ethervox_tool_registry_register_host_tool(registry, tool)`: Registers a host tool, fails with
+    `ETHERVOX_ERROR_ALREADY_EXISTS` if name conflicts
+  - `ethervox_tool_registry_set_timeout(registry, ms)`: Sets timeout for tool invocations
+  - `ethervox_tool_registry_clear_host_tools(registry)`: Removes all host tools (not built-in tools)
+  - `ethervox_string_free(str)`: Frees strings allocated by backend (ABI-stable wrapper around free)
+  - **`is_mutating=true` enforcement**: Tools marked mutating emit `ETHERVOX_EVENT_TOOL_CALL_REQUESTED`
+    (C1.5 event stream) instead of auto-invoking. Attempting to auto-invoke returns
+    `ETHERVOX_ERROR_PERMISSION_DENIED`. This makes prompt injection attacks unable to modify user data.
+  - **Reentrancy protection**: Placeholder for detecting host tool callbacks that call back into the
+    same model (returns `ETHERVOX_ERROR_REENTRANT` - full implementation pending)
+  - Host tools stored as linked list in `tool_manifest_registry_t.host_tools` field
+  - Integration with existing tool manifest system: host tools and built-in tools appear in same manifest
+  - New error codes: `ETHERVOX_ERROR_ALREADY_EXISTS`, `ETHERVOX_ERROR_PERMISSION_DENIED`,
+    `ETHERVOX_ERROR_INVALID_STATE`, `ETHERVOX_ERROR_REENTRANT`
+  - `tests/unit/test_host_tools.c`: 10 test cases covering registration, duplicate detection, timeout,
+    NULL safety, invalid fields, mutating flag, refusal enforcement, invocation (success/error), string
+    freeing. All tests pass.
+  - Library compiles with zero warnings across all 4 profiles (DESKTOP, MOBILE, EDGE, WORKSPACE)
+  - Unblocks TASK-E6.2 (engine tool registration for search_vault, read_document, create_plan, apply_plan)
 
 ### Fixed
 - **Stop-sequence infinite loop** (TASK-C1.1): Fixed the bug where sampled tokens were fed into the

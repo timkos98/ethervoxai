@@ -84,6 +84,13 @@ target_include_directories(test_model_pool PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME ModelPool COMMAND test_model_pool)
 set_tests_properties(ModelPool PROPERTIES TIMEOUT 30 LABELS "unit")
 
+# Host-registered tools tests (TASK-C2.2)
+add_executable(test_host_tools unit/test_host_tools.c)
+target_link_libraries(test_host_tools ethervoxai)
+target_include_directories(test_host_tools PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME HostTools COMMAND test_host_tools)
+set_tests_properties(HostTools PROPERTIES TIMEOUT 30 LABELS "unit")
+
 # Adaptive memory tests (corrections and patterns)
 add_executable(test_adaptive_memory unit/test_adaptive_memory.c)
 target_link_libraries(test_adaptive_memory ethervoxai)
