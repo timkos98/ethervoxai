@@ -77,6 +77,12 @@ typedef struct {
     bool requires_explicit_directives;      // If true, use MUST/ALWAYS/NEVER language
     bool prefers_tool_first_response;       // If true, examples show tool call before explanation
     
+    // End-of-generation (EOG) token handling
+    // Some models (e.g., for creative writing) may generate EOG prematurely;
+    // set ignore_eog=true to continue generation past EOG tokens.
+    // Most models should have ignore_eog=false (default) to respect the model's decision.
+    bool ignore_eog;                        // If true, ignore EOG tokens and continue generation
+    
 } chat_template_t;
 
 /**

@@ -49,6 +49,13 @@ target_include_directories(test_secret_mode PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME SecretMode COMMAND test_secret_mode)
 set_tests_properties(SecretMode PROPERTIES TIMEOUT 30 LABELS "unit")
 
+# Stop sequence handling tests (TASK-C1.1)
+add_executable(test_stop_sequences test_stop_sequences.c)
+target_link_libraries(test_stop_sequences ethervoxai)
+target_include_directories(test_stop_sequences PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME StopSequences COMMAND test_stop_sequences)
+set_tests_properties(StopSequences PROPERTIES TIMEOUT 30 LABELS "unit;conformance")
+
 # Adaptive memory tests (corrections and patterns)
 add_executable(test_adaptive_memory unit/test_adaptive_memory.c)
 target_link_libraries(test_adaptive_memory ethervoxai)

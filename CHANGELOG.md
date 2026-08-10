@@ -47,8 +47,29 @@ All notable changes to this project are recorded here, following
   `ethervox_tts_host_speak()` and `ethervox_tts_host_is_speaking()` for barge-in detection.
   Phonemiser/Piper deletion in progress (removed from file system and most CMake references; some
   consumers like `settings_menu.c` still need updating).
+- **Finish reason constants** (TASK-C1.1): `ETHERVOX_FINISH_STOP`, `ETHERVOX_FINISH_LENGTH`,
+  `ETHERVOX_FINISH_TOOL_CALLS`, `ETHERVOX_FINISH_CONTENT_FILTER`, `ETHERVOX_FINISH_REPETITION`,
+  `ETHERVOX_FINISH_EOG` in `include/ethervox/governor.h`. Generation now reports exact stop reason
+  (aligned with OpenAI API).
+- **Consolidated stop checker** (TASK-C1.1): `governor_should_stop()` helper function in
+  `src/governor/governor.c` that checks all stop conditions (EOG, stop sequences, max tokens,
+  repetition loops) in one place. Replaces three redundant stop-check locations.
+- **Repetition loop detection** (TASK-C1.1): Cycles of ≤8 tokens repeated >3 times now trigger
+  `ETHERVOX_FINISH_REPETITION`, preventing infinite loops like "yes yes yes..." hallucinations.
+- **Per-model `ignore_eog` property** (TASK-C1.1): Added `bool ignore_eog` to `chat_template_t`
+  (`include/ethervox/chat_template.h`). All templates default to `false` (respect model's EOG
+  decision). Can be set `true` for creative tasks where models may EOG prematurely. Removes
+  Granite-specific EOG special-casing.
+- `tests/test_stop_sequences.c` (TASK-C1.1): Conformance test verifying finish reason constants,
+  EOG handling, stop sequence detection, and max tokens backstop. 26 assertions covering all 5
+  chat templates.
 
 ### Fixed
+- **Stop-sequence infinite loop** (TASK-C1.1): Fixed the bug where sampled tokens were fed into the
+  KV cache via `llama_decode()` BEFORE stop-sequence checks, causing the model to see its own stop
+  markers and repeat them infinitely. `governor_should_stop()` is now called BEFORE
+  `llama_decode()`, ensuring stop tokens never enter the context. Stop sequences are excluded from
+  the final output, and generation terminates at exactly the right token.
 - `tests/unit/test_tts_host.c` and `tests/unit/test_voice_conversation.c`: replaced `assert()`
   with an explicit `CHECK()` macro — this test suite builds with `-DNDEBUG` (Release), which
   turns `assert()` into a silent no-op, so every check in these two files (and likely the rest of

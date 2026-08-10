@@ -2870,6 +2870,152 @@ static uint32_t compute_ngram_hash_djb2(const char* tokens[], int n) {
 }
 
 /**
+ * Consolidated stop condition checker - determines if generation should stop
+ * 
+ * Checks (in order):
+ * 1. EOG (end-of-generation) token from model
+ * 2. Stop sequences in buffer (after adding proposed token)
+ * 3. Max tokens limit (hard backstop)
+ * 4. Repetition loops (cycle of ≤8 tokens repeated >3 times)
+ * 
+ * @param governor Governor state
+ * @param next_token The proposed next token to be added
+ * @param token_text Decoded text of next_token
+ * @param buffer Current response buffer
+ * @param generated_count Number of tokens generated so far
+ * @param max_tokens Maximum tokens allowed
+ * @param ngram_detector N-gram repetition detector state
+ * @param finish_reason Output: reason for stopping (one of ETHERVOX_FINISH_* constants)
+ * @param should_include_token Output: whether to include the token in the final output
+ * @return true if generation should stop, false to continue
+ */
+static bool governor_should_stop(
+    const struct ethervox_governor* governor,
+    llama_token next_token,
+    const char* token_text,
+    const char* buffer,
+    int generated_count,
+    int max_tokens,
+    const struct {
+      char last_tokens[8][128];
+      uint32_t hashes[256];
+      int token_count;
+      int history_count;
+    }* ngram_detector,
+    const char** finish_reason,
+    bool* should_include_token) {
+  
+  if (!governor || !token_text || !buffer || !finish_reason || !should_include_token) {
+    return true;  // Safety: stop if invalid state
+  }
+  
+  // Default: include the token
+  *should_include_token = true;
+  
+  // ========================================================================
+  // 1. Check for EOG (End-of-Generation) token
+  // ========================================================================
+  const struct llama_vocab* vocab = llama_model_get_vocab(governor->llm_model);
+  if (vocab && llama_vocab_is_eog(vocab, next_token)) {
+    if (generated_count == 0) {
+      // Immediate EOG suggests prompt/context issue
+      GOV_LOG("WARNING: Model immediately generated EOG token (id=%d)", next_token);
+      *finish_reason = ETHERVOX_FINISH_EOG;
+      *should_include_token = false;
+      return true;
+    } else {
+      // Trust the model's decision to stop
+      GOV_LOG("Stopping: EOG token (id=%d) after %d tokens", next_token, generated_count);
+      *finish_reason = ETHERVOX_FINISH_EOG;
+      *should_include_token = false;
+      return true;
+    }
+  }
+  
+  // ========================================================================
+  // 2. Check for stop sequences (simulate adding token to buffer)
+  // ========================================================================
+  char test_buffer[65536];
+  snprintf(test_buffer, sizeof(test_buffer), "%s%s", buffer, token_text);
+  
+  const char** stop_sequences = (const char**)governor->chat_template->stop_sequences;
+  int stop_count = governor->chat_template->stop_sequence_count;
+  
+  for (int i = 0; i < stop_count && stop_sequences[i] != NULL; i++) {
+    const char* stop_marker = stop_sequences[i];
+    char* stop_pos = strstr(test_buffer, stop_marker);
+    if (stop_pos) {
+      // Found stop sequence - determine if we should include partial token
+      size_t buffer_len = strlen(buffer);
+      size_t safe_len = stop_pos - test_buffer;
+      
+      if (safe_len < buffer_len) {
+        // Stop sequence starts within existing buffer - already have it partially
+        *should_include_token = false;
+      } else if (safe_len == buffer_len) {
+        // This token would start the stop sequence - don't include it
+        *should_include_token = false;
+      } else {
+        // Token contains part of content before stop sequence - include truncated version
+        // NOTE: Caller must handle truncation to safe_len
+        *should_include_token = true;
+      }
+      
+      GOV_LOG("Stopping: stop sequence '%s' detected (safe_len=%zu, buffer_len=%zu)", 
+              stop_marker, safe_len, buffer_len);
+      *finish_reason = ETHERVOX_FINISH_STOP;
+      return true;
+    }
+  }
+  
+  // ========================================================================
+  // 3. Max tokens backstop
+  // ========================================================================
+  if (generated_count >= max_tokens) {
+    GOV_LOG("Stopping: max tokens reached (%d/%d)", generated_count, max_tokens);
+    *finish_reason = ETHERVOX_FINISH_LENGTH;
+    return true;
+  }
+  
+  // ========================================================================
+  // 4. Repetition loop detection (cycle ≤8 tokens repeated >3 times)
+  // ========================================================================
+  #define NGRAM_SIZE 8
+  #define MAX_NGRAM_HISTORY 256
+  
+  if (ngram_detector && ngram_detector->token_count >= NGRAM_SIZE) {
+    // Have full n-gram history - check for repetition
+    // Build current n-gram hash (including the new token via text match)
+    const char* ngram_ptrs[NGRAM_SIZE];
+    for (int i = 0; i < NGRAM_SIZE - 1; i++) {
+      ngram_ptrs[i] = ngram_detector->last_tokens[i + 1];  // Shift left
+    }
+    ngram_ptrs[NGRAM_SIZE - 1] = token_text;  // Add new token
+    
+    uint32_t current_hash = compute_ngram_hash_djb2(ngram_ptrs, NGRAM_SIZE);
+    
+    // Count how many times we've seen this hash
+    int repeat_count = 0;
+    for (int i = 0; i < ngram_detector->history_count && i < MAX_NGRAM_HISTORY; i++) {
+      if (ngram_detector->hashes[i] == current_hash) {
+        repeat_count++;
+      }
+    }
+    
+    if (repeat_count >= 3) {  // Seen 3 times before = 4th occurrence
+      GOV_LOG("Stopping: repetition loop detected (%d-gram repeated %d times)", 
+              NGRAM_SIZE, repeat_count + 1);
+      *finish_reason = ETHERVOX_FINISH_REPETITION;
+      *should_include_token = false;  // Don't include the repeating token
+      return true;
+    }
+  }
+  
+  // No stop condition met - continue generation
+  return false;
+}
+
+/**
  * Execute Governor reasoning loop (legacy API - for backward compatibility)
  *
  * Flow:
@@ -3861,13 +4007,13 @@ ethervox_governor_status_t ethervox_governor_execute(
         break;
       }
       
-      // Check for EOG token (proper way)
-      // For Granite models, <|end_of_text|> IS the correct stop token
-      // HOWEVER: For creative tasks (stories, narratives), the model may generate EOG prematurely
-      // Check if the response looks incomplete before respecting EOG
+      // Check for EOG (End-of-Generation) token
+      // Respect the chat template's ignore_eog setting: if set to true (for creative
+      // tasks where models may EOG prematurely), continue generation; otherwise trust
+      // the model's decision to stop.
       bool is_eog = llama_vocab_is_eog(vocab_safe, next_token);
 
-      if (is_eog) {
+      if (is_eog && !governor->chat_template->ignore_eog) {
         if (generated_count == 0) {
           GOV_LOG(
               "WARNING: Model immediately generated EOG token (id=%d) - this suggests "
@@ -3875,12 +4021,13 @@ ethervox_governor_status_t ethervox_governor_execute(
               next_token);
           break;
         } else {
-          // FIXED: Trust the model's EOG token - it knows when it's done
-          // Don't second-guess with "seems incomplete" heuristics that cause hallucination
           GOV_LOG("Stopping generation: EOG token detected (id=%d) after %d tokens", 
                   next_token, generated_count);
           break;
         }
+      } else if (is_eog && governor->chat_template->ignore_eog) {
+        GOV_LOG("EOG token (id=%d) ignored per chat template configuration", next_token);
+        // Continue generation - fall through to token processing
       }
 
       // Decode token to text
@@ -4283,6 +4430,24 @@ ethervox_governor_status_t ethervox_governor_execute(
           }
         }
       }  // End of token_text processing
+
+      // ========================================================================
+      // CONSOLIDATED STOP CHECK - Check BEFORE feeding token to context
+      // ========================================================================
+      const char* finish_reason_value = NULL;
+      bool should_include_token = true;
+      
+      if (governor_should_stop(governor, next_token, token_text, llm_response_buffer,
+                              generated_count, max_tokens, &ngram_detector,
+                              &finish_reason_value, &should_include_token)) {
+        // Stop condition met - record finish reason and exit
+        GOV_LOG("Stop condition met: %s (should_include_token=%d)", 
+                finish_reason_value, should_include_token);
+        
+        // Don't feed this token to the context - it would pollute future generations
+        // The text buffer already has the correct content based on should_include_token
+        break;
+      }
 
       // Feed token back to context for next prediction with explicit position
       // Check if we're about to exceed context window

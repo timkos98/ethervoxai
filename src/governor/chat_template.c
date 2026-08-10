@@ -36,7 +36,8 @@ static const chat_template_t qwen_template = {
         NULL
     },
     .stop_sequence_count = 4,
-    .tool_format = TOOL_FORMAT_XML_ATTR  // Uses XML with attributes
+    .tool_format = TOOL_FORMAT_XML_ATTR,  // Uses XML with attributes
+    .ignore_eog = false  // Respect model's EOG decision
 };
 
 // IBM Granite 4.0/4.1 template (uses official GGUF markers)
@@ -58,7 +59,8 @@ static const chat_template_t granite_template = {
         NULL
     },
     .stop_sequence_count = 4,
-    .tool_format = TOOL_FORMAT_JSON_IN_XML  // Granite uses JSON inside <tool_call> tags
+    .tool_format = TOOL_FORMAT_JSON_IN_XML,  // Granite uses JSON inside <tool_call> tags
+    .ignore_eog = false  // Respect model's EOG decision
 };
 
 // Microsoft Phi template
@@ -80,7 +82,8 @@ static const chat_template_t phi_template = {
         NULL
     },
     .stop_sequence_count = 4,
-    .tool_format = TOOL_FORMAT_XML_ATTR  // Uses XML with attributes
+    .tool_format = TOOL_FORMAT_XML_ATTR,  // Uses XML with attributes
+    .ignore_eog = false  // Respect model's EOG decision
 };
 
 // Meta Llama 3 template
@@ -100,7 +103,8 @@ static const chat_template_t llama3_template = {
         NULL
     },
     .stop_sequence_count = 2,
-    .tool_format = TOOL_FORMAT_XML_ATTR  // Uses XML with attributes
+    .tool_format = TOOL_FORMAT_XML_ATTR,  // Uses XML with attributes
+    .ignore_eog = false  // Respect model's EOG decision
 };
 
 // Liquid AI LFM2.5 template (ChatML with native tool calling)
@@ -123,7 +127,8 @@ static const chat_template_t lfm_template = {
         NULL
     },
     .stop_sequence_count = 5,
-    .tool_format = TOOL_FORMAT_JSON_ONLY  // LFM2.5 uses pure Pythonic function calls between special tokens
+    .tool_format = TOOL_FORMAT_JSON_ONLY,  // LFM2.5 uses pure Pythonic function calls between special tokens
+    .ignore_eog = false  // Respect model's EOG decision
 };
 
 // ============================================================================

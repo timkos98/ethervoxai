@@ -231,6 +231,16 @@ typedef enum {
 } ethervox_governor_status_t;
 
 /**
+ * Generation finish reasons (aligned with OpenAI API)
+ */
+#define ETHERVOX_FINISH_STOP "stop"                // Stop sequence encountered
+#define ETHERVOX_FINISH_LENGTH "length"            // Max tokens reached
+#define ETHERVOX_FINISH_TOOL_CALLS "tool_calls"    // Tool call detected
+#define ETHERVOX_FINISH_CONTENT_FILTER "content_filter"  // Content policy violated
+#define ETHERVOX_FINISH_REPETITION "repetition"    // Repetition loop detected
+#define ETHERVOX_FINISH_EOG "eog"                  // End-of-generation token
+
+/**
  * Confidence metrics from LLM response
  */
 typedef struct {
