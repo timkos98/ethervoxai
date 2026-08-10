@@ -241,6 +241,7 @@ typedef enum {
 #define ETHERVOX_FINISH_CONTENT_FILTER "content_filter"  // Content policy violated
 #define ETHERVOX_FINISH_REPETITION "repetition"    // Repetition loop detected
 #define ETHERVOX_FINISH_EOG "eog"                  // End-of-generation token
+#define ETHERVOX_FINISH_GRAMMAR_DEADLOCK "grammar_deadlock"  // Grammar constrained to empty candidate set
 
 /**
  * Confidence metrics from LLM response

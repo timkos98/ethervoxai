@@ -91,6 +91,13 @@ target_include_directories(test_host_tools PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME HostTools COMMAND test_host_tools)
 set_tests_properties(HostTools PROPERTIES TIMEOUT 30 LABELS "unit")
 
+# Grammar-constrained decoding tests (TASK-C2.3)
+add_executable(test_grammar unit/test_grammar.c)
+target_link_libraries(test_grammar ethervoxai)
+target_include_directories(test_grammar PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME Grammar COMMAND test_grammar)
+set_tests_properties(Grammar PROPERTIES TIMEOUT 30 LABELS "unit")
+
 # Adaptive memory tests (corrections and patterns)
 add_executable(test_adaptive_memory unit/test_adaptive_memory.c)
 target_link_libraries(test_adaptive_memory ethervoxai)
