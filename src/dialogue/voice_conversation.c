@@ -1106,6 +1106,7 @@ static void* conversation_thread(void* arg) {
                 &error_msg,
                 NULL,  // metrics (optional)
                 NULL,  // progress callback (optional)
+                NULL,  // event callback (optional)
                 NULL,  // token callback (optional)
                 NULL   // user_data (optional)
             );

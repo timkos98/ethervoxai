@@ -70,6 +70,13 @@ target_include_directories(test_cancel_token PRIVATE ${CMAKE_SOURCE_DIR}/include
 add_test(NAME CancelToken COMMAND test_cancel_token)
 set_tests_properties(CancelToken PROPERTIES TIMEOUT 30 LABELS "unit")
 
+# Event stream and UTF-8 validation tests (TASK-C1.5)
+add_executable(test_event_stream test_event_stream.c)
+target_link_libraries(test_event_stream ethervoxai)
+target_include_directories(test_event_stream PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME EventStream COMMAND test_event_stream)
+set_tests_properties(EventStream PROPERTIES TIMEOUT 30 LABELS "unit")
+
 # Adaptive memory tests (corrections and patterns)
 add_executable(test_adaptive_memory unit/test_adaptive_memory.c)
 target_link_libraries(test_adaptive_memory ethervoxai)

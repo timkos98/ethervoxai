@@ -22,6 +22,7 @@
 #include "chat_template.h"
 #include "error.h"
 #include "ethervox/error.h"
+#include "ethervox/event_stream.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -570,6 +571,7 @@ int32_t ethervox_governor_get_kv_pos(ethervox_governor_t* governor);
  * @param error Output: Error message if failed (caller must free)
  * @param metrics Output: Confidence metrics (optional, can be NULL)
  * @param progress_callback Progress callback for UI updates (optional, can be NULL)
+ * @param event_callback Structured event callback (optional, can be NULL)
  * @param token_callback Token-by-token streaming callback (optional, can be NULL)
  * @param user_data User data passed to callbacks (optional, can be NULL)
  * @return Governor status
@@ -579,6 +581,7 @@ ethervox_governor_status_t ethervox_governor_execute(
     ethervox_cancel_token_t* cancel_token,
     char** response, char** error,
     ethervox_confidence_metrics_t* metrics, ethervox_governor_progress_callback progress_callback,
+    ethervox_event_cb event_callback,
     void (*token_callback)(const char* token, void* user_data), void* user_data);
 
 /**
@@ -596,6 +599,7 @@ ethervox_governor_status_t ethervox_governor_execute(
  * @param error Output: Error message if failed (caller must free)
  * @param metrics Output: Confidence metrics (optional, can be NULL)
  * @param progress_callback Progress callback for UI updates (optional, can be NULL)
+ * @param event_callback Structured event callback (optional, can be NULL)
  * @param token_callback Token-by-token streaming callback (optional, can be NULL)
  * @param user_data User data passed to callbacks (optional, can be NULL)
  * @return Governor status
@@ -606,6 +610,7 @@ ethervox_governor_status_t ethervox_governor_execute_with_context(
     ethervox_cancel_token_t* cancel_token,
     char** response, char** error,
     ethervox_confidence_metrics_t* metrics, ethervox_governor_progress_callback progress_callback,
+    ethervox_event_cb event_callback,
     void (*token_callback)(const char* token, void* user_data), void* user_data);
 /**
  * Get iteration count from last execution (for debugging)

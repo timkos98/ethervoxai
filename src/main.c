@@ -2988,8 +2988,9 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
   ethervox_confidence_metrics_t metrics;
 
   ethervox_governor_status_t status = ethervox_governor_execute(
-      g_governor, line, &response, &error, &metrics,
+      g_governor, line, NULL, &response, &error, &metrics,
       NULL,                                                // progress_callback
+      NULL,                                                // event_callback
       g_streaming_enabled ? stream_token_callback : NULL,  // token_callback
       NULL                                                 // user_data
   );
@@ -4323,9 +4324,10 @@ file_tools_cleanup:
     char* error = NULL;
 
     ethervox_governor_status_t status =
-        ethervox_governor_execute(g_governor, startup_prompt, &response, &error,
+        ethervox_governor_execute(g_governor, startup_prompt, NULL, &response, &error,
                                   NULL,  // No metrics
                                   NULL,  // No progress callback
+                                  NULL,  // No event callback
                                   NULL,  // No token callback
                                   NULL   // No user data
         );
@@ -4585,9 +4587,10 @@ file_tools_cleanup:
         char* error = NULL;
 
         ethervox_governor_status_t status =
-            ethervox_governor_execute(g_governor, summary_query, &response, &error,
+            ethervox_governor_execute(g_governor, summary_query, NULL, &response, &error,
                                       NULL,  // No metrics
                                       NULL,  // No progress callback
+                                  NULL,  // No event callback
                                       NULL,  // No token callback
                                       NULL   // No user data
             );
@@ -4691,9 +4694,10 @@ file_tools_cleanup:
         char* error = NULL;
 
         ethervox_governor_status_t status =
-            ethervox_governor_execute(g_governor, summary_query, &response, &error,
+            ethervox_governor_execute(g_governor, summary_query, NULL, &response, &error,
                                       NULL,  // No metrics
                                       NULL,  // No progress callback
+                                  NULL,  // No event callback
                                       NULL,  // No token callback
                                       NULL   // No user data
             );

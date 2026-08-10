@@ -157,6 +157,78 @@ static bool governor_load_progress_callback(float progress, void* user_data) {
 }
 
 /**
+ * Emit token with UTF-8 validation and event/callback handling
+ *
+ * This helper ensures that:
+ * 1. Token text is UTF-8 safe (never splits multi-byte sequences)
+ * 2. Event callback gets a TOKEN event if provided
+ * 3. Legacy token callback works for backwards compatibility
+ *
+ * @param token_text Raw token text from the model (may have incomplete UTF-8)
+ * @param token_id Token ID (or -1 if unknown)
+ * @param event_callback Optional event callback
+ * @param token_callback Optional legacy token callback
+ * @param user_data User data for callbacks
+ */
+static void emit_token_safe(const char* token_text, int32_t token_id,
+                            ethervox_event_cb event_callback,
+                            void (*token_callback)(const char*, void*),
+                            void* user_data) {
+  if (!token_text) {
+    return;
+  }
+
+  // Validate UTF-8 and get safe length
+  size_t safe_len = 0;
+  bool is_valid = ethervox_validate_utf8(token_text, &safe_len);
+
+  // If completely valid, just pass through
+  if (is_valid) {
+    // Emit event if callback provided
+    if (event_callback) {
+      ethervox_event_t event;
+      event.type = ETHERVOX_EVENT_TOKEN;
+      event.token.text = token_text;
+      event.token.token_id = token_id;
+      event_callback(&event, user_data);
+    }
+
+    // Legacy callback for backwards compatibility
+    if (token_callback) {
+      token_callback(token_text, user_data);
+    }
+    return;
+  }
+
+  // Incomplete UTF-8 - emit only the safe prefix
+  if (safe_len > 0) {
+    // Create temporary safe string
+    char* safe_text = (char*)malloc(safe_len + 1);
+    if (safe_text) {
+      memcpy(safe_text, token_text, safe_len);
+      safe_text[safe_len] = '\0';
+
+      // Emit event if callback provided
+      if (event_callback) {
+        ethervox_event_t event;
+        event.type = ETHERVOX_EVENT_TOKEN;
+        event.token.text = safe_text;
+        event.token.token_id = token_id;
+        event_callback(&event, user_data);
+      }
+
+      // Legacy callback
+      if (token_callback) {
+        token_callback(safe_text, user_data);
+      }
+
+      free(safe_text);
+    }
+  }
+  // If safe_len == 0, token is completely invalid - skip it
+}
+
+/**
  * Internal state for the Governor
  */
 struct ethervox_governor {
@@ -2761,6 +2833,7 @@ ethervox_governor_status_t ethervox_governor_execute_with_context(
     ethervox_cancel_token_t* cancel_token,
     char** response, char** error,
     ethervox_confidence_metrics_t* metrics, ethervox_governor_progress_callback progress_callback,
+    ethervox_event_cb event_callback,
     void (*token_callback)(const char* token, void* user_data), void* user_data) {
   // Set conversation callbacks if provided
   if (exec_context && exec_context->callbacks) {
@@ -2772,7 +2845,7 @@ ethervox_governor_status_t ethervox_governor_execute_with_context(
   // If no execution context, just pass through to standard execute
   if (!exec_context) {
     return ethervox_governor_execute(governor, user_query, cancel_token, response, error, metrics,
-                                     progress_callback, token_callback, user_data);
+                                     progress_callback, event_callback, token_callback, user_data);
   }
 
   // Build enhanced query with execution context metadata
@@ -2830,7 +2903,7 @@ ethervox_governor_status_t ethervox_governor_execute_with_context(
 
   // Execute with enhanced query
   return ethervox_governor_execute(governor, enhanced_query, cancel_token, response, error, metrics,
-                                   progress_callback, token_callback, user_data);
+                                   progress_callback, event_callback, token_callback, user_data);
 }
 
 // ============================================================================
@@ -3049,6 +3122,7 @@ ethervox_governor_status_t ethervox_governor_execute(
     ethervox_cancel_token_t* cancel_token,
     char** response, char** error,
     ethervox_confidence_metrics_t* metrics, ethervox_governor_progress_callback progress_callback,
+    ethervox_event_cb event_callback,
     void (*token_callback)(const char* token, void* user_data), void* user_data) {
   if (!governor || !governor->initialized || !user_query || !response) {
     if (error)
@@ -4145,10 +4219,8 @@ ethervox_governor_status_t ethervox_governor_execute(
           size_t available = buffer_size - current_len - 1;
           strncat(llm_response_buffer, token_text, available);
           
-          // Stream it immediately if callback exists
-          if (token_callback) {
-            token_callback(token_text, user_data);
-          }
+          // Stream it immediately with UTF-8 safe event/callback
+          emit_token_safe(token_text, next_token, event_callback, token_callback, user_data);
           
           GOV_LOG("Stop sequence detected - ending generation after truncated token");
           break;  // Stop generation immediately
@@ -4320,8 +4392,9 @@ ethervox_governor_status_t ethervox_governor_execute(
                                       !lookahead_building_stop && 
                                       !oldest_could_be_stop;
           
-          if (should_stream_oldest && token_callback) {
-            token_callback(lookahead.tokens[0], user_data);
+          if (should_stream_oldest) {
+            // Emit token with UTF-8 safe event/callback (token_id unknown in lookahead)
+            emit_token_safe(lookahead.tokens[0], -1, event_callback, token_callback, user_data);
             // Track what we've streamed to UI with bounds checking
             size_t streamed_len = strlen(streamed_output_buffer);
             size_t available = sizeof(streamed_output_buffer) - streamed_len - 1;
@@ -4677,8 +4750,8 @@ ethervox_governor_status_t ethervox_governor_execute(
           size_t token_len = strlen(lookahead.tokens[i]);
           
           if (chars_output + token_len <= safe_char_count) {
-            // Full token fits within safe zone
-            token_callback(lookahead.tokens[i], user_data);
+            // Full token fits within safe zone - emit with UTF-8 safety
+            emit_token_safe(lookahead.tokens[i], -1, event_callback, token_callback, user_data);
             chars_output += token_len;
           } else {
             // Partial token - only output the safe portion
@@ -4687,7 +4760,7 @@ ethervox_governor_status_t ethervox_governor_execute(
               char partial[128];
               strncpy(partial, lookahead.tokens[i], partial_len);
               partial[partial_len] = '\0';
-              token_callback(partial, user_data);
+              emit_token_safe(partial, -1, event_callback, token_callback, user_data);
               chars_output += partial_len;
             }
             break;

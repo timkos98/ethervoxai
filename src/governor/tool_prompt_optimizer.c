@@ -856,7 +856,7 @@ ethervox_result_t ethervox_optimize_tool_prompts(ethervox_governor_t* governor,
 
       ETHERVOX_LOGI("Sending query to LLM for tool '%s' (query length: %d)", tool_idx->name, qoff);
 
-      if (ethervox_governor_execute(governor, query, NULL, &response, &error, NULL, NULL, NULL, NULL) ==
+      if (ethervox_governor_execute(governor, query, NULL, &response, &error, NULL, NULL, NULL, NULL, NULL) ==
               0 &&
           response) {
         // Re-enable tool execution

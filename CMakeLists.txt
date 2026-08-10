@@ -521,6 +521,7 @@ set(COMMON_SOURCES
     src/common/error.c
     src/common/logging.c
     src/common/paths.c
+    src/common/event_stream.c
     src/common/language_detector.c
     src/common/model_downloader.c
     src/config/settings.c

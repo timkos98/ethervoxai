@@ -1650,6 +1650,7 @@ ethervox_result_t ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engi
         &gov_error,
         &metrics,
         NULL,  // Progress callback
+        NULL,  // Event callback
         NULL,  // Token callback (not streaming)
         NULL   // User data
     );
@@ -1724,6 +1725,7 @@ ethervox_result_t ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engi
             &gov_error,
             &metrics,
             NULL,  // TODO: Add progress callback for UI updates
+            NULL,  // Event callback
             NULL,  // Token callback (not streaming)
             NULL   // User data
         );
@@ -1965,6 +1967,7 @@ ethervox_result_t ethervox_dialogue_process_llm_stream(ethervox_dialogue_engine_
         &gov_error,
         &metrics,
         governor_progress_callback,  // Now properly wired from JNI!
+        NULL,  // Event callback (not used yet)
         token_callback,  // Token callback for streaming
         user_data
     );

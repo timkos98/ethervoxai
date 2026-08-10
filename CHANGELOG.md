@@ -87,8 +87,25 @@ All notable changes to this project are recorded here, following
     cancellation latency. Session remains usable after cancellation with no leaked state.
   - Uses C11 atomic_bool for lock-free thread-safety (minimal overhead)
   - `tests/test_cancel_token.c`: 8 test cases covering create/free, NULL safety, basic cancellation,
-    idempotency, cross-thread cancellation, and concurrent is_cancelled checks. All tests pass.
-
+    idempotency, cross-thread cancellation, and concurrent is_cancelled checks. All tests pass.- **Structured event stream** (TASK-C1.5): Unified `ethervox_event_cb` callback interface for tokens,
+  tool calls, usage, load stages, log-probs, and errors (`include/ethervox/event_stream.h`,
+  `src/common/event_stream.c`). API includes:
+  - `ethervox_event_type_t`: 8 event types (LOAD_STAGE, TOKEN, TOOL_CALL_REQUESTED,
+    TOOL_CALL_RESULT, USAGE, LOGPROB, FINISHED, ERROR)
+  - `ethervox_event_t`: Tagged union carrying event-specific data
+  - `ethervox_event_cb`: Callback function signature (returns bool to continue/cancel)
+  - **UTF-8 validation**: Token fragments are guaranteed to never split multi-byte sequences. Ported
+    UTF-8 validation logic from iOS bridge (`EthervoxBridge.mm`) to C. Handles 1-4 byte sequences
+    (ASCII, 2-byte, 3-byte, 4-byte emoji), detects incomplete sequences, validates continuation bytes.
+  - `ethervox_validate_utf8()`: Validates UTF-8 string, returns length of valid prefix
+  - `ethervox_create_safe_utf8()`: Creates UTF-8 safe copy (truncates incomplete sequences)
+  - Threaded through governor execution: added optional `ethervox_event_cb` parameter to
+    `ethervox_governor_execute()` and `ethervox_governor_execute_with_context()`. Old
+    `token_callback` reimplemented on top of event stream for backwards compatibility.
+  - Events delivered in order on the inference thread. String pointers valid only during callback.
+  - `tests/test_event_stream.c`: 16 test cases covering UTF-8 validation (NULL, ASCII, emoji,
+    incomplete 2/3/4-byte sequences, invalid continuation, mixed content), safe string creation,
+    and event structure correctness. All tests pass. Event size: 32 bytes.
 ### Fixed
 - **Stop-sequence infinite loop** (TASK-C1.1): Fixed the bug where sampled tokens were fed into the
   KV cache via `llama_decode()` BEFORE stop-sequence checks, causing the model to see its own stop
