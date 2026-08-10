@@ -1,8 +1,39 @@
 # Changelog
 
-All notable changes to this project are recorded here, following
+All notable changes to this project are documented here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/).
+
+---
+
+## [core-v0.3.0] - 2026-08-10
+
+**ADR-0023: One `ethervox_core`, one line** — Merged `feature/granite-speech-voice-integration` (37 commits) into `main`. Deleted 8 stale branches. All products now track one main line via tags.
+
+### Added (Phase C1.0–C1.6)
+- **4-profile CI matrix** (TASK-C0.1): All four profiles (EDGE, MOBILE, DESKTOP, WORKSPACE) now build and pass `ctest` on every PR via GitHub Actions
+- **PR template** requiring consumer impact statement per ADR-0023 §5
+- All features from C1.0–C1.6 (see Unreleased section below, now released)
+
+### Changed
+- **Repository policy** (ADR-0023): `main` is now the only long-lived branch. Products pin tags, not SHAs. Feature branches are short-lived and deleted on merge.
+- All consumers must now use tags (e.g., `core-v0.3.0`) instead of branch heads
+
+### Removed
+- 8 stale remote branches: `feature/granite-speech-voice-integration`, `agents/unified-voice-model-architecture`, `dev/architecture_change__tool_manifest_approach`, `dev/llm_first_approach`, `feat-android-basic-frontend`, `feat/conversation-summarization`, `feat/memory-tool`, `feat/voice-tool`
+
+### Breaking Changes
+- **TTS subsystem removed**: Old `ethervox_tts_*` APIs deleted, replaced with `ethervox_tts_host_t` interface
+- **Paths required**: Must supply `ethervox_paths_t`, no more hardcoded `HOME`/`Documents/` derivations
+- **Profile required**: Must set `-DETHERVOX_PROFILE=<EDGE|MOBILE|DESKTOP|WORKSPACE>` in CMake
+- **KV cache invalidated**: Old cache files (`system_prompt_*.kvcache`) won't be found, triggers one-time rebuild
+
+### Consumer Impact
+- ✅ **ethervoxai-apple (Workspace)**: Already at feda1a0, re-pinned to `core-v0.3.0`, builds successfully
+- ⚠️ **ethervoxai-android (Friend'O'Mine)**: Pinned at 07fc7e7 with TTS/phonemizer code. Must implement N5.5 (TTS host) before re-pinning to avoid breaking read-aloud (accessibility-critical)
+- ✅ **ethervoxai-ios**: Pinned at 07fc7e7, does not use C TTS API, safe to re-pin with paths API adoption
+
+See TASK-C0.1 execution log in `ethervoxai-planning/tasks/PHASE-C/C0.1-unify-the-core-line.md` for detailed consumer impact audit.
 
 ---
 
