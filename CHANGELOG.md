@@ -73,6 +73,21 @@ All notable changes to this project are recorded here, following
   - `tests/test_paths.c`: 21 assertions covering validation, defaults, joining, directory creation
   - `scripts/check-no-hardcoded-paths.sh`: Grep test warning about hardcoded path usage (45 getenv("HOME"),
     2 "Documents/", 16 "/Library/" instances remain - migration in progress)
+- **`ethervox_cancel_token_t`** (TASK-C1.4): Thread-safe cancellation token for long-running operations
+  (`include/ethervox/cancel_token.h`, `src/governor/cancel_token.c`). API includes:
+  - `ethervox_cancel_token_create()`: Allocate a new token in non-cancelled state
+  - `ethervox_cancel_token_cancel()`: Atomically set the cancelled flag (thread-safe)
+  - `ethervox_cancel_token_is_cancelled()`: Atomically read the cancelled flag (thread-safe)
+  - `ethervox_cancel_token_free()`: Free the token (not thread-safe - caller must synchronize)
+  - Threaded through model loading and generation: added optional `ethervox_cancel_token_t*` parameter
+    to `ethervox_governor_load_model()`, `ethervox_governor_load_model_with_audio()`,
+    `ethervox_governor_execute()`, and `ethervox_governor_execute_with_context()`. All accept NULL
+    for backwards compatibility.
+  - Checked between token generation steps and in model loading progress callbacks for sub-200ms
+    cancellation latency. Session remains usable after cancellation with no leaked state.
+  - Uses C11 atomic_bool for lock-free thread-safety (minimal overhead)
+  - `tests/test_cancel_token.c`: 8 test cases covering create/free, NULL safety, basic cancellation,
+    idempotency, cross-thread cancellation, and concurrent is_cancelled checks. All tests pass.
 
 ### Fixed
 - **Stop-sequence infinite loop** (TASK-C1.1): Fixed the bug where sampled tokens were fed into the

@@ -63,6 +63,13 @@ target_include_directories(test_paths PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME Paths COMMAND test_paths)
 set_tests_properties(Paths PROPERTIES TIMEOUT 30 LABELS "unit")
 
+# Cancellation token tests (TASK-C1.4)
+add_executable(test_cancel_token test_cancel_token.c)
+target_link_libraries(test_cancel_token ethervoxai pthread)
+target_include_directories(test_cancel_token PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME CancelToken COMMAND test_cancel_token)
+set_tests_properties(CancelToken PROPERTIES TIMEOUT 30 LABELS "unit")
+
 # Adaptive memory tests (corrections and patterns)
 add_executable(test_adaptive_memory unit/test_adaptive_memory.c)
 target_link_libraries(test_adaptive_memory ethervoxai)

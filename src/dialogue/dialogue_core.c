@@ -1646,8 +1646,7 @@ ethervox_result_t ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engi
     
     ethervox_governor_status_t status = ethervox_governor_execute(
         (ethervox_governor_t*)engine->governor,
-        intent->raw_text,
-        &gov_response,
+        intent->raw_text, NULL, &gov_response,
         &gov_error,
         &metrics,
         NULL,  // Progress callback
@@ -1721,8 +1720,7 @@ ethervox_result_t ethervox_dialogue_process_llm(ethervox_dialogue_engine_t* engi
         
         ethervox_governor_status_t status = ethervox_governor_execute(
             (ethervox_governor_t*)engine->governor,
-            intent->raw_text,
-            &gov_response,
+            intent->raw_text, NULL, &gov_response,
             &gov_error,
             &metrics,
             NULL,  // TODO: Add progress callback for UI updates
@@ -1963,8 +1961,7 @@ ethervox_result_t ethervox_dialogue_process_llm_stream(ethervox_dialogue_engine_
     // Use the provided governor progress callback (from JNI layer)
     ethervox_governor_status_t status = ethervox_governor_execute(
         (ethervox_governor_t*)engine->governor,
-        intent->raw_text,
-        &gov_response,
+        intent->raw_text, NULL, &gov_response,
         &gov_error,
         &metrics,
         governor_progress_callback,  // Now properly wired from JNI!

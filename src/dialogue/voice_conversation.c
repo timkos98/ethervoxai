@@ -1102,8 +1102,7 @@ static void* conversation_thread(void* arg) {
             ethervox_governor_status_t status = ethervox_governor_execute_with_context(
                 session->governor,
                 recognized_text,
-                &exec_context,
-                &llm_response,
+                &exec_context, NULL, &llm_response,
                 &error_msg,
                 NULL,  // metrics (optional)
                 NULL,  // progress callback (optional)

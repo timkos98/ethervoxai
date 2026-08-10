@@ -2798,7 +2798,7 @@ static void process_command(const char* line, ethervox_memory_store_t* memory,
     const char* model_path = line + 6;
     printf("Loading model: %s\n", model_path);
 
-    ethervox_result_t ret = ethervox_governor_load_model(g_governor, model_path, NULL, NULL, NULL);
+    ethervox_result_t ret = ethervox_governor_load_model(g_governor, model_path, NULL,NULL,  NULL, NULL);
     if (ethervox_is_success(ret)) {
       snprintf(g_loaded_model_path, sizeof(g_loaded_model_path), "%s", model_path);
 
@@ -4214,7 +4214,7 @@ file_tools_cleanup:
       fprintf(stderr, "[ERROR] Model file not found or not readable: %s\n", resolved_path);
       fprintf(stderr, "[INFO] Run './scripts/download-governor-model.sh' to download it\n");
     } else {
-      ethervox_result_t ret = ethervox_governor_load_model(g_governor, resolved_path, NULL, NULL, NULL);
+      ethervox_result_t ret = ethervox_governor_load_model(g_governor, resolved_path, NULL,NULL,  NULL, NULL);
       if (ethervox_is_success(ret)) {
         snprintf(g_loaded_model_path, sizeof(g_loaded_model_path), "%s", resolved_path);
 

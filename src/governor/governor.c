@@ -128,15 +128,27 @@ static bool governor_load_progress_callback(float progress, void* user_data) {
   // user_data contains our custom callback wrapper
   if (user_data) {
     typedef struct {
+      ethervox_cancel_token_t* cancel_token;
       ethervox_load_progress_callback callback;
       void* callback_user_data;
     } callback_context_t;
 
     callback_context_t* ctx = (callback_context_t*)user_data;
+    
+    // Check cancellation first
+    if (ctx->cancel_token && ethervox_cancel_token_is_cancelled(ctx->cancel_token)) {
+      GOV_LOG("[Governor] Model load cancelled");
+      return false;  // Cancel loading
+    }
+    
     if (ctx->callback) {
       char msg[128];
       snprintf(msg, sizeof(msg), "Loading model: %d%%", (int)(progress * 100.0f));
-      ctx->callback("loading_model", progress, msg, ctx->callback_user_data);
+      bool continue_loading = ctx->callback("loading_model", progress, msg, ctx->callback_user_data);
+      if (!continue_loading) {
+        GOV_LOG("[Governor] Model load cancelled by callback");
+        return false;
+      }
     }
   }
 
@@ -1506,6 +1518,7 @@ static ethervox_result_t governor_load_model_impl(ethervox_governor_t* governor,
                                                const char* model_path,
                                                const char* mmproj_path,
                                                const char* cache_dir,
+                                               ethervox_cancel_token_t* cancel_token,
                                                ethervox_load_progress_callback progress_callback,
                                                void* user_data) {
   if (!governor || !model_path)
@@ -1602,11 +1615,13 @@ static ethervox_result_t governor_load_model_impl(ethervox_governor_t* governor,
 
   // Set up callback context for model loading progress
   typedef struct {
+    ethervox_cancel_token_t* cancel_token;
     ethervox_load_progress_callback callback;
     void* callback_user_data;
   } callback_context_t;
 
-  callback_context_t callback_ctx = {.callback = progress_callback,
+  callback_context_t callback_ctx = {.cancel_token = cancel_token,
+                                     .callback = progress_callback,
                                      .callback_user_data = user_data};
 
   model_params.progress_callback = governor_load_progress_callback;
@@ -2317,10 +2332,11 @@ setup_tool_wrappers:
 ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
                                                const char* model_path,
                                                const char* cache_dir,
+                                               ethervox_cancel_token_t* cancel_token,
                                                ethervox_load_progress_callback progress_callback,
                                                void* user_data) {
   return governor_load_model_impl(governor, model_path, /*mmproj_path=*/NULL, cache_dir,
-                                   progress_callback, user_data);
+                                   cancel_token, progress_callback, user_data);
 }
 
 /**
@@ -2331,6 +2347,7 @@ ethervox_result_t ethervox_governor_load_model_with_audio(ethervox_governor_t* g
                                                           const char* model_path,
                                                           const char* mmproj_path,
                                                           const char* cache_dir,
+                                                          ethervox_cancel_token_t* cancel_token,
                                                           ethervox_load_progress_callback progress_callback,
                                                           void* user_data) {
   if (!mmproj_path || mmproj_path[0] == '\0') {
@@ -2338,7 +2355,7 @@ ethervox_result_t ethervox_governor_load_model_with_audio(ethervox_governor_t* g
     return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
   return governor_load_model_impl(governor, model_path, mmproj_path, cache_dir,
-                                   progress_callback, user_data);
+                                   cancel_token, progress_callback, user_data);
 }
 
 /**
@@ -2501,14 +2518,14 @@ ethervox_result_t ethervox_governor_reload_model(ethervox_governor_t* governor) 
   if (governor->mmproj_path) {
     char* mmproj_path_copy = strdup(governor->mmproj_path);
     result = ethervox_governor_load_model_with_audio(
-        governor, model_path_copy, mmproj_path_copy, cache_dir_copy, NULL, NULL);
+        governor, model_path_copy, mmproj_path_copy, cache_dir_copy, NULL, NULL, NULL);
     free(mmproj_path_copy);
     free(model_path_copy);
     free(cache_dir_copy);
     return result;
   }
 #endif
-  result = ethervox_governor_load_model(governor, model_path_copy, cache_dir_copy, NULL, NULL);
+  result = ethervox_governor_load_model(governor, model_path_copy, cache_dir_copy, NULL, NULL, NULL);
   free(model_path_copy);
   free(cache_dir_copy);
   return result;
@@ -2740,7 +2757,9 @@ ethervox_result_t ethervox_governor_init(ethervox_governor_t** governor,
  */
 ethervox_governor_status_t ethervox_governor_execute_with_context(
     ethervox_governor_t* governor, const char* user_query,
-    const ethervox_execution_context_t* exec_context, char** response, char** error,
+    const ethervox_execution_context_t* exec_context,
+    ethervox_cancel_token_t* cancel_token,
+    char** response, char** error,
     ethervox_confidence_metrics_t* metrics, ethervox_governor_progress_callback progress_callback,
     void (*token_callback)(const char* token, void* user_data), void* user_data) {
   // Set conversation callbacks if provided
@@ -2752,7 +2771,7 @@ ethervox_governor_status_t ethervox_governor_execute_with_context(
 
   // If no execution context, just pass through to standard execute
   if (!exec_context) {
-    return ethervox_governor_execute(governor, user_query, response, error, metrics,
+    return ethervox_governor_execute(governor, user_query, cancel_token, response, error, metrics,
                                      progress_callback, token_callback, user_data);
   }
 
@@ -2810,7 +2829,7 @@ ethervox_governor_status_t ethervox_governor_execute_with_context(
   GOV_LOG("Context-aware query (%d chars): %s", offset, enhanced_query);
 
   // Execute with enhanced query
-  return ethervox_governor_execute(governor, enhanced_query, response, error, metrics,
+  return ethervox_governor_execute(governor, enhanced_query, cancel_token, response, error, metrics,
                                    progress_callback, token_callback, user_data);
 }
 
@@ -3026,7 +3045,9 @@ static bool governor_should_stop(
  * 5. Repeat until answer generated, max iterations, or timeout
  */
 ethervox_governor_status_t ethervox_governor_execute(
-    ethervox_governor_t* governor, const char* user_query, char** response, char** error,
+    ethervox_governor_t* governor, const char* user_query,
+    ethervox_cancel_token_t* cancel_token,
+    char** response, char** error,
     ethervox_confidence_metrics_t* metrics, ethervox_governor_progress_callback progress_callback,
     void (*token_callback)(const char* token, void* user_data), void* user_data) {
   if (!governor || !governor->initialized || !user_query || !response) {
@@ -3970,6 +3991,12 @@ ethervox_governor_status_t ethervox_governor_execute(
       // ========================================================================
       if (governor->interrupt_requested) {
         GOV_LOG("Generation cancelled by user after %d tokens", generated_count);
+        break;
+      }
+      
+      // Check external cancellation token
+      if (cancel_token && ethervox_cancel_token_is_cancelled(cancel_token)) {
+        GOV_LOG("Generation cancelled via cancel_token after %d tokens", generated_count);
         break;
       }
       

@@ -18,6 +18,7 @@
 #include <stdint.h>
 #include <time.h>
 
+#include "cancel_token.h"
 #include "chat_template.h"
 #include "error.h"
 #include "ethervox/error.h"
@@ -394,6 +395,7 @@ typedef bool (*ethervox_load_progress_callback)(const char* stage, float progres
  * @param governor Governor instance
  * @param model_path Path to GGUF model file
  * @param cache_dir Directory to store/load KV cache (can be NULL to disable caching)
+ * @param cancel_token Optional cancellation token (can be NULL)
  * @param progress_callback Optional progress callback (can be NULL)
  * @param user_data User data for progress callback (can be NULL)
  * @return 0 on success, negative on error
@@ -401,6 +403,7 @@ typedef bool (*ethervox_load_progress_callback)(const char* stage, float progres
 ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
                                                const char* model_path,
                                                const char* cache_dir,
+                                               ethervox_cancel_token_t* cancel_token,
                                                ethervox_load_progress_callback progress_callback,
                                                void* user_data);
 
@@ -426,6 +429,7 @@ ethervox_result_t ethervox_governor_load_model(ethervox_governor_t* governor,
  * @param model_path Path to Granite Speech Plus GGUF (LLM decoder + Conformer weights)
  * @param mmproj_path Path to companion mmproj GGUF (QFormer audio projector)
  * @param cache_dir Directory to store/load KV cache (can be NULL to disable caching)
+ * @param cancel_token Optional cancellation token (can be NULL)
  * @param progress_callback Optional progress callback (can be NULL)
  * @param user_data User data for progress callback (can be NULL)
  * @return ETHERVOX_SUCCESS on success, negative error code otherwise
@@ -435,6 +439,7 @@ ethervox_result_t ethervox_governor_load_model_with_audio(
     const char* model_path,
     const char* mmproj_path,
     const char* cache_dir,
+    ethervox_cancel_token_t* cancel_token,
     ethervox_load_progress_callback progress_callback,
     void* user_data);
 
@@ -560,6 +565,7 @@ int32_t ethervox_governor_get_kv_pos(ethervox_governor_t* governor);
  *
  * @param governor Governor instance
  * @param user_query User's natural language query
+ * @param cancel_token Optional cancellation token (can be NULL)
  * @param response Output: Final response (caller must free)
  * @param error Output: Error message if failed (caller must free)
  * @param metrics Output: Confidence metrics (optional, can be NULL)
@@ -569,7 +575,9 @@ int32_t ethervox_governor_get_kv_pos(ethervox_governor_t* governor);
  * @return Governor status
  */
 ethervox_governor_status_t ethervox_governor_execute(
-    ethervox_governor_t* governor, const char* user_query, char** response, char** error,
+    ethervox_governor_t* governor, const char* user_query,
+    ethervox_cancel_token_t* cancel_token,
+    char** response, char** error,
     ethervox_confidence_metrics_t* metrics, ethervox_governor_progress_callback progress_callback,
     void (*token_callback)(const char* token, void* user_data), void* user_data);
 
@@ -583,6 +591,7 @@ ethervox_governor_status_t ethervox_governor_execute(
  * @param user_query User's natural language query
  * @param exec_context Execution context (input source, capabilities, callbacks) - can be NULL for
  * legacy behavior
+ * @param cancel_token Optional cancellation token (can be NULL)
  * @param response Output: Final response (caller must free)
  * @param error Output: Error message if failed (caller must free)
  * @param metrics Output: Confidence metrics (optional, can be NULL)
@@ -593,7 +602,9 @@ ethervox_governor_status_t ethervox_governor_execute(
  */
 ethervox_governor_status_t ethervox_governor_execute_with_context(
     ethervox_governor_t* governor, const char* user_query,
-    const ethervox_execution_context_t* exec_context, char** response, char** error,
+    const ethervox_execution_context_t* exec_context,
+    ethervox_cancel_token_t* cancel_token,
+    char** response, char** error,
     ethervox_confidence_metrics_t* metrics, ethervox_governor_progress_callback progress_callback,
     void (*token_callback)(const char* token, void* user_data), void* user_data);
 /**
