@@ -35,6 +35,12 @@ typedef enum {
     ETHERVOX_FILE_ACCESS_READ_WRITE = 1
 } ethervox_file_access_mode_t;
 
+// TASK-C1.2: Compile-time assertion that WORKSPACE profile cannot use read-write file tools
+// (AGENTS.md I2, ADR-0007: no model output can mutate the file system)
+#if defined(ETHERVOX_PROFILE_WORKSPACE) && ETHERVOX_FILE_ACCESS_READ_WRITE
+#error "ETHERVOX_FILE_ACCESS_READ_WRITE cannot be selected under ETHERVOX_PROFILE=WORKSPACE. Workspace shells register their own read-only, vault-mediated file tools from the host."
+#endif
+
 /**
  * User-defined path configuration
  */

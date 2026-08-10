@@ -22,6 +22,16 @@ All notable changes to this project are recorded here, following
     before reaching the network path; `src/llm/model_manager.c`'s independent
     `USE_LIBCURL`/`USE_WININET` download path (previously ungated) is composed with this flag too.
   - `_FILE_TOOLS`: excludes `main.c`'s file-tools init/register block.
+- **`ETHERVOX_PROFILE`** (TASK-C1.2): Named feature profiles for target platform classes —
+  `EDGE|MOBILE|DESKTOP|WORKSPACE`. Setting a profile automatically configures all feature flags:
+  - `EDGE` (ESP32): All network/tool features OFF, no llama.cpp (~200KB target)
+  - `MOBILE` (iOS/Android/RPi): All features ON (voice line with network)
+  - `DESKTOP` (Friend'O'Mine): Same as MOBILE (pool/vision/embeddings future work)
+  - `WORKSPACE`: DESKTOP minus all network features (HTTP, downloader, bug reporter, weather,
+    built-in file tools) — enforces zero-network guarantee for Workspace shells
+  Profile generates `ethervox_features.h` with `ETHERVOX_HAS_*` macros and `ETHERVOX_PROFILE_*`
+  definitions. Conformance test (`tests/unit/test_profile_conformance.c`) verifies feature
+  composition per profile.
 - `scripts/check-no-network-symbols.sh` (TASK-C1.0): scans a static library's undefined symbols
   for `socket`/`connect`/`getaddrinfo`/`gethostbyname`/`curl_*`/`CFNetwork`/`NWConnection`/
   `CFSocket`, failing if any survive. Wired into CI (`workspace-network-symbol-check` job in
@@ -71,6 +81,9 @@ All notable changes to this project are recorded here, following
   - Excluded from build (depend on removed phonemizer): `voice_training.c`, `global_tts.c`,
     `train_pronunciation.c`.
   - Standalone CLI app (`main.c`): Still references old TTS API (not part of library build).
+- **`include/ethervox/file_tools.h`** (TASK-C1.2): Added compile-time assertion that
+  `ETHERVOX_FILE_ACCESS_READ_WRITE` cannot be selected under `ETHERVOX_PROFILE=WORKSPACE` (ADR-0007,
+  AGENTS.md I2: no model output can mutate the file system in Workspace shells).
 
 ### Removed
 - `src/tmp.txt` (tracked debug-log dump); `main.c.bak`/`tmp.txt` added to `.gitignore`.

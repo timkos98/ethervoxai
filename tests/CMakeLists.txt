@@ -263,3 +263,11 @@ target_link_libraries(test_tool_descriptions ethervoxai)
 target_include_directories(test_tool_descriptions PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME ToolDescriptions COMMAND test_tool_descriptions)
 set_tests_properties(ToolDescriptions PROPERTIES TIMEOUT 30 LABELS "unit;tools")
+
+
+# Profile conformance tests (TASK-C1.2) - verify feature composition per profile
+add_executable(test_profile_conformance unit/test_profile_conformance.c)
+target_link_libraries(test_profile_conformance ethervoxai)
+target_include_directories(test_profile_conformance PRIVATE ${CMAKE_SOURCE_DIR}/include ${CMAKE_BINARY_DIR}/include)
+add_test(NAME ProfileConformance COMMAND test_profile_conformance)
+set_tests_properties(ProfileConformance PROPERTIES TIMEOUT 10 LABELS "conformance;profile")
