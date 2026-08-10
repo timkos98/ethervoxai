@@ -13,9 +13,6 @@ endif()
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
 # =============================================================================
 # Git Information Extraction (REQUIRED)
 # =============================================================================
@@ -615,17 +612,12 @@ endif()
 # Add LLM sources only if LLM backends are enabled
 if(WITH_LLAMA OR WITH_TINYLLAMA)
     file(GLOB LLM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/llm/*.c")
-    file(GLOB LLM_CPP_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/llm/*.cpp")
-    # Add llama.cpp grammar support (json-schema-to-grammar)
-    list(APPEND LLM_CPP_SOURCES 
-        "${CMAKE_CURRENT_SOURCE_DIR}/external/llama.cpp/common/json-schema-to-grammar.cpp"
-    )
     message(STATUS "Found LLM sources: ${LLM_SOURCES}")
     # Exclude tinyllama_backend.c as it uses outdated APIs
     list(FILTER LLM_SOURCES EXCLUDE REGEX ".*tinyllama_backend\\.c$")
     message(STATUS "After filtering: ${LLM_SOURCES}")
-    list(APPEND ETHERVOXAI_CORE_SOURCES ${LLM_SOURCES} ${LLM_CPP_SOURCES})
-    message(STATUS "LLM backend sources included (C++: ${LLM_CPP_SOURCES})")
+    list(APPEND ETHERVOXAI_CORE_SOURCES ${LLM_SOURCES})
+    message(STATUS "LLM backend sources included")
 else()
     message(STATUS "LLM backend sources excluded (WITH_LLAMA=OFF, WITH_TINYLLAMA=OFF)")
 endif()

@@ -209,29 +209,6 @@ See TASK-C0.1 execution log in `ethervoxai-planning/tasks/PHASE-C/C0.1-unify-the
     freeing. All tests pass.
   - Library compiles with zero warnings across all 4 profiles (DESKTOP, MOBILE, EDGE, WORKSPACE)
   - Unblocks TASK-E6.2 (engine tool registration for search_vault, read_document, create_plan, apply_plan)
-- **Grammar-constrained decoding** (TASK-C2.3): GBNF (Grammar-Based Next-token Filtering) support
-  for structured LLM outputs (`include/ethervox/grammar.h`, `src/llm/grammar.cpp`). Eliminates
-  ~5-15% of generations that produce unparseable JSON for tool calls (per ADR-0008). API includes:
-  - `ethervox_grammar_t`: Opaque handle for compiled grammar (thread-safe after compilation)
-  - `ethervox_grammar_compile(gbnf_source, &grammar)`: Compiles GBNF grammar from source string
-  - `ethervox_grammar_from_json_schema(schema_json, &grammar)`: Converts JSON Schema to GBNF
-    (killer feature for tool calls). Wraps `json_schema_to_grammar()` from llama.cpp.
-  - `ethervox_grammar_free(grammar)`: Releases grammar resources
-  - `ethervox_grammar_get_source(grammar)`: Returns GBNF source for debugging
-  - **JSON Schema → GBNF conversion**: Supports objects, strings (maxLength, enum, pattern),
-    integers/numbers, booleans, arrays (maxItems), oneOf (union types for tool-call variants).
-    Complex regex patterns in "pattern" are not fully supported (llama.cpp limitation).
-  - **C++ wrapper design**: `grammar.cpp` provides minimal string utilities (`string_repeat`,
-    `string_split`, `string_join`) to avoid pulling in all of llama.cpp's `common.cpp` dependencies.
-    Uses C++17 (required for std::filesystem in llama.cpp).
-  - **Finish reason**: Added `ETHERVOX_FINISH_GRAMMAR_DEADLOCK` to `governor.h` for cases where
-    grammar constraints result in empty candidate set (grammar deadlock detection)
-  - `tests/unit/test_grammar.c`: 11 test cases covering GBNF compilation (simple, JSON),
-    JSON Schema conversion (simple object, string enum, nested object, array, oneOf, tool calls),
-    NULL safety, invalid inputs. All tests pass.
-  - Library compiles with zero warnings across all 4 profiles (DESKTOP, MOBILE, EDGE, WORKSPACE)
-  - Requires CMake C++17 standard (added to CMakeLists.txt)
-  - Blocks TASK-C3.3 (logprobs + structured generation) and voice emotion tag grammars
 
 ### Fixed
 - **Stop-sequence infinite loop** (TASK-C1.1): Fixed the bug where sampled tokens were fed into the
