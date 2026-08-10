@@ -106,6 +106,32 @@ All notable changes to this project are recorded here, following
   - `tests/test_event_stream.c`: 16 test cases covering UTF-8 validation (NULL, ASCII, emoji,
     incomplete 2/3/4-byte sequences, invalid continuation, mixed content), safe string creation,
     and event structure correctness. All tests pass. Event size: 32 bytes.
+- **KV-cache re-keying with hash-based keys** (TASK-C1.6): Multi-model cache support via hash-based
+  filenames and eviction API (`include/ethervox/kv_cache_persistence.h` version 2,
+  `src/governor/kv_cache_persistence.c`). Cache keys are now computed from:
+  - Model file digest (first 1MB + file size — fast but collision-resistant)
+  - System prompt hash (token sequence XOR)
+  - Context size, quantization type, backend version
+  - **Filename format**: `<cache_dir>/kv_cache_<hex_hash>.bin` (64-char hex hash of all components)
+  - API changes:
+    - `ethervox_kv_cache_get_path()`: Computes hash-based path from governor state
+    - `ethervox_kv_cache_save/load()`: Now take `ethervox_paths_t*` and compute path internally
+    - `ethervox_kv_cache_exists()`: Updated to use hash-based lookup
+    - `ethervox_kv_cache_usage()`: New function returns total bytes, count, oldest/newest timestamps
+    - `ethervox_kv_cache_evict_older_than()`: New function deletes caches older than timestamp,
+      returns evicted count and bytes freed
+  - Hash functions: XOR-based for speed (comment notes SHA-256 would be better but avoids crypto
+    dependency). File digest uses simple read of first 1MB for large models.
+  - Directory scanning for usage/eviction: Uses `dirent.h` to iterate `kv_cache_*.bin` files,
+    extracts size/mtime via `stat()`, accumulates statistics.
+  - **Backwards incompatible**: Old cache files (system_prompt_*.kvcache) will not be found by new
+    hash-based lookup. One-time cache rebuild on first run after upgrade.
+  - **Multi-model support**: Different models can now coexist in the same cache directory without
+    filename collisions. Cache mismatches result in silent misses (new cache generated), never
+    wrong loads — llama.cpp handles validation.
+  - All function signatures updated to use `ethervox_paths_t*` (from C1.3) instead of hardcoded paths.
+  - Library compiles successfully (1.3MB); tests not yet added (BACKLOG).
+
 ### Fixed
 - **Stop-sequence infinite loop** (TASK-C1.1): Fixed the bug where sampled tokens were fed into the
   KV cache via `llama_decode()` BEFORE stop-sequence checks, causing the model to see its own stop

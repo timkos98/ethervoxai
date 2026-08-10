@@ -18,6 +18,7 @@
 #include "ethervox/governor.h"
 #include "ethervox/logging.h"
 #include "ethervox/error.h"
+#include "ethervox/paths.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,6 +28,7 @@
 #include <errno.h>
 #include <unistd.h>  // For unlink(), fsync(), usleep()
 #include <fcntl.h>   // For open(), O_RDONLY
+#include <dirent.h>  // For directory iteration (evict/usage functions)
 
 #if defined(ETHERVOX_WITH_LLAMA) && defined(LLAMA_CPP_AVAILABLE) && LLAMA_CPP_AVAILABLE
 #include <llama.h>
@@ -36,7 +38,7 @@
 #endif
 
 #define KV_CACHE_MAGIC 0x4B564341  // "KVCA"
-#define KV_CACHE_VERSION 1
+#define KV_CACHE_VERSION 2          // Version 2: hash-based keying (TASK-C1.6)
 
 // Access governor internals (defined in governor.c)
 #if LLAMA_AVAILABLE
@@ -73,8 +75,122 @@ static void calculate_checksum(const uint8_t* data, size_t data_size, uint8_t* c
     }
 }
 
-bool ethervox_kv_cache_exists(const char* cache_path, const char* model_path) {
-    if (!cache_path || !model_path) return false;
+/**
+ * Compute simple file digest (hash first 1MB + file size for speed)
+ * Full SHA-256 would be better but requires dependency
+ */
+static ethervox_result_t compute_file_digest(const char* file_path, uint8_t* digest_out) {
+    FILE* f = fopen(file_path, "rb");
+    if (!f) {
+        return ETHERVOX_ERROR_FILE_READ;
+    }
+    
+    // Get file size
+    fseek(f, 0, SEEK_END);
+    long file_size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    
+    // Hash first 1MB + file size for speed
+    const size_t max_bytes = 1024 * 1024;  // 1MB
+    size_t bytes_to_read = (size_t)file_size < max_bytes ? (size_t)file_size : max_bytes;
+    
+    uint8_t buffer[4096];
+    size_t bytes_read = 0;
+    memset(digest_out, 0, 32);
+    
+    while (bytes_read < bytes_to_read) {
+        size_t chunk = sizeof(buffer);
+        if (chunk > bytes_to_read - bytes_read) {
+            chunk = bytes_to_read - bytes_read;
+        }
+        
+        size_t n = fread(buffer, 1, chunk, f);
+        if (n == 0) break;
+        
+        for (size_t i = 0; i < n; i++) {
+            digest_out[bytes_read % 32] ^= buffer[i];
+            bytes_read++;
+        }
+    }
+    
+    // Mix in file size
+    for (int i = 0; i < 8; i++) {
+        digest_out[i] ^= (file_size >> (i * 8)) & 0xFF;
+    }
+    
+    fclose(f);
+    return ETHERVOX_SUCCESS;
+}
+
+/**
+ * Compute hash of string data
+ */
+static void compute_string_hash(const char* str, uint8_t* hash_out) {
+    memset(hash_out, 0, 32);
+    if (!str) return;
+    
+    size_t len = strlen(str);
+    for (size_t i = 0; i < len; i++) {
+        hash_out[i % 32] ^= (uint8_t)str[i];
+    }
+}
+
+/**
+ * Compute cache key hash from all components
+ * hash(model digest ‖ prompt hash ‖ ctx size ‖ quant ‖ backend version)
+ */
+static void compute_cache_key_hash(
+    const uint8_t* model_digest,
+    const uint8_t* prompt_hash,
+    uint32_t context_size,
+    uint32_t quantization,
+    uint32_t backend_version,
+    uint8_t* key_hash_out
+) {
+    memset(key_hash_out, 0, 32);
+    
+    // Mix in all components
+    for (int i = 0; i < 32; i++) {
+        key_hash_out[i] ^= model_digest[i];
+        key_hash_out[i] ^= prompt_hash[i];
+    }
+    
+    // Mix in numeric parameters
+    for (int i = 0; i < 4; i++) {
+        key_hash_out[i] ^= (context_size >> (i * 8)) & 0xFF;
+        key_hash_out[i + 4] ^= (quantization >> (i * 8)) & 0xFF;
+        key_hash_out[i + 8] ^= (backend_version >> (i * 8)) & 0xFF;
+    }
+}
+
+/**
+ * Convert hash bytes to hex string
+ */
+static void hash_to_hex(const uint8_t* hash, size_t hash_len, char* hex_out, size_t hex_size) {
+    const char* hex_chars = "0123456789abcdef";
+    size_t out_pos = 0;
+    
+    for (size_t i = 0; i < hash_len && out_pos + 2 < hex_size; i++) {
+        hex_out[out_pos++] = hex_chars[(hash[i] >> 4) & 0xF];
+        hex_out[out_pos++] = hex_chars[hash[i] & 0xF];
+    }
+    hex_out[out_pos] = '\0';
+}
+
+bool ethervox_kv_cache_exists(
+    const ethervox_paths_t* paths,
+    const struct ethervox_governor* governor
+) {
+    if (!paths || !governor) {
+        return false;
+    }
+    
+    // Get the cache path for this configuration
+    char cache_path[1024];
+    ethervox_result_t result = ethervox_kv_cache_get_path(paths, governor, cache_path, sizeof(cache_path));
+    if (result != ETHERVOX_SUCCESS) {
+        return false;
+    }
     
     // Check if file exists and is readable
     struct stat st;
@@ -89,27 +205,24 @@ bool ethervox_kv_cache_exists(const char* cache_path, const char* model_path) {
     }
     
     // Sanity check: File should be at least 1KB (bare minimum for any valid cache)
-    // System prompt caches can be small (15-20KB for 1B models)
-    const size_t min_size = 1024;  // 1KB minimum (just to catch empty/corrupted files)
-    
+    const size_t min_size = 1024;
     if (st.st_size < min_size) {
         ETHERVOX_LOG_WARN("KV cache file suspiciously small: %s (%lld bytes)", 
                          cache_path, (long long)st.st_size);
         ETHERVOX_LOG_WARN("Deleting likely corrupted cache file");
-        unlink(cache_path);  // Delete corrupted cache
+        unlink(cache_path);
         return false;
     }
     
-    // File exists and looks valid - llama.cpp will do its own validation when loading
     ETHERVOX_LOG_INFO("Found KV cache file: %s (%lld bytes)", cache_path, (long long)st.st_size);
     return true;
 }
 
 ethervox_result_t ethervox_kv_cache_save(
-    struct ethervox_governor* governor,
-    const char* cache_path
+    const ethervox_paths_t* paths,
+    struct ethervox_governor* governor
 ) {
-    if (!governor || !cache_path) {
+    if (!paths || !governor) {
         return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
@@ -117,6 +230,14 @@ ethervox_result_t ethervox_kv_cache_save(
     ETHERVOX_LOG_ERROR("KV cache save not available: llama.cpp not linked");
     return ETHERVOX_ERROR_NOT_IMPLEMENTED;
 #else
+    
+    // Compute hash-based cache path
+    char cache_path[1024];
+    ethervox_result_t result = ethervox_kv_cache_get_path(paths, governor, cache_path, sizeof(cache_path));
+    if (result != ETHERVOX_SUCCESS) {
+        ETHERVOX_LOG_ERROR("Failed to compute cache path");
+        return result;
+    }
     
     ETHERVOX_LOG_INFO("Saving KV cache to: %s", cache_path);
     
@@ -280,10 +401,10 @@ ethervox_result_t ethervox_kv_cache_save(
 }
 
 ethervox_result_t ethervox_kv_cache_load(
-    struct ethervox_governor* governor,
-    const char* cache_path
+    const ethervox_paths_t* paths,
+    struct ethervox_governor* governor
 ) {
-    if (!governor || !cache_path) {
+    if (!paths || !governor) {
         return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
@@ -291,6 +412,14 @@ ethervox_result_t ethervox_kv_cache_load(
     ETHERVOX_LOG_ERROR("KV cache load not available: llama.cpp not linked");
     return ETHERVOX_ERROR_NOT_IMPLEMENTED;
 #else
+    
+    // Compute hash-based cache path
+    char cache_path[1024];
+    ethervox_result_t result = ethervox_kv_cache_get_path(paths, governor, cache_path, sizeof(cache_path));
+    if (result != ETHERVOX_SUCCESS) {
+        ETHERVOX_LOG_ERROR("Failed to compute cache path");
+        return result;
+    }
     
     ETHERVOX_LOG_INFO("Loading KV cache from: %s", cache_path);
     
@@ -373,27 +502,235 @@ ethervox_result_t ethervox_kv_cache_load(
 }
 
 ethervox_result_t ethervox_kv_cache_get_path(
-    const char* model_path,
-    const char* files_dir,
+    const ethervox_paths_t* paths,
+    const struct ethervox_governor* governor,
     char* output,
     size_t output_size
 ) {
-    if (!model_path || !files_dir || !output || output_size == 0) {
+    if (!paths || !governor || !output || output_size == 0) {
         return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
-    // Extract model name
-    char model_name[128];
-    extract_model_name(model_path, model_name, sizeof(model_name));
+#if !LLAMA_AVAILABLE
+    (void)paths; (void)governor;
+    return ETHERVOX_ERROR_NOT_IMPLEMENTED;
+#else
     
-    // Build path: <files_dir>/cache/system_prompt_{model}.kvcache
+    // Get model path from governor (cast away const - accessor is read-only)
+    const char* model_path = ethervox_governor_get_model_path((struct ethervox_governor*)governor);
+    if (!model_path) {
+        return ETHERVOX_ERROR_NOT_INITIALIZED;
+    }
+    
+    // Compute model file digest
+    uint8_t model_digest[32];
+    ethervox_result_t result = compute_file_digest(model_path, model_digest);
+    if (result != ETHERVOX_SUCCESS) {
+        ETHERVOX_LOG_ERROR("Failed to compute model digest: %s", model_path);
+        return result;
+    }
+    
+    // Get system prompt for hashing (cast away const - accessor is read-only)
+    int token_count = 0;
+    llama_token* tokens = ethervox_governor_get_system_tokens((struct ethervox_governor*)governor, &token_count);
+    
+    // Hash the system prompt tokens
+    uint8_t prompt_hash[32];
+    memset(prompt_hash, 0, sizeof(prompt_hash));
+    if (tokens && token_count > 0) {
+        for (int i = 0; i < token_count; i++) {
+            for (int j = 0; j < 4; j++) {
+                prompt_hash[(i * 4 + j) % 32] ^= (tokens[i] >> (j * 8)) & 0xFF;
+            }
+        }
+    }
+    
+    // Get context and model info (cast away const - accessor is read-only)
+    struct llama_context* ctx = ethervox_governor_get_llm_context((struct ethervox_governor*)governor);
+    if (!ctx) {
+        return ETHERVOX_ERROR_NOT_INITIALIZED;
+    }
+    
+    uint32_t context_size = (uint32_t)llama_n_ctx(ctx);
+    
+    // Get quantization type from model (if available)
+    // Note: Quantization detection is complex and version-dependent
+    // For now, use 0 as placeholder - the other cache key components are sufficient
+    uint32_t quantization = 0;
+    
+    // Get backend version (use 1 as placeholder if build number not available)
+    #ifdef LLAMA_BUILD_NUMBER
+    uint32_t backend_version = (uint32_t)LLAMA_BUILD_NUMBER;
+    #else
+    uint32_t backend_version = 1;
+    #endif
+    
+    // Compute cache key hash
+    uint8_t cache_key[32];
+    compute_cache_key_hash(model_digest, prompt_hash, context_size, 
+                          quantization, backend_version, cache_key);
+    
+    // Convert hash to hex string (use first 16 bytes = 32 hex chars)
+    char hash_hex[65];
+    hash_to_hex(cache_key, 16, hash_hex, sizeof(hash_hex));
+    
+    // Build path: <cache_dir>/kv_cache_<hash>.bin
     int written = snprintf(output, output_size, 
-                          "%s/cache/system_prompt_%s.kvcache",
-                          files_dir, model_name);
+                          "%s/kv_cache_%s.bin",
+                          paths->cache_dir, hash_hex);
     
     if (written < 0 || (size_t)written >= output_size) {
         return ETHERVOX_ERROR_BUFFER_TOO_SMALL;
     }
+    
+    ETHERVOX_LOG_INFO("KV cache path: %s", output);
+    return ETHERVOX_SUCCESS;
+#endif
+}
+
+ethervox_result_t ethervox_kv_cache_usage(
+    const ethervox_paths_t* paths,
+    ethervox_kv_cache_usage_t* usage
+) {
+    if (!paths || !usage) {
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
+    
+    memset(usage, 0, sizeof(*usage));
+    usage->oldest_timestamp = UINT64_MAX;
+    usage->newest_timestamp = 0;
+    
+    DIR* dir = opendir(paths->cache_dir);
+    if (!dir) {
+        // Directory doesn't exist or can't be opened - that's okay, just means no caches
+        return ETHERVOX_SUCCESS;
+    }
+    
+    struct dirent* entry;
+    while ((entry = readdir(dir)) != NULL) {
+        // Look for .bin files (our cache format)
+        const char* name = entry->d_name;
+        size_t name_len = strlen(name);
+        
+        if (name_len < 4 || strcmp(name + name_len - 4, ".bin") != 0) {
+            continue;  // Not a cache file
+        }
+        
+        // Check if it starts with "kv_cache_"
+        if (strncmp(name, "kv_cache_", 9) != 0) {
+            continue;  // Not our cache file
+        }
+        
+        // Build full path
+        char full_path[1024];
+        snprintf(full_path, sizeof(full_path), "%s/%s", paths->cache_dir, name);
+        
+        // Get file info
+        struct stat st;
+        if (stat(full_path, &st) != 0) {
+            continue;  // Can't stat file
+        }
+        
+        // Update statistics
+        usage->total_bytes += (uint64_t)st.st_size;
+        usage->cache_count++;
+        
+        uint64_t file_time = (uint64_t)st.st_mtime;
+        if (file_time < usage->oldest_timestamp) {
+            usage->oldest_timestamp = file_time;
+        }
+        if (file_time > usage->newest_timestamp) {
+            usage->newest_timestamp = file_time;
+        }
+    }
+    
+    closedir(dir);
+    
+    // Fix timestamps if no caches found
+    if (usage->cache_count == 0) {
+        usage->oldest_timestamp = 0;
+        usage->newest_timestamp = 0;
+    }
+    
+    ETHERVOX_LOG_INFO("KV cache usage: %u files, %llu bytes, oldest=%llu, newest=%llu",
+                     usage->cache_count, (unsigned long long)usage->total_bytes,
+                     (unsigned long long)usage->oldest_timestamp,
+                     (unsigned long long)usage->newest_timestamp);
+    
+    return ETHERVOX_SUCCESS;
+}
+
+ethervox_result_t ethervox_kv_cache_evict_older_than(
+    const ethervox_paths_t* paths,
+    uint64_t evict_before,
+    uint32_t* evicted_count,
+    uint64_t* evicted_bytes
+) {
+    if (!paths) {
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
+    
+    uint32_t count = 0;
+    uint64_t bytes = 0;
+    
+    DIR* dir = opendir(paths->cache_dir);
+    if (!dir) {
+        // Directory doesn't exist - that's okay, nothing to evict
+        if (evicted_count) *evicted_count = 0;
+        if (evicted_bytes) *evicted_bytes = 0;
+        return ETHERVOX_SUCCESS;
+    }
+    
+    struct dirent* entry;
+    while ((entry = readdir(dir)) != NULL) {
+        // Look for .bin files (our cache format)
+        const char* name = entry->d_name;
+        size_t name_len = strlen(name);
+        
+        if (name_len < 4 || strcmp(name + name_len - 4, ".bin") != 0) {
+            continue;
+        }
+        
+        // Check if it starts with "kv_cache_"
+        if (strncmp(name, "kv_cache_", 9) != 0) {
+            continue;
+        }
+        
+        // Build full path
+        char full_path[1024];
+        snprintf(full_path, sizeof(full_path), "%s/%s", paths->cache_dir, name);
+        
+        // Get file info
+        struct stat st;
+        if (stat(full_path, &st) != 0) {
+            continue;
+        }
+        
+        // Check if file is old enough to evict
+        if ((uint64_t)st.st_mtime < evict_before) {
+            uint64_t file_size = (uint64_t)st.st_size;
+            
+            // Delete the file
+            if (unlink(full_path) == 0) {
+                count++;
+                bytes += file_size;
+                ETHERVOX_LOG_INFO("Evicted cache file: %s (%llu bytes, mtime=%llu)",
+                                 name, (unsigned long long)file_size,
+                                 (unsigned long long)st.st_mtime);
+            } else {
+                ETHERVOX_LOG_WARN("Failed to delete cache file: %s (errno=%d: %s)",
+                                 full_path, errno, strerror(errno));
+            }
+        }
+    }
+    
+    closedir(dir);
+    
+    if (evicted_count) *evicted_count = count;
+    if (evicted_bytes) *evicted_bytes = bytes;
+    
+    ETHERVOX_LOG_INFO("Evicted %u cache files, freed %llu bytes", 
+                     count, (unsigned long long)bytes);
     
     return ETHERVOX_SUCCESS;
 }
