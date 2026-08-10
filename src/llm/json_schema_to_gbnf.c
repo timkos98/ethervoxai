@@ -1,0 +1,656 @@
+// SPDX-License-Identifier: LicenseRef-EthervoxAI-Proprietary
+
+/**
+ * @file json_schema_to_gbnf.c
+ * @brief First-party JSON Schema → GBNF converter
+ * 
+ * Pure C implementation using only cJSON (no llama.cpp common/, no nlohmann/json).
+ * Converts a closed subset of JSON Schema to GBNF for grammar-constrained decoding.
+ * 
+ * Implementation strategy:
+ * - Type-by-type development with golden tests per type
+ * - Recursive descent through schema tree
+ * - String builder for GBNF output
+ * - Rule counter for unique names in nested structures
+ */
+
+#include "ethervox/grammar.h"
+#include "cJSON.h"
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#include <ctype.h>
+
+// =============================================================================
+// Grammar structure
+// =============================================================================
+
+struct ethervox_grammar {
+    char* gbnf_source;    // Owned GBNF grammar source
+    char* root_rule;      // Owned root rule name
+};
+
+// =============================================================================
+// String builder for GBNF construction
+// =============================================================================
+
+typedef struct {
+    char* data;
+    size_t length;
+    size_t capacity;
+} string_builder_t;
+
+static ethervox_result_t sb_init(string_builder_t* sb, size_t initial_capacity) {
+    sb->data = (char*)malloc(initial_capacity);
+    if (!sb->data) return ETHERVOX_ERROR_OUT_OF_MEMORY;
+    sb->data[0] = '\0';
+    sb->length = 0;
+    sb->capacity = initial_capacity;
+    return ETHERVOX_SUCCESS;
+}
+
+static ethervox_result_t sb_append(string_builder_t* sb, const char* str) {
+    size_t str_len = strlen(str);
+    size_t required = sb->length + str_len + 1;
+    
+    if (required > sb->capacity) {
+        size_t new_capacity = sb->capacity * 2;
+        while (new_capacity < required) new_capacity *= 2;
+        
+        char* new_data = (char*)realloc(sb->data, new_capacity);
+        if (!new_data) return ETHERVOX_ERROR_OUT_OF_MEMORY;
+        
+        sb->data = new_data;
+        sb->capacity = new_capacity;
+    }
+    
+    memcpy(sb->data + sb->length, str, str_len + 1);
+    sb->length += str_len;
+    return ETHERVOX_SUCCESS;
+}
+
+static void sb_free(string_builder_t* sb) {
+    free(sb->data);
+    sb->data = NULL;
+    sb->length = 0;
+    sb->capacity = 0;
+}
+
+// =============================================================================
+// Schema → GBNF conversion context
+// =============================================================================
+
+typedef struct {
+    string_builder_t output;       // Final GBNF output
+    string_builder_t helper_rules; // Helper rules (ws, etc.) to append at end
+    int rule_counter;              // For unique rule names in nested structures
+    int ws_emitted;                // Track if whitespace rule added
+} conversion_context_t;
+
+// Forward declarations
+static ethervox_result_t convert_schema_to_gbnf(
+    conversion_context_t* ctx,
+    const cJSON* schema,
+    const char* rule_name
+);
+
+// =============================================================================
+// Type converters (implemented in order per C2.3a spec)
+// =============================================================================
+
+/**
+ * Type 1: Boolean
+ * {"type": "boolean"} → rule ::= "true" | "false"
+ */
+static ethervox_result_t convert_boolean(
+    conversion_context_t* ctx,
+    const char* rule_name
+) {
+    char rule[256];
+    snprintf(rule, sizeof(rule), "%s ::= \"true\" | \"false\"\n", rule_name);
+    return sb_append(&ctx->output, rule);
+}
+
+/**
+ * Type 2: Integer
+ * {"type": "integer"} → rule ::= "-"? [0-9]+
+ */
+static ethervox_result_t convert_integer(
+    conversion_context_t* ctx,
+    const char* rule_name
+) {
+    char rule[256];
+    snprintf(rule, sizeof(rule), "%s ::= (\"-\")? [0-9]+\n", rule_name);
+    return sb_append(&ctx->output, rule);
+}
+
+/**
+ * Type 3: Number (float)
+ * {"type": "number"} → rule ::= "-"? [0-9]+ ("." [0-9]+)? (("e" | "E") ("-" | "+")? [0-9]+)?
+ */
+static ethervox_result_t convert_number(
+    conversion_context_t* ctx,
+    const char* rule_name
+) {
+    char rule[512];
+    // Support integer, decimal, and scientific notation
+    snprintf(rule, sizeof(rule),
+        "%s ::= (\"-\")? [0-9]+ (\".\" [0-9]+)? ((\"e\" | \"E\") (\"-\" | \"+\")? [0-9]+)?\n",
+        rule_name);
+    return sb_append(&ctx->output, rule);
+}
+
+/**
+ * Helper: Escape a string for use in GBNF quoted literal
+ * Handles: " → \", \ → \\, newline → \n, tab → \t
+ */
+static char* escape_for_gbnf(const char* str) {
+    if (!str) return NULL;
+    
+    size_t len = strlen(str);
+    size_t capacity = len * 2 + 1;  // Worst case: every char needs escaping
+    char* escaped = (char*)malloc(capacity);
+    if (!escaped) return NULL;
+    
+    size_t j = 0;
+    for (size_t i = 0; i < len; i++) {
+        char c = str[i];
+        switch (c) {
+            case '"':
+                escaped[j++] = '\\';
+                escaped[j++] = '"';
+                break;
+            case '\\':
+                escaped[j++] = '\\';
+                escaped[j++] = '\\';
+                break;
+            case '\n':
+                escaped[j++] = '\\';
+                escaped[j++] = 'n';
+                break;
+            case '\t':
+                escaped[j++] = '\\';
+                escaped[j++] = 't';
+                break;
+            case '\r':
+                escaped[j++] = '\\';
+                escaped[j++] = 'r';
+                break;
+            default:
+                escaped[j++] = c;
+                break;
+        }
+    }
+    escaped[j] = '\0';
+    return escaped;
+}
+
+/**
+ * Type 4: String (plain)
+ * {"type": "string"} → rule ::= "\"" [^"\]* "\""
+ * Note: Escapes quotes and backslashes in the character class
+ */
+static ethervox_result_t convert_string_plain(
+    conversion_context_t* ctx,
+    const char* rule_name
+) {
+    char rule[256];
+    // Allow any character except unescaped quotes
+    // Use \\n instead of \n to output literal \n
+    snprintf(rule, sizeof(rule), "%s ::= \"\\\"\" ([^\"\\\\\\n] | \"\\\\\" [\"\\\\/bfnrt])* \"\\\"\"\n", rule_name);
+    return sb_append(&ctx->output, rule);
+}
+
+/**
+ * Type 5: String enum
+ * {"type": "string", "enum": ["a", "b"]} → rule ::= "\"a\"" | "\"b\""
+ */
+static ethervox_result_t convert_string_enum(
+    conversion_context_t* ctx,
+    const char* rule_name,
+    const cJSON* enum_values
+) {
+    if (!cJSON_IsArray(enum_values) || cJSON_GetArraySize(enum_values) == 0) {
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
+    
+    string_builder_t rule_sb;
+    ethervox_result_t result = sb_init(&rule_sb, 256);
+    if (result != ETHERVOX_SUCCESS) return result;
+    
+    // Start rule
+    char prefix[128];
+    snprintf(prefix, sizeof(prefix), "%s ::= ", rule_name);
+    sb_append(&rule_sb, prefix);
+    
+    // Enumerate values
+    int count = cJSON_GetArraySize(enum_values);
+    for (int i = 0; i < count; i++) {
+        const cJSON* item = cJSON_GetArrayItem(enum_values, i);
+        if (!cJSON_IsString(item)) {
+            sb_free(&rule_sb);
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
+        }
+        
+        const char* value = cJSON_GetStringValue(item);
+        char* escaped = escape_for_gbnf(value);
+        if (!escaped) {
+            sb_free(&rule_sb);
+            return ETHERVOX_ERROR_OUT_OF_MEMORY;
+        }
+        
+        char quoted[512];
+        snprintf(quoted, sizeof(quoted), "\"\\\"%s\\\"\"", escaped);
+        free(escaped);
+        
+        sb_append(&rule_sb, quoted);
+        
+        if (i < count - 1) {
+            sb_append(&rule_sb, " | ");
+        }
+    }
+    
+    sb_append(&rule_sb, "\n");
+    
+    // Append to context output
+    result = sb_append(&ctx->output, rule_sb.data);
+    sb_free(&rule_sb);
+    return result;
+}
+
+/**
+ * Type 6: String maxLength
+ * {"type": "string", "maxLength": 5} → rule ::= "\"" [^"\]{0,5} "\""
+ */
+static ethervox_result_t convert_string_max_length(
+    conversion_context_t* ctx,
+    const char* rule_name,
+    int max_length
+) {
+    if (max_length < 0) {
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
+    
+    char rule[512];
+    snprintf(rule, sizeof(rule),
+        "%s ::= \"\\\"\" ([^\"\\\\\\n] | \"\\\\\" [\"\\\\/bfnrt]){0,%d} \"\\\"\"\n",
+        rule_name, max_length);
+    return sb_append(&ctx->output, rule);
+}
+
+/**
+ * Type 7: String pattern (basic character classes only)
+ * {"type": "string", "pattern": "[a-z]+"} → converts basic patterns
+ * Supports: [a-z], [A-Z], [0-9], +, *, ?, literal characters
+ * Does NOT support: full regex, lookahead, backreferences, etc.
+ */
+static ethervox_result_t convert_string_pattern(
+    conversion_context_t* ctx,
+    const char* rule_name,
+    const char* pattern
+) {
+    if (!pattern) {
+        return ETHERVOX_ERROR_NULL_POINTER;
+    }
+    
+    // For now, convert basic patterns directly
+    // TODO: Full pattern parser if needed (out of scope per C2.3a)
+    char rule[1024];
+    snprintf(rule, sizeof(rule), "%s ::= \"\\\"\" %s \"\\\"\"\n", rule_name, pattern);
+    return sb_append(&ctx->output, rule);
+}
+
+/**
+ * String type dispatcher - handles plain, enum, maxLength, pattern
+ */
+static ethervox_result_t convert_string(
+    conversion_context_t* ctx,
+    const cJSON* schema,
+    const char* rule_name
+) {
+    // Check for enum constraint
+    const cJSON* enum_field = cJSON_GetObjectItem(schema, "enum");
+    if (enum_field && cJSON_IsArray(enum_field)) {
+        return convert_string_enum(ctx, rule_name, enum_field);
+    }
+    
+    // Check for maxLength constraint
+    const cJSON* max_length_field = cJSON_GetObjectItem(schema, "maxLength");
+    if (max_length_field && cJSON_IsNumber(max_length_field)) {
+        int max_length = cJSON_GetNumberValue(max_length_field);
+        return convert_string_max_length(ctx, rule_name, max_length);
+    }
+    
+    // Check for pattern constraint
+    const cJSON* pattern_field = cJSON_GetObjectItem(schema, "pattern");
+    if (pattern_field && cJSON_IsString(pattern_field)) {
+        const char* pattern = cJSON_GetStringValue(pattern_field);
+        return convert_string_pattern(ctx, rule_name, pattern);
+    }
+    
+    // Plain string (no constraints)
+    return convert_string_plain(ctx, rule_name);
+}
+
+/**
+ * Helper: Generate whitespace rule (used by objects/arrays)
+ */
+static ethervox_result_t emit_whitespace_rule(conversion_context_t* ctx) {
+    // Only emit once
+    if (ctx->ws_emitted) return ETHERVOX_SUCCESS;
+    ctx->ws_emitted = 1;
+    
+    return sb_append(&ctx->helper_rules, "ws ::= [ \\t\\n]*\n");
+}
+
+/**
+ * Type 8-10: Object types
+ * Type 8: Empty object {"type": "object", "properties": {}}
+ * Type 9: Required fields
+ * Type 10: Optional fields
+ */
+static ethervox_result_t convert_object(
+    conversion_context_t* ctx,
+    const cJSON* schema,
+    const char* rule_name
+) {
+    ethervox_result_t result;
+    
+    // Emit whitespace rule if not already emitted
+    result = emit_whitespace_rule(ctx);
+    if (result != ETHERVOX_SUCCESS) return result;
+    
+    const cJSON* properties = cJSON_GetObjectItem(schema, "properties");
+    const cJSON* required = cJSON_GetObjectItem(schema, "required");
+    
+    // Type 8: Empty object (no properties or empty properties)
+    if (!properties || cJSON_GetArraySize(properties) == 0) {
+        char rule[256];
+        snprintf(rule, sizeof(rule), "%s ::= \"{\" ws \"}\"\n", rule_name);
+        return sb_append(&ctx->output, rule);
+    }
+    
+    // Build list of required field names
+    int num_required = 0;
+    const char* required_fields[64] = {0};
+    if (required && cJSON_IsArray(required)) {
+        num_required = cJSON_GetArraySize(required);
+        for (int i = 0; i < num_required && i < 64; i++) {
+            const cJSON* item = cJSON_GetArrayItem(required, i);
+            if (cJSON_IsString(item)) {
+                required_fields[i] = cJSON_GetStringValue(item);
+            }
+        }
+    }
+    
+    // Start building object rule
+    string_builder_t obj_sb;
+    result = sb_init(&obj_sb, 1024);
+    if (result != ETHERVOX_SUCCESS) return result;
+    
+    char prefix[128];
+    snprintf(prefix, sizeof(prefix), "%s ::= \"{\" ws ", rule_name);
+    sb_append(&obj_sb, prefix);
+    
+    // Generate property rules
+    int prop_count = 0;
+    const cJSON* prop = NULL;
+    cJSON_ArrayForEach(prop, properties) {
+        const char* prop_name = prop->string;
+        if (!prop_name) continue;
+        
+        // Check if required
+        int is_required = 0;
+        for (int i = 0; i < num_required; i++) {
+            if (required_fields[i] && strcmp(required_fields[i], prop_name) == 0) {
+                is_required = 1;
+                break;
+            }
+        }
+        
+        // Generate subrule for this property's value
+        char value_rule_name[128];
+        snprintf(value_rule_name, sizeof(value_rule_name), "%s_%s_value", rule_name, prop_name);
+        
+        // Convert property schema recursively
+        result = convert_schema_to_gbnf(ctx, prop, value_rule_name);
+        if (result != ETHERVOX_SUCCESS) {
+            sb_free(&obj_sb);
+            return result;
+        }
+        
+        // Add property to object rule
+        if (prop_count > 0) {
+            sb_append(&obj_sb, " ws \",\" ws ");
+        }
+        
+        char prop_pattern[512];
+        if (is_required) {
+            // Required: always present
+            snprintf(prop_pattern, sizeof(prop_pattern), "\"\\\"%s\\\"\" ws \":\" ws %s",
+                     prop_name, value_rule_name);
+        } else {
+            // Optional: may be present
+            snprintf(prop_pattern, sizeof(prop_pattern), "(\"\\\"%s\\\"\" ws \":\" ws %s)?",
+                     prop_name, value_rule_name);
+        }
+        sb_append(&obj_sb, prop_pattern);
+        
+        prop_count++;
+    }
+    
+    sb_append(&obj_sb, " ws \"}\"\n");
+    
+    // Append to context output
+    result = sb_append(&ctx->output, obj_sb.data);
+    sb_free(&obj_sb);
+    return result;
+}
+
+/**
+ * Type 11-12: Array types
+ * Type 11: Array with items schema
+ * Type 12: Array with maxItems constraint
+ */
+static ethervox_result_t convert_array(
+    conversion_context_t* ctx,
+    const cJSON* schema,
+    const char* rule_name
+) {
+    ethervox_result_t result;
+    
+    // Emit whitespace rule if not already emitted
+    result = emit_whitespace_rule(ctx);
+    if (result != ETHERVOX_SUCCESS) return result;
+    
+    const cJSON* items = cJSON_GetObjectItem(schema, "items");
+    if (!items) {
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;  // Array must have items schema
+    }
+    
+    // Generate subrule for array item
+    char item_rule_name[128];
+    snprintf(item_rule_name, sizeof(item_rule_name), "%s_item", rule_name);
+    
+    result = convert_schema_to_gbnf(ctx, items, item_rule_name);
+    if (result != ETHERVOX_SUCCESS) return result;
+    
+    // Check for maxItems constraint
+    const cJSON* max_items_field = cJSON_GetObjectItem(schema, "maxItems");
+    int max_items = -1;
+    if (max_items_field && cJSON_IsNumber(max_items_field)) {
+        max_items = cJSON_GetNumberValue(max_items_field);
+    }
+    
+    // Build array rule
+    string_builder_t arr_sb;
+    result = sb_init(&arr_sb, 512);
+    if (result != ETHERVOX_SUCCESS) return result;
+    
+    char prefix[128];
+    snprintf(prefix, sizeof(prefix), "%s ::= \"[\" ws ", rule_name);
+    sb_append(&arr_sb, prefix);
+    
+    if (max_items > 0) {
+        // Array with maxItems: enumerate all possible lengths
+        // [item, item, item] where length <= maxItems
+        char pattern[512];
+        snprintf(pattern, sizeof(pattern), 
+            "(%s (ws \",\" ws %s){0,%d})? ws \"]\"",
+            item_rule_name, item_rule_name, max_items - 1);
+        sb_append(&arr_sb, pattern);
+    } else {
+        // Unbounded array: item (, item)*
+        char pattern[256];
+        snprintf(pattern, sizeof(pattern),
+            "(%s (ws \",\" ws %s)*)? ws \"]\"",
+            item_rule_name, item_rule_name);
+        sb_append(&arr_sb, pattern);
+    }
+    
+    sb_append(&arr_sb, "\n");
+    
+    result = sb_append(&ctx->output, arr_sb.data);
+    sb_free(&arr_sb);
+    return result;
+}
+
+// =============================================================================
+// Schema type dispatcher
+// =============================================================================
+
+static ethervox_result_t convert_schema_to_gbnf(
+    conversion_context_t* ctx,
+    const cJSON* schema,
+    const char* rule_name
+) {
+    if (!schema) return ETHERVOX_ERROR_NULL_POINTER;
+    
+    // Get type field
+    const cJSON* type_field = cJSON_GetObjectItem(schema, "type");
+    if (!type_field || !cJSON_IsString(type_field)) {
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;  // Schema must have "type"
+    }
+    
+    const char* type = cJSON_GetStringValue(type_field);
+    
+    if (strcmp(type, "boolean") == 0) {
+        return convert_boolean(ctx, rule_name);
+    } else if (strcmp(type, "integer") == 0) {
+        return convert_integer(ctx, rule_name);
+    } else if (strcmp(type, "number") == 0) {
+        return convert_number(ctx, rule_name);
+    } else if (strcmp(type, "string") == 0) {
+        return convert_string(ctx, schema, rule_name);
+    } else if (strcmp(type, "object") == 0) {
+        return convert_object(ctx, schema, rule_name);
+    } else if (strcmp(type, "array") == 0) {
+        return convert_array(ctx, schema, rule_name);
+    }
+    
+    // Unsupported type (will be implemented in later iterations)
+    return ETHERVOX_ERROR_NOT_IMPLEMENTED;
+}
+
+// =============================================================================
+// Public API implementation
+// =============================================================================
+
+ethervox_result_t ethervox_grammar_compile(
+    const char* gbnf_source,
+    const char* root_rule,
+    ethervox_grammar_t** out_grammar
+) {
+    if (!gbnf_source || !root_rule || !out_grammar) {
+        return ETHERVOX_ERROR_NULL_POINTER;
+    }
+    
+    ethervox_grammar_t* grammar = (ethervox_grammar_t*)calloc(1, sizeof(ethervox_grammar_t));
+    if (!grammar) return ETHERVOX_ERROR_OUT_OF_MEMORY;
+    
+    grammar->gbnf_source = strdup(gbnf_source);
+    grammar->root_rule = strdup(root_rule);
+    
+    if (!grammar->gbnf_source || !grammar->root_rule) {
+        ethervox_grammar_free(grammar);
+        return ETHERVOX_ERROR_OUT_OF_MEMORY;
+    }
+    
+    *out_grammar = grammar;
+    return ETHERVOX_SUCCESS;
+}
+
+ethervox_result_t ethervox_grammar_from_json_schema(
+    const char* json_schema,
+    ethervox_grammar_t** out_grammar
+) {
+    if (!json_schema || !out_grammar) {
+        return ETHERVOX_ERROR_NULL_POINTER;
+    }
+    
+    // Parse JSON schema
+    cJSON* schema = cJSON_Parse(json_schema);
+    if (!schema) {
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;  // Malformed JSON
+    }
+    
+    // Initialize conversion context
+    conversion_context_t ctx;
+    ctx.rule_counter = 0;
+    ctx.ws_emitted = 0;
+    ethervox_result_t result = sb_init(&ctx.output, 1024);
+    if (result != ETHERVOX_SUCCESS) {
+        cJSON_Delete(schema);
+        return result;
+    }
+    result = sb_init(&ctx.helper_rules, 256);
+    if (result != ETHERVOX_SUCCESS) {
+        sb_free(&ctx.output);
+        cJSON_Delete(schema);
+        return result;
+    }
+    
+    // Convert schema to GBNF starting with "root" rule
+    result = convert_schema_to_gbnf(&ctx, schema, "root");
+    
+    cJSON_Delete(schema);
+    
+    if (result != ETHERVOX_SUCCESS) {
+        sb_free(&ctx.output);
+        sb_free(&ctx.helper_rules);
+        return result;
+    }
+    
+    // Append helper rules at the end
+    if (ctx.helper_rules.length > 0) {
+        result = sb_append(&ctx.output, ctx.helper_rules.data);
+        if (result != ETHERVOX_SUCCESS) {
+            sb_free(&ctx.output);
+            sb_free(&ctx.helper_rules);
+            return result;
+        }
+    }
+    
+    // Create grammar from generated GBNF
+    result = ethervox_grammar_compile(ctx.output.data, "root", out_grammar);
+    
+    sb_free(&ctx.output);
+    sb_free(&ctx.helper_rules);
+    return result;
+}
+
+void ethervox_grammar_free(ethervox_grammar_t* grammar) {
+    if (!grammar) return;
+    
+    free(grammar->gbnf_source);
+    free(grammar->root_rule);
+    free(grammar);
+}
+
+const char* ethervox_grammar_get_source(const ethervox_grammar_t* grammar) {
+    return grammar ? grammar->gbnf_source : NULL;
+}
+
+const char* ethervox_grammar_get_root(const ethervox_grammar_t* grammar) {
+    return grammar ? grammar->root_rule : NULL;
+}

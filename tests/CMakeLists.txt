@@ -91,6 +91,13 @@ target_include_directories(test_host_tools PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME HostTools COMMAND test_host_tools)
 set_tests_properties(HostTools PROPERTIES TIMEOUT 30 LABELS "unit")
 
+# JSON Schema → GBNF converter tests (TASK-C2.3a)
+add_executable(test_schema_to_gbnf unit/test_schema_to_gbnf.c)
+target_link_libraries(test_schema_to_gbnf ethervoxai)
+target_include_directories(test_schema_to_gbnf PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME SchemaToGbnf COMMAND test_schema_to_gbnf WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+set_tests_properties(SchemaToGbnf PROPERTIES TIMEOUT 30 LABELS "unit;grammar")
+
 # Adaptive memory tests (corrections and patterns)
 add_executable(test_adaptive_memory unit/test_adaptive_memory.c)
 target_link_libraries(test_adaptive_memory ethervoxai)

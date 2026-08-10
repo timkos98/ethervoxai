@@ -1,0 +1,3 @@
+root_name_value ::= "\"" ([^"\\\n] | "\\" ["\\/bfnrt])* "\""
+root ::= "{" ws "\"name\"" ws ":" ws root_name_value ws "}"
+ws ::= [ \t\n]*

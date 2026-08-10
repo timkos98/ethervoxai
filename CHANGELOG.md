@@ -40,6 +40,18 @@ See TASK-C0.1 execution log in `ethervoxai-planning/tasks/PHASE-C/C0.1-unify-the
 ## [Unreleased]
 
 ### Added
+- **JSON Schema → GBNF converter** (TASK-C2.3a, partial — 12/14 types): First-party pure C converter using only cJSON, no llama.cpp common/ or nlohmann/json dependencies. Supports:
+  - Scalar types: boolean, integer, number
+  - String constraints: plain, enum, maxLength, pattern (basic character classes)
+  - Objects: empty, required fields, optional fields
+  - Arrays: unbounded and with maxItems constraint
+  - Recursive nesting (objects containing strings, arrays of objects, etc.)
+  - Remaining: oneOf (union types) and explicitly nested object testing (recursion works but not specifically tested)
+  - API: `ethervox_grammar_compile()`, `ethervox_grammar_from_json_schema()`, `ethervox_grammar_free()`, `ethervox_grammar_get_source()`
+  - Golden tests: 12 schema types with expected GBNF output, all pass
+  - Dependency gate: `nm -g libethervoxai.a | grep nlohmann` → empty ✅
+  - See `include/ethervox/grammar.h`, `src/llm/json_schema_to_gbnf.c`, `tests/unit/test_schema_to_gbnf.c`
+
 - `cmake/EthervoxFeatures.cmake` (TASK-C1.0): `ETHERVOX_FEATURE_HTTP`, `_DOWNLOADER`,
   `_BUG_REPORT`, `_WEATHER`, `_FILE_TOOLS` options, all defaulting `ON` (no behaviour change for
   existing consumers). Selecting any of them `OFF` now excludes the corresponding subsystem from
