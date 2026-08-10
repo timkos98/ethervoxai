@@ -542,111 +542,21 @@ if(WIN32)
     # Windows: Exclude pthread and M_PI dependent sources
     list(APPEND COMMON_SOURCES
         src/audio/aec_speex.c
-        src/tts/tts.c
         src/tts/tts_host.c
         src/tts/text_normalizer.c
-        src/tts/piper_backend.c
-        src/tts/phonemizer/phonemizer.c
-        src/tts/phonemizer/dictionary.c
-        src/tts/phonemizer/espeak_dict.c
-        src/tts/phonemizer/rules_en.c
-        src/tts/phonemizer/rules_de.c
-        src/tts/phonemizer/dict_chinese.c
-        src/tts/phonemizer/chinese_segmenter.c
-        src/tts/phonemizer/pronunciation_overrides.c
-        src/tts/phonemizer/stress_reduction.c
     )
-    message(STATUS "Windows: Excluded reference_buffer, audio_stream_player (pthread), pronunciation_trainer (M_PI)")
+    message(STATUS "Windows: Excluded reference_buffer, audio_stream_player (pthread)")
 else()
     list(APPEND COMMON_SOURCES
         src/audio/reference_buffer.c
         src/audio/aec_speex.c
         src/audio/audio_stream_player.c
-        src/tts/tts.c
         src/tts/tts_host.c
         src/tts/text_normalizer.c
-        src/tts/piper_backend.c
-        src/tts/phonemizer/phonemizer.c
-        src/tts/phonemizer/dictionary.c
-        src/tts/phonemizer/espeak_dict.c
-        src/tts/phonemizer/rules_en.c
-        src/tts/phonemizer/rules_de.c
-        src/tts/phonemizer/dict_chinese.c
-        src/tts/phonemizer/chinese_segmenter.c
-        src/tts/phonemizer/pronunciation_overrides.c
-        src/tts/phonemizer/pronunciation_trainer.c
-        src/tts/phonemizer/stress_reduction.c
     )
 endif()
 
-# Espeak-trained dictionary embeddings (VARIANT-SPECIFIC DICTIONARIES REQUIRED)
-# Each Piper model is trained with a SPECIFIC espeak language variant (e.g., en-us vs en-gb-x-rp).
-# Using the wrong variant causes poor quality because espeak phonemes differ by variant:
-#   en-us:     həlˈoʊ  (US English: /oʊ/ diphthong)
-#   en-gb-x-rp: həlˈəʊ (British RP: /əʊ/ diphthong)
-# 
-# The dictionaries must match the model's phonemes.language field from its .onnx.json config.
-# Generated dictionaries are variant-specific:
-#   - espeak_dict_en_us.h      → for models with language: "en-us"
-#   - espeak_dict_en_gb_rp.h   → for models with language: "en-gb-x-rp"
-#   - espeak_dict_de.h         → for models with language: "de"
-#   - espeak_dict_cmn.h        → for models with language: "cmn"
-#   - espeak_dict_es_419.h     → for models with language: "es-419"
-# 
-# Generate all variants with: ./tools/train_phonemizer.sh (takes ~30 min per variant)
-option(ENABLE_ESPEAK_DICT "Enable embedded espeak-trained dictionaries (variant-specific)" OFF)
-
-set(ESPEAK_DICT_ENABLED FALSE)
-if(ENABLE_ESPEAK_DICT)
-    # Check for generated dictionary headers
-    set(ESPEAK_DICT_DIR "${CMAKE_SOURCE_DIR}/src/tts/phonemizer/data")
-    
-    if(EXISTS "${ESPEAK_DICT_DIR}/espeak_dict_en_us.h")
-        message(STATUS "✅ Espeak dictionary (en-us) found - enabling")
-        add_definitions(-DESPEAK_DICT_EN_US_ENABLED)
-        set(ESPEAK_DICT_ENABLED TRUE)
-    else()
-        message(STATUS "⚠️  Espeak dictionary (en-us) not found. Run: tools/train_phonemizer.sh")
-    endif()
-    
-    if(EXISTS "${ESPEAK_DICT_DIR}/espeak_dict_en_gb_rp.h")
-        message(STATUS "✅ Espeak dictionary (en-gb-rp) found - enabling")
-        add_definitions(-DESPEAK_DICT_EN_GB_RP_ENABLED)
-        set(ESPEAK_DICT_ENABLED TRUE)
-    else()
-        message(STATUS "⚠️  Espeak dictionary (en-gb-rp) not found. Run: tools/train_phonemizer.sh")
-    endif()
-    
-    if(EXISTS "${ESPEAK_DICT_DIR}/espeak_dict_de.h")
-        message(STATUS "✅ Espeak dictionary (de) found - enabling")
-        add_definitions(-DESPEAK_DICT_DE_ENABLED)
-        set(ESPEAK_DICT_ENABLED TRUE)
-    else()
-        message(STATUS "⚠️  Espeak dictionary (de) not found. Run: tools/train_phonemizer.sh")
-    endif()
-    
-    if(EXISTS "${ESPEAK_DICT_DIR}/espeak_dict_cmn.h")
-        message(STATUS "✅ Espeak dictionary (cmn) found - enabling")
-        add_definitions(-DESPEAK_DICT_CMN_ENABLED)
-        set(ESPEAK_DICT_ENABLED TRUE)
-    else()
-        message(STATUS "⚠️  Espeak dictionary (cmn) not found. Run: tools/train_phonemizer.sh")
-    endif()
-    
-    if(EXISTS "${ESPEAK_DICT_DIR}/espeak_dict_es_419.h")
-        message(STATUS "✅ Espeak dictionary (es-419) found - enabling")
-        add_definitions(-DESPEAK_DICT_ES_419_ENABLED)
-        set(ESPEAK_DICT_ENABLED TRUE)
-    else()
-        message(STATUS "⚠️  Espeak dictionary (es-419) not found. Run: tools/train_phonemizer.sh")
-    endif()
-    
-    # Add the data file if any dictionaries are enabled
-    if(ESPEAK_DICT_ENABLED)
-        list(APPEND COMMON_SOURCES src/tts/phonemizer/espeak_dict_data.c)
-        message(STATUS "✅ Espeak dictionary data file included in build")
-    endif()
-endif()
+# Phonemizer and Piper TTS removed (TASK-C1.0) - TTS now handled via ethervox_tts_host_t
 
 # Add bug_reporter.c only for non-Android platforms (Android uses Kotlin BugReporter)
 if(ETHERVOX_FEATURE_BUG_REPORT AND NOT TARGET_PLATFORM STREQUAL "ANDROID" AND NOT WIN32)
@@ -656,7 +566,7 @@ else()
     message(STATUS "Bug reporter disabled (ETHERVOX_FEATURE_BUG_REPORT=OFF, Android, or Windows)")
 endif()
 
-# Collect core source files (non-platform specific)
+# TASK-C1.0: Exclude voice_training.c and global_tts.c - depend on removed phonemizer/TTS
 file(GLOB ETHERVOXAI_CORE_SOURCES 
     "src/dialogue/*.c"
     "src/plugins/*.c"
@@ -666,6 +576,8 @@ file(GLOB ETHERVOXAI_CORE_SOURCES
     "src/plugins/compute_tools/*.c"
     "src/plugins/timer_tools/*.c"
 )
+list(REMOVE_ITEM ETHERVOXAI_CORE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/dialogue/voice_training.c")
+list(REMOVE_ITEM ETHERVOXAI_CORE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/dialogue/global_tts.c")
 
 # Note: src/dialogue/voice_conversation.c is included via GLOB above
 
@@ -747,7 +659,9 @@ message(STATUS "Context tools plugin sources included")
 
 # Add conversation tools plugin sources (speak, listen for LLM-controlled interaction)
 if(NOT WIN32)
+    # TASK-C1.0: Exclude train_pronunciation.c - depends on removed phonemizer
     file(GLOB CONVERSATION_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/conversation_tools/*.c")
+    list(REMOVE_ITEM CONVERSATION_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/conversation_tools/train_pronunciation.c")
     list(APPEND ETHERVOXAI_CORE_SOURCES ${CONVERSATION_TOOLS_SOURCES})
     message(STATUS "Conversation tools plugin sources included")
 else()
@@ -921,13 +835,7 @@ else()
     add_library(ethervoxai STATIC ${ETHERVOXAI_SOURCES})
 endif()
 
-# MSVC-specific fix: phonemizer.c has too many sections
-if(MSVC)
-    set_source_files_properties(
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/tts/phonemizer/phonemizer.c
-        PROPERTIES COMPILE_FLAGS "/bigobj"
-    )
-endif()
+# Phonemizer removed (TASK-C1.0)
 
 target_include_directories(ethervoxai
     PUBLIC
@@ -1046,54 +954,7 @@ if(PkgConfig_FOUND)
         message(STATUS "⊘ Skipped Speex DSP (Android uses platform audio processing)")
     endif()
     
-    # Link ONNX Runtime for Piper TTS (skip on iOS/Android - they use native TTS)
-    if(NOT TARGET_PLATFORM STREQUAL "IOS" AND NOT ANDROID)
-        pkg_check_modules(ONNXRUNTIME onnxruntime)
-        if(ONNXRUNTIME_FOUND)
-            target_link_libraries(ethervoxai PUBLIC ${ONNXRUNTIME_LINK_LIBRARIES})
-            target_include_directories(ethervoxai PRIVATE ${ONNXRUNTIME_INCLUDE_DIRS})
-            target_link_directories(ethervoxai PRIVATE ${ONNXRUNTIME_LIBRARY_DIRS})
-            target_compile_definitions(ethervoxai PUBLIC HAVE_PIPER_TTS=1)
-            message(STATUS "Linked ONNX Runtime library: ${ONNXRUNTIME_VERSION}")
-            message(STATUS "✅ Piper TTS backend ENABLED")
-        else()
-            # Try manual detection (Homebrew on macOS)
-            find_path(ONNXRUNTIME_INCLUDE_DIR 
-                NAMES onnxruntime_c_api.h
-                PATHS /opt/homebrew/Cellar/onnxruntime/*/include/onnxruntime
-                      /usr/local/Cellar/onnxruntime/*/include/onnxruntime
-                      /opt/homebrew/include/onnxruntime
-                      /usr/local/include/onnxruntime
-            )
-            find_library(ONNXRUNTIME_LIBRARY
-                NAMES onnxruntime
-                PATHS /opt/homebrew/Cellar/onnxruntime/*/lib
-                      /usr/local/Cellar/onnxruntime/*/lib
-                      /opt/homebrew/lib
-                      /usr/local/lib
-            )
-            
-            if(ONNXRUNTIME_INCLUDE_DIR AND ONNXRUNTIME_LIBRARY)
-                # Include parent directory so we can use #include <onnxruntime/...>
-                get_filename_component(ONNXRUNTIME_INCLUDE_PARENT "${ONNXRUNTIME_INCLUDE_DIR}" DIRECTORY)
-                target_include_directories(ethervoxai PRIVATE ${ONNXRUNTIME_INCLUDE_PARENT})
-                target_link_libraries(ethervoxai PUBLIC ${ONNXRUNTIME_LIBRARY})
-                target_compile_definitions(ethervoxai PUBLIC HAVE_PIPER_TTS=1)
-                message(STATUS "Found ONNX Runtime manually:")
-                message(STATUS "  Include: ${ONNXRUNTIME_INCLUDE_PARENT}")
-                message(STATUS "  Library: ${ONNXRUNTIME_LIBRARY}")
-                message(STATUS "✅ Piper TTS backend ENABLED")
-            else()
-                message(WARNING "ONNX Runtime not found - Piper TTS will be unavailable. Install with: brew install onnxruntime")
-            endif()
-        endif()
-    else()
-        message(STATUS "⊘ Skipped ONNX Runtime (iOS/Android uses native TTS APIs)")
-    endif()
-    
-    # espeak-ng REMOVED - replaced with custom phonemizer (MIT-licensed)
-    # See src/tts/phonemizer.c for dictionary-based G2P implementation
-    message(STATUS "Using custom phonemizer (espeak-ng dependency removed for licensing)")
+    # ONNX Runtime/Piper TTS removed (TASK-C1.0) - TTS now via ethervox_tts_host_t
     
     # Link libcurl for HTTP downloads (model downloader) - Skip on Android (uses Kotlin HTTP)
     if(NOT ANDROID)

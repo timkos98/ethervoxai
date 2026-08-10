@@ -32,9 +32,11 @@ All notable changes to this project are recorded here, following
   `speak`/`stop`/`pause`/`resume`/`is_speaking`, `ethervox_tts_style_t`, `ethervox_tts_word_cb`,
   `ethervox_tts_set_host`. A missing host returns `ETHERVOX_ERROR_NO_TTS_HOST`, never crashes.
   `tests/unit/test_tts_host.c` verifies speak/stop/pause/resume/is_speaking/word-callback against
-  a fake host. Not yet wired into `dialogue_core.c`/the conversation state machine, and Piper/the
-  phonemiser are not yet deleted — both pending a follow-up session (barge-in needs verifying end
-  to end before the old path can go).
+  a fake host. **UPDATED**: Now wired into `voice_conversation.c`'s `conversation_on_speak()` —
+  mobile/platform-native TTS path unchanged; desktop Piper path replaced with calls to
+  `ethervox_tts_host_speak()` and `ethervox_tts_host_is_speaking()` for barge-in detection.
+  Phonemiser/Piper deletion in progress (removed from file system and most CMake references; some
+  consumers like `settings_menu.c` still need updating).
 
 ### Fixed
 - `tests/unit/test_tts_host.c` and `tests/unit/test_voice_conversation.c`: replaced `assert()`
@@ -53,6 +55,22 @@ All notable changes to this project are recorded here, following
 - All CC BY-NC-SA 4.0 licence references in `src/` and `include/` (132 files: SPDX identifiers,
   "Licensed under…" lines) rewritten to reference the proprietary licence, authorized by
   `LICENSE`'s "Copyright Holder Reservation of Rights" clause.
+- **Piper TTS backend and phonemizer** (TASK-C1.0): Removed `src/tts/phonemizer/` directory (25 files),
+  `src/tts/piper_backend.c`, and `src/tts/tts.c` (old TTS API). TTS is now handled via the
+  `ethervox_tts_host_t` platform callback interface. ONNX Runtime and espeak-ng dependencies removed.
+  CMakeLists.txt cleaned: removed phonemizer source references, ONNX/Piper linking, espeak dictionary
+  embedding logic (5 variant checks + `ENABLE_ESPEAK_DICT` option), MSVC `/bigobj` workaround.
+  Platforms must now register a TTS host via `ethervox_tts_set_host()` before speaking.
+  - `voice_conversation.c`: Fully rewired to use `ethervox_tts_host_speak()` and
+    `ethervox_tts_host_is_speaking()`; removed Piper initialization; barge-in detection now polls
+    host interface. `ethervox_conversation_get_phonemizer()` and `ethervox_conversation_get_tts()`
+    return NULL (API compat stubs).
+  - `settings_menu.c`: Voice testing functions stubbed with "no longer available" message;
+    pronunciation reset action disabled.
+  - `language_detector.c`: TTS reload calls removed; language switching now logs platform-managed TTS.
+  - Excluded from build (depend on removed phonemizer): `voice_training.c`, `global_tts.c`,
+    `train_pronunciation.c`.
+  - Standalone CLI app (`main.c`): Still references old TTS API (not part of library build).
 
 ### Removed
 - `src/tmp.txt` (tracked debug-log dump); `main.c.bak`/`tmp.txt` added to `.gitignore`.

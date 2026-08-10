@@ -3,7 +3,7 @@
  * @brief Real-time voice conversation implementation
  *
  * Manages background thread for wake word → Granite Speech STT → Governor →
- * TTS (desktop Piper, blocking; mobile platform-native, async via
+ * TTS (platform-native via ethervox_tts_host_t; mobile uses async
  * conversation_on_speak's on_speak_request callback + notify_speaking_done)
  * conversation flow. Separate from transcription pipeline.
  *
@@ -23,7 +23,7 @@
 #include "ethervox/governor.h"
 #include "ethervox/stt.h"
 #include "ethervox/audio.h"
-#include "ethervox/tts.h"
+#include "ethervox/tts_host.h"
 #include "ethervox/aec.h"
 #include "ethervox/settings.h"
 
@@ -34,10 +34,6 @@
 #include <unistd.h>
 #include <math.h>
 #include <pthread.h>
-
-// External reference to global TTS context (initialized at app startup in main.c)
-extern ethervox_tts_context_t* g_global_tts;
-extern pthread_mutex_t g_tts_mutex;
 
 // Forward declaration for macOS audio state (platform-specific)
 #ifdef __APPLE__
@@ -105,10 +101,6 @@ struct ethervox_conversation_session {
     // Audio runtime for microphone capture
     ethervox_audio_runtime_t audio_runtime;
     bool audio_initialized;
-    
-    // TTS runtime (Piper neural TTS)
-    ethervox_tts_context_t* tts_context;
-    bool tts_initialized;
     
     // AEC runtime (echo cancellation)
     ethervox_aec_t* aec_context;
@@ -497,144 +489,52 @@ static int conversation_on_speak(const char* text, const char* language,
         return ETHERVOX_SUCCESS;
     }
     
-    // Desktop path (Piper). Use explicit language if provided, otherwise auto-detect from text
-    const char* target_language = language;
-    if (!target_language) {
-        // Auto-detect from assistant's text when language not specified
-        target_language = ethervox_detect_and_switch_voice(
-            text,
-            NULL,  // Force detection from text, don't inherit user's STT language
-            (void**)&session->tts_context
-        );
-    } else {
-        // Explicit language specified - switch voice directly
-        target_language = ethervox_switch_to_language(target_language, (void**)&session->tts_context);
-    }
+    // Host TTS path (all platforms via ethervox_tts_host_t)
+    const char* target_language = language ? language : "en";
     
     // Print to console
     printf("\n========================================================\n");
     printf("🤖 Assistant [%s]: %s\n", target_language, text);
     printf("========================================================\n\n");
     
-    // Synthesize and play audio with Piper TTS
-    if (session->tts_initialized && session->tts_context) {
-        // Apply the emotion-derived speaker_id before synthesis (desktop/Piper
-        // only - a documented no-op on any other backend, see tts.h). Voice
-        // switching above (ethervox_switch_to_language) may have swapped the
-        // underlying model, so this must happen after it, not before.
-        if (speaker_id >= 0) {
-            ethervox_tts_set_speaker_id(session->tts_context, speaker_id);
-        }
-
-        ethervox_tts_audio_t tts_output = {0};
-        ethervox_result_t result = ethervox_tts_synthesize_text(session->tts_context, text, &tts_output);
+    // Speak via the registered TTS host
+    ethervox_tts_style_t style = {
+        .voice_id = NULL,  // Use system default
+        .rate = 1.0f,
+        .pitch = 1.0f,
+        .emotion = NULL,
+        .intensity = 1.0f
+    };
+    
+    ethervox_result_t result = ethervox_tts_host_speak(text, &style, NULL /* word_cb */);
+    
+    if (ethervox_is_success(result)) {
+        ETHERVOX_LOG_INFO("TTS host speak initiated");
         
-        if (ethervox_is_success(result) && tts_output.samples && tts_output.sample_count > 0) {
-            ETHERVOX_LOG_INFO("TTS synthesized %zu samples at %dHz", 
-                            tts_output.sample_count, tts_output.sample_rate);
-            
-            // Set AEC reference buffer (must be called before playback)
-            if (session->aec_initialized && session->aec_context) {
-                ethervox_aec_set_reference(session->aec_context, 
-                                          tts_output.samples, 
-                                          tts_output.sample_count);
-                ETHERVOX_LOG_DEBUG("AEC reference buffer updated with TTS output");
-            }
-            
-            // Play the synthesized audio through speakers
-            if (session->audio_initialized && session->audio_runtime.driver.write_audio) {
-                // Convert float samples to int16 for CoreAudio
-                size_t byte_count = tts_output.sample_count * sizeof(int16_t);
-                int16_t* pcm_buffer = (int16_t*)malloc(byte_count);
-                if (pcm_buffer) {
-                    for (size_t i = 0; i < tts_output.sample_count; i++) {
-                        float sample = tts_output.samples[i];
-                        // Clamp and convert to int16
-                        if (sample > 1.0f) sample = 1.0f;
-                        if (sample < -1.0f) sample = -1.0f;
-                        pcm_buffer[i] = (int16_t)(sample * 32767.0f);
-                    }
-                    
-                    ethervox_audio_buffer_t playback_buffer = {
-                        .data = (float*)pcm_buffer,  // Cast to float* to match struct type
-                        .size = byte_count,  // Size in BYTES for the audio driver
-                        .channels = tts_output.channels
-                    };
-                    
-                    int play_result = session->audio_runtime.driver.write_audio(
-                        &session->audio_runtime, &playback_buffer);
-                    
-                    if (play_result == 0) {
-                        ETHERVOX_LOG_INFO("Audio playback queued (%zu samples)", tts_output.sample_count);
-                        
-                        // ALWAYS wait for playback to finish before resuming listening
-                        // This prevents microphone from capturing TTS echo/feedback
-#ifdef __APPLE__
-                        // macOS-specific playback synchronization
-                        macos_audio_state_t* state = (macos_audio_state_t*)session->audio_runtime.platform_data;
-                        if (state) {
-                            ETHERVOX_LOG_DEBUG("Waiting for audio playback to complete (allow_interrupt=%d)...", allow_interrupt);
-                            
-                            // Give the playback thread time to start consuming samples
-                            usleep(20000); // 20ms initial delay
-                            
-                            int poll_count = 0;
-                            while (1) {
-                                pthread_mutex_lock(&state->playback_lock);
-                                bool is_empty = (state->playback_write_pos == state->playback_read_pos);
-                                size_t write_pos = state->playback_write_pos;
-                                size_t read_pos = state->playback_read_pos;
-                                pthread_mutex_unlock(&state->playback_lock);
-                                
-                                if (poll_count % 50 == 0 && !is_empty) { // Log every 500ms while playing
-                                    ETHERVOX_LOG_DEBUG("Playback buffer: write=%zu read=%zu", write_pos, read_pos);
-                                }
-                                
-                                if (is_empty) {
-                                    break;
-                                }
-                                
-                                // Check for interruption if allowed (user speaking detected)
-                                if (allow_interrupt && poll_count % 10 == 0) {
-                                    pthread_mutex_lock(&session->mutex);
-                                    bool should_stop =
-                                        session->thread_should_exit || session->interrupt_requested;
-                                    pthread_mutex_unlock(&session->mutex);
-                                    
-                                    if (should_stop) {
-                                        ETHERVOX_LOG_INFO("Audio playback interrupted by user");
-                                        // Clear the playback buffer to stop audio immediately
-                                        pthread_mutex_lock(&state->playback_lock);
-                                        state->playback_write_pos = state->playback_read_pos;
-                                        pthread_mutex_unlock(&state->playback_lock);
-                                        break;
-                                    }
-                                }
-                                
-                                usleep(10000); // 10ms polling interval
-                                poll_count++;
-                            }
-                            ETHERVOX_LOG_DEBUG("Audio playback completed");
-                        }
-#endif
-                    } else {
-                        ETHERVOX_LOG_WARN("Audio playback failed: %d", play_result);
-                    }
-                    
-                    free(pcm_buffer);
-                } else {
-                    ETHERVOX_LOG_ERROR("Failed to allocate PCM buffer");
+        // Wait for speech to complete, checking for interrupts if allowed
+        int poll_count = 0;
+        while (ethervox_tts_host_is_speaking()) {
+            // Check for interruption if allowed
+            if (allow_interrupt && poll_count % 10 == 0) {
+                pthread_mutex_lock(&session->mutex);
+                bool should_stop = session->thread_should_exit || session->interrupt_requested;
+                pthread_mutex_unlock(&session->mutex);
+                
+                if (should_stop) {
+                    ETHERVOX_LOG_INFO("TTS interrupted by user");
+                    ethervox_tts_host_stop();
+                    break;
                 }
-            } else {
-                ETHERVOX_LOG_WARN("Audio playback not available");
             }
             
-            ethervox_tts_audio_free(&tts_output);
-        } else {
-            ETHERVOX_LOG_WARN("TTS synthesis failed (code=%d), using text-only mode", result);
+            usleep(10000);  // 10ms polling interval
+            poll_count++;
         }
+        ETHERVOX_LOG_DEBUG("TTS playback completed");
+    } else if (result == ETHERVOX_ERROR_NO_TTS_HOST) {
+        ETHERVOX_LOG_WARN("No TTS host registered, text-only mode");
     } else {
-        ETHERVOX_LOG_DEBUG("TTS not initialized, text-only mode");
+        ETHERVOX_LOG_WARN("TTS host speak failed (code=%d), using text-only mode", result);
     }
     
     return ETHERVOX_SUCCESS;
@@ -1401,62 +1301,16 @@ ethervox_conversation_session_t* ethervox_conversation_init(
     // Language detection
     session->last_detected_language[0] = '\0';  // Initialize to empty (use fallback detection)
     
-    // Initialize TTS (Piper backend)
-    session->tts_initialized = false;
-    session->tts_context = NULL;
-    
-    // Load settings for TTS and AEC configuration
-    ethervox_persistent_settings_t settings;
-    bool settings_loaded = ethervox_is_success(ethervox_settings_load(&settings, NULL));
-    
-    // Check if global TTS is already initialized (from app startup)
-    // If so, reuse it instead of creating a new instance
-    pthread_mutex_lock(&g_tts_mutex);
-    if (g_global_tts) {
-        session->tts_context = g_global_tts;
-        session->tts_initialized = true;
-        pthread_mutex_unlock(&g_tts_mutex);
-        ETHERVOX_LOG_INFO("Reusing global TTS instance for voice conversation");
-    } else {
-        pthread_mutex_unlock(&g_tts_mutex);
-        
-        // No global TTS, initialize one for this session
-        if (settings_loaded) {
-            // Check if Piper is enabled and model exists
-            if (strcmp(settings.tts.engine, "piper") == 0 && 
-                strlen(settings.tts.piper_model_path) > 0) {
-                
-                ethervox_tts_config_t tts_config = ethervox_tts_default_config();
-                tts_config.backend = ETHERVOX_TTS_BACKEND_PIPER;
-                tts_config.model_path = settings.tts.piper_model_path;
-                tts_config.speaking_rate = settings.tts.speed;
-                tts_config.phoneme_variance = settings.tts.phoneme_variance;
-                tts_config.prosody_variance = settings.tts.prosody_variance;
-                tts_config.sample_rate = 16000;  // Target sample rate
-                tts_config.channels = 1;         // Mono
-                
-                session->tts_context = ethervox_tts_create(&tts_config);
-                if (session->tts_context && ethervox_tts_is_ready(session->tts_context)) {
-                    session->tts_initialized = true;
-                    ETHERVOX_LOG_INFO("Piper TTS initialized: %s", settings.tts.piper_model_path);
-                } else {
-                    ETHERVOX_LOG_WARN("Failed to initialize Piper TTS");
-                    if (session->tts_context) {
-                        ethervox_tts_destroy(session->tts_context);
-                        session->tts_context = NULL;
-                    }
-                }
-            } else {
-                ETHERVOX_LOG_INFO("TTS disabled or not Piper (engine=%s)", settings.tts.engine);
-            }
-        } else {
-            ETHERVOX_LOG_WARN("Failed to load settings, TTS disabled");
-        }
-    }
+    // TTS is now handled via ethervox_tts_host_t (no per-session initialization)
+    // The host must be registered separately via ethervox_tts_set_host()
     
     // Initialize AEC if enabled
     session->aec_initialized = false;
     session->aec_context = NULL;
+    
+    // Load settings for AEC configuration
+    ethervox_persistent_settings_t settings;
+    bool settings_loaded = ethervox_is_success(ethervox_settings_load(&settings, NULL));
     
     if (settings_loaded && settings.aec.enabled && strcmp(settings.aec.backend, "speex") == 0) {
         ethervox_aec_config_t aec_config = {
@@ -1480,8 +1334,8 @@ ethervox_conversation_session_t* ethervox_conversation_init(
                         settings.aec.enabled, settings.aec.backend);
     }
     
-    ETHERVOX_LOG_INFO("Conversation session initialized (always_listening=%d, TTS=%d, AEC=%d)",
-                      session->always_listening, session->tts_initialized, session->aec_initialized);
+    ETHERVOX_LOG_INFO("Conversation session initialized (always_listening=%d, AEC=%d)",
+                      session->always_listening, session->aec_initialized);
     
     return session;
 }
@@ -1663,24 +1517,7 @@ void ethervox_conversation_cleanup(ethervox_conversation_session_t* session) {
         session->stt_initialized = false;
     }
     
-    // Cleanup TTS context (but NOT if it's the global instance)
-    if (session->tts_initialized && session->tts_context) {
-        pthread_mutex_lock(&g_tts_mutex);
-        bool is_global = (session->tts_context == g_global_tts);
-        pthread_mutex_unlock(&g_tts_mutex);
-        
-        if (!is_global) {
-            // Session-specific TTS, safe to destroy
-            ethervox_tts_destroy(session->tts_context);
-            ETHERVOX_LOG_DEBUG("Session TTS context destroyed");
-        } else {
-            // Global TTS, just detach from session
-            ETHERVOX_LOG_DEBUG("Detached from global TTS (not destroyed)");
-        }
-        
-        session->tts_context = NULL;
-        session->tts_initialized = false;
-    }
+    // TTS is now handled via ethervox_tts_host_t (no per-session cleanup)
     
     // Cleanup AEC context
     if (session->aec_initialized && session->aec_context) {
@@ -1713,38 +1550,17 @@ void ethervox_conversation_cleanup(ethervox_conversation_session_t* session) {
     ETHERVOX_LOG_INFO("Conversation session cleaned up");
 }
 
-/**
- * Get phonemizer context from conversation session
- */
+// Legacy functions - no longer used with ethervox_tts_host_t but kept for API compatibility
 void* ethervox_conversation_get_phonemizer(ethervox_conversation_session_t* session) {
-    if (!session) {
-        ETHERVOX_LOG_WARN("get_phonemizer: session is NULL");
-        return NULL;
-    }
-    if (!session->tts_context) {
-        ETHERVOX_LOG_WARN("get_phonemizer: tts_context is NULL");
-        return NULL;
-    }
-    
-    ETHERVOX_LOG_INFO("get_phonemizer: calling ethervox_tts_get_phonemizer");
-    // Get phonemizer from TTS context
-    void* result = ethervox_tts_get_phonemizer(session->tts_context);
-    if (result) {
-        ETHERVOX_LOG_INFO("get_phonemizer: success, got phonemizer %p", result);
-    } else {
-        ETHERVOX_LOG_WARN("get_phonemizer: ethervox_tts_get_phonemizer returned NULL");
-    }
-    return result;
+    (void)session;
+    ETHERVOX_LOG_WARN("get_phonemizer: TTS is now handled via ethervox_tts_host_t (no phonemizer)");
+    return NULL;
 }
 
-/**
- * Get TTS context from conversation session
- */
 void* ethervox_conversation_get_tts(ethervox_conversation_session_t* session) {
-    if (!session) {
-        return NULL;
-    }
-    return session->tts_context;
+    (void)session;
+    ETHERVOX_LOG_WARN("get_tts: TTS is now handled via ethervox_tts_host_t (no session TTS context)");
+    return NULL;
 }
 
 /**
