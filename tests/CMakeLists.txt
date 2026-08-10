@@ -77,6 +77,13 @@ target_include_directories(test_event_stream PRIVATE ${CMAKE_SOURCE_DIR}/include
 add_test(NAME EventStream COMMAND test_event_stream)
 set_tests_properties(EventStream PROPERTIES TIMEOUT 30 LABELS "unit")
 
+# Multi-model pool tests (TASK-C2.1)
+add_executable(test_model_pool unit/test_model_pool.c)
+target_link_libraries(test_model_pool ethervoxai)
+target_include_directories(test_model_pool PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME ModelPool COMMAND test_model_pool)
+set_tests_properties(ModelPool PROPERTIES TIMEOUT 30 LABELS "unit")
+
 # Adaptive memory tests (corrections and patterns)
 add_executable(test_adaptive_memory unit/test_adaptive_memory.c)
 target_link_libraries(test_adaptive_memory ethervoxai)

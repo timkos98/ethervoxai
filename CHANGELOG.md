@@ -162,6 +162,28 @@ See TASK-C0.1 execution log in `ethervoxai-planning/tasks/PHASE-C/C0.1-unify-the
     wrong loads — llama.cpp handles validation.
   - All function signatures updated to use `ethervox_paths_t*` (from C1.3) instead of hardcoded paths.
   - Library compiles successfully (1.3MB); tests not yet added (BACKLOG).
+- **Multi-model pool** (TASK-C2.1): Concurrent multi-model loading and execution with memory budget
+  enforcement (`include/ethervox/model_pool.h`, `src/llm/model_pool.c`). API includes:
+  - `ethervox_model_pool_t`: Pool manages multiple loaded models with a memory budget
+  - `ethervox_model_pool_create(paths, budget, &pool)`: Creates pool with memory budget in bytes
+    (0 = no limit)
+  - `ethervox_model_pool_load(pool, config, progress_cb, ctx, &handle)`: Loads model, returns handle.
+    Fails with `ETHERVOX_ERROR_OUT_OF_MEMORY` if budget exceeded. Thread-safe.
+  - `ethervox_model_pool_unload(pool, handle)`: Unloads model, frees resources. Thread-safe.
+  - `ethervox_model_pool_would_fit(pool, config, &fits, &required)`: Estimates memory requirements
+    without loading. Calculation includes model file size + KV cache (context_size × 2048 bytes/token)
+    + 128MB overhead. Must be accurate within ±10% to prevent OOM kills.
+  - `ethervox_model_pool_memory_usage(pool, &used, &budget)`: Reports current usage across all models
+  - **Refcounted backend init**: Single `llama_backend_init()` per process, refcounted across pools.
+    First pool creation initializes, last pool destruction cleans up.
+  - **Per-model mutex**: `inference_mutex` in `ethervox_model_handle_t` serializes inference on same
+    model handle. Different models can run concurrently.
+  - Platform-agnostic threading: Uses `pthread_mutex_t` (POSIX) or `CRITICAL_SECTION` (Windows)
+  - Designed for Workspace (main LLM + vision + embeddings) and mobile model hot-swap use cases
+  - `tests/unit/test_model_pool.c`: 5 test cases covering create/destroy, memory usage, budget
+    enforcement, NULL safety, refcounted backend. All tests pass.
+  - Library compiles with zero warnings across all 4 profiles (DESKTOP, MOBILE, EDGE, WORKSPACE)
+  - Blocks TASK-C2.4 (embeddings), C3.1 (vision), C3.2 (forking), C3.4 (pressure)
 
 ### Fixed
 - **Stop-sequence infinite loop** (TASK-C1.1): Fixed the bug where sampled tokens were fed into the
