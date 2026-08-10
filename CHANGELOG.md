@@ -63,6 +63,16 @@ All notable changes to this project are recorded here, following
 - `tests/test_stop_sequences.c` (TASK-C1.1): Conformance test verifying finish reason constants,
   EOG handling, stop sequence detection, and max tokens backstop. 26 assertions covering all 5
   chat templates.
+- **`ethervox_paths_t`** (TASK-C1.3): Caller-supplied path configuration API (`include/ethervox/paths.h`,
+  `src/common/paths.c`) replacing hardcoded `getenv("HOME")` and `Documents/` derivations. Required for
+  macOS App Sandbox, security-scoped vault access, and mobile file-access restrictions. API includes:
+  - `ethervox_paths_t` struct: `data_dir`, `cache_dir`, `models_dir`, `temp_dir` (all must be absolute)
+  - `ethervox_paths_validate()`: Checks paths are absolute, exist/creatable, have R/W permissions
+  - `ethervox_paths_get_default()`: Platform-specific defaults (macOS/Linux/Windows; NOT Android/iOS)
+  - `ethervox_path_join()`, `ethervox_ensure_directory()`: Path manipulation helpers
+  - `tests/test_paths.c`: 21 assertions covering validation, defaults, joining, directory creation
+  - `scripts/check-no-hardcoded-paths.sh`: Grep test warning about hardcoded path usage (45 getenv("HOME"),
+    2 "Documents/", 16 "/Library/" instances remain - migration in progress)
 
 ### Fixed
 - **Stop-sequence infinite loop** (TASK-C1.1): Fixed the bug where sampled tokens were fed into the

@@ -56,6 +56,13 @@ target_include_directories(test_stop_sequences PRIVATE ${CMAKE_SOURCE_DIR}/inclu
 add_test(NAME StopSequences COMMAND test_stop_sequences)
 set_tests_properties(StopSequences PROPERTIES TIMEOUT 30 LABELS "unit;conformance")
 
+# Path configuration tests (TASK-C1.3)
+add_executable(test_paths test_paths.c)
+target_link_libraries(test_paths ethervoxai)
+target_include_directories(test_paths PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME Paths COMMAND test_paths)
+set_tests_properties(Paths PROPERTIES TIMEOUT 30 LABELS "unit")
+
 # Adaptive memory tests (corrections and patterns)
 add_executable(test_adaptive_memory unit/test_adaptive_memory.c)
 target_link_libraries(test_adaptive_memory ethervoxai)
