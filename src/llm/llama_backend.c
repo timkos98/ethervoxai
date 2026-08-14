@@ -341,6 +341,25 @@ static void llama_backend_cleanup(ethervox_llm_backend_t* backend) {
 #endif
 }
 
+/**
+ * Set grammar constraint for next generation
+ * 
+ * @param backend Backend instance
+ * @param grammar Grammar to use (NULL to clear)
+ * @return ETHERVOX_SUCCESS or error code
+ */
+ethervox_result_t ethervox_llm_backend_set_grammar(ethervox_llm_backend_t* backend, 
+                                                    struct ethervox_grammar* grammar) {
+  if (!backend || !backend->handle) {
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
+  }
+  
+  llama_backend_context_t* ctx = (llama_backend_context_t*)backend->handle;
+  ctx->grammar = (ethervox_grammar_t*)grammar;
+  
+  return ETHERVOX_SUCCESS;
+}
+
 static ethervox_result_t llama_backend_load_model(ethervox_llm_backend_t* backend, const char* model_path) {
   if (!backend || !backend->handle || !model_path) {
     return ETHERVOX_ERROR_INVALID_ARGUMENT;

@@ -99,6 +99,11 @@ void ethervox_llm_backend_free(ethervox_llm_backend_t* backend);
 ethervox_result_t ethervox_llm_backend_load_model(ethervox_llm_backend_t* backend, const char* model_path);
 void ethervox_llm_backend_unload_model(ethervox_llm_backend_t* backend);
 
+// Grammar-constrained decoding
+struct ethervox_grammar;  // Forward declaration
+ethervox_result_t ethervox_llm_backend_set_grammar(ethervox_llm_backend_t* backend, 
+                                                    struct ethervox_grammar* grammar);
+
 // Generation
 ethervox_result_t ethervox_llm_backend_generate(ethervox_llm_backend_t* backend,
                                  const char* prompt,

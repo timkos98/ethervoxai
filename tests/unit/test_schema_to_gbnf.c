@@ -255,6 +255,8 @@ int main(void) {
     test_golden("object_optional");
     test_golden("array");
     test_golden("array_max_items");
+    test_golden("oneof_tool_variants");
+    test_golden("nested_objects");
     
     printf("\n✅ All tests passed!\n");
     return 0;

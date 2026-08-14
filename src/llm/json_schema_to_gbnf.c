@@ -98,6 +98,11 @@ static ethervox_result_t convert_schema_to_gbnf(
     const cJSON* schema,
     const char* rule_name
 );
+static ethervox_result_t convert_one_of(
+    conversion_context_t* ctx,
+    const cJSON* schema,
+    const char* rule_name
+);
 
 // =============================================================================
 // Type converters (implemented in order per C2.3a spec)
@@ -520,6 +525,65 @@ static ethervox_result_t convert_array(
     return result;
 }
 
+/**
+ * Type 13: oneOf (union types)
+ * Generates alternation: variant1 | variant2 | variant3
+ */
+static ethervox_result_t convert_one_of(
+    conversion_context_t* ctx,
+    const cJSON* schema,
+    const char* rule_name
+) {
+    ethervox_result_t result;
+    
+    const cJSON* one_of = cJSON_GetObjectItem(schema, "oneOf");
+    if (!one_of || !cJSON_IsArray(one_of)) {
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
+    
+    int variant_count = cJSON_GetArraySize(one_of);
+    if (variant_count == 0) {
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;  // Empty oneOf
+    }
+    
+    // Generate subrule for each variant
+    string_builder_t union_sb;
+    result = sb_init(&union_sb, 512);
+    if (result != ETHERVOX_SUCCESS) return result;
+    
+    char prefix[128];
+    snprintf(prefix, sizeof(prefix), "%s ::= ", rule_name);
+    sb_append(&union_sb, prefix);
+    
+    for (int i = 0; i < variant_count; i++) {
+        const cJSON* variant = cJSON_GetArrayItem(one_of, i);
+        if (!variant) continue;
+        
+        // Generate unique rule name for this variant
+        char variant_rule[128];
+        snprintf(variant_rule, sizeof(variant_rule), "%s_variant%d", rule_name, i);
+        
+        // Convert variant schema
+        result = convert_schema_to_gbnf(ctx, variant, variant_rule);
+        if (result != ETHERVOX_SUCCESS) {
+            sb_free(&union_sb);
+            return result;
+        }
+        
+        // Add to union (with | separator except for first)
+        if (i > 0) {
+            sb_append(&union_sb, " | ");
+        }
+        sb_append(&union_sb, variant_rule);
+    }
+    
+    sb_append(&union_sb, "\n");
+    
+    result = sb_append(&ctx->output, union_sb.data);
+    sb_free(&union_sb);
+    return result;
+}
+
 // =============================================================================
 // Schema type dispatcher
 // =============================================================================
@@ -531,10 +595,17 @@ static ethervox_result_t convert_schema_to_gbnf(
 ) {
     if (!schema) return ETHERVOX_ERROR_NULL_POINTER;
     
+    // Check for oneOf first (union types)
+    const cJSON* one_of = cJSON_GetObjectItem(schema, "oneOf");
+    if (one_of && cJSON_IsArray(one_of)) {
+        // Type 13: oneOf (union type)
+        return convert_one_of(ctx, schema, rule_name);
+    }
+    
     // Get type field
     const cJSON* type_field = cJSON_GetObjectItem(schema, "type");
     if (!type_field || !cJSON_IsString(type_field)) {
-        return ETHERVOX_ERROR_INVALID_ARGUMENT;  // Schema must have "type"
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;  // Schema must have "type" or "oneOf"
     }
     
     const char* type = cJSON_GetStringValue(type_field);
