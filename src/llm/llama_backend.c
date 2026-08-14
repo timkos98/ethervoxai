@@ -22,6 +22,7 @@
 #include "ethervox/config.h"
 #include "ethervox/device_profile.h"
 #include "ethervox/gguf_config_helper.h"
+#include "ethervox/grammar.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -90,6 +91,9 @@ typedef struct {
   bool use_mlock;
   bool use_mmap;
   volatile bool cancel_requested;  // Flag to cancel generation
+  
+  // Grammar (optional, for constrained decoding)
+  ethervox_grammar_t* grammar;      // Optional grammar constraint
   
 } llama_backend_context_t;
 
@@ -268,6 +272,7 @@ static ethervox_result_t ethervox_llama_backend_init(ethervox_llm_backend_t* bac
 #endif
   
   ctx->cancel_requested = false;
+  ctx->grammar = NULL;  // No grammar by default
   
   // Initialize device profiling for adaptive configuration
   ETHERVOX_LOG_INFO("[Adaptive Config] Initializing device profile...");
@@ -608,6 +613,43 @@ static ethervox_result_t llama_backend_generate(ethervox_llm_backend_t* backend,
   llama_sampler_chain_add(sampler, llama_sampler_init_top_p(ctx->top_p, 1));
   llama_sampler_chain_add(sampler, llama_sampler_init_penalties(128, 1.2f, 0.0f, 0.0f));  // Stronger repeat penalty (128 lookback, 1.2 strength)
   llama_sampler_chain_add(sampler, llama_sampler_init_temp(ctx->temperature));
+  
+  // Grammar (if present) - constrain output format
+  if (ctx->grammar) {
+    struct llama_sampler* grammar_sampler = NULL;
+    
+    size_t trigger_word_count = 0;
+    const char* const* trigger_words = ethervox_grammar_get_trigger_words(ctx->grammar, &trigger_word_count);
+    
+    if (ethervox_grammar_is_lazy(ctx->grammar) && trigger_words && trigger_word_count > 0) {
+      // Lazy mode: apply grammar only after trigger detected
+      grammar_sampler = llama_sampler_init_grammar_lazy_patterns(
+        vocab,
+        ethervox_grammar_get_source(ctx->grammar),
+        ethervox_grammar_get_root(ctx->grammar),
+        trigger_words,
+        trigger_word_count,
+        NULL, 0  // No trigger tokens for now
+      );
+    } else {
+      // Immediate mode: apply grammar from start
+      grammar_sampler = llama_sampler_init_grammar(
+        vocab,
+        ethervox_grammar_get_source(ctx->grammar),
+        ethervox_grammar_get_root(ctx->grammar)
+      );
+    }
+    
+    if (!grammar_sampler) {
+      LLAMA_ERROR("Grammar compilation failed");
+      llama_sampler_free(sampler);
+      free(response_text);
+      ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_INVALID_ARGUMENT, "Grammar compilation failed");
+    }
+    
+    llama_sampler_chain_add(sampler, grammar_sampler);
+  }
+  
   llama_sampler_chain_add(sampler, llama_sampler_init_dist(0));
   LLAMA_LOG("Sampler chain created, starting token generation (max %d tokens)", ctx->n_predict);
   
@@ -706,6 +748,7 @@ static ethervox_result_t llama_backend_generate_stream(ethervox_llm_backend_t* b
   // Note: We don't try to cancel mid-generation as it causes state corruption.
   // Instead, Kotlin layer uses processing IDs to ignore results from old generations.
   ctx->cancel_requested = false;
+  // Grammar is set separately via API if needed (not reset on each generation)
   
   // Synchronize to ensure any previous computation is complete
   llama_synchronize(ctx->ctx);
@@ -866,7 +909,44 @@ static ethervox_result_t llama_backend_generate_stream(ethervox_llm_backend_t* b
   // 4. temperature - controls randomness/creativity
   llama_sampler_chain_add(sampler, llama_sampler_init_temp(ctx->temperature));
   
-  // 5. dist - final sampling from the filtered distribution
+  // 5. grammar (if present) - constrain output format
+  if (ctx->grammar) {
+    struct llama_sampler* grammar_sampler = NULL;
+    
+    size_t trigger_word_count = 0;
+    const char* const* trigger_words = ethervox_grammar_get_trigger_words(ctx->grammar, &trigger_word_count);
+    
+    if (ethervox_grammar_is_lazy(ctx->grammar) && trigger_words && trigger_word_count > 0) {
+      // Lazy mode: apply grammar only after trigger detected
+      grammar_sampler = llama_sampler_init_grammar_lazy_patterns(
+        vocab,
+        ethervox_grammar_get_source(ctx->grammar),
+        ethervox_grammar_get_root(ctx->grammar),
+        trigger_words,
+        trigger_word_count,
+        NULL, 0  // No trigger tokens for now
+      );
+      LLAMA_LOG("Initialized lazy grammar sampler with %zu trigger words", trigger_word_count);
+    } else {
+      // Immediate mode: apply grammar from start
+      grammar_sampler = llama_sampler_init_grammar(
+        vocab,
+        ethervox_grammar_get_source(ctx->grammar),
+        ethervox_grammar_get_root(ctx->grammar)
+      );
+      LLAMA_LOG("Initialized immediate grammar sampler");
+    }
+    
+    if (!grammar_sampler) {
+      LLAMA_ERROR("Grammar compilation failed");
+      llama_sampler_free(sampler);
+      ETHERVOX_RETURN_ERROR(ETHERVOX_ERROR_INVALID_ARGUMENT, "Grammar compilation failed");
+    }
+    
+    llama_sampler_chain_add(sampler, grammar_sampler);
+  }
+  
+  // 6. dist - final sampling from the filtered distribution
   llama_sampler_chain_add(sampler, llama_sampler_init_dist(0));
   
   LLAMA_LOG("Sampler chain created (temp=%.2f, top_p=%.2f, top_k=40, repeat_penalty=1.2), starting streaming token generation (max %u tokens)", 

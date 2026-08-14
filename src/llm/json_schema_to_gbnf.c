@@ -27,7 +27,12 @@
 
 struct ethervox_grammar {
     char* gbnf_source;    // Owned GBNF grammar source
-    char* root_rule;      // Owned root rule name
+    char* root_rule;      // Owned root rule name (usually "root")
+    
+    // Lazy grammar support
+    bool is_lazy;         // Enable lazy mode
+    char** trigger_words; // NULL-terminated array of trigger words
+    size_t trigger_word_count;  // Count of trigger words
 };
 
 // =============================================================================
@@ -570,6 +575,9 @@ ethervox_result_t ethervox_grammar_compile(
     
     grammar->gbnf_source = strdup(gbnf_source);
     grammar->root_rule = strdup(root_rule);
+    grammar->is_lazy = false;  // Immediate mode by default
+    grammar->trigger_words = NULL;
+    grammar->trigger_word_count = 0;
     
     if (!grammar->gbnf_source || !grammar->root_rule) {
         ethervox_grammar_free(grammar);
@@ -644,6 +652,15 @@ void ethervox_grammar_free(ethervox_grammar_t* grammar) {
     
     free(grammar->gbnf_source);
     free(grammar->root_rule);
+    
+    // Free trigger words array
+    if (grammar->trigger_words) {
+        for (size_t i = 0; i < grammar->trigger_word_count; i++) {
+            free(grammar->trigger_words[i]);
+        }
+        free(grammar->trigger_words);
+    }
+    
     free(grammar);
 }
 
@@ -653,4 +670,67 @@ const char* ethervox_grammar_get_source(const ethervox_grammar_t* grammar) {
 
 const char* ethervox_grammar_get_root(const ethervox_grammar_t* grammar) {
     return grammar ? grammar->root_rule : NULL;
+}
+
+bool ethervox_grammar_is_lazy(const ethervox_grammar_t* grammar) {
+    return grammar ? grammar->is_lazy : false;
+}
+
+const char* const* ethervox_grammar_get_trigger_words(
+    const ethervox_grammar_t* grammar,
+    size_t* out_count
+) {
+    if (!grammar || !grammar->is_lazy) {
+        if (out_count) *out_count = 0;
+        return NULL;
+    }
+    
+    if (out_count) *out_count = grammar->trigger_word_count;
+    return (const char* const*)grammar->trigger_words;
+}
+
+ethervox_result_t ethervox_grammar_set_lazy_mode(
+    ethervox_grammar_t* grammar,
+    const char** trigger_words,
+    size_t trigger_word_count
+) {
+    if (!grammar) return ETHERVOX_ERROR_NULL_POINTER;
+    
+    // Free existing trigger words if any
+    if (grammar->trigger_words) {
+        for (size_t i = 0; i < grammar->trigger_word_count; i++) {
+            free(grammar->trigger_words[i]);
+        }
+        free(grammar->trigger_words);
+        grammar->trigger_words = NULL;
+        grammar->trigger_word_count = 0;
+    }
+    
+    // Disable lazy mode if no triggers provided
+    if (!trigger_words || trigger_word_count == 0) {
+        grammar->is_lazy = false;
+        return ETHERVOX_SUCCESS;
+    }
+    
+    // Copy trigger words
+    grammar->trigger_words = (char**)malloc(trigger_word_count * sizeof(char*));
+    if (!grammar->trigger_words) return ETHERVOX_ERROR_OUT_OF_MEMORY;
+    
+    for (size_t i = 0; i < trigger_word_count; i++) {
+        grammar->trigger_words[i] = strdup(trigger_words[i]);
+        if (!grammar->trigger_words[i]) {
+            // Clean up on failure
+            for (size_t j = 0; j < i; j++) {
+                free(grammar->trigger_words[j]);
+            }
+            free(grammar->trigger_words);
+            grammar->trigger_words = NULL;
+            return ETHERVOX_ERROR_OUT_OF_MEMORY;
+        }
+    }
+    
+    grammar->trigger_word_count = trigger_word_count;
+    grammar->is_lazy = true;
+    
+    return ETHERVOX_SUCCESS;
 }

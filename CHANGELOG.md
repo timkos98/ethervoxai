@@ -40,6 +40,17 @@ See TASK-C0.1 execution log in `ethervoxai-planning/tasks/PHASE-C/C0.1-unify-the
 ## [Unreleased]
 
 ### Added
+- **Grammar-constrained decoding integration** (TASK-C2.3b): Thread grammar parameters through generation pipeline and implement lazy grammars. Grammar samplers are now inserted into llama.cpp sampler chain at correct position (after penalties, before dist):
+  - Extended `ethervox_grammar_t` to support lazy mode with trigger words
+  - Added `ethervox_grammar_set_lazy_mode()`, `ethervox_grammar_is_lazy()`, `ethervox_grammar_get_trigger_words()` APIs
+  - Grammar sampler integration in `llama_backend.c` for both streaming and non-streaming generation
+  - Lazy mode: grammar only engages after trigger pattern detected (e.g., "```json"), allowing free text explanation before structured output
+  - Immediate mode: grammar enforced from first token
+  - Added `ETHERVOX_FINISH_GRAMMAR_DEADLOCK` finish reason constant
+  - Test coverage: lazy mode API test verifies enable/disable and trigger word management
+  - See `include/ethervox/grammar.h`, `src/llm/llama_backend.c`, `src/llm/json_schema_to_gbnf.c`
+  - All 4 profiles (EDGE, MOBILE, DESKTOP, WORKSPACE) build successfully ✅
+
 - **JSON Schema → GBNF converter** (TASK-C2.3a, partial — 12/14 types): First-party pure C converter using only cJSON, no llama.cpp common/ or nlohmann/json dependencies. Supports:
   - Scalar types: boolean, integer, number
   - String constraints: plain, enum, maxLength, pattern (basic character classes)

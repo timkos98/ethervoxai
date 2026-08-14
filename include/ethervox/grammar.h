@@ -112,6 +112,52 @@ const char* ethervox_grammar_get_source(const ethervox_grammar_t* grammar);
  */
 const char* ethervox_grammar_get_root(const ethervox_grammar_t* grammar);
 
+/**
+ * @brief Check if grammar is in lazy mode
+ * 
+ * @param grammar Grammar object
+ * @return true if lazy mode enabled, false otherwise
+ */
+bool ethervox_grammar_is_lazy(const ethervox_grammar_t* grammar);
+
+/**
+ * @brief Get trigger words for lazy grammar
+ * 
+ * @param grammar Grammar object
+ * @param out_count Output: number of trigger words (can be NULL)
+ * @return Pointer to trigger words array (owned by grammar, do not free)
+ * @return NULL if grammar is NULL or not in lazy mode
+ */
+const char* const* ethervox_grammar_get_trigger_words(
+    const ethervox_grammar_t* grammar,
+    size_t* out_count
+);
+
+/**
+ * @brief Enable lazy grammar mode with trigger words
+ * 
+ * Lazy grammars allow the model to produce free text (explanation, thinking)
+ * followed by structured output. The grammar only engages after one of the
+ * trigger words/patterns is detected in the output.
+ * 
+ * @param grammar Grammar object
+ * @param trigger_words NULL-terminated array of trigger strings (will be copied)
+ * @param trigger_word_count Number of trigger words in the array
+ * @return ETHERVOX_SUCCESS or error code
+ * 
+ * @example
+ * const char* triggers[] = {"```json"};
+ * ethervox_grammar_set_lazy_mode(grammar, triggers, 1);
+ * 
+ * @note Pass NULL and 0 to disable lazy mode
+ * @note Trigger words are copied; caller retains ownership of input array
+ */
+ethervox_result_t ethervox_grammar_set_lazy_mode(
+    ethervox_grammar_t* grammar,
+    const char** trigger_words,
+    size_t trigger_word_count
+);
+
 #ifdef __cplusplus
 }
 #endif

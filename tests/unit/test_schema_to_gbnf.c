@@ -180,6 +180,67 @@ int main(void) {
     test_malformed_json();
     test_compile_direct_gbnf();
     
+    // Test lazy mode API
+    printf("\n--- Lazy Mode Tests ---\n");
+    {
+        const char* schema = "{\"type\": \"object\", \"properties\": {\"tool\": {\"type\": \"string\"}}}";
+        ethervox_grammar_t* grammar = NULL;
+        ethervox_result_t result = ethervox_grammar_from_json_schema(schema, &grammar);
+        if (result != ETHERVOX_SUCCESS || !grammar) {
+            fprintf(stderr, "❌ Failed to create grammar for lazy mode test\n");
+            return 1;
+        }
+        
+        // Initially not lazy
+        if (ethervox_grammar_is_lazy(grammar)) {
+            fprintf(stderr, "❌ Grammar should not be lazy by default\n");
+            ethervox_grammar_free(grammar);
+            return 1;
+        }
+        
+        // Enable lazy mode
+        const char* triggers[] = {"```json", "```"};
+        result = ethervox_grammar_set_lazy_mode(grammar, triggers, 2);
+        if (result != ETHERVOX_SUCCESS) {
+            fprintf(stderr, "❌ Failed to set lazy mode\n");
+            ethervox_grammar_free(grammar);
+            return 1;
+        }
+        
+        // Check lazy mode is enabled
+        if (!ethervox_grammar_is_lazy(grammar)) {
+            fprintf(stderr, "❌ Grammar should be lazy after setting\n");
+            ethervox_grammar_free(grammar);
+            return 1;
+        }
+        
+        // Check trigger words
+        size_t trigger_count = 0;
+        const char* const* trigger_words = ethervox_grammar_get_trigger_words(grammar, &trigger_count);
+        if (trigger_count != 2 || !trigger_words) {
+            fprintf(stderr, "❌ Expected 2 trigger words, got %zu\n", trigger_count);
+            ethervox_grammar_free(grammar);
+            return 1;
+        }
+        
+        if (strcmp(trigger_words[0], "```json") != 0 || strcmp(trigger_words[1], "```") != 0) {
+            fprintf(stderr, "❌ Trigger words don't match\n");
+            ethervox_grammar_free(grammar);
+            return 1;
+        }
+        
+        // Disable lazy mode
+        result = ethervox_grammar_set_lazy_mode(grammar, NULL, 0);
+        if (result != ETHERVOX_SUCCESS || ethervox_grammar_is_lazy(grammar)) {
+            fprintf(stderr, "❌ Failed to disable lazy mode\n");
+            ethervox_grammar_free(grammar);
+            return 1;
+        }
+        
+        ethervox_grammar_free(grammar);
+        printf("✅ Lazy mode API test passed\n");
+    }
+    
     // Golden tests (implemented types only)
     printf("\n--- Golden Tests ---\n");
     test_golden("boolean");
