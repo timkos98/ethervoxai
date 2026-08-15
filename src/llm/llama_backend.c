@@ -88,8 +88,7 @@ typedef struct {
   
   // State
   char* loaded_model_path;
-  bool use_mlock;
-  bool use_mmap;
+  enum llama_load_mode load_mode;
   volatile bool cancel_requested;  // Flag to cancel generation
   
   // Grammar (optional, for constrained decoding)
@@ -254,21 +253,20 @@ static ethervox_result_t ethervox_llama_backend_init(ethervox_llm_backend_t* bac
   
   // Platform-specific memory settings for optimal performance
 #if defined(ETHERVOX_PLATFORM_MACOS) || defined(ETHERVOX_PLATFORM_LINUX) || defined(ETHERVOX_PLATFORM_WINDOWS)
-  // Desktop: Use mmap for fast startup, optional mlock if lots of RAM
-  ctx->use_mmap = true;    // Memory-map file for fast lazy loading
-  ctx->use_mlock = false;  // Don't lock (prevents swapping but needs lots of RAM)
+  // Desktop: Use mmap for fast startup
+  ctx->load_mode = LLAMA_LOAD_MODE_MMAP;  // Memory-map for fast loading with Metal
+
 #elif defined(ETHERVOX_PLATFORM_IOS)
-  // iOS: mmap not supported, must preload model
-  ctx->use_mmap = false;   // iOS doesn't support mmap for model files
-  ctx->use_mlock = false;
+  // iOS: mmap not supported
+  ctx->load_mode = LLAMA_LOAD_MODE_NONE;  // iOS doesn't support mmap
+
 #elif defined(ETHERVOX_PLATFORM_ANDROID)
   // Android: Use mmap for battery efficiency
-  ctx->use_mmap = true;
-  ctx->use_mlock = false;
+  ctx->load_mode = LLAMA_LOAD_MODE_MMAP;  // Android supports mmap
+
 #else
-  // Embedded: Preload if enough RAM, otherwise use mmap
-  ctx->use_mmap = true;
-  ctx->use_mlock = false;
+  // Embedded/fallback
+  ctx->load_mode = LLAMA_LOAD_MODE_MMAP;
 #endif
   
   ctx->cancel_requested = false;
@@ -382,13 +380,10 @@ static ethervox_result_t llama_backend_load_model(ethervox_llm_backend_t* backen
   // Initialize model parameters
   ctx->model_params = llama_model_default_params();
   ctx->model_params.n_gpu_layers = ctx->n_gpu_layers;
-  ctx->model_params.use_mlock = ctx->use_mlock;
-  ctx->model_params.use_mmap = ctx->use_mmap;
+  ctx->model_params.load_mode = ctx->load_mode;
   
-  ETHERVOX_LOG_INFO("Loading model with %d GPU layers requested (mmap=%s, mlock=%s)", 
-                    ctx->n_gpu_layers, 
-                    ctx->use_mmap ? "true" : "false",
-                    ctx->use_mlock ? "true" : "false");
+  ETHERVOX_LOG_INFO("Loading model with %d GPU layers requested (load_mode=%d)", 
+                    ctx->n_gpu_layers, (int)ctx->load_mode);
   
   // Load model
   ctx->model = llama_model_load_from_file(model_path, ctx->model_params);
@@ -630,7 +625,7 @@ static ethervox_result_t llama_backend_generate(ethervox_llm_backend_t* backend,
   // Add sampling strategies to the chain (same as streaming for consistency)
   llama_sampler_chain_add(sampler, llama_sampler_init_top_k(40));
   llama_sampler_chain_add(sampler, llama_sampler_init_top_p(ctx->top_p, 1));
-  llama_sampler_chain_add(sampler, llama_sampler_init_penalties(128, 1.2f, 0.0f, 0.0f));  // Stronger repeat penalty (128 lookback, 1.2 strength)
+  llama_sampler_chain_add(sampler, llama_sampler_init_penalties(llama_vocab_n_tokens(vocab), 128, 1.2f, 0.0f, 0.0f));  // Stronger repeat penalty (128 lookback, 1.2 strength)
   llama_sampler_chain_add(sampler, llama_sampler_init_temp(ctx->temperature));
   
   // Grammar (if present) - constrain output format
@@ -919,6 +914,7 @@ static ethervox_result_t llama_backend_generate_stream(ethervox_llm_backend_t* b
   
   // 3. repetition penalty - discourage repeating patterns (prevents training-data-style repetition)
   llama_sampler_chain_add(sampler, llama_sampler_init_penalties(
+    llama_vocab_n_tokens(vocab),  // n_vocab: vocab size
     128,    // penalty_last_n: look back 128 tokens (wider context)
     1.2f,   // penalty_repeat: stronger penalty to break training patterns
     0.0f,   // penalty_freq: no frequency penalty

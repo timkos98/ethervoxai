@@ -107,8 +107,7 @@ ethervox_result_t ethervox_stt_granite_speech_init(ethervox_stt_runtime_t* runti
 
   struct llama_model_params model_params = llama_model_default_params();
   model_params.n_gpu_layers = runtime->config.n_gpu_layers;
-  model_params.use_mmap = true;
-  model_params.use_mlock = false;
+  model_params.load_mode = LLAMA_LOAD_MODE_MMAP;
 
   gs->model = llama_model_load_from_file(runtime->config.model_path, model_params);
   if (!gs->model) {

@@ -141,28 +141,36 @@ int main(int argc, char** argv) {
     printf("Loading model: %s\n", model_path);
     
     // Initialize backend
-    ethervox_llm_config_t config = {
-        .model_path = model_path,
-        .n_threads = 4,
-        .n_ctx = 2048,
-        .n_gpu_layers = 40,
-        .temperature = 0.7f,
-        .top_p = 0.9f,
-        .n_predict = 100,
-        .use_mlock = false,
-        .use_mmap = true
-    };
-    
-    ethervox_llm_backend_t* backend = ethervox_llm_backend_create("llama", &config);
+    ethervox_llm_backend_t* backend = ethervox_llm_create_llama_backend();
     if (!backend) {
         fprintf(stderr, "Failed to create backend\n");
+        return 1;
+    }
+    
+    ethervox_llm_config_t config = {0};
+    config.model_path = NULL;  // Set on load_model
+    config.model_name = "granite";
+    config.max_tokens = 100;
+    config.context_length = 2048;
+    config.temperature = 0.7f;
+    config.top_p = 0.9f;
+    config.seed = 42;
+    config.use_gpu = true;
+    config.gpu_layers = 999;  // Use Metal on macOS
+    config.language_code = NULL;
+    
+    ethervox_result_t init_result = ethervox_llm_backend_init(backend, &config);
+    if (init_result != ETHERVOX_SUCCESS) {
+        fprintf(stderr, "Failed to initialize backend: %s\n", ethervox_error_string(init_result));
+        ethervox_llm_backend_free(backend);
         return 1;
     }
     
     ethervox_result_t load_result = ethervox_llm_backend_load_model(backend, model_path);
     if (load_result != ETHERVOX_SUCCESS) {
         fprintf(stderr, "Failed to load model: %s\n", ethervox_error_string(load_result));
-        ethervox_llm_backend_destroy(backend);
+        ethervox_llm_backend_cleanup(backend);
+        ethervox_llm_backend_free(backend);
         return 1;
     }
     
@@ -175,6 +183,7 @@ int main(int argc, char** argv) {
     
     printf("\n=== All tests complete ===\n");
     
-    ethervox_llm_backend_destroy(backend);
+    ethervox_llm_backend_cleanup(backend);
+    ethervox_llm_backend_free(backend);
     return 0;
 }

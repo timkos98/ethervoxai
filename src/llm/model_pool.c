@@ -247,8 +247,7 @@ ethervox_result_t ethervox_model_pool_load(
     
     // Load model
     struct llama_model_params model_params = llama_model_default_params();
-    model_params.use_mmap = true;
-    model_params.use_mlock = false;
+    model_params.load_mode = LLAMA_LOAD_MODE_MMAP;
     
     struct llama_model* model = llama_load_model_from_file(config->model_path, model_params);
     if (!model) {
