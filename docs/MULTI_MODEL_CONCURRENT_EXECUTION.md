@@ -115,6 +115,11 @@ Process Memory Budget: 3 GB
 
 ## Memory Budget Enforcement
 
+**Current Implementation (C3.1):**
+- **Static budget**: Set at pool creation, enforced via `would_fit()` before loading
+- **No automatic eviction**: Models stay loaded until explicitly unloaded
+- **OOM prevention**: Accurate estimation prevents loading more than budget allows
+
 **Estimation Formula** (from `estimate_memory()`):
 ```c
 required = file_size + (context_size × 2048) + 128MB
@@ -127,6 +132,32 @@ required = file_size + (context_size × 2048) + 128MB
 - Context 4096 tokens: 4096 × 2048 = 8 MB
 - Overhead: 128 MB
 - **Total: ~651 MB**
+
+**Pending (C3.4 - Memory Pressure & LRU Eviction):**
+- **Dynamic pressure callbacks**: `ethervox_model_pool_set_pressure_callback()`
+- **LRU eviction**: `ethervox_model_pool_evict_lru(bytes, protected_roles)`
+- **OS-driven**: Host responds to system memory warnings
+- **Graceful degradation**: Handles land in `unloaded` state, never dangling
+- **Protected roles**: Keep critical models (e.g., "governor") loaded during pressure
+
+**Spec (§12):**
+> "Host drives from OS pressure signals; handles land in a defined `unloaded` state, never dangling"
+
+**Future behavior:**
+```c
+// Host receives OS memory warning
+on_memory_pressure(MEMORY_PRESSURE_WARNING) {
+    // Evict least-recently-used models, protect governor
+    ethervox_model_pool_evict_lru(pool, 
+        500 * 1024 * 1024,  // Free 500 MB
+        (const char*[]){"governor"},  // Keep this role loaded
+        1);
+}
+
+// Handles remain valid but in unloaded state
+result = ethervox_session_generate(session_using_evicted_model, ...);
+// → Returns ETHERVOX_ERROR_MODEL_UNLOADED (graceful failure)
+```
 
 ## Multimodal Support (Vision/Audio)
 
@@ -148,6 +179,7 @@ ethervox_model_capabilities(docling_handle, &caps);
 
 ## Usage Pattern for Document Processing
 
+**Current (C3.1 - Static Budget):**
 ```c
 // 1. Create pool with budget for both models
 ethervox_model_pool_create(&paths, 3GB, &pool);
@@ -157,6 +189,7 @@ ethervox_model_pool_load(pool, &governor_config, NULL, NULL, &gov);
 
 // 3. Load docling for document understanding
 ethervox_model_pool_load(pool, &docling_config, NULL, NULL, &doc);
+// → Fails if budget exceeded
 
 // 4. Query capabilities
 ethervox_model_capabilities(doc, &caps);
@@ -175,6 +208,31 @@ ethervox_model_pool_destroy(pool);
 // → Unloads both models
 // → Decrements g_backend.refcount
 // → Calls llama_backend_free() when last pool is destroyed
+```
+
+**Future (C3.4 - Dynamic Pressure Management):**
+```c
+// Host registers pressure callback
+void on_pressure(ethervox_memory_pressure_level_t level, void* ud) {
+    ethervox_model_pool_t* pool = (ethervox_model_pool_t*)ud;
+    
+    if (level == ETHERVOX_PRESSURE_WARNING) {
+        // Evict LRU models, protect governor
+        ethervox_model_pool_evict_lru(pool, 
+            500 * 1024 * 1024,              // Free 500 MB
+            (const char*[]){"governor"},    // Protected roles
+            1);
+        // → Docling evicted if least recently used
+        // → Handle remains valid but model unloaded
+    }
+}
+
+ethervox_model_pool_set_pressure_callback(pool, on_pressure, pool);
+
+// Later: App can reload on-demand
+if (docling_needed && !is_loaded(doc_handle)) {
+    ethervox_model_pool_reload(pool, doc_handle);
+}
 ```
 
 ## Governor vs Model Pool
@@ -200,7 +258,7 @@ ethervox_model_pool_destroy(pool);
 
 ✅ **Complete:**
 - Global refcounted backend
-- Memory budget enforcement
+- Memory budget enforcement (static)
 - Per-model handle allocation
 - Multimodal (mtmd) integration
 - Capability queries
@@ -209,6 +267,13 @@ ethervox_model_pool_destroy(pool);
 - Session API that uses inference_mutex
 - Actual concurrent inference execution
 - Session-level media attachment
+- Batch throughput optimization (≥4× via KV cache reuse)
+
+⏳ **Pending (C3.4 - Memory Pressure & LRU):**
+- Dynamic memory pressure callbacks
+- LRU eviction with role protection
+- Graceful model unloading (handles stay valid in unloaded state)
+- OS-driven memory management
 
 ## Testing
 
