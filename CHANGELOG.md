@@ -40,6 +40,19 @@ See TASK-C0.1 execution log in `ethervoxai-planning/tasks/PHASE-C/C0.1-unify-the
 ## [Unreleased]
 
 ### Added
+- **Embeddings API** (TASK-C2.4, 2026-08-15): Text → float vector conversion for semantic search with configurable pooling and L2 normalization
+  - `ethervox_embed_dimensions()`: Get embedding dimension count from loaded model
+  - `ethervox_embed_max_batch()`: Get maximum batch size (context_size / 2)
+  - `ethervox_embed_texts()`: Batch embed with pooling strategies (MEAN=1, CLS=2, LAST=3) and optional L2 normalization for cosine similarity
+  - Truncates texts >512 tokens at token boundary with warning
+  - Cancellation support via `ethervox_cancel_token_t`
+  - Uses llama.cpp's `llama_model_n_embd()` and `llama_get_embeddings_seq()` with pooling
+  - L2 normalization enables cosine similarity via dot product (unit vectors)
+  - 5 unit tests: NULL safety, pooling validation, L2 norm math, cosine similarity, zero vectors
+  - All 4 profiles (EDGE, MOBILE, DESKTOP, WORKSPACE) build successfully ✅
+  - See `include/ethervox/embeddings.h`, `src/llm/embeddings.c`, `tests/unit/test_embeddings.c`
+  - Note: Integration tests with embedding model pending; current tests verify API contracts and mathematical correctness
+
 - **Grammar-constrained decoding - COMPLETE** (TASK-C2.3a/b, 2026-08-14): Full JSON Schema → GBNF converter and generation pipeline integration
   - **C2.3a**: 14/14 JSON Schema types: boolean, integer, number, string (plain/enum/maxLength/pattern), object (required/optional), array (unbounded/maxItems), **oneOf (union types)**, **nested objects**
   - **C2.3b**: Backend integration complete + governor API integration

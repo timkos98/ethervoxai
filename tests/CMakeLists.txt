@@ -98,6 +98,13 @@ target_include_directories(test_schema_to_gbnf PRIVATE ${CMAKE_SOURCE_DIR}/inclu
 add_test(NAME SchemaToGbnf COMMAND test_schema_to_gbnf WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 set_tests_properties(SchemaToGbnf PROPERTIES TIMEOUT 30 LABELS "unit;grammar")
 
+# Embeddings API tests (TASK-C2.4)
+add_executable(test_embeddings unit/test_embeddings.c)
+target_link_libraries(test_embeddings ethervoxai m)
+target_include_directories(test_embeddings PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME Embeddings COMMAND test_embeddings)
+set_tests_properties(Embeddings PROPERTIES TIMEOUT 30 LABELS "unit;embeddings")
+
 # Adaptive memory tests (corrections and patterns)
 add_executable(test_adaptive_memory unit/test_adaptive_memory.c)
 target_link_libraries(test_adaptive_memory ethervoxai)
