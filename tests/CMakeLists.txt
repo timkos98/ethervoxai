@@ -327,3 +327,12 @@ target_link_libraries(test_profile_conformance ethervoxai)
 target_include_directories(test_profile_conformance PRIVATE ${CMAKE_SOURCE_DIR}/include ${CMAKE_BINARY_DIR}/include)
 add_test(NAME ProfileConformance COMMAND test_profile_conformance)
 set_tests_properties(ProfileConformance PROPERTIES TIMEOUT 10 LABELS "conformance;profile")
+
+# Grammar generation stress test (TASK-C2.3c) - 500 schemas × 20 iterations
+add_executable(test_grammar_generation test_grammar_generation.c)
+target_link_libraries(test_grammar_generation ethervoxai)
+target_include_directories(test_grammar_generation PRIVATE ${CMAKE_SOURCE_DIR}/include)
+# Not added to ctest (requires model file and takes ~30-60 minutes)
+# Generate schemas first: python3 scripts/generate_grammar_test_schemas.py
+# Run manually: ./tests/test_grammar_generation <model.gguf> <schema_dir> [iterations]
+# Example: ./tests/test_grammar_generation ~/.ethervox/models/governor/granite-4.0-h-1b-Q4_K_M.gguf tests/schemas/grammar_stress 20
