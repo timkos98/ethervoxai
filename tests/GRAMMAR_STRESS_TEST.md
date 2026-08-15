@@ -26,25 +26,68 @@ Comprehensive grammar-constrained generation testing for JSON Schema → GBNF co
 
 ## What's Broken (llama.cpp)
 
-Grammar sampling crashes during generation with:
+**Updated to latest master (adb55e514 from 2026-08-15) but grammar generation still fails.**
+
+Original error (b9045):
 ```
-libc++abi: terminating due to uncaught exception of type std::runtime_error:
-Unexpected empty grammar stack after accepting piece: ``` (74694)
+std::runtime_error: Unexpected empty grammar stack after accepting piece
 ```
 
-**Root cause:** llama.cpp's grammar acceptance logic (`llama_grammar_accept_token`) has edge cases where:
-- The grammar stack becomes empty during token acceptance
-- Happens with valid GBNF grammars that parse correctly
-- Not specific to our schemas - affects golden test schemas too
-- Likely related to backtracking or alternative branch handling
+Current error (adb55e514):
+```
+Invalid argument error during sampler chain initialization
+```
 
-**Upstream issue:** Need to file bug with llama.cpp maintainers
+**What Works:**
+- ✅ Basic generation without grammar (5/5 tests pass)
+- ✅ Grammar schema → GBNF conversion (compiles successfully)
+- ✅ Grammar can be set on backend
+- ✅ Model loads and runs with Metal GPU
+- ✅ Granite-speech (mtmd) architecture supported in latest master
+
+**What Fails:**
+- ❌ ANY generation attempt WITH grammar fails immediately  
+- ❌ Error occurs during sampler chain creation, not during generation
+- ❌ Even simplest schema fails: `{"type":"object","properties":{"message":{"type":"string"}}}`
+
+**Root Cause:**
+The error changed from a runtime stack overflow to an initialization error. This suggests:
+1. The grammar sampler API may have changed in ways we haven't adapted to
+2. There might be additional requirements for grammar initialization
+3. The grammar format itself might have changed
+
+**Testing Done:**
+- test_simple_generation: Isolates grammar vs non-grammar behavior
+- Confirmed: Backend setup is correct (non-grammar generation works perfectly)
+- Confirmed: Not a KV cache or model loading issue
+- Confirmed: Grammar conversion produces valid GBNF
+
+## Next Steps
+
+1. **Investigate llama.cpp grammar sampler API changes**
+   - Check if llama_sampler_init_grammar() signature changed
+   - Verify GBNF format compatibility with latest version
+   - Look for required initialization steps we're missing
+
+2. **Alternative: Check if grammar feature flags changed**
+   - Might need specific build flags
+   - Might need additional sampler chain setup
+
+3. **Fallback: File upstream bug report**
+   - If grammar system is genuinely broken in latest master
+   - Provide minimal reproduction case
+
+4. **Alternative Libraries:**
+   - outlines (Python-based constrained generation)
+   - guidance (Microsoft's library)
+   - llama-cpp-python bindings might have working grammar support
 
 ## When This Can Continue
 
-C2.3c can proceed once either:
-1. llama.cpp fixes grammar sampler robustness, or
-2. We switch to a different constrained decoding library (e.g., outlines, guidance)
+C2.3c can proceed once:
+1. Grammar sampler initialization issue is resolved, OR
+2. We switch to alternative constrained decoding library, OR  
+3. We revert to older llama.cpp with working grammar (if such version exists)
 
 ## Usage (When Unblocked)
 
