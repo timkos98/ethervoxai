@@ -119,6 +119,26 @@ target_include_directories(test_media PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME Media COMMAND test_media)
 set_tests_properties(Media PROPERTIES TIMEOUT 30 LABELS "unit;media;multimodal")
 
+# Granite-Docling integration test (TASK-C3.1 acceptance test)
+# Manual test only - requires granite-docling-258M model and test image
+add_executable(test_docling_integration integration/test_docling_integration.c)
+target_link_libraries(test_docling_integration ethervoxai)
+target_include_directories(test_docling_integration PRIVATE ${CMAKE_SOURCE_DIR}/include)
+# Not added to ctest - run manually:
+# ./tests/test_docling_integration <model_path> <image_path>
+
+# Minimal mmproj loading test (debug C3.1)
+add_executable(test_mmproj_load integration/test_mmproj_load.c)
+target_link_libraries(test_mmproj_load ethervoxai)
+target_include_directories(test_mmproj_load PRIVATE ${CMAKE_SOURCE_DIR}/include)
+# Not added to ctest - run manually:
+# ./tests/test_mmproj_load <text_model.gguf> <mmproj.gguf>
+
+# mmproj WITH context test (debug C3.1)
+add_executable(test_mmproj_with_context integration/test_mmproj_with_context.c)
+target_link_libraries(test_mmproj_with_context ethervoxai)
+target_include_directories(test_mmproj_with_context PRIVATE ${CMAKE_SOURCE_DIR}/include)
+
 # Adaptive memory tests (corrections and patterns)
 add_executable(test_adaptive_memory unit/test_adaptive_memory.c)
 target_link_libraries(test_adaptive_memory ethervoxai)

@@ -33,6 +33,29 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
+#include <pwd.h>
+
+// Expand ~ in paths to home directory
+static char* expand_tilde(const char* path) {
+    if (path[0] != '~') {
+        return strdup(path);
+    }
+    
+    const char* home = getenv("HOME");
+    if (!home) {
+        struct passwd* pw = getpwuid(getuid());
+        home = pw ? pw->pw_dir : NULL;
+    }
+    if (!home) {
+        return strdup(path);  // fallback
+    }
+    
+    size_t len = strlen(home) + strlen(path);
+    char* expanded = malloc(len);
+    snprintf(expanded, len, "%s%s", home, path + 1);
+    return expanded;
+}
 
 // Helper to read file into memory
 static unsigned char* read_file(const char* path, size_t* out_size) {
@@ -70,48 +93,61 @@ int main(int argc, char** argv) {
     
     // Parse arguments
     if (argc < 3) {
-        fprintf(stderr, "Usage: %s <model_path> <image_path>\n", argv[0]);
+        fprintf(stderr, "Usage: %s <model_path> <image_path> [mmproj_path]\n", argv[0]);
         fprintf(stderr, "\nExample:\n");
-        fprintf(stderr, "  %s ~/.ethervox/models/granite-docling-258M/model.safetensors test.png\n", argv[0]);
-        fprintf(stderr, "\nTo download the model:\n");
+        fprintf(stderr, "  %s ~/.ethervox/models/granite-docling-258M/text-model.gguf test.png ~/.ethervox/models/granite-docling-258M/mmproj-model.gguf\n", argv[0]);
+        fprintf(stderr, "\nTo download and convert the model:\n");
         fprintf(stderr, "  mkdir -p ~/.ethervox/models/granite-docling-258M\n");
         fprintf(stderr, "  cd ~/.ethervox/models/granite-docling-258M\n");
-        fprintf(stderr, "  wget https://huggingface.co/ibm-granite/granite-docling-258M/resolve/main/model.safetensors\n");
+        fprintf(stderr, "  curl -L -o model.safetensors https://huggingface.co/ibm-granite/granite-docling-258M/resolve/main/model.safetensors\n");
+        fprintf(stderr, "  python3 path/to/convert_hf_to_gguf.py . --outfile text-model.gguf --outtype f32\n");
+        fprintf(stderr, "  python3 path/to/convert_hf_to_gguf.py . --outfile mmproj-model.gguf --outtype f32 --mmproj\n");
         return 1;
     }
     
     const char* model_path = argv[1];
     const char* image_path = argv[2];
+    const char* mmproj_path = (argc >= 4) ? argv[3] : NULL;
     
     // Check files exist
-    struct stat st;
-    if (stat(model_path, &st) != 0) {
+    struct stat st_model;
+    if (stat(model_path, &st_model) != 0) {
         fprintf(stderr, "❌ Model file not found: %s\n", model_path);
         fprintf(stderr, "\nDownload it with:\n");
         fprintf(stderr, "  wget https://huggingface.co/ibm-granite/granite-docling-258M/resolve/main/model.safetensors -O %s\n", model_path);
         return 1;
     }
     
-    if (stat(image_path, &st) != 0) {
+    struct stat st_image;
+    if (stat(image_path, &st_image) != 0) {
         fprintf(stderr, "❌ Image file not found: %s\n", image_path);
         return 1;
     }
     
-    printf("Model: %s (%.1f MB)\n", model_path, st.st_size / (1024.0 * 1024.0));
-    
-    if (stat(image_path, &st) == 0) {
-        printf("Image: %s (%.1f KB)\n\n", image_path, st.st_size / 1024.0);
-    }
+    printf("Model: %s (%.1f MB)\n", model_path, st_model.st_size / (1024.0 * 1024.0));
+    printf("Image: %s (%.1f KB)\n\n", image_path, st_image.st_size / 1024.0);
     
     // Step 1: Create model pool
     printf("Step 1: Creating model pool...\n");
     
-    ethervox_paths_t paths = {0};
-    strncpy(paths.models_dir, "~/.ethervox/models", sizeof(paths.models_dir) - 1);
-    strncpy(paths.cache_dir, "~/.ethervox/cache", sizeof(paths.cache_dir) - 1);
+    char* data_dir = expand_tilde("~/.ethervox/data");
+    char* cache_dir = expand_tilde("~/.ethervox/cache");
+    char* models_dir = expand_tilde("~/.ethervox/models");
+    char* temp_dir = expand_tilde("~/.ethervox/tmp");
     
+    ethervox_paths_t paths = {
+        .data_dir = data_dir,
+        .cache_dir = cache_dir,
+        .models_dir = models_dir,
+        .temp_dir = temp_dir
+    };
     ethervox_model_pool_t* pool = NULL;
-    ethervox_result_t result = ethervox_model_pool_create(&paths, 2ULL * 1024 * 1024 * 1024, &pool);  // 2GB budget
+    ethervox_result_t result = ethervox_model_pool_create(&paths, 2ULL * 1024 * 1024 * 1024, &pool);
+    
+    free(data_dir);
+    free(cache_dir);
+    free(models_dir);
+    free(temp_dir);
     
     if (result != ETHERVOX_SUCCESS) {
         fprintf(stderr, "❌ Failed to create model pool: %d\n", result);
@@ -119,13 +155,19 @@ int main(int argc, char** argv) {
     }
     printf("✅ Model pool created\n\n");
     
-    // Step 2: Load granite-docling model (safetensors format)
+    // Step 2: Load granite-docling model
     printf("Step 2: Loading granite-docling-258M model...\n");
-    printf("Note: llama.cpp will load safetensors directly, no conversion needed\n");
+    if (mmproj_path) {
+        printf("Note: Using separate text model + vision encoder (mmproj)\n");
+        printf("  Text model: %s\n", model_path);
+        printf("  Vision encoder: %s\n", mmproj_path);
+    } else {
+        printf("Note: Using unified model (no separate mmproj)\n");
+    }
     
     ethervox_model_config_t config = {
         .model_path = model_path,
-        .mmproj_path = NULL,  // Docling is a unified VLM, no separate mmproj needed
+        .mmproj_path = mmproj_path,
         .context_size = 4096,
         .n_threads = 4,
         .use_gpu = true,

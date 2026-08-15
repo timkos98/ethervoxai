@@ -218,6 +218,20 @@ Implements standard German phonological rules:
 - **Download**: Users/app download GGUF conversions separately from Hugging Face
 - **Attribution**: Copyright (c) IBM Corporation
 
+### IBM Granite Docling Models
+- **License**: Apache License 2.0 — verified from Hugging Face model card
+  (`license:apache-2.0` tag on `ibm-granite/granite-docling-258M`)
+- **Purpose**: Document understanding and conversion — vision-language model for OCR, table
+  extraction, formula recognition, and structured document parsing (C3.1 multimodal API testing)
+- **URL**: https://huggingface.co/ibm-granite/granite-docling-258M
+- **Architecture**: Idefics3-based VLM with siglip2 vision encoder + Granite 165M LLM
+- **Status**: ⚠️ Architecture not yet supported by llama.cpp mtmd library (as of 2026-08-15).
+  See `docs/GRANITE_DOCLING_INVESTIGATION.md` for details.
+- **Download**: Model downloaded from Hugging Face, converted to GGUF format (f32) with mmproj
+- **Attribution**: Copyright (c) IBM Research
+- **Model Size**: ~656MB (text model) + ~374MB (vision encoder mmproj)
+- **Training Data**: SynthCodeNet, SynthFormulaNet, SynthChartNet, DoclingMatix (all Apache 2.0 / MIT)
+
 ### LLaMA Models
 - **License**: Various (depends on model)
 - **Purpose**: Large language model inference

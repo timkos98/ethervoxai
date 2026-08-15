@@ -45,11 +45,24 @@ typedef pthread_mutex_t mutex_t;
 #define OVERHEAD_BYTES 128 * 1024 * 1024  // 128MB overhead per model
 
 // Global backend state (refcounted)
+// Note: Use static initializer for mutex to avoid race conditions
+#ifdef _WIN32
 static struct {
     mutex_t mutex;
     int refcount;
     bool initialized;
-} g_backend = {0};
+} g_backend = {0};  // Windows CRITICAL_SECTION can be zero-initialized
+#else
+static struct {
+    mutex_t mutex;
+    int refcount;
+    bool initialized;
+} g_backend = {
+    .mutex = PTHREAD_MUTEX_INITIALIZER,
+    .refcount = 0,
+    .initialized = false
+};
+#endif
 
 /**
  * Model handle structure
@@ -84,8 +97,15 @@ static ethervox_result_t backend_init(void) {
     if (!g_backend.initialized) {
 #if LLAMA_AVAILABLE
         llama_backend_init();
+        ggml_backend_load_all();
+        if (ggml_backend_reg_count() == 0) {
+            ETHERVOX_LOG_ERROR("[ModelPool] No ggml backends loaded, cannot load models");
+            MUTEX_UNLOCK(g_backend.mutex);
+            return ETHERVOX_ERROR_INVALID_ARGUMENT;
+        }
         g_backend.initialized = true;
-        ETHERVOX_LOG_INFO("[ModelPool] Initialized llama backend");
+        ETHERVOX_LOG_INFO("[ModelPool] Initialized llama backend (%d ggml backends available)", 
+                         (int)ggml_backend_reg_count());
 #else
         MUTEX_UNLOCK(g_backend.mutex);
         return ETHERVOX_ERROR_NOT_IMPLEMENTED;
@@ -162,11 +182,7 @@ ethervox_result_t ethervox_model_pool_create(
         return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
-    // Initialize global backend mutex if needed (BEFORE calling backend_init which locks it!)
-    if (!g_backend.initialized && g_backend.refcount == 0) {
-        MUTEX_INIT(g_backend.mutex);
-    }
-    
+    // Global backend mutex is statically initialized, safe to call backend_init()
     ethervox_result_t result = backend_init();
     if (result != ETHERVOX_SUCCESS) {
         return result;
@@ -253,8 +269,9 @@ ethervox_result_t ethervox_model_pool_load(
     // Load model
     struct llama_model_params model_params = llama_model_default_params();
     model_params.load_mode = LLAMA_LOAD_MODE_MMAP;
+    model_params.n_gpu_layers = config->use_gpu ? 99 : 0;  // Use GPU if requested
     
-    struct llama_model* model = llama_load_model_from_file(config->model_path, model_params);
+    struct llama_model* model = llama_model_load_from_file(config->model_path, model_params);
     if (!model) {
         ETHERVOX_LOG_ERROR("[ModelPool] Failed to load model: %s", config->model_path);
         return ETHERVOX_ERROR_FILE_READ;
@@ -289,16 +306,24 @@ ethervox_result_t ethervox_model_pool_load(
         strncpy(handle->role, config->role, sizeof(handle->role) - 1);
     }
     
+    // Initialize mutex BEFORE any error paths that might destroy it
+    MUTEX_INIT(handle->inference_mutex);
+    
     // Load mmproj if provided (for multimodal support)
 #if defined(MTMD_AVAILABLE) && MTMD_AVAILABLE
     if (config->mmproj_path) {
+        ETHERVOX_LOG_INFO("[ModelPool] About to load mmproj: %s", config->mmproj_path);
+        ETHERVOX_LOG_INFO("[ModelPool] Model pointer: %p, Context pointer: %p", (void*)model, (void*)ctx);
+        
         struct mtmd_context_params mtmd_params = mtmd_context_params_default();
         mtmd_params.use_gpu = config->use_gpu;
         mtmd_params.print_timings = false;
         mtmd_params.n_threads = (int)config->n_threads;
-        mtmd_params.media_marker = NULL;  // Use default from mmproj metadata
+        // media_marker: use default from mtmd_context_params_default()
         
+        ETHERVOX_LOG_INFO("[ModelPool] Calling mtmd_init_from_file...");
         void* mctx = mtmd_init_from_file(config->mmproj_path, model, mtmd_params);
+        ETHERVOX_LOG_INFO("[ModelPool] mtmd_init_from_file returned: %p", mctx);
         if (!mctx) {
             ETHERVOX_LOG_ERROR("[ModelPool] Failed to load mmproj: %s", config->mmproj_path);
             MUTEX_DESTROY(handle->inference_mutex);
@@ -319,8 +344,6 @@ ethervox_result_t ethervox_model_pool_load(
         ETHERVOX_LOG_WARN("[ModelPool] mmproj requested but MTMD not available in this build");
     }
 #endif
-    
-    MUTEX_INIT(handle->inference_mutex);
     
     // Add to pool
     MUTEX_LOCK(pool->pool_mutex);
