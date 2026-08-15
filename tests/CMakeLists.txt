@@ -105,6 +105,13 @@ target_include_directories(test_embeddings PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME Embeddings COMMAND test_embeddings)
 set_tests_properties(Embeddings PROPERTIES TIMEOUT 30 LABELS "unit;embeddings")
 
+# Chat template conformance tests (TASK-C2.5)
+add_executable(test_chat_templates unit/test_chat_templates.c)
+target_link_libraries(test_chat_templates ethervoxai)
+target_include_directories(test_chat_templates PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME ChatTemplates COMMAND test_chat_templates)
+set_tests_properties(ChatTemplates PROPERTIES TIMEOUT 30 LABELS "unit;chat_templates;conformance")
+
 # Adaptive memory tests (corrections and patterns)
 add_executable(test_adaptive_memory unit/test_adaptive_memory.c)
 target_link_libraries(test_adaptive_memory ethervoxai)
@@ -336,3 +343,9 @@ target_include_directories(test_grammar_generation PRIVATE ${CMAKE_SOURCE_DIR}/i
 # Generate schemas first: python3 scripts/generate_grammar_test_schemas.py
 # Run manually: ./tests/test_grammar_generation <model.gguf> <schema_dir> [iterations]
 # Example: ./tests/test_grammar_generation ~/.ethervox/models/governor/granite-4.0-h-1b-Q4_K_M.gguf tests/schemas/grammar_stress 20
+
+# Simple generation test for debugging setup/grammar issues
+add_executable(test_simple_generation test_simple_generation.c)
+target_link_libraries(test_simple_generation ethervoxai)
+target_include_directories(test_simple_generation PRIVATE ${CMAKE_SOURCE_DIR}/include)
+# Run: ./tests/test_simple_generation ~/.ethervox/models/governor/granite-4.0-h-1b-Q4_K_M.gguf

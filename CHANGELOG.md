@@ -40,6 +40,16 @@ See TASK-C0.1 execution log in `ethervoxai-planning/tasks/PHASE-C/C0.1-unify-the
 ## [Unreleased]
 
 ### Added
+- **Chat template conformance tests** (TASK-C2.5, 2026-08-15): Golden tests verifying byte-for-byte correctness of chat template formatting for all supported formats
+  - Added GRANITE_3 and GRANITE_4 distinction (separate templates for 3.x vs 4.x versions)
+  - CHAT_TEMPLATE_CHATML alias for QWEN (same format)
+  - CHAT_TEMPLATE_GRANITE alias for GRANITE_4 (backward compatibility)
+  - Auto-detection: granite-3/granite_3 → GRANITE_3, granite-4+/unversioned → GRANITE_4
+  - 16 golden tests covering GRANITE_3, GRANITE_4, CHATML, LLAMA3: system messages, user messages, assistant start, tool results, multi-turn conversations, stop sequences, tool formats
+  - Fixed format functions to return ETHERVOX_SUCCESS (0) instead of snprintf byte count
+  - All 4 profiles (EDGE, MOBILE, DESKTOP, WORKSPACE) build successfully ✅
+  - See `include/ethervox/chat_template.h`, `src/governor/chat_template.c`, `tests/unit/test_chat_templates.c`
+
 - **Embeddings API** (TASK-C2.4, 2026-08-15): Text → float vector conversion for semantic search with configurable pooling and L2 normalization
   - `ethervox_embed_dimensions()`: Get embedding dimension count from loaded model
   - `ethervox_embed_max_batch()`: Get maximum batch size (context_size / 2)

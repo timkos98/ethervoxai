@@ -35,11 +35,14 @@ typedef enum {
  * Supported chat template formats
  */
 typedef enum {
-    CHAT_TEMPLATE_QWEN,      // Qwen 2.5 format: <|im_start|>role\n...<|im_end|>
-    CHAT_TEMPLATE_GRANITE,   // IBM Granite format: <|system|>, <|user|>, <|assistant|>
+    CHAT_TEMPLATE_QWEN,      // Qwen 2.5 / ChatML format: <|im_start|>role\n...<|im_end|>
+    CHAT_TEMPLATE_GRANITE_3, // IBM Granite 3.x format: <|start_of_role|>role<|end_of_role|>...< tool|>
+    CHAT_TEMPLATE_GRANITE_4, // IBM Granite 4.x format: <|start_of_role|>role<|end_of_role|>...<|tool_call|>
+    CHAT_TEMPLATE_GRANITE = CHAT_TEMPLATE_GRANITE_4,  // Alias for latest Granite (backward compat)
     CHAT_TEMPLATE_PHI,       // Microsoft Phi format: <|system|>...<|end|><|user|>...<|end|>
     CHAT_TEMPLATE_LLAMA3,    // Meta Llama 3 format: <|begin_of_text|><|start_header_id|>role<|end_header_id|>
     CHAT_TEMPLATE_LFM,       // Liquid AI LFM2.5 format: ChatML with tool calling tokens
+    CHAT_TEMPLATE_CHATML = CHAT_TEMPLATE_QWEN,  // ChatML alias (same as Qwen)
     CHAT_TEMPLATE_AUTO       // Auto-detect from model name/metadata
 } chat_template_type_t;
 

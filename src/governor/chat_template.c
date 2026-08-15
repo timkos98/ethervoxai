@@ -17,7 +17,7 @@
 // Template Definitions
 // ============================================================================
 
-// Qwen 2.5 template
+// Qwen 2.5 / ChatML template
 static const chat_template_t qwen_template = {
     .type = CHAT_TEMPLATE_QWEN,
     .system_start = "<|im_start|>system\n",
@@ -36,13 +36,13 @@ static const chat_template_t qwen_template = {
         NULL
     },
     .stop_sequence_count = 4,
-    .tool_format = TOOL_FORMAT_XML_ATTR,  // Uses XML with attributes
-    .ignore_eog = false  // Respect model's EOG decision
+    .tool_format = TOOL_FORMAT_XML_ATTR,
+    .ignore_eog = false
 };
 
-// IBM Granite 4.0/4.1 template (uses official GGUF markers)
-static const chat_template_t granite_template = {
-    .type = CHAT_TEMPLATE_GRANITE,
+// IBM Granite 3.x template
+static const chat_template_t granite3_template = {
+    .type = CHAT_TEMPLATE_GRANITE_3,
     .system_start = "<|start_of_role|>system<|end_of_role|>",
     .system_end = "<|end_of_text|>\n",
     .user_start = "<|start_of_role|>user<|end_of_role|>",
@@ -52,15 +52,38 @@ static const chat_template_t granite_template = {
     .tool_result_start = "<|start_of_role|>user<|end_of_role|><tool_result>",
     .tool_result_end = "</tool_result><|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>",
     .stop_sequences = {
-        "<|end_of_text|>",              // Official Granite stop token
-        "<|start_of_role|>",            // Catch role markers
+        "<|end_of_text|>",
+        "<|start_of_role|>",
         "<|end_of_role|>",
-        "<tool_result",                 // Prevent fake tool results
+        "<tool_result",
         NULL
     },
     .stop_sequence_count = 4,
-    .tool_format = TOOL_FORMAT_JSON_IN_XML,  // Granite uses JSON inside <tool_call> tags
-    .ignore_eog = false  // Respect model's EOG decision
+    .tool_format = TOOL_FORMAT_JSON_IN_XML,
+    .ignore_eog = false
+};
+
+// IBM Granite 4.0/4.1 template
+static const chat_template_t granite4_template = {
+    .type = CHAT_TEMPLATE_GRANITE_4,
+    .system_start = "<|start_of_role|>system<|end_of_role|>",
+    .system_end = "<|end_of_text|>\n",
+    .user_start = "<|start_of_role|>user<|end_of_role|>",
+    .user_end = "<|end_of_text|>\n",
+    .assistant_start = "<|start_of_role|>assistant<|end_of_role|>",
+    .assistant_end = "<|end_of_text|>\n",
+    .tool_result_start = "<|start_of_role|>user<|end_of_role|><tool_result>",
+    .tool_result_end = "</tool_result><|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>",
+    .stop_sequences = {
+        "<|end_of_text|>",
+        "<|start_of_role|>",
+        "<|end_of_role|>",
+        "<tool_result",
+        NULL
+    },
+    .stop_sequence_count = 4,
+    .tool_format = TOOL_FORMAT_JSON_IN_XML,
+    .ignore_eog = false
 };
 
 // Microsoft Phi template
@@ -163,7 +186,12 @@ chat_template_type_t chat_template_detect(const char* model_path) {
     
     // Check for Granite
     if (strstr(lower_path, "granite")) {
-        return CHAT_TEMPLATE_GRANITE;
+        // Check for version 3
+        if (strstr(lower_path, "granite-3") || strstr(lower_path, "granite_3")) {
+            return CHAT_TEMPLATE_GRANITE_3;
+        }
+        // Default to Granite 4 for unversioned or version 4+
+        return CHAT_TEMPLATE_GRANITE_4;
     }
     
     // Check for Qwen
@@ -194,13 +222,15 @@ const chat_template_t* chat_template_get(chat_template_type_t type, const char* 
     switch (type) {
         case CHAT_TEMPLATE_LFM:
             return &lfm_template;
-        case CHAT_TEMPLATE_GRANITE:
-            return &granite_template;
+        case CHAT_TEMPLATE_GRANITE_3:
+            return &granite3_template;
+        case CHAT_TEMPLATE_GRANITE_4:  // CHAT_TEMPLATE_GRANITE is an alias for this
+            return &granite4_template;
         case CHAT_TEMPLATE_PHI:
             return &phi_template;
         case CHAT_TEMPLATE_LLAMA3:
             return &llama3_template;
-        case CHAT_TEMPLATE_QWEN:
+        case CHAT_TEMPLATE_QWEN:  // CHAT_TEMPLATE_CHATML is an alias for this
         default:
             return &qwen_template;
     }
@@ -214,10 +244,11 @@ ethervox_result_t chat_template_format_system(
 ) {
     if (!tmpl || !content || !output || output_size == 0) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
-    return snprintf(output, output_size, "%s%s%s",
-                   tmpl->system_start,
-                   content,
-                   tmpl->system_end);
+    int written = snprintf(output, output_size, "%s%s%s",
+                           tmpl->system_start,
+                           content,
+                           tmpl->system_end);
+    return (written >= 0 && (size_t)written < output_size) ? ETHERVOX_SUCCESS : ETHERVOX_ERROR_BUFFER_TOO_SMALL;
 }
 
 ethervox_result_t chat_template_format_user(
@@ -228,10 +259,11 @@ ethervox_result_t chat_template_format_user(
 ) {
     if (!tmpl || !content || !output || output_size == 0) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
-    return snprintf(output, output_size, "%s%s%s",
-                   tmpl->user_start,
-                   content,
-                   tmpl->user_end);
+    int written = snprintf(output, output_size, "%s%s%s",
+                           tmpl->user_start,
+                           content,
+                           tmpl->user_end);
+    return (written >= 0 && (size_t)written < output_size) ? ETHERVOX_SUCCESS : ETHERVOX_ERROR_BUFFER_TOO_SMALL;
 }
 
 ethervox_result_t chat_template_format_assistant_start(
@@ -241,7 +273,8 @@ ethervox_result_t chat_template_format_assistant_start(
 ) {
     if (!tmpl || !output || output_size == 0) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
-    return snprintf(output, output_size, "%s", tmpl->assistant_start);
+    int written = snprintf(output, output_size, "%s", tmpl->assistant_start);
+    return (written >= 0 && (size_t)written < output_size) ? ETHERVOX_SUCCESS : ETHERVOX_ERROR_BUFFER_TOO_SMALL;
 }
 
 ethervox_result_t chat_template_format_tool_result(
@@ -252,10 +285,11 @@ ethervox_result_t chat_template_format_tool_result(
 ) {
     if (!tmpl || !result || !output || output_size == 0) return ETHERVOX_ERROR_INVALID_ARGUMENT;
     
-    return snprintf(output, output_size, "%s%s%s",
-                   tmpl->tool_result_start,
-                   result,
-                   tmpl->tool_result_end);
+    int written = snprintf(output, output_size, "%s%s%s",
+                           tmpl->tool_result_start,
+                           result,
+                           tmpl->tool_result_end);
+    return (written >= 0 && (size_t)written < output_size) ? ETHERVOX_SUCCESS : ETHERVOX_ERROR_BUFFER_TOO_SMALL;
 }
 
 bool chat_template_has_stop_sequence(
