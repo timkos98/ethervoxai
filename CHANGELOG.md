@@ -49,10 +49,14 @@ See TASK-C0.1 execution log in `ethervoxai-planning/tasks/PHASE-C/C0.1-unify-the
   - `ethervox_media_free()`: Release media resources
   - Model pool now supports optional mmproj loading via `ethervox_model_config_t.mmproj_path`
   - Model handles track mtmd_context for multimodal support
+  - Granite-Docling integration test: loads safetensors model directly (no GGUF conversion needed)
+  - Documentation: `docs/MULTI_MODEL_CONCURRENT_EXECUTION.md` explains refcounted backend, per-model locking, concurrent execution
   - 6 unit tests covering validation, NULL safety, and all media types ✅
+  - Integration test verifies: pool creation, model loading, capability queries, memory budget enforcement ✅
   - All 4 profiles (EDGE, MOBILE, DESKTOP, WORKSPACE) build successfully ✅
-  - See `include/ethervox/media.h`, `src/llm/media.c`, `tests/unit/test_media.c`
-  - Next: Integration test with granite-docling-258M model for document structure extraction
+  - See `include/ethervox/media.h`, `src/llm/media.c`, `tests/unit/test_media.c`, `tests/integration/test_docling_integration.c`
+  - Architecture: One refcounted llama_backend_init() per process, per-model inference_mutex for concurrent execution
+  - Ready for concurrent governor + vision model use cases
 
 - **Chat template conformance tests** (TASK-C2.5, 2026-08-15): Golden tests verifying byte-for-byte correctness of chat template formatting for all supported formats
   - Added GRANITE_3 and GRANITE_4 distinction (separate templates for 3.x vs 4.x versions)
