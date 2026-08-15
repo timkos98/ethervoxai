@@ -162,7 +162,7 @@ ethervox_result_t ethervox_model_pool_create(
         return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     
-    // Initialize global backend if needed
+    // Initialize global backend mutex if needed (BEFORE calling backend_init which locks it!)
     if (!g_backend.initialized && g_backend.refcount == 0) {
         MUTEX_INIT(g_backend.mutex);
     }
