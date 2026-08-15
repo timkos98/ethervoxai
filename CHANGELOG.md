@@ -40,6 +40,20 @@ See TASK-C0.1 execution log in `ethervoxai-planning/tasks/PHASE-C/C0.1-unify-the
 ## [Unreleased]
 
 ### Added
+- **Multimodal media API** (TASK-C3.1, 2026-08-15): Media-agnostic API for vision and audio inputs via llama.cpp's mtmd library
+  - `ethervox_media_kind_t`: IMAGE_RGBA8, IMAGE_PNG, IMAGE_JPEG, AUDIO_PCM16
+  - `ethervox_media_t`: Container for media data with dimensions/sample rate
+  - `ethervox_capabilities_t`: Query model capabilities (vision/audio support)
+  - `ethervox_model_capabilities()`: Query what media types a model supports
+  - `ethervox_media_prepare()`: Validate and prepare media for encoding
+  - `ethervox_media_free()`: Release media resources
+  - Model pool now supports optional mmproj loading via `ethervox_model_config_t.mmproj_path`
+  - Model handles track mtmd_context for multimodal support
+  - 6 unit tests covering validation, NULL safety, and all media types ✅
+  - All 4 profiles (EDGE, MOBILE, DESKTOP, WORKSPACE) build successfully ✅
+  - See `include/ethervox/media.h`, `src/llm/media.c`, `tests/unit/test_media.c`
+  - Next: Integration test with granite-docling-258M model for document structure extraction
+
 - **Chat template conformance tests** (TASK-C2.5, 2026-08-15): Golden tests verifying byte-for-byte correctness of chat template formatting for all supported formats
   - Added GRANITE_3 and GRANITE_4 distinction (separate templates for 3.x vs 4.x versions)
   - CHAT_TEMPLATE_CHATML alias for QWEN (same format)

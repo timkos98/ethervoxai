@@ -112,6 +112,13 @@ target_include_directories(test_chat_templates PRIVATE ${CMAKE_SOURCE_DIR}/inclu
 add_test(NAME ChatTemplates COMMAND test_chat_templates)
 set_tests_properties(ChatTemplates PROPERTIES TIMEOUT 30 LABELS "unit;chat_templates;conformance")
 
+# Multimodal media API tests (TASK-C3.1)
+add_executable(test_media unit/test_media.c)
+target_link_libraries(test_media ethervoxai)
+target_include_directories(test_media PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME Media COMMAND test_media)
+set_tests_properties(Media PROPERTIES TIMEOUT 30 LABELS "unit;media;multimodal")
+
 # Adaptive memory tests (corrections and patterns)
 add_executable(test_adaptive_memory unit/test_adaptive_memory.c)
 target_link_libraries(test_adaptive_memory ethervoxai)

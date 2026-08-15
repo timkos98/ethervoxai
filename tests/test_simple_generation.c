@@ -51,8 +51,8 @@ static void test_no_grammar(ethervox_llm_backend_t* backend, int iterations) {
 static void test_single_grammar(ethervox_llm_backend_t* backend) {
     printf("\n=== Test 2: Single generation WITH simple grammar ===\n");
     
-    // Simple schema: {"type": "object", "properties": {"message": {"type": "string"}}}
-    const char* schema = "{\"type\":\"object\",\"properties\":{\"message\":{\"type\":\"string\"}}}";
+    // Simple schema with REQUIRED property to avoid empty object issue
+    const char* schema = "{\"type\":\"object\",\"properties\":{\"message\":{\"type\":\"string\"}},\"required\":[\"message\"]}";
     
     ethervox_grammar_t* grammar = NULL;
     ethervox_result_t conv_result = ethervox_grammar_from_json_schema(schema, &grammar);
@@ -63,6 +63,15 @@ static void test_single_grammar(ethervox_llm_backend_t* backend) {
     }
     
     printf("✅ Grammar compiled\n");
+    
+    // Debug: print the GBNF that was generated
+    const char* gbnf_source = ethervox_grammar_get_source(grammar);
+    const char* gbnf_root = ethervox_grammar_get_root(grammar);
+    printf("DEBUG: GBNF root rule: %s\n", gbnf_root ? gbnf_root : "(null)");
+    printf("DEBUG: GBNF source length: %zu\n", gbnf_source ? strlen(gbnf_source) : 0);
+    if (gbnf_source && strlen(gbnf_source) < 500) {
+        printf("DEBUG: GBNF source:\n%s\n", gbnf_source);
+    }
     
     ethervox_result_t set_result = ethervox_llm_backend_set_grammar(backend, grammar);
     if (set_result != ETHERVOX_SUCCESS) {

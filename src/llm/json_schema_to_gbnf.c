@@ -93,6 +93,7 @@ typedef struct {
 } conversion_context_t;
 
 // Forward declarations
+static ethervox_result_t emit_whitespace_rule(conversion_context_t* ctx);
 static ethervox_result_t convert_schema_to_gbnf(
     conversion_context_t* ctx,
     const cJSON* schema,
@@ -204,10 +205,12 @@ static ethervox_result_t convert_string_plain(
     conversion_context_t* ctx,
     const char* rule_name
 ) {
+    ethervox_result_t result = emit_whitespace_rule(ctx);
+    if (result != ETHERVOX_SUCCESS) return result;
+    
     char rule[256];
-    // Allow any character except unescaped quotes
-    // Use \\n instead of \n to output literal \n
-    snprintf(rule, sizeof(rule), "%s ::= \"\\\"\" ([^\"\\\\\\n] | \"\\\\\" [\"\\\\/bfnrt])* \"\\\"\"\n", rule_name);
+    // Match llama.cpp's JSON string format: exclude control chars, support common escapes, ws after closing quote
+    snprintf(rule, sizeof(rule), "%s ::= \"\\\"\" ([^\"\\\\\\x7F\\x00-\\x1F] | \"\\\\\" [\"\\\\/bfnrt])* \"\\\"\" ws\n", rule_name);
     return sb_append(&ctx->output, rule);
 }
 
@@ -350,7 +353,7 @@ static ethervox_result_t emit_whitespace_rule(conversion_context_t* ctx) {
     if (ctx->ws_emitted) return ETHERVOX_SUCCESS;
     ctx->ws_emitted = 1;
     
-    return sb_append(&ctx->helper_rules, "ws ::= [ \\t\\n]*\n");
+    return sb_append(&ctx->helper_rules, "ws ::= | \" \" | \"\\n\" [ \\t]{0,20}\n");
 }
 
 /**
@@ -376,7 +379,7 @@ static ethervox_result_t convert_object(
     // Type 8: Empty object (no properties or empty properties)
     if (!properties || cJSON_GetArraySize(properties) == 0) {
         char rule[256];
-        snprintf(rule, sizeof(rule), "%s ::= \"{\" ws \"}\"\n", rule_name);
+        snprintf(rule, sizeof(rule), "%s ::= \"{\" ws \"}\" ws\n", rule_name);
         return sb_append(&ctx->output, rule);
     }
     
@@ -420,7 +423,7 @@ static ethervox_result_t convert_object(
         
         // Generate subrule for this property's value
         char value_rule_name[128];
-        snprintf(value_rule_name, sizeof(value_rule_name), "%s_%s_value", rule_name, prop_name);
+        snprintf(value_rule_name, sizeof(value_rule_name), "%s-%s-value", rule_name, prop_name);
         
         // Convert property schema recursively
         result = convert_schema_to_gbnf(ctx, prop, value_rule_name);
@@ -449,7 +452,7 @@ static ethervox_result_t convert_object(
         prop_count++;
     }
     
-    sb_append(&obj_sb, " ws \"}\"\n");
+    sb_append(&obj_sb, " ws \"}\" ws\n");
     
     // Append to context output
     result = sb_append(&ctx->output, obj_sb.data);
@@ -480,7 +483,7 @@ static ethervox_result_t convert_array(
     
     // Generate subrule for array item
     char item_rule_name[128];
-    snprintf(item_rule_name, sizeof(item_rule_name), "%s_item", rule_name);
+    snprintf(item_rule_name, sizeof(item_rule_name), "%s-item", rule_name);
     
     result = convert_schema_to_gbnf(ctx, items, item_rule_name);
     if (result != ETHERVOX_SUCCESS) return result;
@@ -561,7 +564,7 @@ static ethervox_result_t convert_one_of(
         
         // Generate unique rule name for this variant
         char variant_rule[128];
-        snprintf(variant_rule, sizeof(variant_rule), "%s_variant%d", rule_name, i);
+        snprintf(variant_rule, sizeof(variant_rule), "%s-variant%d", rule_name, i);
         
         // Convert variant schema
         result = convert_schema_to_gbnf(ctx, variant, variant_rule);

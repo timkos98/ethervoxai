@@ -45,6 +45,7 @@ typedef void (*ethervox_progress_cb)(float progress, void* user_data);
  */
 typedef struct {
     const char* model_path;        /**< Path to GGUF model file */
+    const char* mmproj_path;       /**< Path to companion mmproj file (NULL if not multimodal) */
     uint32_t context_size;         /**< Context size in tokens */
     uint32_t n_threads;            /**< Number of threads for inference */
     bool use_gpu;                  /**< Whether to use GPU acceleration */

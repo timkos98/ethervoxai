@@ -19,6 +19,10 @@
 #define LLAMA_AVAILABLE 0
 #endif
 
+#if defined(MTMD_AVAILABLE) && MTMD_AVAILABLE
+#include "mtmd.h"
+#endif
+
 // Platform-specific threading
 #ifdef _WIN32
 #include <windows.h>
@@ -53,6 +57,7 @@ static struct {
 struct ethervox_model_handle {
     struct llama_model* model;
     struct llama_context* ctx;
+    void* mtmd_ctx;              // mtmd_context* for multimodal support (NULL if not supported)
     mutex_t inference_mutex;  // Serializes inference on this model
     uint64_t memory_bytes;    // Actual memory used
     char role[64];            // Model role (main, vision, embed)
@@ -278,10 +283,42 @@ ethervox_result_t ethervox_model_pool_load(
     
     handle->model = model;
     handle->ctx = ctx;
+    handle->mtmd_ctx = NULL;  // Initialize to NULL
     handle->memory_bytes = required_bytes;
     if (config->role) {
         strncpy(handle->role, config->role, sizeof(handle->role) - 1);
     }
+    
+    // Load mmproj if provided (for multimodal support)
+#if defined(MTMD_AVAILABLE) && MTMD_AVAILABLE
+    if (config->mmproj_path) {
+        struct mtmd_context_params mtmd_params = mtmd_context_params_default();
+        mtmd_params.use_gpu = config->use_gpu;
+        mtmd_params.print_timings = false;
+        mtmd_params.n_threads = (int)config->n_threads;
+        mtmd_params.media_marker = NULL;  // Use default from mmproj metadata
+        
+        void* mctx = mtmd_init_from_file(config->mmproj_path, model, mtmd_params);
+        if (!mctx) {
+            ETHERVOX_LOG_ERROR("[ModelPool] Failed to load mmproj: %s", config->mmproj_path);
+            MUTEX_DESTROY(handle->inference_mutex);
+            free(handle);
+            llama_free(ctx);
+            llama_free_model(model);
+            return ETHERVOX_ERROR_FILE_READ;
+        }
+        
+        handle->mtmd_ctx = mctx;
+        ETHERVOX_LOG_INFO("[ModelPool] Loaded mmproj: %s (vision=%d, audio=%d)",
+                         config->mmproj_path,
+                         mtmd_support_vision(mctx),
+                         mtmd_support_audio(mctx));
+    }
+#else
+    if (config->mmproj_path) {
+        ETHERVOX_LOG_WARN("[ModelPool] mmproj requested but MTMD not available in this build");
+    }
+#endif
     
     MUTEX_INIT(handle->inference_mutex);
     
@@ -325,6 +362,14 @@ ethervox_result_t ethervox_model_pool_unload(
     
     // Free resources
 #if LLAMA_AVAILABLE
+    // Free mtmd context if loaded
+#if defined(MTMD_AVAILABLE) && MTMD_AVAILABLE
+    if (handle->mtmd_ctx) {
+        mtmd_free((mtmd_context*)handle->mtmd_ctx);
+        handle->mtmd_ctx = NULL;
+    }
+#endif
+    
     if (handle->ctx) {
         llama_free(handle->ctx);
     }
