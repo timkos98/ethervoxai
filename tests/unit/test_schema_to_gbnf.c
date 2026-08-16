@@ -26,7 +26,7 @@
  */
 
 #include "ethervox/grammar.h"
-#include <assert.h>
+#include "test_utils.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -123,14 +123,14 @@ static void test_null_safety(void) {
     ethervox_grammar_t* grammar = NULL;
     
     // NULL schema
-    assert(ethervox_grammar_from_json_schema(NULL, &grammar) == ETHERVOX_ERROR_NULL_POINTER);
+    CHECK(ethervox_grammar_from_json_schema(NULL, &grammar) == ETHERVOX_ERROR_NULL_POINTER);
     
     // NULL output pointer
-    assert(ethervox_grammar_from_json_schema("{\"type\": \"boolean\"}", NULL) == ETHERVOX_ERROR_NULL_POINTER);
+    CHECK(ethervox_grammar_from_json_schema("{\"type\": \"boolean\"}", NULL) == ETHERVOX_ERROR_NULL_POINTER);
     
     // NULL grammar operations
-    assert(ethervox_grammar_get_source(NULL) == NULL);
-    assert(ethervox_grammar_get_root(NULL) == NULL);
+    CHECK(ethervox_grammar_get_source(NULL) == NULL);
+    CHECK(ethervox_grammar_get_root(NULL) == NULL);
     ethervox_grammar_free(NULL);  // Should not crash
     
     printf("PASS: null_safety\n");
@@ -140,10 +140,10 @@ static void test_malformed_json(void) {
     ethervox_grammar_t* grammar = NULL;
     
     // Not JSON
-    assert(ethervox_grammar_from_json_schema("not json", &grammar) == ETHERVOX_ERROR_INVALID_ARGUMENT);
+    CHECK(ethervox_grammar_from_json_schema("not json", &grammar) == ETHERVOX_ERROR_INVALID_ARGUMENT);
     
     // Missing type field
-    assert(ethervox_grammar_from_json_schema("{\"foo\": \"bar\"}", &grammar) == ETHERVOX_ERROR_INVALID_ARGUMENT);
+    CHECK(ethervox_grammar_from_json_schema("{\"foo\": \"bar\"}", &grammar) == ETHERVOX_ERROR_INVALID_ARGUMENT);
     
     printf("PASS: malformed_json\n");
 }
@@ -153,15 +153,15 @@ static void test_compile_direct_gbnf(void) {
     const char* gbnf = "root ::= \"hello\" | \"world\"\n";
     
     ethervox_result_t result = ethervox_grammar_compile(gbnf, "root", &grammar);
-    assert(result == ETHERVOX_SUCCESS);
-    assert(grammar != NULL);
+    CHECK(result == ETHERVOX_SUCCESS);
+    CHECK(grammar != NULL);
     
     const char* source = ethervox_grammar_get_source(grammar);
     const char* root = ethervox_grammar_get_root(grammar);
     
-    assert(source != NULL);
-    assert(strcmp(source, gbnf) == 0);
-    assert(strcmp(root, "root") == 0);
+    CHECK(source != NULL);
+    CHECK(strcmp(source, gbnf) == 0);
+    CHECK(strcmp(root, "root") == 0);
     
     ethervox_grammar_free(grammar);
     printf("PASS: compile_direct_gbnf\n");

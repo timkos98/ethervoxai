@@ -9,10 +9,10 @@
  */
 
 #include "ethervox/media.h"
+#include "test_utils.h"
 #include "ethervox/error.h"
 #include <stdio.h>
 #include <string.h>
-#include <assert.h>
 
 // Test helpers
 #define ASSERT(cond, msg) do { \

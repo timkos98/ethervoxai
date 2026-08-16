@@ -40,6 +40,50 @@ See TASK-C0.1 execution log in `ethervoxai-planning/tasks/PHASE-C/C0.1-unify-the
 ## [Unreleased]
 
 ### Added
+- **C5.1 (complete)**: LoRA adapter loading
+  - New `adapter.h` API for loading and managing LoRA adapters
+  - `ethervox_adapter_load()` loads adapters from GGUF files, associated with model handles
+  - `ethervox_adapter_free()` manually frees adapters (or auto-freed with model)
+  - `ethervox_model_set_adapters()` applies one or more adapters to a model context with configurable scales
+  - Metadata inspection functions: `ethervox_adapter_get_metadata()`, `ethervox_adapter_meta_count()`, `ethervox_adapter_meta_key_by_index()`, `ethervox_adapter_meta_value_by_index()`
+  - Wraps llama.cpp's existing `llama_adapter_lora` support, zero-copy pass-through
+  - Test suite: 4/4 tests pass (NULL handling, adapter loading, metadata, apply/clear)
+  - Use case: Granite Libraries adapters for certainty estimation and hallucination detection (post-1.0)
+- **C4.3 (complete)**: Structured logging and metrics
+  - Extended `logging.h` with structured logging types: `ethervox_log_subsystem_t` (8 subsystems + unknown), `ethervox_log_field_t` (key-value pairs), `ethervox_log_entry_t` (level/subsystem/fields/timestamp)
+  - `ethervox_log_set_callback()` to register structured log callback (thread-safe)
+  - `ethervox_log_ex()` for subsystem-aware logging, `ethervox_log_fields()` for field-based logging
+  - Updated `ethervox_log()` to invoke callback with default CORE subsystem (backward compatible)
+  - `ethervox_metrics_t` struct with 20 fields: model pool metrics (loaded/evicted/bytes), generation metrics (total/succeeded/failed/tokens/time), session metrics (active/forked/kv hits+misses), grammar metrics (structured gens/avg confidence), error metrics (total/OOM/timeout)
+  - `ethervox_metrics_snapshot()` for point-in-time metrics, `ethervox_metrics_reset()` for cumulative counter reset
+  - Internal helper functions for metrics recording (generation, structured gen, error tracking)
+  - Test suite: 5/5 tests pass (callback invocation, subsystem tagging, structured fields, metrics snapshot, metrics reset)
+  - Removed conflicting old callback typedef from `config.h` (replaced with new structured callback)
+- **C4.2 (complete)**: Deterministic seeding
+  - Fixed `llama_backend.c` to use configured seed instead of hardcoded 0
+  - Added seed=0 → time-based random seed handling in `structured_generation.c`
+  - Determinism boundary documented in `structured_generation.h`
+  - Test suite: 2/2 tests pass (same seed → identical output over 20 runs, seed=0 → random)
+  - Note: Determinism holds for fixed (build, backend, thread count); breaks across backends/thread counts
+- **C4.1 (complete)**: OS abstraction layer
+  - `platform_thread.h`: Cross-platform threading primitives (mutex, thread, condition variable, static initializer)
+  - `platform_time.h`: Cross-platform time primitives (monotonic time, wall clock, sleep, ISO 8601 formatting)
+  - `platform_directory.h`: Cross-platform directory operations (open, read, close, create, create_recursive, remove)
+  - `platform_fs.h`: Cross-platform file system operations (exists, is_file, is_dir, file_size, delete, rename, copy, absolute_path, path_join, get_extension)
+  - `platform_mem.h`: Cross-platform memory operations (aligned allocation, memory mapping, system memory info)
+  - Thin static inline wrappers over POSIX pthread and Win32 APIs, zero overhead
+  - Updated `model_pool.c` to use new platform_thread.h (removed inline platform-specific code)
+  - Test suite: 5/5 tests pass (mutex, time, file system, directory, memory)
+- **C3.4 (complete)**: Memory pressure and LRU eviction
+  - `ethervox_residency_class_t` enum: RESIDENT (never evicted) vs ON_DEMAND (evictable)
+  - `ethervox_model_config_t` extended with `residency` and `ttl_seconds` fields
+  - `ethervox_model_pool_set_pressure_callback()`: Register OS memory pressure handler
+  - `ethervox_model_pool_evict_lru()`: Explicit LRU eviction with protected roles
+  - `ethervox_model_pool_set_max_on_demand()`: Limit concurrent on-demand models
+  - LRU tracking: timestamp-based, linear scan eviction
+  - Retry-once logic: if OOM, evict and retry load once
+  - Max on-demand enforcement: evict LRU before loading new on-demand
+  - Test suite: 4/4 tests pass (resident, LRU order, max_on_demand, protected roles)
 - **Multimodal media API** (TASK-C3.1, 2026-08-15): Media-agnostic API for vision and audio inputs via llama.cpp's mtmd library
   - `ethervox_media_kind_t`: IMAGE_RGBA8, IMAGE_PNG, IMAGE_JPEG, AUDIO_PCM16
   - `ethervox_media_t`: Container for media data with dimensions/sample rate
@@ -48,6 +92,12 @@ See TASK-C0.1 execution log in `ethervoxai-planning/tasks/PHASE-C/C0.1-unify-the
   - `ethervox_media_prepare()`: Validate and prepare media for encoding
   - `ethervox_media_free()`: Release media resources
   - Model pool now supports optional mmproj loading via `ethervox_model_config_t.mmproj_path`
+- **Structured generation with confidence scoring** (TASK-C3.3, 2026-08-15): Log-probability extraction and calibrated confidence metrics for structured JSON generation
+  - `ethervox_generate_structured()`: Generate grammar-constrained JSON with confidence score [0.0, 1.0]
+  - `ethervox_structured_gen_params_t`: Generation parameters (max_tokens, temperature, top_p, seed, include_logprobs)
+  - Confidence calculation excludes grammar-forced structural tokens (only content choices count)
+  - `ETHERVOX_EVENT_LOGPROB` fires for each token when enabled (includes token text, logprob, probability)
+  - Geometric mean of content token probabilities provides interpretable confidence metric
   - Model handles track mtmd_context for multimodal support
   - Granite-Docling integration test: loads safetensors model directly (no GGUF conversion needed)
   - Documentation: `docs/MULTI_MODEL_CONCURRENT_EXECUTION.md` explains refcounted backend, per-model locking, concurrent execution
@@ -272,17 +322,29 @@ See TASK-C0.1 execution log in `ethervoxai-planning/tasks/PHASE-C/C0.1-unify-the
   markers and repeat them infinitely. `governor_should_stop()` is now called BEFORE
   `llama_decode()`, ensuring stop tokens never enter the context. Stop sequences are excluded from
   the final output, and generation terminates at exactly the right token.
+- **BACKLOG-15 complete**: All 16 remaining test files in `tests/unit/` now use `CHECK()` macro
+  instead of `assert()`. Created shared `test_utils.h` header providing `CHECK()` macro definition
+  that works regardless of NDEBUG setting. Replaced 449 `assert()` calls across
+  `test_audio_core.c`, `test_audio_integration.c`, `test_config.c`, `test_context_overflow.c`,
+  `test_device_profile.c`, `test_error.c`, `test_file_tools.c`, `test_gguf_config.c`,
+  `test_memory_tools.c`, `test_mobile_optimization.c`, `test_plugin_manager.c`,
+  `test_schema_to_gbnf.c`, `test_secret_mode.c`, `test_voice_training.c`, and `test_wake_word.c`.
+  Note: `test_media.c` uses custom `ASSERT` macro that already evaluates unconditionally (not
+  affected by NDEBUG), so unchanged. All tests build and run successfully with `CHECK()` macro.
+  Originally fixed `test_tts_host.c` and `test_voice_conversation.c` in C1.0; remaining files
+  completed 2025-01-12. Tests now properly validate conditions even when built in Release mode with
+  `-DNDEBUG`.
 - `tests/unit/test_tts_host.c` and `tests/unit/test_voice_conversation.c`: replaced `assert()`
   with an explicit `CHECK()` macro — this test suite builds with `-DNDEBUG` (Release), which
-  turns `assert()` into a silent no-op, so every check in these two files (and likely the rest of
-  `tests/unit/`, not yet fixed — see BACKLOG-15) was passing vacuously regardless of correctness.
+  turns `assert()` into a silent no-op, so every check in these two files was passing vacuously
+  regardless of correctness (see BACKLOG-15 entry above for full fix).
   Fixing this in `test_voice_conversation.c` (the barge-in test coverage) surfaced two real,
   previously-masked issues: a test-authoring bug in the grace-period exact-boundary case (the
   detector itself was correct — `ethervox_barge_in_detector_process`'s documented `>=` semantics),
   and a gap where `ethervox_conversation_init`/`start`'s background thread never reaches
   `ETHERVOX_CONV_STATE_ERROR` when local STT/TTS model files are absent (stays at
   `UNINITIALIZED` indefinitely instead) — worked around in the test (`SKIP` instead of fail), the
-  underlying `voice_conversation.c` gap itself is unfixed (BACKLOG-15).
+  underlying `voice_conversation.c` gap itself is unfixed.
 
 ### Changed
 - All CC BY-NC-SA 4.0 licence references in `src/` and `include/` (132 files: SPDX identifiers,

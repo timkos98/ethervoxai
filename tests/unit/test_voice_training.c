@@ -7,6 +7,7 @@
  */
 
 #include "ethervox/voice_training.h"
+#include "test_utils.h"
 #include "ethervox/error.h"
 #include "ethervox/pronunciation_trainer.h"
 #include "ethervox/audio_recording.h"
@@ -14,7 +15,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <assert.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <math.h>
@@ -51,17 +51,17 @@ static void test_audio_wav_writing() {
     // Generate 1 second of test audio (440 Hz tone)
     int num_samples = 16000;
     float* samples = generate_test_audio(num_samples, 440.0f);
-    assert(samples != NULL);
+    CHECK(samples != NULL);
     
     // Write to WAV file
     int result = ethervox_audio_write_wav(test_file, samples, num_samples, 16000, 1);
-    assert(result == 0);
-    assert(file_exists(test_file));
+    CHECK(result == 0);
+    CHECK(file_exists(test_file));
     
     // Verify file size is reasonable (header + data)
     struct stat st;
     stat(test_file, &st);
-    assert(st.st_size > 1000); // Should be at least 1KB
+    CHECK(st.st_size > 1000); // Should be at least 1KB
     
     free(samples);
     unlink(test_file);
@@ -90,14 +90,14 @@ static void test_mel_extraction() {
     // Generate test audio
     int num_samples = 16000;
     float* samples = generate_test_audio(num_samples, 440.0f);
-    assert(samples != NULL);
+    CHECK(samples != NULL);
     
     // Extract mel spectrogram
     int num_frames;
     float** mels = pronunciation_trainer_extract_mels(samples, num_samples, 16000, &num_frames);
     
-    assert(mels != NULL);
-    assert(num_frames > 0);
+    CHECK(mels != NULL);
+    CHECK(num_frames > 0);
     
     // Verify mel dimensions (should have 80 bands)
     // Check first frame has reasonable values
@@ -108,7 +108,7 @@ static void test_mel_extraction() {
             break;
         }
     }
-    assert(has_energy);
+    CHECK(has_energy);
     
     // Free mel spectrogram
     for (int i = 0; i < num_frames; i++) {
@@ -133,7 +133,7 @@ static void test_dtw_distance() {
     float distance = pronunciation_trainer_dtw_distance(seq1, 5, seq2, 5);
     
     // Distance between identical sequences should be 0
-    assert(distance < 0.001f);
+    CHECK(distance < 0.001f);
     
     // Create two different sequences
     float seq3[] = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f};
@@ -142,7 +142,7 @@ static void test_dtw_distance() {
     float distance2 = pronunciation_trainer_dtw_distance(seq3, 5, seq4, 5);
     
     // Distance between different sequences should be > 0
-    assert(distance2 > 0.1f);
+    CHECK(distance2 > 0.1f);
     
     printf("  ✅ DTW distance passed (identical=%.4f, different=%.4f)\n", distance, distance2);
 }
@@ -158,19 +158,19 @@ static void test_phoneme_variants() {
     char** variants = NULL;
     int num_variants = pronunciation_trainer_generate_variants(base_phonemes, &variants, NULL, 20);
     
-    assert(num_variants > 0);
-    assert(num_variants <= 20); // Should generate up to 20 variants
-    assert(variants != NULL);
+    CHECK(num_variants > 0);
+    CHECK(num_variants <= 20); // Should generate up to 20 variants
+    CHECK(variants != NULL);
     
     // Verify variants are different from base
     bool has_different = false;
     for (int i = 0; i < num_variants; i++) {
-        assert(variants[i] != NULL);
+        CHECK(variants[i] != NULL);
         if (strcmp(variants[i], base_phonemes) != 0) {
             has_different = true;
         }
     }
-    assert(has_different);
+    CHECK(has_different);
     
     // Free variants
     for (int i = 0; i < num_variants; i++) {
@@ -188,20 +188,20 @@ static void test_invalid_inputs() {
     printf("Testing invalid input handling...\n");
     
     // Test NULL inputs
-    assert(ethervox_audio_write_wav(NULL, NULL, 0, 16000, 1) != 0);
-    assert(ethervox_audio_write_wav("/tmp/test.wav", NULL, 0, 16000, 1) != 0);
-    assert(ethervox_audio_record_to_file(NULL, 1, 16000, 1) != 0);
-    assert(ethervox_audio_record_to_file("/tmp/test.wav", 0, 16000, 1) != 0);
+    CHECK(ethervox_audio_write_wav(NULL, NULL, 0, 16000, 1) != 0);
+    CHECK(ethervox_audio_write_wav("/tmp/test.wav", NULL, 0, 16000, 1) != 0);
+    CHECK(ethervox_audio_record_to_file(NULL, 1, 16000, 1) != 0);
+    CHECK(ethervox_audio_record_to_file("/tmp/test.wav", 0, 16000, 1) != 0);
     
     // Test mel extraction with NULL
     int num_frames;
     float** mels = pronunciation_trainer_extract_mels(NULL, 1000, 16000, &num_frames);
-    assert(mels == NULL);
+    CHECK(mels == NULL);
     
     // Test variant generation with NULL
     char** variants = NULL;
     int num_variants = pronunciation_trainer_generate_variants(NULL, &variants, NULL, 20);
-    assert(num_variants == 0);
+    CHECK(num_variants == 0);
     
     printf("  ✅ Invalid input handling passed\n");
 }
@@ -227,7 +227,7 @@ static void test_audio_comparison() {
     float similarity = pronunciation_trainer_compare_audio(audio_path1, audio_path2);
     
     // Similar audio should have high similarity (> 0.8)
-    assert(similarity > 0.8f);
+    CHECK(similarity > 0.8f);
     
     // Cleanup
     free(samples1);
@@ -260,7 +260,7 @@ static void test_audio_comparison_different() {
     float similarity = 0.5f;  // Placeholder
     
     // Different audio should have lower similarity (< 0.8)
-    assert(similarity < 0.8f);
+    CHECK(similarity < 0.8f);
     
     // Cleanup
     free(samples1);
