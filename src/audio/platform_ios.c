@@ -33,6 +33,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include <pthread.h>
 #include <AudioToolbox/AudioToolbox.h>
 
@@ -460,6 +461,27 @@ static void ios_audio_cleanup(ethervox_audio_runtime_t* runtime) {
   free(state);
   runtime->platform_data = NULL;
   printf("iOS AudioQueue driver cleaned up\n");
+}
+
+/**
+ * @brief Calculate RMS energy of an audio buffer, used by voice_conversation.c's
+ * barge-in VAD (see ethervox_audio_calculate_rms_energy in audio.h).
+ * @param samples Float audio samples normalized to [-1, 1]
+ * @param count Number of samples
+ * @return RMS energy value (typically 0.0-1.0 range)
+ */
+float ethervox_audio_calculate_rms_energy(const float* samples, uint32_t count) {
+    if (!samples || count == 0) {
+        return 0.0f;
+    }
+
+    double sum_sq = 0.0;
+    for (uint32_t i = 0; i < count; i++) {
+        double sample = (double)samples[i];
+        sum_sq += sample * sample;
+    }
+
+    return (float)sqrt(sum_sq / (double)count);
 }
 
 ethervox_result_t ethervox_audio_register_platform_driver(ethervox_audio_runtime_t* runtime) {
