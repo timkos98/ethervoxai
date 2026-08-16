@@ -42,6 +42,8 @@
 #include "ethervox/llm.h"
 #include "ethervox/stt.h"
 #include "ethervox/wake_word.h"
+#include "ethervox/paths.h"
+#include "ethervox/logging.h"
 // NOTE: dialogue.h removed - using direct governor/registry architecture
 #include "ethervox/compute_tools.h"
 #include "ethervox/config.h"
@@ -101,10 +103,9 @@ void ethervox_log_with_callback(int level, const char* tag, const char* fmt, ...
   // Send to Android logcat
   __android_log_print(level, tag, "%s", buffer);
 
-  // Send to callback (debug window) if registered
-  if (g_ethervox_log_callback) {
-    g_ethervox_log_callback(level, tag, buffer);
-  }
+  // Note: C4.3 structured logging - callback invoked by core logging system,
+  // not called directly here. The java_log_callback_wrapper will be invoked
+  // automatically for all log entries if registered.
 }
 
 // JNI callback storage for log forwarding
@@ -126,8 +127,13 @@ static ethervox_tool_registry_t* g_registry = NULL;
 static tool_manifest_registry_t* g_manifest_registry = NULL;
 static ethervox_memory_store_t* g_memory_store = NULL;
 
-// Android-specific files directory
+// Android-specific files directory (deprecated - migrate to g_android_paths)
 static char g_android_files_dir[512] = {0};
+
+// Android paths configuration (N6.1)
+static char g_paths_buffer[2048] = {0};  // Buffer for path strings
+static ethervox_paths_t g_android_paths = {0};  // Global paths struct
+static bool g_paths_initialized = false;
 
 // Governor runtime configuration (tunable from Java settings)
 typedef struct {
@@ -377,7 +383,7 @@ JNIEXPORT jboolean JNICALL Java_com_droid_ethervox_1core_NativeLib_loadGovernorM
   // Load model - Governor will handle KV cache detection, loading, and saving internally
   LOGI("[JNI] Loading model (Governor will check for KV cache)...");
   ethervox_result_t result = ethervox_governor_load_model(
-      g_governor, path, g_android_files_dir, progress_callback, progress_user_data
+      g_governor, path, &g_android_paths, NULL, progress_callback, progress_user_data
   );
 
   (*env)->ReleaseStringUTFChars(env, modelPath, path);
@@ -469,7 +475,7 @@ JNIEXPORT jboolean JNICALL Java_com_droid_ethervox_1core_NativeLib_loadGovernorM
 
   LOGI("[JNI] Loading audio-capable model (Governor will check for KV cache)...");
   ethervox_result_t result = ethervox_governor_load_model_with_audio(
-      g_governor, path, mmproj_path, g_android_files_dir, progress_callback, progress_user_data
+      g_governor, path, mmproj_path, &g_android_paths, NULL, progress_callback, progress_user_data
   );
 
   (*env)->ReleaseStringUTFChars(env, modelPath, path);
@@ -1867,7 +1873,7 @@ JNIEXPORT jstring JNICALL Java_com_droid_ethervox_1core_NativeLib_processDialogu
   char* response = NULL;
   char* error = NULL;
   ethervox_governor_status_t status =
-      ethervox_governor_execute(g_governor, text, &response, &error, NULL, NULL, NULL, NULL);
+      ethervox_governor_execute(g_governor, text, NULL, &response, &error, NULL, NULL, NULL, NULL, NULL);
 
   (*env)->ReleaseStringUTFChars(env, user_text, text);
 
@@ -2149,9 +2155,10 @@ JNIEXPORT void JNICALL Java_com_droid_ethervox_1core_NativeLib_processDialogueSt
   char* response = NULL;
   char* error = NULL;
   ethervox_governor_status_t status =
-      ethervox_governor_execute(g_governor, text, &response, &error,
+      ethervox_governor_execute(g_governor, text, NULL, &response, &error,
                                 NULL,                               // metrics (optional)
                                 native_governor_progress_callback,  // progress callback
+                                NULL,                               // event callback (N6.1 - not used yet)
                                 native_token_callback,              // token callback for streaming
                                 &stream_ctx                         // user data
       );
@@ -2552,16 +2559,29 @@ static void sanitize_utf8_for_java(char* buffer, size_t max_len) {
   }
 }
 
-static void java_log_callback_wrapper(int level, const char* tag, const char* message) {
-  if (!g_jvm || !g_log_callback_obj || !g_log_callback_method) {
+// JNI log callback wrapper for C4.3 structured logging
+static void java_log_callback_wrapper(const ethervox_log_entry_t* entry, void* user_data) {
+  (void)user_data;  // Unused
+  
+  if (!g_jvm || !g_log_callback_obj || !g_log_callback_method || !entry) {
     return;
   }
 
-  // Guard against NULL pointers
-  if (!tag)
-    tag = "EthervoxCore";
-  if (!message)
-    message = "";
+  // Map ethervox_log_level_t to Android log priority
+  int android_level = ANDROID_LOG_INFO;
+  switch (entry->level) {
+    case ETHERVOX_LOG_LEVEL_TRACE:   android_level = ANDROID_LOG_VERBOSE; break;
+    case ETHERVOX_LOG_LEVEL_DEBUG:   android_level = ANDROID_LOG_DEBUG; break;
+    case ETHERVOX_LOG_LEVEL_INFO:    android_level = ANDROID_LOG_INFO; break;
+    case ETHERVOX_LOG_LEVEL_WARN:    android_level = ANDROID_LOG_WARN; break;
+    case ETHERVOX_LOG_LEVEL_ERROR:   android_level = ANDROID_LOG_ERROR; break;
+    case ETHERVOX_LOG_LEVEL_FATAL:   android_level = ANDROID_LOG_FATAL; break;
+    case ETHERVOX_LOG_LEVEL_OFF:     android_level = ANDROID_LOG_SILENT; break;
+  }
+  
+  // Build tag from subsystem (e.g., "llm", "governor", "audio")
+  const char* tag = entry->func ? entry->func : "EthervoxCore";
+  const char* message = entry->message ? entry->message : "";
 
   JNIEnv* env = NULL;
   jint result = (*g_jvm)->GetEnv(g_jvm, (void**)&env, JNI_VERSION_1_6);
@@ -2589,7 +2609,7 @@ static void java_log_callback_wrapper(int level, const char* tag, const char* me
   jstring jMessage = (*env)->NewStringUTF(env, safe_message);
 
   if (jTag && jMessage) {
-    (*env)->CallVoidMethod(env, g_log_callback_obj, g_log_callback_method, level, jTag, jMessage);
+    (*env)->CallVoidMethod(env, g_log_callback_obj, g_log_callback_method, android_level, jTag, jMessage);
   }
 
   if (jTag)
@@ -3297,7 +3317,7 @@ JNIEXPORT jboolean JNICALL Java_com_droid_ethervox_1core_NativeLib_loadGovernorM
   }
 
   ethervox_result_t result = ethervox_governor_load_model(
-      g_governor, path, g_android_files_dir, progress_callback, progress_user_data
+      g_governor, path, &g_android_paths, NULL, progress_callback, progress_user_data
   );
 
   (*env)->ReleaseStringUTFChars(env, modelPath, path);
