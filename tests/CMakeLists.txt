@@ -376,3 +376,65 @@ add_executable(test_simple_generation test_simple_generation.c)
 target_link_libraries(test_simple_generation ethervoxai)
 target_include_directories(test_simple_generation PRIVATE ${CMAKE_SOURCE_DIR}/include)
 # Run: ./tests/test_simple_generation ~/.ethervox/models/governor/granite-4.0-h-1b-Q4_K_M.gguf
+
+# Session forking benchmark (TASK-C3.2) - measures ≥4× throughput improvement
+add_executable(bench_fork bench_fork.c)
+target_link_libraries(bench_fork ethervoxai)
+target_include_directories(bench_fork PRIVATE ${CMAKE_SOURCE_DIR}/include)
+# Not added to ctest (requires model file and is a benchmark, not a test)
+# Run manually: ./tests/bench_fork [model.gguf]
+# Example: ./tests/bench_fork ~/models/granite-3.0-8b-instruct-Q4_K_M.gguf
+# Target: ≥4× speedup for 300-document classification workload
+
+# Session forking leak test (TASK-C3.2) - verify 300 forks don't leak
+add_executable(test_session_leak test_session_leak.c)
+target_link_libraries(test_session_leak ethervoxai)
+target_include_directories(test_session_leak PRIVATE ${CMAKE_SOURCE_DIR}/include)
+# Run with ASan/LSan: ./tests/test_session_leak [model.gguf]
+# Should complete with zero leaks reported by sanitizers
+
+# Structured generation with confidence scoring (TASK-C3.3)
+add_executable(test_structured_confidence test_structured_confidence.c)
+target_link_libraries(test_structured_confidence ethervoxai)
+target_include_directories(test_structured_confidence PRIVATE ${CMAKE_SOURCE_DIR}/include)
+# Run: ./tests/test_structured_confidence <model.gguf>
+# Example: ./tests/test_structured_confidence ~/.ethervox/models/governor/granite-4.0-h-1b-Q4_K_M.gguf
+# Tests confidence calculation and log-prob extraction
+
+# LRU eviction and memory pressure (TASK-C3.4)
+add_executable(test_lru_eviction test_lru_eviction.c)
+target_link_libraries(test_lru_eviction ethervoxai)
+target_include_directories(test_lru_eviction PRIVATE ${CMAKE_SOURCE_DIR}/include)
+# Run: ./tests/test_lru_eviction <model.gguf>
+# Example: ./tests/test_lru_eviction ~/.ethervox/models/governor/granite-4.0-h-1b-Q4_K_M.gguf
+# Tests: resident never evicted, LRU order, max_on_demand, protected roles
+
+# Platform abstraction layer (TASK-C4.1)
+add_executable(test_platform_abstraction test_platform_abstraction.c)
+target_link_libraries(test_platform_abstraction ethervoxai)
+target_include_directories(test_platform_abstraction PRIVATE ${CMAKE_SOURCE_DIR}/include)
+# Run: ./tests/test_platform_abstraction
+# Tests: mutex, time, file system, directory, memory operations
+
+# Deterministic seeding (TASK-C4.2)
+add_executable(test_deterministic_seeding test_deterministic_seeding.c)
+target_link_libraries(test_deterministic_seeding ethervoxai)
+target_include_directories(test_deterministic_seeding PRIVATE ${CMAKE_SOURCE_DIR}/include)
+# Run: ./tests/test_deterministic_seeding <model.gguf>
+# Example: ./tests/test_deterministic_seeding ~/.ethervox/models/governor/granite-4.0-h-1b-Q4_K_M.gguf
+# Tests: same seed → identical output (20 runs), different seeds → different output, seed=0 → random
+
+# Structured logging and metrics (TASK-C4.3)
+add_executable(test_logging_metrics test_logging_metrics.c)
+target_link_libraries(test_logging_metrics ethervoxai)
+target_include_directories(test_logging_metrics PRIVATE ${CMAKE_SOURCE_DIR}/include)
+# Run: ./tests/test_logging_metrics
+# Tests: callback invocation, subsystem tagging, structured fields, metrics snapshot, metrics reset
+
+# LoRA adapter loading (TASK-C5.1)
+add_executable(test_adapter test_adapter.c)
+target_link_libraries(test_adapter ethervoxai)
+target_include_directories(test_adapter PRIVATE ${CMAKE_SOURCE_DIR}/include)
+# Run: ./tests/test_adapter [<model.gguf> <adapter.gguf>]
+# Tests: adapter loading, metadata reading, apply/clear adapters, NULL handling
+# Note: Without adapter file, runs API contract tests only

@@ -41,6 +41,16 @@ typedef struct ethervox_model_handle ethervox_model_handle_t;
 typedef void (*ethervox_progress_cb)(float progress, void* user_data);
 
 /**
+ * Model residency class (C3.4)
+ * 
+ * Determines whether a model should be evicted under memory pressure.
+ */
+typedef enum {
+    ETHERVOX_RESIDENCY_RESIDENT,   /**< Never evicted except explicitly; main models */
+    ETHERVOX_RESIDENCY_ON_DEMAND   /**< Evictable under pressure or TTL; vision/speech */
+} ethervox_residency_class_t;
+
+/**
  * Model configuration for loading
  */
 typedef struct {
@@ -48,8 +58,12 @@ typedef struct {
     const char* mmproj_path;       /**< Path to companion mmproj file (NULL if not multimodal) */
     uint32_t context_size;         /**< Context size in tokens */
     uint32_t n_threads;            /**< Number of threads for inference */
+    uint32_t n_seq_max;            /**< Max number of sequences (0 = default 1) */
     bool use_gpu;                  /**< Whether to use GPU acceleration */
+    bool kv_unified;               /**< Use unified KV buffer for shared prefixes */
     const char* role;              /**< Model role (e.g., "main", "vision", "embed") */
+    ethervox_residency_class_t residency;  /**< Residency class (C3.4) */
+    uint32_t ttl_seconds;          /**< TTL for on-demand models (0 = default 90s) */
 } ethervox_model_config_t;
 
 /**
@@ -155,6 +169,107 @@ ethervox_result_t ethervox_model_pool_memory_usage(
     const ethervox_model_pool_t* pool,
     uint64_t* out_used,
     uint64_t* out_budget
+);
+
+/**
+ * Get llama_model from a model handle
+ * 
+ * Returns the underlying llama_model pointer for session management.
+ * The pointer remains owned by the handle; do not free it.
+ * 
+ * @param handle Model handle
+ * @return llama_model pointer, or NULL if handle is invalid
+ */
+struct llama_model* ethervox_model_handle_get_model(
+    ethervox_model_handle_t* handle
+);
+
+/**
+ * Get llama_context from a model handle
+ * 
+ * Returns the underlying llama_context pointer for session management.
+ * The pointer remains owned by the handle; do not free it.
+ * 
+ * @param handle Model handle
+ * @return llama_context pointer, or NULL if handle is invalid
+ */
+struct llama_context* ethervox_model_handle_get_context(
+    ethervox_model_handle_t* handle
+);
+
+/**
+ * Memory pressure callback (C3.4)
+ * 
+ * Called by the host when the OS signals memory pressure. The pool will evict
+ * on-demand models in LRU order until pressure is relieved or no more evictable
+ * models remain.
+ * 
+ * Thread-safe: May be called from any thread.
+ * 
+ * @param user_data User data provided during registration
+ */
+typedef void (*ethervox_memory_pressure_cb)(void* user_data);
+
+/**
+ * Set memory pressure callback (C3.4)
+ * 
+ * Registers a callback that the host invokes when OS memory pressure occurs
+ * (e.g., DispatchSource.memoryPressure on Apple, onTrimMemory on Android).
+ * 
+ * When invoked, the pool evicts on-demand models in LRU order until sufficient
+ * memory is freed. Resident models are never evicted by this mechanism.
+ * 
+ * @param pool Model pool
+ * @param callback Pressure callback (NULL to unregister)
+ * @param user_data User data passed to callback
+ * @return ETHERVOX_SUCCESS or error code
+ */
+ethervox_result_t ethervox_model_pool_set_pressure_callback(
+    ethervox_model_pool_t* pool,
+    ethervox_memory_pressure_cb callback,
+    void* user_data
+);
+
+/**
+ * Evict LRU on-demand models (C3.4)
+ * 
+ * Evicts least-recently-used on-demand models until the specified number of bytes
+ * is freed, or until no more evictable models remain.
+ * 
+ * Protected roles are never evicted (e.g., protect "main" governor).
+ * Models with active inference are skipped.
+ * 
+ * Thread-safe: Can be called concurrently.
+ * 
+ * @param pool Model pool
+ * @param bytes_to_free Target bytes to free (0 = evict all on-demand)
+ * @param protected_roles Array of role names to protect (NULL-terminated)
+ * @param out_freed Receives actual bytes freed (can be NULL)
+ * @return ETHERVOX_SUCCESS or error code
+ */
+ethervox_result_t ethervox_model_pool_evict_lru(
+    ethervox_model_pool_t* pool,
+    uint64_t bytes_to_free,
+    const char** protected_roles,
+    uint64_t* out_freed
+);
+
+/**
+ * Set max concurrent on-demand models (C3.4)
+ * 
+ * Enforces a limit on the number of simultaneously loaded on-demand models.
+ * Used for tier S/XS devices where only 1 on-demand model is allowed.
+ * 
+ * When the limit is reached, loading a new on-demand model evicts the LRU one.
+ * Resident models do not count toward this limit.
+ * 
+ * @param pool Model pool
+ * @param max_concurrent Maximum concurrent on-demand models (0 = no limit)
+ * @return ETHERVOX_SUCCESS or error code
+ */
+ethervox_result_t ethervox_model_pool_set_max_on_demand(
+    ethervox_model_pool_t* pool,
+    uint32_t max_concurrent
 );
 
 #ifdef __cplusplus

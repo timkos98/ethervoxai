@@ -8,9 +8,11 @@
 
 #include "ethervox/model_pool.h"
 #include "ethervox/logging.h"
+#include "ethervox/platform_thread.h"
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 
 #if defined(ETHERVOX_WITH_LLAMA) && defined(LLAMA_CPP_AVAILABLE) && LLAMA_CPP_AVAILABLE
 #include <llama.h>
@@ -23,46 +25,26 @@
 #include "mtmd.h"
 #endif
 
-// Platform-specific threading
-#ifdef _WIN32
-#include <windows.h>
-typedef CRITICAL_SECTION mutex_t;
-#define MUTEX_INIT(m) InitializeCriticalSection(&(m))
-#define MUTEX_DESTROY(m) DeleteCriticalSection(&(m))
-#define MUTEX_LOCK(m) EnterCriticalSection(&(m))
-#define MUTEX_UNLOCK(m) LeaveCriticalSection(&(m))
-#else
-#include <pthread.h>
-typedef pthread_mutex_t mutex_t;
-#define MUTEX_INIT(m) pthread_mutex_init(&(m), NULL)
-#define MUTEX_DESTROY(m) pthread_mutex_destroy(&(m))
-#define MUTEX_LOCK(m) pthread_mutex_lock(&(m))
-#define MUTEX_UNLOCK(m) pthread_mutex_unlock(&(m))
-#endif
+// Convenience macros for mutex operations (ignore return values for now)
+#define MUTEX_INIT(m) ethervox_mutex_init(&(m))
+#define MUTEX_DESTROY(m) ethervox_mutex_destroy(&(m))
+#define MUTEX_LOCK(m) ethervox_mutex_lock(&(m))
+#define MUTEX_UNLOCK(m) ethervox_mutex_unlock(&(m))
 
 // Memory estimation constants (bytes per token for KV cache)
 #define KV_BYTES_PER_TOKEN_F16 2048  // FP16 KV cache, typical for 7-8B models
 #define OVERHEAD_BYTES 128 * 1024 * 1024  // 128MB overhead per model
 
 // Global backend state (refcounted)
-// Note: Use static initializer for mutex to avoid race conditions
-#ifdef _WIN32
 static struct {
-    mutex_t mutex;
-    int refcount;
-    bool initialized;
-} g_backend = {0};  // Windows CRITICAL_SECTION can be zero-initialized
-#else
-static struct {
-    mutex_t mutex;
+    ethervox_mutex_t mutex;
     int refcount;
     bool initialized;
 } g_backend = {
-    .mutex = PTHREAD_MUTEX_INITIALIZER,
+    .mutex = ETHERVOX_MUTEX_INITIALIZER,
     .refcount = 0,
     .initialized = false
 };
-#endif
 
 /**
  * Model handle structure
@@ -71,9 +53,17 @@ struct ethervox_model_handle {
     struct llama_model* model;
     struct llama_context* ctx;
     void* mtmd_ctx;              // mtmd_context* for multimodal support (NULL if not supported)
-    mutex_t inference_mutex;  // Serializes inference on this model
-    uint64_t memory_bytes;    // Actual memory used
-    char role[64];            // Model role (main, vision, embed)
+    ethervox_mutex_t inference_mutex;     // Serializes inference on this model
+    uint64_t memory_bytes;       // Actual memory used
+    char role[64];               // Model role (main, vision, embed)
+    
+    // C3.4: Memory pressure and LRU eviction
+    ethervox_residency_class_t residency;  // RESIDENT or ON_DEMAND
+    time_t last_use;             // Last access timestamp (LRU tracking)
+    time_t loaded_at;            // Load timestamp (for TTL calculation)
+    int refcount;                // Reference count (active generations)
+    uint32_t ttl_seconds;        // TTL for on-demand models (0 = no expiry)
+    
     struct ethervox_model_handle* next;  // Linked list
 };
 
@@ -84,8 +74,14 @@ struct ethervox_model_pool {
     ethervox_paths_t paths;
     uint64_t budget_bytes;
     uint64_t used_bytes;
-    mutex_t pool_mutex;  // Protects pool state
+    ethervox_mutex_t pool_mutex;  // Protects pool state
     ethervox_model_handle_t* models;  // Linked list of loaded models
+    
+    // C3.4: Memory pressure and LRU eviction
+    ethervox_memory_pressure_cb pressure_callback;  // OS pressure handler
+    void* pressure_user_data;                       // User data for callback
+    uint32_t max_on_demand;                         // Max concurrent on-demand (0 = no limit)
+    uint32_t current_on_demand;                     // Current on-demand count
 };
 
 /**
@@ -256,11 +252,57 @@ ethervox_result_t ethervox_model_pool_load(
         return result;
     }
     
+    // C3.4: Retry-once logic - if doesn't fit, try evicting and retry
+    if (!fits && config->residency == ETHERVOX_RESIDENCY_ON_DEMAND) {
+        ETHERVOX_LOG_INFO("[ModelPool] Model doesn't fit, attempting LRU eviction (need %llu MB)",
+                         (unsigned long long)(required_bytes / (1024 * 1024)));
+        
+        // Try to free enough space for this model
+        uint64_t bytes_needed = required_bytes - (pool->budget_bytes - pool->used_bytes);
+        uint64_t freed = 0;
+        
+        // Protect the role we're trying to load (don't evict same role)
+        const char* protected[2] = { config->role, NULL };
+        result = ethervox_model_pool_evict_lru(pool, bytes_needed, protected, &freed);
+        
+        if (result == ETHERVOX_SUCCESS && freed > 0) {
+            ETHERVOX_LOG_INFO("[ModelPool] Evicted %llu MB, retrying load",
+                             (unsigned long long)(freed / (1024 * 1024)));
+            
+            // Retry would_fit check
+            result = ethervox_model_pool_would_fit(pool, config, &fits, &required_bytes);
+            if (result != ETHERVOX_SUCCESS) {
+                return result;
+            }
+        }
+    }
+    
     if (!fits) {
-        ETHERVOX_LOG_ERROR("[ModelPool] Model requires %llu MB but only %llu MB available",
+        ETHERVOX_LOG_ERROR("[ModelPool] Model requires %llu MB but only %llu MB available (after eviction attempt)",
                           (unsigned long long)(required_bytes / (1024 * 1024)),
                           (unsigned long long)((pool->budget_bytes - pool->used_bytes) / (1024 * 1024)));
         return ETHERVOX_ERROR_OUT_OF_MEMORY;
+    }
+    
+    // C3.4: Check max_on_demand limit
+    if (config->residency == ETHERVOX_RESIDENCY_ON_DEMAND && pool->max_on_demand > 0) {
+        MUTEX_LOCK(pool->pool_mutex);
+        uint32_t current = pool->current_on_demand;
+        MUTEX_UNLOCK(pool->pool_mutex);
+        
+        if (current >= pool->max_on_demand) {
+            ETHERVOX_LOG_INFO("[ModelPool] Max on-demand limit reached (%u), evicting LRU", pool->max_on_demand);
+            
+            // Evict one on-demand model (protect the role we're loading)
+            const char* protected[2] = { config->role, NULL };
+            uint64_t freed = 0;
+            result = ethervox_model_pool_evict_lru(pool, 0, protected, &freed);
+            
+            if (result != ETHERVOX_SUCCESS) {
+                ETHERVOX_LOG_ERROR("[ModelPool] Failed to evict for max_on_demand enforcement");
+                return ETHERVOX_ERROR_OUT_OF_MEMORY;
+            }
+        }
     }
     
     ETHERVOX_LOG_INFO("[ModelPool] Loading model: %s (role=%s, ctx=%u)",
@@ -282,6 +324,8 @@ ethervox_result_t ethervox_model_pool_load(
     ctx_params.n_ctx = config->context_size;
     ctx_params.n_threads = config->n_threads;
     ctx_params.n_threads_batch = config->n_threads;
+    ctx_params.n_seq_max = config->n_seq_max > 0 ? config->n_seq_max : 1;
+    ctx_params.kv_unified = config->kv_unified;
     
     struct llama_context* ctx = llama_new_context_with_model(model, ctx_params);
     if (!ctx) {
@@ -305,6 +349,14 @@ ethervox_result_t ethervox_model_pool_load(
     if (config->role) {
         strncpy(handle->role, config->role, sizeof(handle->role) - 1);
     }
+    
+    // C3.4: Initialize LRU and residency fields
+    time_t now = time(NULL);
+    handle->residency = config->residency;
+    handle->last_use = now;
+    handle->loaded_at = now;
+    handle->refcount = 0;
+    handle->ttl_seconds = (config->ttl_seconds > 0) ? config->ttl_seconds : 90;  // Default 90s
     
     // Initialize mutex BEFORE any error paths that might destroy it
     MUTEX_INIT(handle->inference_mutex);
@@ -350,6 +402,11 @@ ethervox_result_t ethervox_model_pool_load(
     handle->next = pool->models;
     pool->models = handle;
     pool->used_bytes += required_bytes;
+    
+    // C3.4: Update on-demand counter
+    if (handle->residency == ETHERVOX_RESIDENCY_ON_DEMAND) {
+        pool->current_on_demand++;
+    }
     MUTEX_UNLOCK(pool->pool_mutex);
     
     ETHERVOX_LOG_INFO("[ModelPool] Loaded model successfully (using %llu MB / %llu MB)",
@@ -380,6 +437,11 @@ ethervox_result_t ethervox_model_pool_unload(
     if (*prev) {
         *prev = handle->next;
         pool->used_bytes -= handle->memory_bytes;
+        
+        // C3.4: Update on-demand counter
+        if (handle->residency == ETHERVOX_RESIDENCY_ON_DEMAND) {
+            pool->current_on_demand--;
+        }
     }
     MUTEX_UNLOCK(pool->pool_mutex);
     
@@ -461,6 +523,159 @@ ethervox_result_t ethervox_model_pool_memory_usage(
     }
     if (out_budget) {
         *out_budget = pool->budget_bytes;
+    }
+    
+    return ETHERVOX_SUCCESS;
+}
+
+struct llama_model* ethervox_model_handle_get_model(
+    ethervox_model_handle_t* handle
+) {
+    return handle ? handle->model : NULL;
+}
+
+struct llama_context* ethervox_model_handle_get_context(
+    ethervox_model_handle_t* handle
+) {
+    return handle ? handle->ctx : NULL;
+}
+
+// ============================================================================
+// C3.4: Memory Pressure and LRU Eviction
+// ============================================================================
+
+ethervox_result_t ethervox_model_pool_set_pressure_callback(
+    ethervox_model_pool_t* pool,
+    ethervox_memory_pressure_cb callback,
+    void* user_data
+) {
+    if (!pool) {
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
+    
+    MUTEX_LOCK(pool->pool_mutex);
+    pool->pressure_callback = callback;
+    pool->pressure_user_data = user_data;
+    MUTEX_UNLOCK(pool->pool_mutex);
+    
+    ETHERVOX_LOG_INFO("[ModelPool] Memory pressure callback %s",
+                     callback ? "registered" : "unregistered");
+    return ETHERVOX_SUCCESS;
+}
+
+ethervox_result_t ethervox_model_pool_set_max_on_demand(
+    ethervox_model_pool_t* pool,
+    uint32_t max_concurrent
+) {
+    if (!pool) {
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
+    
+    MUTEX_LOCK(pool->pool_mutex);
+    pool->max_on_demand = max_concurrent;
+    MUTEX_UNLOCK(pool->pool_mutex);
+    
+    ETHERVOX_LOG_INFO("[ModelPool] Max concurrent on-demand models: %u %s",
+                     max_concurrent, max_concurrent == 0 ? "(no limit)" : "");
+    return ETHERVOX_SUCCESS;
+}
+
+/**
+ * Helper: Check if role is protected
+ */
+static bool is_role_protected(const char* role, const char** protected_roles) {
+    if (!protected_roles || !role) {
+        return false;
+    }
+    
+    for (int i = 0; protected_roles[i] != NULL; i++) {
+        if (strcmp(role, protected_roles[i]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+ethervox_result_t ethervox_model_pool_evict_lru(
+    ethervox_model_pool_t* pool,
+    uint64_t bytes_to_free,
+    const char** protected_roles,
+    uint64_t* out_freed
+) {
+    if (!pool) {
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
+    
+    MUTEX_LOCK(pool->pool_mutex);
+    
+    uint64_t freed = 0;
+    bool continue_evicting = true;
+    
+    while (continue_evicting) {
+        // Find LRU on-demand model that can be evicted
+        ethervox_model_handle_t* lru_candidate = NULL;
+        time_t oldest_use = 0;
+        
+        for (ethervox_model_handle_t* h = pool->models; h != NULL; h = h->next) {
+            // Skip resident models
+            if (h->residency != ETHERVOX_RESIDENCY_ON_DEMAND) {
+                continue;
+            }
+            
+            // Skip models with active references (in-flight generation)
+            if (h->refcount > 0) {
+                continue;
+            }
+            
+            // Skip protected roles
+            if (is_role_protected(h->role, protected_roles)) {
+                continue;
+            }
+            
+            // Track oldest (LRU)
+            if (lru_candidate == NULL || h->last_use < oldest_use) {
+                lru_candidate = h;
+                oldest_use = h->last_use;
+            }
+        }
+        
+        // No more evictable models
+        if (lru_candidate == NULL) {
+            ETHERVOX_LOG_INFO("[ModelPool] LRU eviction: no more evictable models (freed %llu MB)",
+                             (unsigned long long)(freed / (1024 * 1024)));
+            break;
+        }
+        
+        // Evict this model
+        ETHERVOX_LOG_INFO("[ModelPool] Evicting LRU model: role=%s, last_use=%ld seconds ago",
+                         lru_candidate->role,
+                         (long)(time(NULL) - lru_candidate->last_use));
+        
+        uint64_t model_bytes = lru_candidate->memory_bytes;
+        freed += model_bytes;
+        
+        // Unlock before calling unload (unload acquires the lock)
+        MUTEX_UNLOCK(pool->pool_mutex);
+        ethervox_result_t result = ethervox_model_pool_unload(pool, lru_candidate);
+        MUTEX_LOCK(pool->pool_mutex);
+        
+        if (result != ETHERVOX_SUCCESS) {
+            ETHERVOX_LOG_ERROR("[ModelPool] Failed to unload LRU model");
+            break;
+        }
+        
+        // Check if we've freed enough (if target was specified)
+        if (bytes_to_free > 0 && freed >= bytes_to_free) {
+            ETHERVOX_LOG_INFO("[ModelPool] LRU eviction target met: freed %llu MB",
+                             (unsigned long long)(freed / (1024 * 1024)));
+            continue_evicting = false;
+        }
+    }
+    
+    MUTEX_UNLOCK(pool->pool_mutex);
+    
+    if (out_freed) {
+        *out_freed = freed;
     }
     
     return ETHERVOX_SUCCESS;
