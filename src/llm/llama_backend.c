@@ -683,8 +683,8 @@ static ethervox_result_t llama_backend_generate(ethervox_llm_backend_t* backend,
   
   llama_sampler_chain_add(sampler, llama_sampler_init_top_k(40));
   llama_sampler_chain_add(sampler, llama_sampler_init_top_p(ctx->top_p, 1));
-  llama_sampler_chain_add(sampler, llama_sampler_init_dist(0));
-  LLAMA_LOG("Sampler chain created, starting token generation (max %d tokens)", ctx->n_predict);
+  llama_sampler_chain_add(sampler, llama_sampler_init_dist(ctx->seed));
+  LLAMA_LOG("Sampler chain created (seed=%u), starting token generation (max %d tokens)", ctx->seed, ctx->n_predict);
   
   // Generate tokens
   int n_generated = 0;
@@ -971,10 +971,10 @@ static ethervox_result_t llama_backend_generate_stream(ethervox_llm_backend_t* b
   
   llama_sampler_chain_add(sampler, llama_sampler_init_top_k(40));
   llama_sampler_chain_add(sampler, llama_sampler_init_top_p(ctx->top_p, 1));
-  llama_sampler_chain_add(sampler, llama_sampler_init_dist(0));
+  llama_sampler_chain_add(sampler, llama_sampler_init_dist(ctx->seed));
   
-  LLAMA_LOG("Sampler chain created (temp=%.2f, top_p=%.2f, top_k=40, repeat_penalty=1.2), starting streaming token generation (max %u tokens)", 
-            (double)ctx->temperature, (double)ctx->top_p, (unsigned int)ctx->n_predict);
+  LLAMA_LOG("Sampler chain created (temp=%.2f, top_p=%.2f, top_k=40, repeat_penalty=1.2, seed=%u), starting streaming token generation (max %u tokens)",
+            (double)ctx->temperature, (double)ctx->top_p, ctx->seed, (unsigned int)ctx->n_predict);
 
   // Generate tokens and stream them
   int n_generated = 0;
