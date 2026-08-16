@@ -25,6 +25,7 @@
 #include "ethervox/device_profile.h"  // Adaptive hardware configuration
 #include "ethervox/error.h"
 #include "ethervox/kv_cache_persistence.h"  // KV cache save/load for fast startup
+#include "ethervox/model_pool.h"      // Model pool integration (N6.2a-core)
 #include "ethervox/tool_manifest.h"   // Manifest system for optimized prompts
 
 #ifdef _WIN32
@@ -156,6 +157,28 @@ static bool governor_load_progress_callback(float progress, void* user_data) {
   return true;  // Continue loading
 }
 
+// Progress callback adapter for model pool (N6.2a-core)
+// NOTE: Pool API has no cancel_token parameter - cancellation during pool-backed
+// loads is not currently supported (filed against N6.4). This adapter forwards
+// progress but cannot cancel mid-flight.
+static void pool_progress_adapter(float progress, void* user_data) {
+  if (user_data) {
+    typedef struct {
+      ethervox_load_progress_callback callback;
+      void* callback_user_data;
+    } pool_callback_context_t;
+
+    pool_callback_context_t* ctx = (pool_callback_context_t*)user_data;
+    if (ctx->callback) {
+      char msg[128];
+      snprintf(msg, sizeof(msg), "Loading model via pool: %d%%", (int)(progress * 100.0f));
+      // Cannot check cancellation here - pool API has no cancel_token
+      ctx->callback("loading_model", progress, msg, ctx->callback_user_data);
+    }
+  }
+  GOV_LOG("[Governor] Pool load progress: %d%%", (int)(progress * 100.0f));
+}
+
 /**
  * Emit token with UTF-8 validation and event/callback handling
  *
@@ -263,6 +286,10 @@ struct ethervox_governor {
                            // ethervox_governor_reload_model() can re-attach
                            // mtmd on reload (NULL for text-only Governor
                            // instances)
+
+  // Model pool integration (N6.2a-core) - NULL = legacy direct loading
+  ethervox_model_pool_t* pool;          // weak ref, NOT owned
+  ethervox_model_handle_t* model_handle; // owned; unload via pool, never llama_free() it
 
   // Saved system prompt for recovery after nuclear clear
   llama_token* system_prompt_tokens;
@@ -1753,6 +1780,74 @@ static ethervox_result_t governor_load_model_impl(ethervox_governor_t* governor,
   GOV_LOG("[Governor] Path: %s", model_path);
   GOV_LOG("[Governor] Model params address: %p", (void*)&model_params);
 
+  // N6.2a-core: Pool-backed loading when governor->pool is set
+  // Pool owns weights + llama_context only; mmproj_path is always NULL in pool
+  // config (governor's existing mtmd code runs unchanged after this, against
+  // whichever model/context the load path produced).
+  if (governor->pool) {
+    GOV_LOG("[Governor] Loading model via pool (N6.2a-core)");
+    
+    // Build pool config from governor params
+    ethervox_model_config_t pool_config = {0};
+    pool_config.model_path = model_path;
+    pool_config.mmproj_path = NULL;  // ALWAYS NULL - governor attaches mtmd separately
+    pool_config.context_size = governor->config.context_size;
+    pool_config.n_threads = governor->config.n_threads;
+    pool_config.n_seq_max = mmproj_path ? 3 : 2;  // Audio needs 3 sequences
+    pool_config.use_gpu = (governor->config.gpu_layers > 0);
+    pool_config.kv_unified = false;  // Use default KV cache type
+    pool_config.role = "main";
+    pool_config.residency = ETHERVOX_RESIDENCY_RESIDENT;
+    pool_config.ttl_seconds = 0;  // Never evict
+    
+    // Set up progress callback adapter (note: cannot cancel via pool API)
+    typedef struct {
+      ethervox_load_progress_callback callback;
+      void* callback_user_data;
+    } pool_callback_context_t;
+    
+    pool_callback_context_t pool_cb_ctx = {
+      .callback = progress_callback,
+      .callback_user_data = user_data
+    };
+    
+    // Load through pool
+    ethervox_result_t pool_result = ethervox_model_pool_load(
+        governor->pool,
+        &pool_config,
+        pool_progress_adapter,
+        progress_callback ? &pool_cb_ctx : NULL,
+        &governor->model_handle
+    );
+    
+    if (ethervox_is_error(pool_result)) {
+      GOV_ERROR("[Governor] Pool load failed with error code: %d", pool_result);
+      return pool_result;
+    }
+    
+    // Extract llama internals from pool handle
+    governor->llm_model = ethervox_model_handle_get_model(governor->model_handle);
+    governor->llm_ctx = ethervox_model_handle_get_context(governor->model_handle);
+    
+    if (!governor->llm_model || !governor->llm_ctx) {
+      GOV_ERROR("[Governor] Pool returned NULL model or context");
+      if (governor->model_handle) {
+        ethervox_model_pool_unload(governor->pool, governor->model_handle);
+        governor->model_handle = NULL;
+      }
+      return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
+    
+    GOV_LOG("[Governor] Model loaded via pool: model=%p, ctx=%p", 
+            (void*)governor->llm_model, (void*)governor->llm_ctx);
+    
+    // Skip to mtmd attachment (after context creation in legacy path)
+    goto after_context_creation;
+  }
+
+  // Legacy direct loading path (iOS, Workspace, or Android without pool)
+  GOV_LOG("[Governor] Loading model directly (legacy path)");
+
   governor->llm_model = llama_model_load_from_file(model_path, model_params);
 
   GOV_LOG("[Governor] llama_model_load_from_file returned: %p", (void*)governor->llm_model);
@@ -1865,6 +1960,8 @@ static ethervox_result_t governor_load_model_impl(ethervox_governor_t* governor,
 
   GOV_LOG("Context created successfully");
 
+after_context_creation:  // N6.2a-core: Label for pool path to skip legacy context creation
+  
   // Attach mtmd (multimodal audio) context when loading with audio support -
   // see docs/UNIFIED_VOICE_MODEL_ARCHITECTURE.md section 3.1. Must happen
   // before any decode below, since ASR decode (seq 2) shares this same
@@ -1881,9 +1978,15 @@ static ethervox_result_t governor_load_model_impl(ethervox_governor_t* governor,
     governor->mtmd_ctx = mtmd_init_from_file(mmproj_path, governor->llm_model, mtmd_params);
     if (!governor->mtmd_ctx) {
       GOV_ERROR("Failed to load mmproj from %s - audio support unavailable", mmproj_path);
-      llama_free(governor->llm_ctx);
+      // N6.2a-core: Pool-aware cleanup
+      if (governor->pool && governor->model_handle) {
+        ethervox_model_pool_unload(governor->pool, governor->model_handle);
+        governor->model_handle = NULL;
+      } else {
+        llama_free(governor->llm_ctx);
+        llama_model_free(governor->llm_model);
+      }
       governor->llm_ctx = NULL;
-      llama_model_free(governor->llm_model);
       governor->llm_model = NULL;
       return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
@@ -1892,9 +1995,15 @@ static ethervox_result_t governor_load_model_impl(ethervox_governor_t* governor,
       GOV_ERROR("Loaded mmproj (%s) does not report audio support - wrong file?", mmproj_path);
       mtmd_free(governor->mtmd_ctx);
       governor->mtmd_ctx = NULL;
-      llama_free(governor->llm_ctx);
+      // N6.2a-core: Pool-aware cleanup
+      if (governor->pool && governor->model_handle) {
+        ethervox_model_pool_unload(governor->pool, governor->model_handle);
+        governor->model_handle = NULL;
+      } else {
+        llama_free(governor->llm_ctx);
+        llama_model_free(governor->llm_model);
+      }
       governor->llm_ctx = NULL;
-      llama_model_free(governor->llm_model);
       governor->llm_model = NULL;
       return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
@@ -1911,9 +2020,15 @@ static ethervox_result_t governor_load_model_impl(ethervox_governor_t* governor,
 #else
   if (mmproj_path) {
     GOV_ERROR("Audio-capable load requested but mtmd is not available in this build");
-    llama_free(governor->llm_ctx);
+    // N6.2a-core: Pool-aware cleanup
+    if (governor->pool && governor->model_handle) {
+      ethervox_model_pool_unload(governor->pool, governor->model_handle);
+      governor->model_handle = NULL;
+    } else {
+      llama_free(governor->llm_ctx);
+      llama_model_free(governor->llm_model);
+    }
     governor->llm_ctx = NULL;
-    llama_model_free(governor->llm_model);
     governor->llm_model = NULL;
     return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
@@ -2085,8 +2200,14 @@ static ethervox_result_t governor_load_model_impl(ethervox_governor_t* governor,
     
     if (build_result < 0) {
       GOV_ERROR("Failed to build system prompt (error code: %d)", build_result);
-      llama_free(governor->llm_ctx);
-      llama_model_free(governor->llm_model);
+      // N6.2a-core: Pool-aware cleanup
+      if (governor->pool && governor->model_handle) {
+        ethervox_model_pool_unload(governor->pool, governor->model_handle);
+        governor->model_handle = NULL;
+      } else {
+        llama_free(governor->llm_ctx);
+        llama_model_free(governor->llm_model);
+      }
       governor->llm_ctx = NULL;
       governor->llm_model = NULL;
       return ETHERVOX_ERROR_INVALID_ARGUMENT;
@@ -2122,8 +2243,14 @@ static ethervox_result_t governor_load_model_impl(ethervox_governor_t* governor,
 
   if (n_tokens <= 0) {
     GOV_ERROR("Failed to tokenize system prompt");
-    llama_free(governor->llm_ctx);
-    llama_model_free(governor->llm_model);
+    // N6.2a-core: Pool-aware cleanup
+    if (governor->pool && governor->model_handle) {
+      ethervox_model_pool_unload(governor->pool, governor->model_handle);
+      governor->model_handle = NULL;
+    } else {
+      llama_free(governor->llm_ctx);
+      llama_model_free(governor->llm_model);
+    }
     governor->llm_ctx = NULL;
     governor->llm_model = NULL;
     return ETHERVOX_ERROR_INVALID_ARGUMENT;
@@ -2132,8 +2259,14 @@ static ethervox_result_t governor_load_model_impl(ethervox_governor_t* governor,
   llama_token* tokens = malloc(n_tokens * sizeof(llama_token));
   if (!tokens) {
     GOV_ERROR("Failed to allocate token buffer");
-    llama_free(governor->llm_ctx);
-    llama_model_free(governor->llm_model);
+    // N6.2a-core: Pool-aware cleanup
+    if (governor->pool && governor->model_handle) {
+      ethervox_model_pool_unload(governor->pool, governor->model_handle);
+      governor->model_handle = NULL;
+    } else {
+      llama_free(governor->llm_ctx);
+      llama_model_free(governor->llm_model);
+    }
     governor->llm_ctx = NULL;
     governor->llm_model = NULL;
     return ETHERVOX_ERROR_INVALID_ARGUMENT;
@@ -2204,8 +2337,14 @@ static ethervox_result_t governor_load_model_impl(ethervox_governor_t* governor,
       GOV_ERROR("Failed to process system prompt chunk at token %d", i);
       llama_batch_free(batch);
       free(tokens);
-      llama_free(governor->llm_ctx);
-      llama_model_free(governor->llm_model);
+      // N6.2a-core: Pool-aware cleanup
+      if (governor->pool && governor->model_handle) {
+        ethervox_model_pool_unload(governor->pool, governor->model_handle);
+        governor->model_handle = NULL;
+      } else {
+        llama_free(governor->llm_ctx);
+        llama_model_free(governor->llm_model);
+      }
       governor->llm_ctx = NULL;
       governor->llm_model = NULL;
       return ETHERVOX_ERROR_INVALID_ARGUMENT;

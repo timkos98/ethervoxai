@@ -198,6 +198,19 @@ struct llama_context* ethervox_model_handle_get_context(
 );
 
 /**
+ * Get mtmd_context from a model handle (N6.3)
+ * 
+ * Returns the multimodal context pointer if the model was loaded with mmproj_path.
+ * The pointer remains owned by the handle; do not free it.
+ * 
+ * @param handle Model handle
+ * @return mtmd_context pointer, or NULL if handle is invalid or model has no mmproj
+ */
+struct mtmd_context* ethervox_model_handle_get_mtmd(
+    ethervox_model_handle_t* handle
+);
+
+/**
  * Memory pressure callback (C3.4)
  * 
  * Called by the host when the OS signals memory pressure. The pool will evict

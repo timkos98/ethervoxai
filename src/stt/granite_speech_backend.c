@@ -43,6 +43,7 @@
 #include "ethervox/logging.h"
 #include "ethervox/chat_template.h"
 #include "ethervox/granite_speech_decode.h"
+#include "ethervox/model_pool.h"  // N6.3: Pool integration
 
 #if defined(LLAMA_CPP_AVAILABLE) && LLAMA_CPP_AVAILABLE && defined(MTMD_AVAILABLE) && MTMD_AVAILABLE
 
@@ -62,6 +63,9 @@ typedef struct {
   mtmd_context* mctx;
   const chat_template_t* tmpl;  // CHAT_TEMPLATE_GRANITE - shared with the Governor's format
   int audio_sample_rate;        // From mtmd_get_audio_sample_rate(), expected 16000
+  // N6.3: Pool integration
+  ethervox_model_pool_t* pool;          // weak ref, NULL = legacy direct loading
+  ethervox_model_handle_t* model_handle; // owned, unload via pool when non-NULL
 } granite_speech_context_t;
 
 static void granite_speech_log_callback(enum ggml_log_level level, const char* text, void* user_data) {
@@ -92,6 +96,9 @@ ethervox_result_t ethervox_stt_granite_speech_init(ethervox_stt_runtime_t* runti
     return ETHERVOX_ERROR_OUT_OF_MEMORY;
   }
 
+  // N6.3: Store pool reference if provided
+  gs->pool = runtime->config.pool;
+
   if (!g_granite_llama_backend_initialized) {
     ggml_log_set(granite_speech_log_callback, NULL);
     llama_log_set(granite_speech_log_callback, NULL);
@@ -105,48 +112,91 @@ ethervox_result_t ethervox_stt_granite_speech_init(ethervox_stt_runtime_t* runti
     g_granite_llama_backend_initialized = true;
   }
 
-  struct llama_model_params model_params = llama_model_default_params();
-  model_params.n_gpu_layers = runtime->config.n_gpu_layers;
+  // N6.3: Load through pool if available (Android with N6.2 complete),
+  // otherwise fall back to direct loading (iOS, other platforms)
+  if (gs->pool) {
+    LOG_INFO("Granite Speech: loading via model pool for budget enforcement");
+    
+    ethervox_model_config_t pool_config = {
+      .model_path = runtime->config.model_path,
+      .mmproj_path = runtime->config.mmproj_path,  // Pool handles mmproj loading
+      .context_size = 4096,
+      .n_threads = 4,
+      .use_gpu = (runtime->config.n_gpu_layers > 0),
+      .role = "speech",  // Role for pool tracking
+      .n_seq_max = 3,    // Typical for multimodal models
+    };
+    
+    ethervox_result_t pool_result = ethervox_model_pool_load(
+      gs->pool, &pool_config, NULL, NULL, &gs->model_handle
+    );
+    
+    if (ethervox_is_error(pool_result)) {
+      LOG_ERROR("Granite Speech: pool load failed with error %d", pool_result);
+      free(gs);
+      return pool_result;
+    }
+    
+    // Extract model, context, and mtmd from pool handle
+    gs->model = ethervox_model_handle_get_model(gs->model_handle);
+    gs->ctx = ethervox_model_handle_get_context(gs->model_handle);
+    gs->mctx = ethervox_model_handle_get_mtmd(gs->model_handle);
+    
+    if (!gs->model || !gs->ctx || !gs->mctx) {
+      LOG_ERROR("Granite Speech: pool returned NULL components");
+      ethervox_model_pool_unload(gs->pool, gs->model_handle);
+      free(gs);
+      return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
+    
+    LOG_INFO("Granite Speech: loaded via pool successfully");
+  } else {
+    // Legacy direct loading path (iOS, other platforms without pool)
+    LOG_INFO("Granite Speech: loading directly (no pool configured)");
+    
+    struct llama_model_params model_params = llama_model_default_params();
+    model_params.n_gpu_layers = runtime->config.n_gpu_layers;
 
-  gs->model = llama_model_load_from_file(runtime->config.model_path, model_params);
-  if (!gs->model) {
-    LOG_ERROR("Granite Speech: failed to load model from %s", runtime->config.model_path);
-    free(gs);
-    return ETHERVOX_ERROR_INVALID_ARGUMENT;
-  }
+    gs->model = llama_model_load_from_file(runtime->config.model_path, model_params);
+    if (!gs->model) {
+      LOG_ERROR("Granite Speech: failed to load model from %s", runtime->config.model_path);
+      free(gs);
+      return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
 
-  struct llama_context_params ctx_params = llama_context_default_params();
-  // Granite Speech's own model card documents evaluation on segments up to
-  // ~9 minutes. 4096 tokens comfortably covers one utterance's audio tokens
-  // + prompt + generated transcript for a single one-shot call.
-  ctx_params.n_ctx = 4096;
-  ctx_params.n_batch = 512;
-  ctx_params.n_ubatch = 512;
-  ctx_params.no_perf = true;
+    struct llama_context_params ctx_params = llama_context_default_params();
+    // Granite Speech's own model card documents evaluation on segments up to
+    // ~9 minutes. 4096 tokens comfortably covers one utterance's audio tokens
+    // + prompt + generated transcript for a single one-shot call.
+    ctx_params.n_ctx = 4096;
+    ctx_params.n_batch = 512;
+    ctx_params.n_ubatch = 512;
+    ctx_params.no_perf = true;
 
-  gs->ctx = llama_init_from_model(gs->model, ctx_params);
-  if (!gs->ctx) {
-    LOG_ERROR("Granite Speech: failed to create llama context");
-    llama_model_free(gs->model);
-    free(gs);
-    return ETHERVOX_ERROR_INVALID_ARGUMENT;
-  }
+    gs->ctx = llama_init_from_model(gs->model, ctx_params);
+    if (!gs->ctx) {
+      LOG_ERROR("Granite Speech: failed to create llama context");
+      llama_model_free(gs->model);
+      free(gs);
+      return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
 
-  struct mtmd_context_params mtmd_params = mtmd_context_params_default();
-  mtmd_params.use_gpu = (runtime->config.n_gpu_layers != 0);
-  mtmd_params.print_timings = false;
-  mtmd_params.n_threads = ctx_params.n_threads;
-  // media_marker left NULL: the mmproj GGUF's own metadata carries the
-  // "<|audio|>" marker used verbatim in the prompt strings below, so mtmd
-  // resolves it from the file without an override.
+    struct mtmd_context_params mtmd_params = mtmd_context_params_default();
+    mtmd_params.use_gpu = (runtime->config.n_gpu_layers != 0);
+    mtmd_params.print_timings = false;
+    mtmd_params.n_threads = ctx_params.n_threads;
+    // media_marker left NULL: the mmproj GGUF's own metadata carries the
+    // "<|audio|>" marker used verbatim in the prompt strings below, so mtmd
+    // resolves it from the file without an override.
 
-  gs->mctx = mtmd_init_from_file(runtime->config.mmproj_path, gs->model, mtmd_params);
-  if (!gs->mctx) {
-    LOG_ERROR("Granite Speech: failed to load mmproj from %s", runtime->config.mmproj_path);
-    llama_free(gs->ctx);
-    llama_model_free(gs->model);
-    free(gs);
-    return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    gs->mctx = mtmd_init_from_file(runtime->config.mmproj_path, gs->model, mtmd_params);
+    if (!gs->mctx) {
+      LOG_ERROR("Granite Speech: failed to load mmproj from %s", runtime->config.mmproj_path);
+      llama_free(gs->ctx);
+      llama_model_free(gs->model);
+      free(gs);
+      return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
   }
 
   if (!mtmd_support_audio(gs->mctx)) {
@@ -261,9 +311,21 @@ void ethervox_stt_granite_speech_cleanup(ethervox_stt_runtime_t* runtime) {
   granite_speech_context_t* gs = (granite_speech_context_t*)runtime->backend_context;
   if (!gs) return;
 
-  if (gs->mctx) mtmd_free(gs->mctx);
-  if (gs->ctx) llama_free(gs->ctx);
-  if (gs->model) llama_model_free(gs->model);
+  // N6.3: Route cleanup through pool if model was loaded that way
+  if (gs->pool && gs->model_handle) {
+    LOG_INFO("Granite Speech: unloading via model pool");
+    ethervox_model_pool_unload(gs->pool, gs->model_handle);
+    gs->model_handle = NULL;
+    gs->model = NULL;
+    gs->ctx = NULL;
+    gs->mctx = NULL;
+  } else {
+    // Legacy direct cleanup (iOS, other platforms)
+    if (gs->mctx) mtmd_free(gs->mctx);
+    if (gs->ctx) llama_free(gs->ctx);
+    if (gs->model) llama_model_free(gs->model);
+  }
+  
   free(gs);
   runtime->backend_context = NULL;
 }

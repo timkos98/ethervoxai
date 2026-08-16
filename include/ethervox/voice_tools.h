@@ -98,9 +98,10 @@ typedef struct {
  * 
  * @param session Voice session state
  * @param memory Memory store for saving transcripts
+ * @param pool Model pool for budget enforcement (N6.3, NULL for legacy platforms)
  * @return 0 on success, -1 on error
  */
-int ethervox_voice_tools_init(ethervox_voice_session_t* session, void* memory);
+int ethervox_voice_tools_init(ethervox_voice_session_t* session, void* memory, struct ethervox_model_pool* pool);
 
 /**
  * Start listening session

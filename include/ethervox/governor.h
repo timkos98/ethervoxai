@@ -322,6 +322,11 @@ typedef struct {
  */
 typedef struct ethervox_governor ethervox_governor_t;
 
+/**
+ * Opaque model pool handle (forward declaration for governor integration)
+ */
+typedef struct ethervox_model_pool ethervox_model_pool_t;
+
 // ============================================================================
 // Tool Registry Functions
 // ============================================================================
@@ -657,6 +662,23 @@ void ethervox_governor_set_tool_execution(ethervox_governor_t* governor, bool en
  * Cleanup Governor (frees resources)
  */
 void ethervox_governor_cleanup(ethervox_governor_t* governor);
+
+/**
+ * Set model pool for governor (N6.2a-core integration)
+ * 
+ * Configures the governor to load models through the specified pool instead of
+ * direct llama.cpp calls. Pool is a weak reference (not owned by governor).
+ * 
+ * Only Android calls this; iOS/Workspace leave pool=NULL for legacy behavior.
+ * 
+ * @param governor Governor instance
+ * @param pool Model pool (NULL = restore legacy direct-loading behavior)
+ * @return ETHERVOX_SUCCESS or error code
+ */
+ethervox_result_t ethervox_governor_set_model_pool(
+    ethervox_governor_t* governor,
+    ethervox_model_pool_t* pool
+);
 
 // ============================================================================
 // Default Configuration

@@ -539,6 +539,13 @@ struct llama_context* ethervox_model_handle_get_context(
     return handle ? handle->ctx : NULL;
 }
 
+// N6.3: mtmd getter for multimodal models
+struct mtmd_context* ethervox_model_handle_get_mtmd(
+    ethervox_model_handle_t* handle
+) {
+    return handle ? handle->mtmd_ctx : NULL;
+}
+
 // ============================================================================
 // C3.4: Memory Pressure and LRU Eviction
 // ============================================================================

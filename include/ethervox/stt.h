@@ -74,6 +74,7 @@ typedef struct {
   uint32_t max_transcript_tokens;  // Cap on generated transcript tokens (0 = backend default:
                                     // 256 for BASE single-utterance calls, 1024 for PLUS chunks)
   int n_gpu_layers;              // GPU offload layers for the Granite Speech LLM decoder (0 = CPU only)
+  struct ethervox_model_pool* pool;  // N6.3: Model pool for budget enforcement (NULL = direct loading for compatibility)
 } ethervox_stt_config_t;
 
 /**

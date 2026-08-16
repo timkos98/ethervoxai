@@ -276,7 +276,7 @@ static void* audio_capture_thread(void* arg) {
 /**
  * Initialize voice tools with the Granite Speech Plus backend
  */
-ethervox_result_t ethervox_voice_tools_init(ethervox_voice_session_t* session, void* memory) {
+ethervox_result_t ethervox_voice_tools_init(ethervox_voice_session_t* session, void* memory, ethervox_model_pool_t* pool) {
   if (!session) {
     LOG_ERROR("Session is NULL");
     return ETHERVOX_ERROR_INVALID_ARGUMENT;
@@ -506,7 +506,8 @@ ethervox_result_t ethervox_voice_tools_init(ethervox_voice_session_t* session, v
                                       .sample_rate = 16000,
                                       .enable_partial_results = false,
                                       .enable_punctuation = false,  // Plus variant: SAA tagging, no punctuation
-                                      .vad_threshold = 0.5f};
+                                      .vad_threshold = 0.5f,
+                                      .pool = pool};  // N6.3: Pass pool for budget enforcement
 
   if (ethervox_stt_init(&session->stt_runtime, &stt_config) != 0) {
     LOG_ERROR("Failed to initialize Granite Speech Plus STT");
