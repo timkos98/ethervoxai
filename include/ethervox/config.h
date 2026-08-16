@@ -388,9 +388,7 @@ extern "C" {
 // Runtime debug mode control (can be toggled at runtime)
 extern int g_ethervox_debug_enabled;
 
-// C log callback for sending logs to Java/Kotlin debug window
-typedef void (*ethervox_log_callback_t)(int level, const char* tag, const char* message);
-extern ethervox_log_callback_t g_ethervox_log_callback;
+// Note: Log callback moved to logging.h for structured logging (C4.3)
 
 // Forward declare logging helper  
 void ethervox_log_with_callback(int level, const char* tag, const char* fmt, ...);
