@@ -44,6 +44,7 @@
 #include "ethervox/wake_word.h"
 #include "ethervox/paths.h"
 #include "ethervox/logging.h"
+#include "ethervox/model_pool.h"  // N6.2a: Model pool for memory management
 // NOTE: dialogue.h removed - using direct governor/registry architecture
 #include "ethervox/compute_tools.h"
 #include "ethervox/config.h"
@@ -126,6 +127,11 @@ static ethervox_governor_t* g_governor = NULL;
 static ethervox_tool_registry_t* g_registry = NULL;
 static tool_manifest_registry_t* g_manifest_registry = NULL;
 static ethervox_memory_store_t* g_memory_store = NULL;
+
+// Model pool for memory-managed model loading (N6.2a)
+static ethervox_model_pool_t* g_model_pool = NULL;
+static ethervox_model_handle_t* g_governor_handle = NULL;  // Handle for main governor model
+static ethervox_model_handle_t* g_speech_handle = NULL;     // Handle for speech model (when loaded)
 
 // Android-specific files directory (deprecated - migrate to g_android_paths)
 static char g_android_files_dir[512] = {0};
@@ -1432,6 +1438,25 @@ JNIEXPORT jint JNICALL Java_com_droid_ethervox_1core_NativeLib_platformInit(JNIE
 
   LOGI("Total tools registered: %d", tool_count);
 
+  // Create model pool for memory-managed model loading (N6.2a)
+  // Budget=0 means no limit for now (budget derivation in N6.2b)
+  if (g_paths_initialized) {
+    ethervox_result_t pool_result = ethervox_model_pool_create(
+        &g_android_paths,
+        0,  // budget_bytes=0 → no limit (N6.2a: plumbing only)
+        &g_model_pool
+    );
+    if (ethervox_is_error(pool_result)) {
+      LOGE("Failed to create model pool - error code: %d", pool_result);
+      // Continue anyway - fall back to direct loading if pool unavailable
+      g_model_pool = NULL;
+    } else {
+      LOGI("Model pool created successfully (budget=unlimited, N6.2a)");
+    }
+  } else {
+    LOGW("Paths not initialized yet - model pool creation deferred");
+  }
+
   // NOTE: Governor initialization moved to platformInitGovernor()
   // This allows user to choose minimal vs full mode before governor init
 
@@ -1507,6 +1532,15 @@ JNIEXPORT void JNICALL Java_com_droid_ethervox_1core_NativeLib_platformCleanup(J
   (void)thiz;
 
   // Cleanup in reverse order of initialization
+
+  // Cleanup model pool (N6.2a) - unloads all models
+  if (g_model_pool) {
+    ethervox_model_pool_destroy(g_model_pool);
+    g_model_pool = NULL;
+    g_governor_handle = NULL;  // Handles invalidated by pool destruction
+    g_speech_handle = NULL;
+    LOGI("Model pool cleaned up");
+  }
 
   if (g_manifest_registry) {
     // Manifest registry cleanup (if needed)
