@@ -88,7 +88,6 @@ typedef struct {
   
   // State
   char* loaded_model_path;
-  enum llama_load_mode load_mode;
   volatile bool cancel_requested;  // Flag to cancel generation
   
   // Grammar (optional, for constrained decoding)
@@ -252,22 +251,7 @@ static ethervox_result_t ethervox_llama_backend_init(ethervox_llm_backend_t* bac
   ctx->n_threads = LLAMA_DEFAULT_THREADS;
   
   // Platform-specific memory settings for optimal performance
-#if defined(ETHERVOX_PLATFORM_MACOS) || defined(ETHERVOX_PLATFORM_LINUX) || defined(ETHERVOX_PLATFORM_WINDOWS)
-  // Desktop: Use mmap for fast startup
-  ctx->load_mode = LLAMA_LOAD_MODE_MMAP;  // Memory-map for fast loading with Metal
-
-#elif defined(ETHERVOX_PLATFORM_IOS)
-  // iOS: mmap not supported
-  ctx->load_mode = LLAMA_LOAD_MODE_NONE;  // iOS doesn't support mmap
-
-#elif defined(ETHERVOX_PLATFORM_ANDROID)
-  // Android: Use mmap for battery efficiency
-  ctx->load_mode = LLAMA_LOAD_MODE_MMAP;  // Android supports mmap
-
-#else
-  // Embedded/fallback
-  ctx->load_mode = LLAMA_LOAD_MODE_MMAP;
-#endif
+  // Note: llama.cpp removed load_mode from API - now uses default mmap behavior
   
   ctx->cancel_requested = false;
   ctx->grammar = NULL;  // No grammar by default
@@ -380,10 +364,9 @@ static ethervox_result_t llama_backend_load_model(ethervox_llm_backend_t* backen
   // Initialize model parameters
   ctx->model_params = llama_model_default_params();
   ctx->model_params.n_gpu_layers = ctx->n_gpu_layers;
-  ctx->model_params.load_mode = ctx->load_mode;
   
-  ETHERVOX_LOG_INFO("Loading model with %d GPU layers requested (load_mode=%d)", 
-                    ctx->n_gpu_layers, (int)ctx->load_mode);
+  ETHERVOX_LOG_INFO("Loading model with %d GPU layers requested", 
+                    ctx->n_gpu_layers);
   
   // Load model
   ctx->model = llama_model_load_from_file(model_path, ctx->model_params);
@@ -624,7 +607,7 @@ static ethervox_result_t llama_backend_generate(ethervox_llm_backend_t* backend,
   
   // Sampler chain order (following llama.cpp convention): penalties → temp → grammar → top_k → top_p → dist
   // Grammar MUST come before truncating samplers to ensure at least one valid token survives
-  llama_sampler_chain_add(sampler, llama_sampler_init_penalties(llama_vocab_n_tokens(vocab), 128, 1.2f, 0.0f, 0.0f));
+  llama_sampler_chain_add(sampler, llama_sampler_init_penalties(128, 1.2f, 0.0f, 0.0f));
   llama_sampler_chain_add(sampler, llama_sampler_init_temp(ctx->temperature));
   
   // Grammar (if present) - constrain output format
@@ -683,8 +666,8 @@ static ethervox_result_t llama_backend_generate(ethervox_llm_backend_t* backend,
   
   llama_sampler_chain_add(sampler, llama_sampler_init_top_k(40));
   llama_sampler_chain_add(sampler, llama_sampler_init_top_p(ctx->top_p, 1));
-  llama_sampler_chain_add(sampler, llama_sampler_init_dist(ctx->seed));
-  LLAMA_LOG("Sampler chain created (seed=%u), starting token generation (max %d tokens)", ctx->seed, ctx->n_predict);
+  llama_sampler_chain_add(sampler, llama_sampler_init_dist(0));
+  LLAMA_LOG("Sampler chain created, starting token generation (max %d tokens)", ctx->n_predict);
   
   // Generate tokens
   int n_generated = 0;
@@ -927,7 +910,6 @@ static ethervox_result_t llama_backend_generate_stream(ethervox_llm_backend_t* b
   // Sampler chain order (following llama.cpp convention): penalties → temp → grammar → top_k → top_p → dist
   // Grammar MUST come before truncating samplers to ensure at least one valid token survives
   llama_sampler_chain_add(sampler, llama_sampler_init_penalties(
-    llama_vocab_n_tokens(vocab),
     128,    // penalty_last_n: look back 128 tokens
     1.2f,   // penalty_repeat: stronger penalty to break training patterns
     0.0f,   // penalty_freq: no frequency penalty
@@ -971,10 +953,10 @@ static ethervox_result_t llama_backend_generate_stream(ethervox_llm_backend_t* b
   
   llama_sampler_chain_add(sampler, llama_sampler_init_top_k(40));
   llama_sampler_chain_add(sampler, llama_sampler_init_top_p(ctx->top_p, 1));
-  llama_sampler_chain_add(sampler, llama_sampler_init_dist(ctx->seed));
+  llama_sampler_chain_add(sampler, llama_sampler_init_dist(0));
   
-  LLAMA_LOG("Sampler chain created (temp=%.2f, top_p=%.2f, top_k=40, repeat_penalty=1.2, seed=%u), starting streaming token generation (max %u tokens)",
-            (double)ctx->temperature, (double)ctx->top_p, ctx->seed, (unsigned int)ctx->n_predict);
+  LLAMA_LOG("Sampler chain created (temp=%.2f, top_p=%.2f, top_k=40, repeat_penalty=1.2), starting streaming token generation (max %u tokens)", 
+            (double)ctx->temperature, (double)ctx->top_p, (unsigned int)ctx->n_predict);
 
   // Generate tokens and stream them
   int n_generated = 0;

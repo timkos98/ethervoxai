@@ -310,7 +310,6 @@ ethervox_result_t ethervox_model_pool_load(
     
     // Load model
     struct llama_model_params model_params = llama_model_default_params();
-    model_params.load_mode = LLAMA_LOAD_MODE_MMAP;
     model_params.n_gpu_layers = config->use_gpu ? 99 : 0;  // Use GPU if requested
     
     struct llama_model* model = llama_model_load_from_file(config->model_path, model_params);
@@ -327,7 +326,7 @@ ethervox_result_t ethervox_model_pool_load(
     ctx_params.n_seq_max = config->n_seq_max > 0 ? config->n_seq_max : 1;
     ctx_params.kv_unified = config->kv_unified;
     
-    struct llama_context* ctx = llama_new_context_with_model(model, ctx_params);
+    struct llama_context* ctx = llama_init_from_model(model, ctx_params);
     if (!ctx) {
         llama_free_model(model);
         ETHERVOX_LOG_ERROR("[ModelPool] Failed to create context");

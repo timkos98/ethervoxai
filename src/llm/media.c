@@ -65,7 +65,7 @@ ethervox_result_t ethervox_model_capabilities(
     out->supports_vision = mtmd_support_vision(mctx);
     out->supports_audio = mtmd_support_audio(mctx);
     out->audio_sample_rate = mtmd_get_audio_sample_rate(mctx);
-    out->media_marker = mtmd_get_marker(mctx);
+    out->media_marker = mtmd_default_marker();
 
     ETHERVOX_LOG_INFO("[Media] Model capabilities: vision=%d, audio=%d, sample_rate=%d",
                      out->supports_vision, out->supports_audio, out->audio_sample_rate);

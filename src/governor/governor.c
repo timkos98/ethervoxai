@@ -1682,8 +1682,7 @@ static ethervox_result_t governor_load_model_impl(ethervox_governor_t* governor,
   // Model params - Use runtime config (with config.h fallbacks)
   struct llama_model_params model_params = llama_model_default_params();
   model_params.n_gpu_layers = governor->config.gpu_layers;
-  // Set load_mode based on config (mmap by default for performance)
-  model_params.load_mode = LLAMA_LOAD_MODE_MMAP;
+  // llama.cpp now uses mmap by default - load_mode parameter removed
 
   // Set up callback context for model loading progress
   typedef struct {
@@ -1699,8 +1698,7 @@ static ethervox_result_t governor_load_model_impl(ethervox_governor_t* governor,
   model_params.progress_callback = governor_load_progress_callback;
   model_params.progress_callback_user_data = progress_callback ? &callback_ctx : NULL;
 
-  GOV_LOG("[Governor] Model params: n_gpu_layers=%d, load_mode=%d", model_params.n_gpu_layers,
-          model_params.load_mode);
+    GOV_LOG("[Governor] Model params: n_gpu_layers=%d", model_params.n_gpu_layers);
 
   // Verify model path is not empty
   if (model_path[0] == '\0') {
@@ -1729,7 +1727,6 @@ static ethervox_result_t governor_load_model_impl(ethervox_governor_t* governor,
   GOV_LOG("[Governor] Final check before load:");
   GOV_LOG("  - model_path: %s", model_path);
   GOV_LOG("  - n_gpu_layers: %d", model_params.n_gpu_layers);
-  GOV_LOG("  - load_mode: %d", model_params.load_mode);
   GOV_LOG("  - vocab_only: %d", model_params.vocab_only);
   GOV_LOG("  - check_tensors: %d", model_params.check_tensors);
 
@@ -1768,9 +1765,7 @@ static ethervox_result_t governor_load_model_impl(ethervox_governor_t* governor,
 
   if (!governor->llm_model) {
     GOV_ERROR("Failed to load model from %s", model_path);
-    GOV_ERROR("Model params used: n_gpu_layers=%d, load_mode=%d",
-              model_params.n_gpu_layers, model_params.load_mode);
-
+    GOV_ERROR("Model params used: n_gpu_layers=%d", model_params.n_gpu_layers);
     // Try to understand why it failed
     GOV_ERROR("Possible reasons:");
     GOV_ERROR("  1. Incompatible GGUF version");
@@ -3999,7 +3994,6 @@ ethervox_governor_status_t ethervox_governor_execute(
     // Add repetition penalty first to prevent loops
     llama_sampler_chain_add(
         sampler, llama_sampler_init_penalties(
-                     llama_vocab_n_tokens(vocab),
                      ETHERVOX_GOVERNOR_PENALTY_LAST_N, ETHERVOX_GOVERNOR_REPETITION_PENALTY,
                      ETHERVOX_GOVERNOR_FREQUENCY_PENALTY, ETHERVOX_GOVERNOR_PRESENCE_PENALTY));
 

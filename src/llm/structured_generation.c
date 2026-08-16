@@ -189,7 +189,7 @@ static struct llama_sampler* create_sampler(
     // Add penalties (frequency, presence, repeat)
     int n_vocab = llama_vocab_n_tokens(gen_ctx->vocab);
     llama_sampler_chain_add(sampler, 
-        llama_sampler_init_penalties(n_vocab, 128, 1.1f, 0.0f, 0.0f));
+        llama_sampler_init_penalties(128, 1.1f, 0.0f, 0.0f));
     
     // Add temperature
     llama_sampler_chain_add(sampler, 
