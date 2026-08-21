@@ -530,20 +530,10 @@ ethervox_result_t ethervox_kv_cache_get_path(
         return result;
     }
     
-    // Get system prompt for hashing (cast away const - accessor is read-only)
-    int token_count = 0;
-    llama_token* tokens = ethervox_governor_get_system_tokens((struct ethervox_governor*)governor, &token_count);
-    
-    // Hash the system prompt tokens
+    // prompt_hash is intentionally zeros: tokens aren't available at exists-check time,
+    // only at save time, so including them makes the key mismatch and the cache invisible.
     uint8_t prompt_hash[32];
     memset(prompt_hash, 0, sizeof(prompt_hash));
-    if (tokens && token_count > 0) {
-        for (int i = 0; i < token_count; i++) {
-            for (int j = 0; j < 4; j++) {
-                prompt_hash[(i * 4 + j) % 32] ^= (tokens[i] >> (j * 8)) & 0xFF;
-            }
-        }
-    }
     
     // Get context and model info (cast away const - accessor is read-only)
     struct llama_context* ctx = ethervox_governor_get_llm_context((struct ethervox_governor*)governor);

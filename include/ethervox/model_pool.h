@@ -56,6 +56,9 @@ typedef enum {
 typedef struct {
     const char* model_path;        /**< Path to GGUF model file */
     const char* mmproj_path;       /**< Path to companion mmproj file (NULL if not multimodal) */
+    const char* media_marker;      /**< Media placeholder marker used in prompts fed to mtmd_tokenize()
+                                         (NULL = mtmd's own default, "<__media__>"). Must match the
+                                         literal marker text embedded in prompts by the caller. */
     uint32_t context_size;         /**< Context size in tokens */
     uint32_t n_threads;            /**< Number of threads for inference */
     uint32_t n_seq_max;            /**< Max number of sequences (0 = default 1) */

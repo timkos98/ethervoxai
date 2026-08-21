@@ -40,6 +40,29 @@ See TASK-C0.1 execution log in `ethervoxai-planning/tasks/PHASE-C/C0.1-unify-the
 ## [Unreleased]
 
 ### Added
+- **C2.2b: wire host tools into the governor's actual tool-dispatch loop** — C2.2 built the
+  `is_mutating` refusal primitive (`ethervox_host_tool_is_mutating`/`_invoke`) but never connected
+  it to `governor.c`'s real tool-execution path (`execute_tool_call_json`), which only ever
+  searched the built-in `ethervox_tool_registry_t`. Host-registered tools (Android's `AlarmTool`,
+  `TimerTool`, `SystemInfoTool`, etc. from N5.2) were listed in the system prompt via
+  `manifest_registry` but had no execution path at all - calling one returned "Unknown tool".
+  - Added `ethervox_host_tool_exists()` (`host_tools.h`/`.c`) - `is_mutating()` alone can't
+    distinguish "not registered" from "registered, not mutating"
+  - `execute_tool_call_json()` now falls back to the host tool registry when a tool isn't found
+    in the built-in registry, so non-mutating host tools actually execute end to end
+  - Mutating host tools emit the new `ETHERVOX_GOVERNOR_EVENT_TOOL_CALL_REQUESTED` progress event
+    and fail closed (denied) unless a confirmation callback is registered and approves - see
+    `ethervox_governor_set_tool_confirmation_callback()` in `governor.h`. No callback is currently
+    registered from Android; wiring a real approve/deny UI is N5.4's job
+  - Denial is fed back to the model as a plain-language tool error ("User denied this action."),
+    reusing the existing tool-error continuation path rather than aborting the run
+  - The XML-attribute tool-call format (`execute_tool_call`) is unchanged - its fixed attribute
+    whitelist is built-in-tool-specific and isn't how host tools are called (they use the JSON
+    format); this was a deliberate scope decision, not an oversight
+  - `test_host_tools.c`: added `test_exists` (4/4 new assertions); full suite passes standalone
+    (`ctest -R HostTools`) and `assembleDevDebug` builds clean end to end
+  - Follow-up, not in this change: an Android-side confirmation callback (N5.4) and a governor-loop
+    integration test that exercises a live tool call through `ethervox_governor_execute()`
 - **C5.1 (complete)**: LoRA adapter loading
   - New `adapter.h` API for loading and managing LoRA adapters
   - `ethervox_adapter_load()` loads adapters from GGUF files, associated with model handles

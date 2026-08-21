@@ -393,9 +393,11 @@ JNIEXPORT jboolean JNICALL Java_com_droid_ethervox_1core_NativeLib_loadGovernorM
   }
 
   // Load model - Governor will handle KV cache detection, loading, and saving internally
-  LOGI("[JNI] Loading model (Governor will check for KV cache)...");
+  // N6.1: Pass cache_dir string (not the whole paths struct - this version uses legacy signature)
+  const char* cache_dir = g_paths_initialized ? g_android_paths.cache_dir : g_android_files_dir;
+  LOGI("[JNI] Loading model (Governor will check for KV cache at: %s)...", cache_dir ? cache_dir : "(null)");
   ethervox_result_t result = ethervox_governor_load_model(
-      g_governor, path, &g_android_paths, NULL, progress_callback, progress_user_data
+      g_governor, path, cache_dir, NULL, progress_callback, progress_user_data
   );
 
   (*env)->ReleaseStringUTFChars(env, modelPath, path);
@@ -704,11 +706,14 @@ JNIEXPORT jstring JNICALL Java_com_droid_ethervox_1core_NativeLib_triggerConvers
   ethervox_result_t result = ethervox_generate_conversation_summary(g_governor, g_memory_store, summary_buffer, sizeof(summary_buffer));
   
   if (result == ETHERVOX_SUCCESS) {
-    return (*env)->NewStringUTF(env, "Conversation summary generated successfully");
+    if (summary_buffer[0] == '\0') {
+      return (*env)->NewStringUTF(env, "No conversation to summarize");
+    }
+    return (*env)->NewStringUTF(env, "Conversation summarized and moved into the KV cache");
   } else {
     // Get error message based on result code
     char error_msg[256];
-    snprintf(error_msg, sizeof(error_msg), "Error generating summary: code %d", result);
+    snprintf(error_msg, sizeof(error_msg), "Error: Failed to generate summary (code %d)", result);
     return (*env)->NewStringUTF(env, error_msg);
   }
 }
@@ -1464,7 +1469,7 @@ JNIEXPORT jint JNICALL Java_com_droid_ethervox_1core_NativeLib_platformInitGover
     return -1;
   }
 
-  // N6.2a-core: Configure governor to use model pool for loading
+  // N6.2a-core: Route governor model loading through the memory pool
   if (g_model_pool) {
     ethervox_result_t pool_result = ethervox_governor_set_model_pool(g_governor, g_model_pool);
     if (ethervox_is_error(pool_result)) {
@@ -1473,7 +1478,7 @@ JNIEXPORT jint JNICALL Java_com_droid_ethervox_1core_NativeLib_platformInitGover
       g_governor = NULL;
       return -1;
     }
-    LOGI("Governor configured to use model pool for loading");
+    LOGI("[Governor] Configured to load via model pool");
   }
 
   const char* mode_name = minimal_mode ? "MINIMAL" : (is_finetuned ? "FINETUNED" : "FULL");
@@ -2763,7 +2768,7 @@ const char* ethervox_get_android_files_dir(void) {
 }
 
 JNIEXPORT void JNICALL Java_com_droid_ethervox_1core_NativeLib_setAndroidFilesDir(
-    JNIEnv* env, jobject thiz, jstring filesDir) {
+    JNIEnv* env, jobject thiz, jstring filesDir, jstring cacheDir) {
   (void)thiz;
 
   if (!filesDir) {
@@ -2771,16 +2776,92 @@ JNIEXPORT void JNICALL Java_com_droid_ethervox_1core_NativeLib_setAndroidFilesDi
     return;
   }
 
-  const char* dir = (*env)->GetStringUTFChars(env, filesDir, NULL);
-  if (dir) {
-    strncpy(g_android_files_dir, dir, sizeof(g_android_files_dir) - 1);
-    g_android_files_dir[sizeof(g_android_files_dir) - 1] = '\0';
-    (*env)->ReleaseStringUTFChars(env, filesDir, dir);
+  // Get files directory string
+  const char* files = (*env)->GetStringUTFChars(env, filesDir, NULL);
+  if (!files) {
+    LOGE("Failed to get files directory string");
+    return;
+  }
 
-    LOGI("[Android] Files directory set to: %s", g_android_files_dir);
-    LOGI("[Android] Granite Speech models: %s/models/%s/", g_android_files_dir,
-         ETHERVOX_GRANITE_SPEECH_SUBDIR);
-    LOGI("[Android] Transcripts: %s/transcripts/", g_android_files_dir);
+  // Get cache directory string (optional for backward compatibility)
+  const char* cache = NULL;
+  if (cacheDir) {
+    cache = (*env)->GetStringUTFChars(env, cacheDir, NULL);
+  }
+
+  // Copy to deprecated g_android_files_dir for backward compatibility
+  strncpy(g_android_files_dir, files, sizeof(g_android_files_dir) - 1);
+  g_android_files_dir[sizeof(g_android_files_dir) - 1] = '\0';
+
+  // Initialize g_android_paths structure (N6.1)
+  // Use g_paths_buffer to store the strings so they persist
+  size_t offset = 0;
+  
+  // data_dir = filesDir
+  size_t files_len = strlen(files);
+  if (offset + files_len + 1 < sizeof(g_paths_buffer)) {
+    strncpy(g_paths_buffer + offset, files, sizeof(g_paths_buffer) - offset - 1);
+    g_android_paths.data_dir = g_paths_buffer + offset;
+    offset += files_len + 1;
+  }
+
+  // cache_dir = cacheDir (or filesDir/cache if not provided)
+  if (cache) {
+    size_t cache_len = strlen(cache);
+    if (offset + cache_len + 1 < sizeof(g_paths_buffer)) {
+      strncpy(g_paths_buffer + offset, cache, sizeof(g_paths_buffer) - offset - 1);
+      g_android_paths.cache_dir = g_paths_buffer + offset;
+      offset += cache_len + 1;
+    }
+  } else {
+    // Fallback: use filesDir/cache
+    char cache_fallback[512];
+    snprintf(cache_fallback, sizeof(cache_fallback), "%s/cache", files);
+    size_t fallback_len = strlen(cache_fallback);
+    if (offset + fallback_len + 1 < sizeof(g_paths_buffer)) {
+      strncpy(g_paths_buffer + offset, cache_fallback, sizeof(g_paths_buffer) - offset - 1);
+      g_android_paths.cache_dir = g_paths_buffer + offset;
+      offset += fallback_len + 1;
+    }
+  }
+
+  // models_dir = filesDir/models
+  char models_path[512];
+  snprintf(models_path, sizeof(models_path), "%s/models", files);
+  size_t models_len = strlen(models_path);
+  if (offset + models_len + 1 < sizeof(g_paths_buffer)) {
+    strncpy(g_paths_buffer + offset, models_path, sizeof(g_paths_buffer) - offset - 1);
+    g_android_paths.models_dir = g_paths_buffer + offset;
+    offset += models_len + 1;
+  }
+
+  // temp_dir = cacheDir/tmp (or filesDir/tmp if cache not provided)
+  char temp_path[512];
+  if (cache) {
+    snprintf(temp_path, sizeof(temp_path), "%s/tmp", cache);
+  } else {
+    snprintf(temp_path, sizeof(temp_path), "%s/tmp", files);
+  }
+  size_t temp_len = strlen(temp_path);
+  if (offset + temp_len + 1 < sizeof(g_paths_buffer)) {
+    strncpy(g_paths_buffer + offset, temp_path, sizeof(g_paths_buffer) - offset - 1);
+    g_android_paths.temp_dir = g_paths_buffer + offset;
+    offset += temp_len + 1;
+  }
+
+  g_paths_initialized = true;
+
+  LOGI("[Android] Paths configured:");
+  LOGI("  data_dir:   %s", g_android_paths.data_dir);
+  LOGI("  cache_dir:  %s", g_android_paths.cache_dir);
+  LOGI("  models_dir: %s", g_android_paths.models_dir);
+  LOGI("  temp_dir:   %s", g_android_paths.temp_dir);
+  LOGI("[Android] Granite Speech models: %s/%s/", g_android_paths.models_dir,
+       ETHERVOX_GRANITE_SPEECH_SUBDIR);
+
+  (*env)->ReleaseStringUTFChars(env, filesDir, files);
+  if (cache) {
+    (*env)->ReleaseStringUTFChars(env, cacheDir, cache);
   }
 }
 
@@ -3480,8 +3561,10 @@ JNIEXPORT jboolean JNICALL Java_com_droid_ethervox_1core_NativeLib_loadGovernorM
     }
   }
 
+  // N6.1: Pass cache_dir string for KV cache (not whole paths struct)
+  const char* cache_dir = g_paths_initialized ? g_android_paths.cache_dir : g_android_files_dir;
   ethervox_result_t result = ethervox_governor_load_model(
-      g_governor, path, &g_android_paths, NULL, progress_callback, progress_user_data
+      g_governor, path, cache_dir, NULL, progress_callback, progress_user_data
   );
 
   (*env)->ReleaseStringUTFChars(env, modelPath, path);

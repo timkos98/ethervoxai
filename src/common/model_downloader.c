@@ -95,17 +95,22 @@ static const model_definition_t GRANITE_SPEECH_MODELS[] = {
 // pattern as GRANITE_SPEECH_MODELS above.
 static const model_definition_t GRANITE_SPEECH_PLUS_MODELS[] = {
     {
+        // Remote name is dash-separated ("...-plus-Q4_K_M.gguf") - see docs/MODELS.md §3, the
+        // filename trap. Local name (this struct's first field) stays dot-separated to match the
+        // hardcoded paths this same file, voice_tools.c and ethervox_android_core.c all use.
         "granite-speech-4.1-2b-plus.Q4_K_M.gguf",
         "IBM Granite Speech 4.1 2B Plus (Recommended) - speaker-attributed ASR (SAA)",
-        "https://huggingface.co/ibm-granite/granite-speech-4.1-2b-plus-GGUF/resolve/main/granite-speech-4.1-2b-plus.Q4_K_M.gguf",
-        1600000000,  // ~1.6GB
+        "https://huggingface.co/ibm-granite/granite-speech-4.1-2b-plus-GGUF/resolve/main/granite-speech-4.1-2b-plus-Q4_K_M.gguf?download=true",
+        1024458752,  // 977 MB - see docs/MODELS.md §2 and ModelConfig.kt's sizeMB
         true
     },
     {
+        // Remote name is the repo's actual "mmproj-model-f16.gguf", not a per-model name - see
+        // docs/MODELS.md §3. Local name (this struct's first field) is our own convention.
         "mmproj-granite-speech-4.1-2b-plus-Q4_K_M.gguf",
         "IBM Granite Speech 4.1 2B Plus mmproj (audio projector) - required companion file",
-        "https://huggingface.co/ibm-granite/granite-speech-4.1-2b-plus-GGUF/resolve/main/mmproj-granite-speech-4.1-2b-plus-Q4_K_M.gguf",
-        300000000,  // ~300MB
+        "https://huggingface.co/ibm-granite/granite-speech-4.1-2b-plus-GGUF/resolve/main/mmproj-model-f16.gguf?download=true",
+        1168113664,  // 1114 MB - larger than the model itself, see docs/MODELS.md §2
         true
     }
 };

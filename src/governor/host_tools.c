@@ -177,6 +177,13 @@ bool ethervox_host_tool_is_mutating(
     return tool ? tool->is_mutating : false;
 }
 
+bool ethervox_host_tool_exists(
+    const tool_manifest_registry_t* registry,
+    const char* name
+) {
+    return ethervox_host_tool_find(registry, name) != NULL;
+}
+
 /**
  * Invoke a host tool
  */

@@ -25,8 +25,10 @@
 #include "ethervox/device_profile.h"  // Adaptive hardware configuration
 #include "ethervox/error.h"
 #include "ethervox/kv_cache_persistence.h"  // KV cache save/load for fast startup
+#include "ethervox/memory_tools.h"     // Persisting the manual conversation summary
 #include "ethervox/model_pool.h"      // Model pool integration (N6.2a-core)
 #include "ethervox/tool_manifest.h"   // Manifest system for optimized prompts
+#include "ethervox/host_tools.h"       // Host-registered tools (N5.2/C2.2 governor integration)
 
 #ifdef _WIN32
 #include <malloc.h>  // For alloca on Windows
@@ -70,6 +72,7 @@ static bool g_model_corruption_detected = false;
 
 // Context window management constants
 #define CONTEXT_CLEAR_THRESHOLD_PERCENT 80  // Clear when >80% of per-sequence capacity used
+#define SUMMARIZE_CACHE_GEN_BUDGET 100  // Max tokens to generate for a manual conversation summary
 
 // Forward declarations for helper functions (defined after struct definition)
 #if defined(ETHERVOX_WITH_LLAMA) && LLAMA_HEADER_AVAILABLE
@@ -258,6 +261,8 @@ struct ethervox_governor {
   ethervox_governor_config_t config;
   ethervox_tool_registry_t* tool_registry;
   tool_manifest_registry_t* manifest_registry;  // Manifest system (optimized prompts)
+  ethervox_tool_confirmation_callback tool_confirmation_callback;  // ADR-0007 mutating-tool gate
+  void* tool_confirmation_user_data;
 
 #if defined(ETHERVOX_WITH_LLAMA) && LLAMA_HEADER_AVAILABLE
   struct llama_model* llm_model;
@@ -731,24 +736,17 @@ static ethervox_result_t auto_repair_kv_cache(struct ethervox_governor* governor
   }
   
   // Reload system prompt
-  const char* cache_dir = getenv("ETHERVOX_FILES_DIR");
+  const char* cache_dir = governor->cache_dir_saved ? governor->cache_dir_saved : getenv("ETHERVOX_FILES_DIR");
   if (!cache_dir) {
     GOV_ERROR("No cache directory available for repair");
     return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
-  
-  char cache_path[512];
-  ethervox_result_t path_result = ethervox_kv_cache_get_path(
-      governor->model_path, cache_dir, cache_path, sizeof(cache_path)
-  );
-  
-  if (!ethervox_is_success(path_result)) {
-    GOV_ERROR("Failed to get cache path for repair");
-    return path_result;
-  }
-  
+
+  ethervox_paths_t kv_paths = {0};
+  kv_paths.cache_dir = cache_dir;
+
   // Try loading from cache
-  ethervox_result_t load_result = ethervox_kv_cache_load(governor, cache_path);
+  ethervox_result_t load_result = ethervox_kv_cache_load(&kv_paths, governor);
   
   if (!ethervox_is_success(load_result)) {
     // Regenerate from tokens as last resort
@@ -1256,13 +1254,15 @@ static char* parse_attribute(const char* tag, const char* attr_name) {
  * Input: JSON string like {"name": "calculator_compute", "arguments": {"expression": "17*23"}}
  * Extracts name and arguments, calls tool
  */
-static int execute_tool_call_json(const char* tool_call_json, ethervox_tool_registry_t* registry,
-                                  char** result, char** error) {
-  if (!tool_call_json || !registry || !result || !error) {
+static int execute_tool_call_json(const char* tool_call_json, ethervox_governor_t* governor,
+                                  ethervox_governor_progress_callback progress_callback,
+                                  void* user_data, char** result, char** error) {
+  if (!tool_call_json || !governor || !result || !error) {
     if (error)
       *error = strdup("Invalid parameters passed to execute_tool_call_json");
     return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
+  ethervox_tool_registry_t* registry = governor->tool_registry;
 
   // Simple JSON parsing - find "name" field
   const char* name_start = strstr(tool_call_json, "\"name\"");
@@ -1311,12 +1311,20 @@ static int execute_tool_call_json(const char* tool_call_json, ethervox_tool_regi
 
   // Find tool in registry
   const ethervox_tool_t* tool = ethervox_tool_registry_find(registry, tool_name);
+  bool is_host_tool = false;
   if (!tool) {
-    char err_msg[256];
-    snprintf(err_msg, sizeof(err_msg), "Unknown tool: %s", tool_name);
-    *error = strdup(err_msg);
-    free(tool_name);
-    return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    // Fall back to host-registered tools (N5.2/C2.2) - these are never in the built-in
+    // ethervox_tool_registry_t, only in the manifest registry's host_tools list.
+    if (governor->manifest_registry &&
+        ethervox_host_tool_exists(governor->manifest_registry, tool_name)) {
+      is_host_tool = true;
+    } else {
+      char err_msg[256];
+      snprintf(err_msg, sizeof(err_msg), "Unknown tool: %s", tool_name);
+      *error = strdup(err_msg);
+      free(tool_name);
+      return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
   }
 
   // Find "arguments" field
@@ -1415,7 +1423,46 @@ static int execute_tool_call_json(const char* tool_call_json, ethervox_tool_regi
     }
   }
 
-  GOV_LOG("Executing tool '%s' with JSON: %s", tool->name, json_input);
+  GOV_LOG("Executing tool '%s' with JSON: %s", tool ? tool->name : tool_name, json_input);
+
+  // Host-registered tools (N5.2) execute through a completely different path from the
+  // built-in registry: is_mutating enforcement (ADR-0007) lives in host_tools.c, not here.
+  if (is_host_tool) {
+    if (ethervox_host_tool_is_mutating(governor->manifest_registry, tool_name)) {
+      if (progress_callback) {
+        char req_msg[1024];
+        snprintf(req_msg, sizeof(req_msg), "%s: %s", tool_name, json_input);
+        progress_callback(ETHERVOX_GOVERNOR_EVENT_TOOL_CALL_REQUESTED, req_msg, user_data);
+      }
+      // Fail closed: no confirmation callback registered means mutating tools are always
+      // denied, never silently auto-approved.
+      bool approved = governor->tool_confirmation_callback &&
+                       governor->tool_confirmation_callback(
+                           tool_name, json_input, governor->tool_confirmation_user_data);
+      if (!approved) {
+        GOV_LOG("Mutating tool '%s' denied (ADR-0007)", tool_name);
+        *error = strdup("User denied this action.");
+        free(tool_name);
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;  // model sees this as a tool error and can respond
+      }
+    }
+
+    ethervox_result_t host_status =
+        ethervox_host_tool_invoke(governor->manifest_registry, tool_name, json_input, result, error);
+    free(tool_name);
+    if (host_status != ETHERVOX_SUCCESS) {
+      if (!*error) {
+        *error = strdup("Host tool invocation failed");
+      }
+      GOV_ERROR("Host tool failed: %s", *error);
+      return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
+    if (!*result) {
+      *result = strdup("(no output)");
+    }
+    GOV_LOG("Host tool succeeded: %s", *result);
+    return ETHERVOX_SUCCESS;
+  }
 
   free(tool_name);
 
@@ -1644,15 +1691,20 @@ static ethervox_result_t governor_load_model_impl(ethervox_governor_t* governor,
       governor->tool_result_suffix_len = 0;
     }
 
-    // Free context and model
-    if (governor->llm_ctx) {
-      llama_free(governor->llm_ctx);
-      governor->llm_ctx = NULL;
+    // N6.2a-core: Pool-aware cleanup — pool owns model+ctx lifecycle when active
+    if (governor->pool && governor->model_handle) {
+      ethervox_model_pool_unload(governor->pool, governor->model_handle);
+      governor->model_handle = NULL;
+    } else {
+      if (governor->llm_ctx) {
+        llama_free(governor->llm_ctx);
+      }
+      if (governor->llm_model) {
+        llama_model_free(governor->llm_model);
+      }
     }
-    if (governor->llm_model) {
-      llama_model_free(governor->llm_model);
-      governor->llm_model = NULL;
-    }
+    governor->llm_ctx = NULL;
+    governor->llm_model = NULL;
     if (governor->model_path) {
       free(governor->model_path);
       governor->model_path = NULL;
@@ -1791,7 +1843,10 @@ static ethervox_result_t governor_load_model_impl(ethervox_governor_t* governor,
     ethervox_model_config_t pool_config = {0};
     pool_config.model_path = model_path;
     pool_config.mmproj_path = NULL;  // ALWAYS NULL - governor attaches mtmd separately
-    pool_config.context_size = governor->config.context_size;
+    // Enforce the same minimum n_ctx as the legacy path (default 8192 is too small for n_seq_max=2)
+    const uint32_t pool_min_ctx = mmproj_path ? 24576u : 16384u;
+    pool_config.context_size = governor->config.context_size < pool_min_ctx
+                               ? pool_min_ctx : governor->config.context_size;
     pool_config.n_threads = governor->config.n_threads;
     pool_config.n_seq_max = mmproj_path ? 3 : 2;  // Audio needs 3 sequences
     pool_config.use_gpu = (governor->config.gpu_layers > 0);
@@ -2037,29 +2092,32 @@ after_context_creation:  // N6.2a-core: Label for pool path to skip legacy conte
   // Get vocab early - needed for both cache load and normal generation paths
   const struct llama_vocab* vocab = llama_model_get_vocab(governor->llm_model);
 
+  // Set model_path now — kv_cache_get_path reads it via ethervox_governor_get_model_path()
+  free(governor->model_path);
+  governor->model_path = model_path ? strdup(model_path) : NULL;
+  
+  // Mark loaded - llm_ctx and llm_model are valid, needed for kv_cache_get_path()
+  governor->llm_loaded = true;
+
   // === KV CACHE OPTIMIZATION ===
   // Check for saved KV cache to skip expensive system prompt processing
   bool cache_loaded = false;
   if (cache_dir) {
-    char cache_path[512];
-    ethervox_result_t cache_path_result = ethervox_kv_cache_get_path(
-        model_path, cache_dir, cache_path, sizeof(cache_path)
-    );
-    
-    if (ethervox_is_success(cache_path_result) && 
-        ethervox_kv_cache_exists(cache_path, model_path)) {
-      
+    ethervox_paths_t kv_paths = {0};
+    kv_paths.cache_dir = cache_dir;
+
+    if (ethervox_kv_cache_exists(&kv_paths, governor)) {
+
       GOV_LOG("═══════════════════════════════════════════════════════");
       GOV_LOG("KV CACHE FOUND - Loading system prompt instantly");
-      GOV_LOG("Cache file: %s", cache_path);
       GOV_LOG("═══════════════════════════════════════════════════════");
-      
+
       if (progress_callback) {
-        progress_callback("processing_prompt", 0.1f, 
+        progress_callback("processing_prompt", 0.1f,
                         "Loading system prompt from cache...", user_data);
       }
-      
-      ethervox_result_t load_result = ethervox_kv_cache_load(governor, cache_path);
+
+      ethervox_result_t load_result = ethervox_kv_cache_load(&kv_paths, governor);
       
       if (ethervox_is_success(load_result)) {
         cache_loaded = true;
@@ -2092,7 +2150,7 @@ after_context_creation:  // N6.2a-core: Label for pool path to skip legacy conte
   // If cache was loaded successfully, skip system prompt generation
   if (cache_loaded) {
     // Set up essentials that would normally be set during system prompt processing
-    governor->model_path = strdup(model_path);
+    // model_path already set before KV cache check
     // Guard against cache_dir aliasing governor->cache_dir_saved (reload_model()
     // passes the saved pointer straight back in) - strdup a copy before freeing.
     char* new_cache_dir_saved = cache_dir ? strdup(cache_dir) : NULL;
@@ -2394,7 +2452,7 @@ after_context_creation:  // N6.2a-core: Label for pool path to skip legacy conte
 
   governor->system_prompt_token_count = n_tokens;
   governor->current_kv_pos = n_tokens;  // Start after system prompt
-  governor->model_path = strdup(model_path);
+  // model_path already set before KV cache check
   {
     // Guard against cache_dir aliasing governor->cache_dir_saved (reload_model()
     // passes the saved pointer straight back in) - strdup a copy before freeing.
@@ -2410,29 +2468,19 @@ after_context_creation:  // N6.2a-core: Label for pool path to skip legacy conte
   GOV_LOG("═══════════════════════════════════════════════════════");
   
   if (cache_dir) {
-    char cache_path[512];
-    ethervox_result_t cache_path_result = ethervox_kv_cache_get_path(
-        model_path, cache_dir, cache_path, sizeof(cache_path)
-    );
-    
-    GOV_LOG("Cache path construction result: %d", cache_path_result);
-    
-    if (ethervox_is_success(cache_path_result)) {
-      GOV_LOG("═══ SAVING KV CACHE ═══");
-      GOV_LOG("Cache path: %s", cache_path);
-      ethervox_result_t save_result = ethervox_kv_cache_save(governor, cache_path);
-      if (ethervox_is_success(save_result)) {
-        GOV_LOG("╔═══════════════════════════════════════════════════╗");
-        GOV_LOG("║  ✓ KV CACHE SAVED SUCCESSFULLY                    ║");
-        GOV_LOG("║  Path: %-40s  ║", cache_path);
-        GOV_LOG("║  Next startup will load instantly (~3-5 seconds)  ║");
-        GOV_LOG("╚═══════════════════════════════════════════════════╝");
-      } else {
-        GOV_LOG("❌ FAILED to save KV cache (error code %d)", save_result);
-        GOV_LOG("   Next startup will regenerate system prompt");
-      }
+    ethervox_paths_t kv_paths = {0};
+    kv_paths.cache_dir = cache_dir;
+
+    GOV_LOG("═══ SAVING KV CACHE ═══");
+    ethervox_result_t save_result = ethervox_kv_cache_save(&kv_paths, governor);
+    if (ethervox_is_success(save_result)) {
+      GOV_LOG("╔═══════════════════════════════════════════════════╗");
+      GOV_LOG("║  ✓ KV CACHE SAVED SUCCESSFULLY                    ║");
+      GOV_LOG("║  Next startup will load instantly (~3-5 seconds)  ║");
+      GOV_LOG("╚═══════════════════════════════════════════════════╝");
     } else {
-      GOV_LOG("❌ Failed to construct cache path (code %d)", cache_path_result);
+      GOV_LOG("❌ FAILED to save KV cache (error code %d)", save_result);
+      GOV_LOG("   Next startup will regenerate system prompt");
     }
   } else {
     GOV_LOG("❌ KV cache NOT saved: cache_dir is NULL");
@@ -2502,8 +2550,6 @@ setup_tool_wrappers:
     GOV_LOG("  Suffix tokenized to %d tokens, decodes to: '%s'",
             governor->tool_result_suffix_len, suffix_verify);
   }
-
-  governor->llm_loaded = true;
 
   GOV_LOG("System prompt processed into KV cache (%d tokens)", 
           governor->system_prompt_token_count);
@@ -2618,6 +2664,14 @@ ethervox_result_t ethervox_governor_transcribe_audio(ethervox_governor_t* govern
 /**
  * Unload the Governor model to free memory
  */
+ethervox_result_t ethervox_governor_set_model_pool(ethervox_governor_t* governor,
+                                                    ethervox_model_pool_t* pool) {
+  if (!governor)
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
+  governor->pool = pool;  /* weak ref, not owned; NULL restores legacy direct-loading */
+  return ETHERVOX_SUCCESS;
+}
+
 ethervox_result_t ethervox_governor_unload_model(ethervox_governor_t* governor) {
   if (!governor)
     return ETHERVOX_ERROR_INVALID_ARGUMENT;
@@ -2912,6 +2966,8 @@ ethervox_result_t ethervox_governor_init(ethervox_governor_t** governor,
 
   gov->tool_registry = tool_registry;
   gov->manifest_registry = NULL;       // Set later via ethervox_governor_set_manifest()
+  gov->tool_confirmation_callback = NULL;  // Set later via ethervox_governor_set_tool_confirmation_callback(); mutating host tools deny by default until then
+  gov->tool_confirmation_user_data = NULL;
   gov->initialized = true;
   gov->llm_loaded = false;
   gov->tool_execution_enabled = true;  // Enabled by default
@@ -3463,19 +3519,16 @@ ethervox_governor_status_t ethervox_governor_execute(
       // This is 10-100x faster than manually reprocessing tokens
       bool kv_cache_loaded = false;
       if (governor->model_path) {
-        // Get cache directory from environment (Android files dir)
-        const char* cache_dir = getenv("ETHERVOX_FILES_DIR");
+        // Prefer cache_dir saved at load time; fall back to env var
+        const char* cache_dir = governor->cache_dir_saved ? governor->cache_dir_saved : getenv("ETHERVOX_FILES_DIR");
         if (cache_dir) {
-          char cache_path[512];
-          ethervox_result_t path_result = ethervox_kv_cache_get_path(
-              governor->model_path, cache_dir, cache_path, sizeof(cache_path)
-          );
-          
-          if (ethervox_is_success(path_result) && 
-              ethervox_kv_cache_exists(cache_path, governor->model_path)) {
-            
+          ethervox_paths_t kv_paths = {0};
+          kv_paths.cache_dir = cache_dir;
+
+          if (ethervox_kv_cache_exists(&kv_paths, governor)) {
+
             GOV_LOG("RELIGHT FAST PATH: Found KV cache file, attempting instant recovery...");
-            ethervox_result_t load_result = ethervox_kv_cache_load(governor, cache_path);
+            ethervox_result_t load_result = ethervox_kv_cache_load(&kv_paths, governor);
             
             if (ethervox_is_success(load_result)) {
               kv_cache_loaded = true;
@@ -5177,8 +5230,8 @@ ethervox_governor_status_t ethervox_governor_execute(
         // Execute tool using format-specific handler
         int status;
         if (tool_format == TOOL_FORMAT_JSON_IN_XML) {
-          status = execute_tool_call_json(tool_calls[i], governor->tool_registry, &tool_result,
-                                          &tool_error);
+          status = execute_tool_call_json(tool_calls[i], governor, progress_callback, user_data,
+                                          &tool_result, &tool_error);
         } else {
           status =
               execute_tool_call(tool_calls[i], governor->tool_registry, &tool_result, &tool_error);
@@ -5760,18 +5813,15 @@ ethervox_result_t ethervox_governor_reset_conversation(ethervox_governor_t* gove
   // ========================================================================
   bool kv_cache_loaded = false;
   if (governor->model_path) {
-    const char* cache_dir = getenv("ETHERVOX_FILES_DIR");
+    const char* cache_dir = governor->cache_dir_saved ? governor->cache_dir_saved : getenv("ETHERVOX_FILES_DIR");
     if (cache_dir) {
-      char cache_path[512];
-      ethervox_result_t path_result = ethervox_kv_cache_get_path(
-          governor->model_path, cache_dir, cache_path, sizeof(cache_path)
-      );
-      
-      if (ethervox_is_success(path_result) && 
-          ethervox_kv_cache_exists(cache_path, governor->model_path)) {
-        
+      ethervox_paths_t kv_paths = {0};
+      kv_paths.cache_dir = cache_dir;
+
+      if (ethervox_kv_cache_exists(&kv_paths, governor)) {
+
         GOV_LOG("Reset fast path: Loading from KV cache file...");
-        ethervox_result_t load_result = ethervox_kv_cache_load(governor, cache_path);
+        ethervox_result_t load_result = ethervox_kv_cache_load(&kv_paths, governor);
         
         if (ethervox_is_success(load_result)) {
           kv_cache_loaded = true;
@@ -5887,6 +5937,16 @@ void ethervox_governor_set_manifest(ethervox_governor_t* governor, tool_manifest
       GOV_LOG("  Optimization loaded: %s", manifest->optimization_loaded ? "YES" : "NO");
     }
   }
+}
+
+void ethervox_governor_set_tool_confirmation_callback(
+    ethervox_governor_t* governor,
+    ethervox_tool_confirmation_callback callback,
+    void* user_data) {
+  if (!governor) return;
+  governor->tool_confirmation_callback = callback;
+  governor->tool_confirmation_user_data = user_data;
+  GOV_LOG("[HostTools] Tool confirmation callback %s", callback ? "registered" : "cleared");
 }
 
 // ============================================================================
@@ -6203,6 +6263,241 @@ ethervox_result_t ethervox_governor_summarize_and_clear_cache(ethervox_governor_
   percent = get_ctx_seq_percent(governor->current_kv_pos, governor->llm_ctx);
   GOV_LOG("Cache cleared: now at position %d (%d%% of sequence capacity)", 
           governor->current_kv_pos, percent);
+
+  return ETHERVOX_SUCCESS;
+#endif
+}
+
+ethervox_result_t ethervox_governor_summarize_conversation_to_cache(
+    ethervox_governor_t* governor,
+    ethervox_memory_store_t* memory_store,
+    char* summary_out,
+    size_t summary_size) {
+  if (!governor || !summary_out || summary_size == 0) {
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
+  }
+
+  summary_out[0] = '\0';
+
+#if !defined(ETHERVOX_WITH_LLAMA) || !LLAMA_HEADER_AVAILABLE
+  return ETHERVOX_ERROR_INVALID_ARGUMENT;
+#else
+  if (!governor->llm_loaded || !governor->llm_ctx || governor->system_prompt_token_count == 0) {
+    GOV_ERROR("Cannot summarize: model not loaded");
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
+  }
+
+  if (governor->conversation_history.turn_count == 0) {
+    GOV_LOG("No conversation to summarize");
+    return ETHERVOX_SUCCESS;
+  }
+
+  // Build conversation text from the live conversation history (last 10 turns)
+  char conversation_context[4096] = {0};
+  int ctx_len = 0;
+  uint32_t start_turn = (governor->conversation_history.turn_count > 10)
+                            ? (governor->conversation_history.turn_count - 10)
+                            : 0;
+  for (uint32_t i = start_turn; i < governor->conversation_history.turn_count; i++) {
+    conversation_turn_t* turn = &governor->conversation_history.turns[i];
+    int remaining = sizeof(conversation_context) - ctx_len - 1;
+    if (remaining > 200) {
+      int written = snprintf(conversation_context + ctx_len, remaining, "%s: %s\n",
+                             turn->is_user ? "User" : "Assistant", turn->preview);
+      if (written > 0 && written < remaining) {
+        ctx_len += written;
+      }
+    }
+  }
+
+  char summary_prompt[5120];
+  snprintf(summary_prompt, sizeof(summary_prompt),
+           "Summarize this conversation in 2-3 concise sentences, capturing key topics, "
+           "decisions, and context that should be remembered:\n\n%s\n\n"
+           "Summary (2-3 sentences):",
+           conversation_context);
+
+  const struct llama_vocab* vocab = llama_model_get_vocab(governor->llm_model);
+  llama_token* prompt_tokens = (llama_token*)malloc(1024 * sizeof(llama_token));
+  if (!prompt_tokens) {
+    return ETHERVOX_ERROR_OUT_OF_MEMORY;
+  }
+
+  int n_prompt = llama_tokenize(vocab, summary_prompt, strlen(summary_prompt), prompt_tokens, 1024,
+                                true, false);
+  if (n_prompt <= 0) {
+    free(prompt_tokens);
+    GOV_ERROR("Failed to tokenize summary prompt");
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
+  }
+
+  // n_seq_max is only 2 (or 3 with audio) - seq 1 is the permanent RELIGHT system-prompt
+  // backup and must not be touched here. There is no free scratch sequence, so the
+  // summarization prompt is decoded into seq 0 past the live conversation; the whole
+  // conversation region (including this scratch work) is discarded together below.
+  int scratch_start = governor->current_kv_pos;
+  uint32_t seq_capacity = get_ctx_seq_capacity(governor->llm_ctx);
+  if ((uint32_t)(scratch_start + n_prompt + SUMMARIZE_CACHE_GEN_BUDGET) >= seq_capacity) {
+    free(prompt_tokens);
+    GOV_ERROR("Not enough context space to summarize (pos=%d, prompt=%d, seq_capacity=%u)",
+              scratch_start, n_prompt, seq_capacity);
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
+  }
+
+  int chunk_size = 512;
+  for (int i = 0; i < n_prompt; i += chunk_size) {
+    int chunk_len = (i + chunk_size > n_prompt) ? (n_prompt - i) : chunk_size;
+    bool is_last_chunk = (i + chunk_size >= n_prompt);
+
+    llama_batch batch = llama_batch_init(chunk_len, 0, llama_n_seq_max(governor->llm_ctx));
+    batch.n_tokens = chunk_len;
+    for (int j = 0; j < chunk_len; j++) {
+      batch.token[j] = prompt_tokens[i + j];
+      batch.pos[j] = scratch_start + i + j;
+      batch.n_seq_id[j] = 1;
+      batch.seq_id[j][0] = 0;
+      batch.logits[j] = false;
+    }
+    if (is_last_chunk) {
+      batch.logits[chunk_len - 1] = true;
+    }
+
+    if (llama_decode(governor->llm_ctx, batch) != 0) {
+      GOV_ERROR("Failed to process summary prompt chunk at token %d", i);
+      llama_batch_free(batch);
+      free(prompt_tokens);
+      return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
+    llama_batch_free(batch);
+  }
+  free(prompt_tokens);
+
+  // Generate the summary text (low temperature, short budget)
+  char llm_summary[1024] = {0};
+  int summary_len = 0;
+  bool summary_complete = false;
+  int gen_pos = scratch_start + n_prompt;
+
+  struct llama_sampler* sampler = llama_sampler_chain_init(llama_sampler_chain_default_params());
+  llama_sampler_chain_add(sampler, llama_sampler_init_temp(0.3f));
+  llama_sampler_chain_add(sampler, llama_sampler_init_dist(0));
+
+  for (int i = 0; i < SUMMARIZE_CACHE_GEN_BUDGET && !summary_complete; i++) {
+    llama_token next_token = llama_sampler_sample(sampler, governor->llm_ctx, -1);
+    llama_sampler_accept(sampler, next_token);
+
+    if (next_token == llama_vocab_eos(vocab)) {
+      summary_complete = true;
+      break;
+    }
+
+    // A leading newline (e.g. right after "Summary:") is formatting, not the end of the
+    // summary - only treat a newline as a stop once real content has been produced.
+    if (next_token == llama_vocab_nl(vocab)) {
+      if (summary_len > 0) {
+        summary_complete = true;
+        break;
+      }
+      // else: fall through and decode it so generation continues, but don't count it as content
+    } else {
+      char piece[32];
+      int n_chars = llama_token_to_piece(vocab, next_token, piece, sizeof(piece), 0, false);
+      if (n_chars > 0 && summary_len + n_chars < (int)sizeof(llm_summary) - 1) {
+        memcpy(llm_summary + summary_len, piece, n_chars);
+        summary_len += n_chars;
+        llm_summary[summary_len] = '\0';
+      }
+    }
+
+    llama_batch batch = llama_batch_init(1, 0, llama_n_seq_max(governor->llm_ctx));
+    batch.n_tokens = 1;
+    batch.token[0] = next_token;
+    batch.pos[0] = gen_pos + i;
+    batch.n_seq_id[0] = 1;
+    batch.seq_id[0][0] = 0;
+    batch.logits[0] = true;
+
+    if (llama_decode(governor->llm_ctx, batch) != 0) {
+      llama_batch_free(batch);
+      break;
+    }
+    llama_batch_free(batch);
+  }
+  llama_sampler_free(sampler);
+
+  if (llm_summary[0] == '\0') {
+    GOV_ERROR("Summary generation produced no text");
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
+  }
+
+  // Discard the old conversation AND the scratch prompt/generation above in one clear -
+  // both live past system_prompt_token_count in seq 0.
+  llama_memory_t mem = llama_get_memory(governor->llm_ctx);
+  bool cleared = llama_memory_seq_rm(mem, 0, governor->system_prompt_token_count, -1);
+  int32_t actual_max = llama_memory_seq_pos_max(mem, 0);
+  if (!cleared || actual_max >= governor->system_prompt_token_count) {
+    GOV_ERROR("Failed to clear conversation region (actual_max=%d) - aborting summarize", actual_max);
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
+  }
+
+  // Move the summary into the now-empty conversation cache, right after the system prompt
+  llama_token* summary_tokens = (llama_token*)malloc(512 * sizeof(llama_token));
+  if (!summary_tokens) {
+    return ETHERVOX_ERROR_OUT_OF_MEMORY;
+  }
+  int n_summary_tok =
+      llama_tokenize(vocab, llm_summary, strlen(llm_summary), summary_tokens, 512, false, false);
+  if (n_summary_tok <= 0) {
+    free(summary_tokens);
+    GOV_ERROR("Failed to tokenize generated summary");
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
+  }
+
+  llama_batch load_batch = llama_batch_init(n_summary_tok, 0, llama_n_seq_max(governor->llm_ctx));
+  load_batch.n_tokens = n_summary_tok;
+  for (int j = 0; j < n_summary_tok; j++) {
+    load_batch.token[j] = summary_tokens[j];
+    load_batch.pos[j] = governor->system_prompt_token_count + j;
+    load_batch.n_seq_id[j] = 1;
+    load_batch.seq_id[j][0] = 0;
+    load_batch.logits[j] = (j == n_summary_tok - 1);
+  }
+  bool load_ok = (llama_decode(governor->llm_ctx, load_batch) == 0);
+  llama_batch_free(load_batch);
+
+  if (!load_ok) {
+    free(summary_tokens);
+    GOV_ERROR("Failed to load summary into conversation cache");
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
+  }
+
+  reset_kv_cache_tracking(governor, governor->system_prompt_token_count);
+  track_kv_cache_tokens(governor, summary_tokens, n_summary_tok);
+  free(summary_tokens);
+
+  governor->current_kv_pos = governor->system_prompt_token_count + n_summary_tok;
+
+  // The conversation is now represented by the summary sitting in the cache
+  cleanup_conversation_history(&governor->conversation_history);
+  init_conversation_history(&governor->conversation_history, 32);
+
+  GOV_LOG("Summarized conversation into cache: %d summary tokens at position %d (%d%%)",
+          n_summary_tok, governor->current_kv_pos,
+          get_ctx_seq_percent(governor->current_kv_pos, governor->llm_ctx));
+
+  // Persist alongside, so the summary survives a KV cache reset/reload too
+  if (memory_store && memory_store->is_initialized) {
+    uint64_t memory_id;
+    const char* tags[] = {"context_summary"};
+    ethervox_result_t store_result =
+        ethervox_memory_store_add(memory_store, llm_summary, tags, 1, 1.0f, false, &memory_id);
+    if (ethervox_is_error(store_result)) {
+      GOV_ERROR("Summary applied to cache but failed to persist to memory: %d", store_result);
+    }
+  }
+
+  strncpy(summary_out, llm_summary, summary_size - 1);
+  summary_out[summary_size - 1] = '\0';
 
   return ETHERVOX_SUCCESS;
 #endif

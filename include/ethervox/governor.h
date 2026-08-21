@@ -23,6 +23,7 @@
 #include "error.h"
 #include "ethervox/error.h"
 #include "ethervox/event_stream.h"
+#include "ethervox/memory_tools.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -271,6 +272,9 @@ typedef enum {
   ETHERVOX_GOVERNOR_EVENT_MANIFEST_FALLBACK_LEVEL_1,  // Binary manifest one-liners (good fallback)
   ETHERVOX_GOVERNOR_EVENT_MANIFEST_FALLBACK_LEVEL_2,  // LLM-only mode (degraded, suggest
                                                       // optimization)
+  ETHERVOX_GOVERNOR_EVENT_TOOL_CALL_REQUESTED,        // Mutating host tool awaiting user
+                                                      // confirmation (ADR-0007) - message is
+                                                      // "<tool_name>: <arguments_json>"
   ETHERVOX_GOVERNOR_EVENT_COMPLETE                    // Final answer ready
 } ethervox_governor_event_type_t;
 
@@ -284,6 +288,26 @@ typedef enum {
  */
 typedef void (*ethervox_governor_progress_callback)(ethervox_governor_event_type_t event_type,
                                                     const char* message, void* user_data);
+
+/**
+ * Tool confirmation callback (ADR-0007 "Preview -> Approve -> Apply", host tools only).
+ *
+ * Called synchronously on the generation thread when the model requests a host tool
+ * registered with `is_mutating = true`. The core blocks on this call - it is the host's
+ * job to show a confirmation UI and return promptly; a slow host makes the whole
+ * conversation appear to hang.
+ *
+ * If no callback is registered, mutating host tools are denied by default (fail closed -
+ * ADR-0007 requires an explicit approval path, not an implicit one).
+ *
+ * @param tool_name Name of the tool being requested
+ * @param arguments_json JSON-encoded arguments (valid for the callback's duration only)
+ * @param user_data User data passed to ethervox_governor_set_tool_confirmation_callback
+ * @return true to execute the tool, false to deny
+ */
+typedef bool (*ethervox_tool_confirmation_callback)(const char* tool_name,
+                                                     const char* arguments_json,
+                                                     void* user_data);
 
 /**
  * System prompt loading mode
@@ -326,6 +350,19 @@ typedef struct ethervox_governor ethervox_governor_t;
  * Opaque model pool handle (forward declaration for governor integration)
  */
 typedef struct ethervox_model_pool ethervox_model_pool_t;
+
+/**
+ * Register the tool confirmation callback used for mutating host tools
+ * (ADR-0007 "Preview -> Approve -> Apply").
+ *
+ * @param governor Governor instance
+ * @param callback Callback to invoke, or NULL to clear (mutating tools then always deny)
+ * @param user_data Opaque pointer passed back to the callback
+ */
+void ethervox_governor_set_tool_confirmation_callback(
+    ethervox_governor_t* governor,
+    ethervox_tool_confirmation_callback callback,
+    void* user_data);
 
 // ============================================================================
 // Tool Registry Functions
@@ -647,6 +684,28 @@ ethervox_result_t ethervox_governor_reset_conversation(ethervox_governor_t* gove
  */
 ethervox_result_t ethervox_governor_summarize_and_clear_cache(ethervox_governor_t* governor,
                                                               bool force_clear);
+
+/**
+ * Manually summarize the live conversation and move the summary into the conversation cache
+ *
+ * Generates an LLM summary of the current conversation_history, clears the conversation
+ * region of the KV cache (system prompt is preserved), decodes the summary back into that
+ * now-empty region so the model is immediately "warm" with the condensed context, resets
+ * conversation_history, and persists the summary text to memory_store (if provided) tagged
+ * "context_summary". Unlike ethervox_governor_summarize_and_clear_cache, this leaves the
+ * cache loaded with the summary rather than deferring reload to the next generation.
+ *
+ * @param governor Governor instance
+ * @param memory_store Optional memory store to persist the summary text to (may be NULL)
+ * @param summary_out Output buffer for the generated summary text
+ * @param summary_size Size of summary_out
+ * @return ETHERVOX_SUCCESS on success (summary_out is empty if there was nothing to summarize)
+ */
+ethervox_result_t ethervox_governor_summarize_conversation_to_cache(
+    ethervox_governor_t* governor,
+    ethervox_memory_store_t* memory_store,
+    char* summary_out,
+    size_t summary_size);
 
 /**
  * Enable or disable tool call execution

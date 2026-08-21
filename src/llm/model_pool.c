@@ -370,7 +370,12 @@ ethervox_result_t ethervox_model_pool_load(
         mtmd_params.use_gpu = config->use_gpu;
         mtmd_params.print_timings = false;
         mtmd_params.n_threads = (int)config->n_threads;
-        // media_marker: use default from mtmd_context_params_default()
+        // mtmd_tokenize() splits prompts on this marker; NULL keeps mtmd's own
+        // default ("<__media__>"). Callers whose prompts embed a different
+        // literal marker (e.g. Granite Speech's "<|audio|>") must set it.
+        if (config->media_marker) {
+            mtmd_params.media_marker = config->media_marker;
+        }
         
         ETHERVOX_LOG_INFO("[ModelPool] Calling mtmd_init_from_file...");
         void* mctx = mtmd_init_from_file(config->mmproj_path, model, mtmd_params);

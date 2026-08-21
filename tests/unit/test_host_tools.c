@@ -407,6 +407,48 @@ static int test_string_free(void) {
     return 0;
 }
 
+static int test_exists(void) {
+    printf("test_exists...\n");
+
+    tool_manifest_registry_t registry = {0};
+
+    // Not registered yet: exists() is false, distinct from is_mutating() also being false
+    CHECK(ethervox_host_tool_exists(&registry, "maybe_tool") == false);
+    CHECK(ethervox_host_tool_is_mutating(&registry, "maybe_tool") == false);
+
+    ethervox_host_tool_t non_mutating = {
+        .name = "maybe_tool",
+        .description = "A non-mutating tool",
+        .parameters_schema_json = "{\"type\":\"object\"}",
+        .is_mutating = false,
+        .invoke = test_callback_success,
+        .user_data = NULL
+    };
+    CHECK_SUCCESS(ethervox_tool_registry_register_host_tool(&registry, &non_mutating));
+
+    // Registered and non-mutating: exists() true, is_mutating() false - the case the governor's
+    // execute_tool_call_json() fallback must be able to tell apart from "not registered"
+    CHECK(ethervox_host_tool_exists(&registry, "maybe_tool") == true);
+    CHECK(ethervox_host_tool_is_mutating(&registry, "maybe_tool") == false);
+
+    ethervox_host_tool_t mutating = {
+        .name = "mutating_tool",
+        .description = "A mutating tool",
+        .parameters_schema_json = "{\"type\":\"object\"}",
+        .is_mutating = true,
+        .invoke = test_callback_success,
+        .user_data = NULL
+    };
+    CHECK_SUCCESS(ethervox_tool_registry_register_host_tool(&registry, &mutating));
+    CHECK(ethervox_host_tool_exists(&registry, "mutating_tool") == true);
+    CHECK(ethervox_host_tool_is_mutating(&registry, "mutating_tool") == true);
+
+    ethervox_tool_registry_clear_host_tools(&registry);
+
+    printf("  PASS\n");
+    return 0;
+}
+
 int main(void) {
     printf("Running host tools tests...\n\n");
     
@@ -422,6 +464,7 @@ int main(void) {
     failed += test_invoke_success();
     failed += test_invoke_error();
     failed += test_string_free();
+    failed += test_exists();
     
     printf("\n");
     if (failed == 0) {

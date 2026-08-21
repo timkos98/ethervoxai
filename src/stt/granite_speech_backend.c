@@ -80,6 +80,16 @@ static void granite_speech_log_callback(enum ggml_log_level level, const char* t
   }
 }
 
+// GGML_ASSERT failures (e.g. a shape mismatch building the clip/mtmd graph) call
+// ggml_abort(), which by default only fprintf()s to stderr - invisible on Android unless
+// the process happens to redirect stderr to logcat. Without this, a SIGABRT tombstone names
+// only the function it happened in, never the failed assertion or tensor shapes. Routing it
+// through our own logger makes the actual "GGML_ASSERT(...) failed" text (with file:line)
+// appear in logcat before the abort(), same as any other native crash investigation.
+static void granite_speech_abort_callback(const char* error_message) {
+  LOG_ERROR("[FATAL] ggml_abort: %s", error_message ? error_message : "(no message)");
+}
+
 ethervox_result_t ethervox_stt_granite_speech_init(ethervox_stt_runtime_t* runtime) {
   if (!runtime->config.model_path || runtime->config.model_path[0] == '\0') {
     LOG_ERROR("Granite Speech: model_path is required");
@@ -102,6 +112,7 @@ ethervox_result_t ethervox_stt_granite_speech_init(ethervox_stt_runtime_t* runti
   if (!g_granite_llama_backend_initialized) {
     ggml_log_set(granite_speech_log_callback, NULL);
     llama_log_set(granite_speech_log_callback, NULL);
+    ggml_set_abort_callback(granite_speech_abort_callback);
     llama_backend_init();
     ggml_backend_load_all();
     if (ggml_backend_reg_count() == 0) {
@@ -120,6 +131,11 @@ ethervox_result_t ethervox_stt_granite_speech_init(ethervox_stt_runtime_t* runti
     ethervox_model_config_t pool_config = {
       .model_path = runtime->config.model_path,
       .mmproj_path = runtime->config.mmproj_path,  // Pool handles mmproj loading
+      // mtmd_tokenize() splits prompts on this marker (see granite_speech_decode.c's
+      // fixed prompts) - mtmd's own default ("<__media__>") never matches "<|audio|>",
+      // which silently made every decode fail with "number of bitmaps does not
+      // match number of markers" (rc=1).
+      .media_marker = "<|audio|>",
       .context_size = 4096,
       .n_threads = 4,
       .use_gpu = (runtime->config.n_gpu_layers > 0),
@@ -185,9 +201,13 @@ ethervox_result_t ethervox_stt_granite_speech_init(ethervox_stt_runtime_t* runti
     mtmd_params.use_gpu = (runtime->config.n_gpu_layers != 0);
     mtmd_params.print_timings = false;
     mtmd_params.n_threads = ctx_params.n_threads;
-    // media_marker left NULL: the mmproj GGUF's own metadata carries the
-    // "<|audio|>" marker used verbatim in the prompt strings below, so mtmd
-    // resolves it from the file without an override.
+    // mtmd_tokenize() splits prompts on ctx->media_marker, which is a plain field
+    // assignment from this param (mtmd_context_params_default() leaves it at
+    // "<__media__>", NOT the GGUF's own marker - there is no metadata-driven
+    // override in mtmd_context's constructor). granite_speech_decode.c's prompts
+    // use the literal "<|audio|>" token, so it must match here or mtmd_tokenize()
+    // fails with "number of bitmaps does not match number of markers" (rc=1).
+    mtmd_params.media_marker = "<|audio|>";
 
     gs->mctx = mtmd_init_from_file(runtime->config.mmproj_path, gs->model, mtmd_params);
     if (!gs->mctx) {

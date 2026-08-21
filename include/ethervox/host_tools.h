@@ -165,6 +165,22 @@ bool ethervox_host_tool_is_mutating(
 );
 
 /**
+ * Check whether a host tool with this name is registered (internal API for governor).
+ *
+ * `ethervox_host_tool_is_mutating()` alone cannot distinguish "not registered" from
+ * "registered, not mutating" - both return false. Callers that need to fall back to a
+ * built-in tool registry when a host tool doesn't exist must check this first.
+ *
+ * @param registry Tool manifest registry
+ * @param name Tool name
+ * @return true if a host tool with this name is registered
+ */
+bool ethervox_host_tool_exists(
+    const tool_manifest_registry_t* registry,
+    const char* name
+);
+
+/**
  * Invoke a host tool (internal API for governor)
  *
  * @param registry Tool manifest registry
