@@ -40,6 +40,28 @@ See TASK-C0.1 execution log in `ethervoxai-planning/tasks/PHASE-C/C0.1-unify-the
 ## [Unreleased]
 
 ### Added
+- **C3.5 (partial)**: Streaming transcription events
+  - `ETHERVOX_EVENT_TRANSCRIPTION_SEGMENT` + `ethervox_event_transcription_segment_t`
+    (`event_stream.h`): segment_id (stable across revisions), speaker_id, text, is_final - reuses
+    the existing C1.5 event stream rather than a new callback type
+  - `ethervox_voice_tools_set_event_callback()`: register a callback on
+    `ethervox_voice_session_t`, additive only - `ethervox_voice_tools_stop_listen()`'s returned
+    transcript is unchanged whether or not a callback is registered
+  - Wired into `finalize_chunk_and_restart()` (Mode 2/Granite Speech Plus): fires once per chunk
+    already finalized during capture (every `GRANITE_SPEECH_CHUNK_SECONDS`), before the recording
+    stops - this is the mechanism `ethervoxai-android` N7.8's segment-level interim already reads
+    from at stop time; now it can be pushed as it happens instead
+  - Every segment from this call site is emitted `is_final=true` at birth: Granite Speech Plus's
+    `finalize()` is one-shot per chunk with no intra-chunk partial, so the revision path exists in
+    the struct for a future backend with real incremental decoding, not exercised by this one
+  - `tests/test_streaming_transcription.c`: event struct shape, callback register/clear/NULL-safety,
+    callback invocation with expected field values
+  - **Not verified this session** (needs a live Granite Speech Plus model + real audio, not
+    available in this environment): segments actually arriving before stop end-to-end, revision
+    semantics, UTF-8 boundary safety across segment splits, slow-consumer backpressure dropping
+    only non-final revisions. C3.5 stays open until one of those is exercised for real
+  - Verified: all four `ETHERVOX_PROFILE` values build; `ethervoxai-android`'s
+    `./gradlew assembleDevDebug` and `ethervoxai-ios`'s `./build_backend.sh macos` both succeed
 - **C2.6b (complete)**: Tool catalogue migration finished — all ~40 tools now data
   - `tools/catalogue/conversation_tools.json`: `speak`, `listen`, `listen_and_summarize` migrated
   - `tools/catalogue/workspace_tools.json`: all 7 Tauri workspace tools migrated

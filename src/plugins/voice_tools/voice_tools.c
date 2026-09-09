@@ -115,6 +115,24 @@ static void track_max_speaker_id(ethervox_voice_session_t* session, const char* 
 }
 
 /**
+ * Highest [Speaker N]: id referenced in `text` alone (TASK-C3.5), or -1 if
+ * none - unlike track_max_speaker_id, this doesn't touch session state; it's
+ * the per-segment speaker_id carried on a single transcription-segment event.
+ */
+static int32_t max_speaker_id_in_text(const char* text) {
+  int32_t max_id = -1;
+  const char* marker = strstr(text, "[Speaker ");
+  while (marker) {
+    int speaker_id = -1;
+    if (sscanf(marker, "[Speaker %d]:", &speaker_id) == 1 && speaker_id > max_id) {
+      max_id = speaker_id;
+    }
+    marker = strstr(marker + 1, "[Speaker ");
+  }
+  return max_id;
+}
+
+/**
  * Append `text` to the session's in-memory transcript buffer (growing it as
  * needed) and to the live transcript file for real-time LLM/UI monitoring.
  */
@@ -173,6 +191,22 @@ static bool finalize_chunk_and_restart(ethervox_voice_session_t* session) {
 
       append_transcript_segment(session, formatted_segment);
       LOG_INFO("Segment %u: %s", session->segment_count, formatted_segment);
+
+      // TASK-C3.5: streaming transcription event, additive to full_transcript
+      // above. Granite Speech Plus's finalize() is one-shot per chunk (see
+      // this function's own doc comment) - there is no intra-chunk partial
+      // to revise, so every segment this call site emits is final at birth;
+      // the is_final=false/revision path exists in the event struct for a
+      // future backend with real incremental decoding, not exercised here.
+      if (session->transcription_event_cb) {
+        ethervox_event_t event = {0};
+        event.type = ETHERVOX_EVENT_TRANSCRIPTION_SEGMENT;
+        event.transcription_segment.segment_id = session->segment_count;
+        event.transcription_segment.speaker_id = max_speaker_id_in_text(result.text);
+        event.transcription_segment.text = result.text;
+        event.transcription_segment.is_final = true;
+        session->transcription_event_cb(&event, session->transcription_event_user_data);
+      }
 
       // Carry a bounded tail of the raw (untagged-timestamp) transcript
       // forward as prefix_text so the next chunk keeps consistent
@@ -827,6 +861,17 @@ ethervox_result_t ethervox_voice_tools_stop_listen(ethervox_voice_session_t* ses
  */
 bool ethervox_voice_tools_is_recording(const ethervox_voice_session_t* session) {
   return session && session->is_recording;
+}
+
+/**
+ * Register streaming transcription event callback (TASK-C3.5)
+ */
+void ethervox_voice_tools_set_event_callback(ethervox_voice_session_t* session,
+                                              ethervox_event_cb callback,
+                                              void* user_data) {
+  if (!session) return;
+  session->transcription_event_cb = callback;
+  session->transcription_event_user_data = user_data;
 }
 
 /**

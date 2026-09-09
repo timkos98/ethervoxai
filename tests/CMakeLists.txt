@@ -445,5 +445,14 @@ target_link_libraries(test_tool_catalogue ethervoxai)
 target_include_directories(test_tool_catalogue PRIVATE ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/tests ${ETHERVOX_CATALOGUE_GENERATED_DIR})
 add_test(NAME test_tool_catalogue COMMAND test_tool_catalogue)
 # Run: ./tests/test_tool_catalogue
+
+# Streaming transcription events (TASK-C3.5)
+add_executable(test_streaming_transcription test_streaming_transcription.c)
+target_link_libraries(test_streaming_transcription ethervoxai)
+target_include_directories(test_streaming_transcription PRIVATE ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/tests)
+add_test(NAME test_streaming_transcription COMMAND test_streaming_transcription)
+# Run: ./tests/test_streaming_transcription
+# Tests: event struct shape, callback register/clear/NULL-safety, callback invocation fields
+# Note: full pipeline (real segments arriving mid-recording) needs a live Granite Speech Plus model
 # Tests: golden byte-identical contracts for the migrated compute_tools group,
 # loader NOT_FOUND/NOT_SUPPORTED/INVALID_ARGUMENT/success paths

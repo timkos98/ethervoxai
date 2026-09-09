@@ -16,6 +16,7 @@
 #include "ethervox/audio.h"
 #include "ethervox/memory_tools.h"
 #include "ethervox/error.h"
+#include "ethervox/event_stream.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -89,7 +90,14 @@ typedef struct {
     
     // Summarization state
     bool needs_summarization;  // Flag to trigger LLM summarization
-    
+
+    // TASK-C3.5: streaming transcription events. Fired once per finalized
+    // chunk (see GRANITE_SPEECH_CHUNK_SECONDS), during capture, in addition
+    // to - not instead of - full_transcript above. NULL if not registered
+    // (existing hosts that never call the setter see no behaviour change).
+    ethervox_event_cb transcription_event_cb;
+    void* transcription_event_user_data;
+
 } ethervox_voice_session_t;
 
 
@@ -129,6 +137,23 @@ bool ethervox_voice_tools_is_recording(const ethervox_voice_session_t* session);
  * Cleanup voice tools
  */
 void ethervox_voice_tools_cleanup(ethervox_voice_session_t* session);
+
+/**
+ * Register a callback for streaming transcription segment events (TASK-C3.5).
+ *
+ * The callback receives an ETHERVOX_EVENT_TRANSCRIPTION_SEGMENT event once per
+ * chunk finalized during capture (see GRANITE_SPEECH_CHUNK_SECONDS), before
+ * the session is stopped. This is additive: ethervox_voice_tools_stop_listen()
+ * still returns the same complete transcript regardless of whether a callback
+ * is registered.
+ *
+ * @param session Voice session
+ * @param callback Callback to invoke per segment, or NULL to clear
+ * @param user_data Opaque pointer passed back to the callback
+ */
+void ethervox_voice_tools_set_event_callback(ethervox_voice_session_t* session,
+                                              ethervox_event_cb callback,
+                                              void* user_data);
 
 /**
  * Prompt user to assign names to speakers and update transcript file

@@ -51,7 +51,10 @@ typedef enum {
     ETHERVOX_EVENT_FINISHED,
     
     /** Error during operation */
-    ETHERVOX_EVENT_ERROR
+    ETHERVOX_EVENT_ERROR,
+
+    /** Streaming transcription segment (TASK-C3.5) - partial or final ASR result during capture */
+    ETHERVOX_EVENT_TRANSCRIPTION_SEGMENT
 } ethervox_event_type_t;
 
 /**
@@ -129,6 +132,26 @@ typedef struct {
 } ethervox_event_error_t;
 
 /**
+ * Streaming transcription segment event data (TASK-C3.5)
+ *
+ * Emitted as a host-facing transcript segment becomes available during
+ * capture, in addition to (not instead of) the existing batch STT result
+ * returned when the recording stops. `segment_id` is stable across
+ * revisions of the same segment: a host that keys its displayed lines by
+ * `segment_id` can update a line in place instead of duplicating it.
+ *
+ * Once a segment has been emitted with `is_final = true`, it is never
+ * re-emitted - the id is retired. A non-final segment may be re-emitted
+ * later under the same `segment_id` with corrected `text`/`speaker_id`.
+ */
+typedef struct {
+    uint32_t segment_id;     /**< Stable id; unchanged across a segment's revisions */
+    int32_t speaker_id;      /**< Speaker id for this segment, or -1 if unknown/undiarized */
+    const char* text;        /**< UTF-8 segment text (valid for callback duration only) */
+    bool is_final;           /**< true if this segment will never be revised again */
+} ethervox_event_transcription_segment_t;
+
+/**
  * Unified event structure
  *
  * Check the type field, then access the corresponding union member.
@@ -145,6 +168,7 @@ typedef struct {
         ethervox_event_logprob_t logprob;
         ethervox_event_finished_t finished;
         ethervox_event_error_t error;
+        ethervox_event_transcription_segment_t transcription_segment;
     };
 } ethervox_event_t;
 
