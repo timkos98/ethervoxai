@@ -70,6 +70,17 @@ See TASK-C0.1 execution log in `ethervoxai-planning/tasks/PHASE-C/C0.1-unify-the
     in the registry, so it's filed as BACKLOG-29 rather than fixed in this migration packet.
   - Verified all four `ETHERVOX_PROFILE` values (`EDGE`, `MOBILE`, `DESKTOP`, `WORKSPACE`)
     configure and build `libethervoxai.a` cleanly with the new catalogue embedding
+  - **Fixed a real `EDGE`-profile gap**: `file_tools`' CMake glob was gated only on `NOT WIN32`,
+    never on `ETHERVOX_FEATURE_FILE_TOOLS` — only the `main.c` registration call site consulted the
+    flag, so the plugin and its catalogue JSON still linked into `EDGE`/`WORKSPACE` binaries
+    despite that flag being `OFF` for both. Gated the glob on the flag too, matching
+    `weather_tools`' existing pattern. Verified via a scratch `EDGE`-profile build: `strings
+    libethervoxai.a` shows zero occurrences of `file_list`/`path_set`/etc. afterward.
+    `workspace_tools` has no equivalent flag and remains compiled into every profile — filed as
+    BACKLOG-30 rather than added here (no equivalent exclusion is named in `16-TOOLS.md`)
+  - Verified against real consumers, not just config: `ethervoxai-android`'s
+    `./gradlew assembleDevDebug` (full NDK cross-compile + JNI + APK) and `ethervoxai-ios`'s own
+    `./build_backend.sh macos` (macOS + iOS device + iOS Simulator `libethervoxai.a`) both succeed
 - **C2.6a (complete)**: Tool catalogue format, loader and pilot migration
   - `tools/catalogue/compute_tools.json`: tool contracts (name, profiles, description, is_mutating,
     schema) for the `compute_tools` group, replacing hardcoded C literals (`16-TOOLS.md`)
