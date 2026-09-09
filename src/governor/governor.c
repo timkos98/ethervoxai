@@ -4272,8 +4272,9 @@ ethervox_governor_status_t ethervox_governor_execute(
     // Add repetition penalty first to prevent loops
     llama_sampler_chain_add(
         sampler, llama_sampler_init_penalties(
-                     ETHERVOX_GOVERNOR_PENALTY_LAST_N, ETHERVOX_GOVERNOR_REPETITION_PENALTY,
-                     ETHERVOX_GOVERNOR_FREQUENCY_PENALTY, ETHERVOX_GOVERNOR_PRESENCE_PENALTY));
+                     llama_vocab_n_tokens(vocab), ETHERVOX_GOVERNOR_PENALTY_LAST_N,
+                     ETHERVOX_GOVERNOR_REPETITION_PENALTY, ETHERVOX_GOVERNOR_FREQUENCY_PENALTY,
+                     ETHERVOX_GOVERNOR_PRESENCE_PENALTY));
 
     // Use VERY low temperature for maximally deterministic tool selection
     // 0.05 forces the model to pick the highest probability path (tool calling)
