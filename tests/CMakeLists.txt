@@ -473,5 +473,16 @@ target_include_directories(test_c36b_shared_governor_stt PRIVATE ${CMAKE_SOURCE_
 # Tests: governor-shaped load (role=main) then STT load (role=speech) against the
 # same model_path shares weights (memory delta < 700MB, not a second full model),
 # and STT still produces a real transcript through the shared model + its own context
+
+# Governor context integrity + ctx_mutex concurrency (TASK-C3.6b) - not add_test'd:
+# needs real Granite Speech Plus model/mmproj GGUF paths and real audio.
+add_executable(test_c36b_threading_and_context integration/test_c36b_threading_and_context.c)
+target_link_libraries(test_c36b_threading_and_context ethervoxai)
+target_include_directories(test_c36b_threading_and_context PRIVATE ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/tests)
+# Run: ./tests/test_c36b_threading_and_context <model.gguf> <mmproj.gguf> <speech.wav>
+# Tests: conversation (seq 0) is byte-identical (kv_pos + decoded contents) before
+# and after a real ASR pass on seq 2; concurrent ethervox_governor_execute() +
+# ethervox_governor_transcribe_audio() from separate threads completes cleanly
+# now that ctx_mutex serializes access to the shared llama_context
 # Tests: golden byte-identical contracts for the migrated compute_tools group,
 # loader NOT_FOUND/NOT_SUPPORTED/INVALID_ARGUMENT/success paths

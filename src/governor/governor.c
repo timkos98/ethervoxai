@@ -27,6 +27,7 @@
 #include "ethervox/kv_cache_persistence.h"  // KV cache save/load for fast startup
 #include "ethervox/memory_tools.h"     // Persisting the manual conversation summary
 #include "ethervox/model_pool.h"      // Model pool integration (N6.2a-core)
+#include "ethervox/platform_thread.h"  // ethervox_mutex_t - C3.6b ctx_mutex
 #include "ethervox/tool_manifest.h"   // Manifest system for optimized prompts
 #include "ethervox/host_tools.h"       // Host-registered tools (N5.2/C2.2 governor integration)
 
@@ -339,7 +340,52 @@ struct ethervox_governor {
 
   // Chat template for formatting
   const chat_template_t* chat_template;
+
+  // C3.6b: serializes every operation that decodes against llm_ctx (chat
+  // generation, transcribe_audio's seq-2 decode, load/unload/reload,
+  // reset_conversation, summarization) against every other one. Necessary
+  // because Mode 1's unified voice architecture runs chat generation (seq 0)
+  // and ASR decode (seq 2) against the SAME llama_context - concurrent
+  // llama_decode() calls on one context from two threads is unsafe in
+  // llama.cpp regardless of which sequence each call targets. Not needed
+  // between two DIFFERENT ethervox_governor_t/STT-runtime instances sharing
+  // one model's weights via the pool (C3.6a) - separate llama_context
+  // objects over shared, read-only weights are safe to decode concurrently
+  // by llama.cpp's own design (this is what its server's multi-slot
+  // batching already relies on). See docs/UNIFIED_VOICE_MODEL_ARCHITECTURE.md.
+  ethervox_mutex_t ctx_mutex;
 };
+
+// ============================================================================
+// C3.6b: ctx_mutex scope guard
+// ============================================================================
+//
+// A plain lock()/unlock() pair is unsafe to hand-place in the functions below:
+// several of them (ethervox_governor_execute() in particular) have many early
+// `return`s scattered across hundreds of lines, and missing even one unlock on
+// an error path would deadlock every future call permanently. Using GCC/Clang's
+// `cleanup` attribute makes the unlock automatic on every exit from the scope
+// the guard variable is declared in, regardless of which `return` was taken -
+// the same guarantee a C++ RAII guard would give, without needing one.
+//
+// Usage: place `GOVERNOR_CTX_LOCK(governor);` as the first statement after any
+// argument-validation checks that don't yet need the lock (a NULL governor, for
+// instance, must be checked before this macro dereferences it).
+
+typedef struct {
+  ethervox_mutex_t* mutex;
+} governor_ctx_lock_guard_t;
+
+static void governor_ctx_lock_guard_release(governor_ctx_lock_guard_t* guard) {
+  if (guard->mutex) {
+    ethervox_mutex_unlock(guard->mutex);
+  }
+}
+
+#define GOVERNOR_CTX_LOCK(gov)                                                                    \
+  ethervox_mutex_lock(&(gov)->ctx_mutex);                                                         \
+  __attribute__((cleanup(governor_ctx_lock_guard_release)))                                       \
+  governor_ctx_lock_guard_t ctx_lock_guard_ = {&(gov)->ctx_mutex}
 
 // ============================================================================
 // KV Cache Debugging Functions
@@ -1674,6 +1720,7 @@ static ethervox_result_t governor_load_model_impl(ethervox_governor_t* governor,
   GOV_ERROR("llama.cpp not available - cannot load model");
   return ETHERVOX_ERROR_INVALID_ARGUMENT;
 #else
+  GOVERNOR_CTX_LOCK(governor);
 
   // If a model is already loaded, unload it first
   if (governor->llm_loaded) {
@@ -2029,8 +2076,18 @@ after_context_creation:  // N6.2a-core: Label for pool path to skip legacy conte
     mtmd_params.use_gpu = (governor->config.gpu_layers != 0);
     mtmd_params.print_timings = false;
     mtmd_params.n_threads = ctx_params.n_threads;
-    // media_marker left NULL: the mmproj GGUF's own metadata carries the
-    // "<|audio|>" marker used verbatim in granite_speech_decode.c's prompts.
+    // C3.6b fix: mtmd_tokenize() splits prompts on ctx->media_marker, which is a
+    // plain field assignment from this param - mtmd_context_params_default()
+    // leaves it at "<__media__>", NOT driven by the mmproj GGUF's own metadata
+    // (there is no such override in mtmd_context's constructor - this file's
+    // previous comment here claiming otherwise was wrong). granite_speech_decode.c's
+    // shared prompt-building routine (used by both this path and STT's own,
+    // src/stt/granite_speech_backend.c) emits the literal "<|audio|>" token, so it
+    // must match here too or mtmd_tokenize() fails with "number of bitmaps does
+    // not match number of markers" (rc=1) on every ethervox_governor_transcribe_audio()
+    // call - exactly the bug STT's own loader already worked around (see its
+    // identical comment), just never carried over to this call site.
+    mtmd_params.media_marker = "<|audio|>";
 
     governor->mtmd_ctx = mtmd_init_from_file(mmproj_path, governor->llm_model, mtmd_params);
     if (!governor->mtmd_ctx) {
@@ -2643,6 +2700,8 @@ ethervox_result_t ethervox_governor_transcribe_audio(ethervox_governor_t* govern
   GOV_ERROR("ethervox_governor_transcribe_audio: mtmd not available in this build");
   return ETHERVOX_ERROR_NOT_INITIALIZED;
 #else
+  GOVERNOR_CTX_LOCK(governor);
+
   if (!governor->mtmd_ctx) {
     GOV_ERROR("ethervox_governor_transcribe_audio: Governor was not loaded with audio support "
               "(see ethervox_governor_load_model_with_audio)");
@@ -2687,6 +2746,8 @@ ethervox_result_t ethervox_governor_unload_model(ethervox_governor_t* governor) 
   GOV_ERROR("llama.cpp not available");
   return ETHERVOX_ERROR_INVALID_ARGUMENT;
 #else
+  GOVERNOR_CTX_LOCK(governor);
+
   GOV_LOG("[Governor] Unloading model to free memory (keeping model path for reload)");
 
   // Free mtmd audio-decode context, if this Governor was loaded with audio
@@ -2700,14 +2761,27 @@ ethervox_result_t ethervox_governor_unload_model(ethervox_governor_t* governor) 
 #endif
   governor->audio_sample_rate = 0;
 
-  // Free LLM context and model
-  if (governor->llm_ctx) {
-    llama_free(governor->llm_ctx);
+  // C3.6a: if this model/context came from a shared pool handle (possibly
+  // still in use by another consumer, e.g. STT under a different role
+  // pointed at the same model_path), the pool - not this function - owns
+  // freeing it. Calling llama_free()/llama_model_free() directly here would
+  // free memory the pool still tracks as live, leaving any other holder of
+  // the same shared model with dangling llm_model/llm_ctx pointers.
+  if (governor->pool && governor->model_handle) {
+    ethervox_model_pool_unload(governor->pool, governor->model_handle);
+    governor->model_handle = NULL;
     governor->llm_ctx = NULL;
-  }
-  if (governor->llm_model) {
-    llama_model_free(governor->llm_model);
     governor->llm_model = NULL;
+  } else {
+    // Free LLM context and model
+    if (governor->llm_ctx) {
+      llama_free(governor->llm_ctx);
+      governor->llm_ctx = NULL;
+    }
+    if (governor->llm_model) {
+      llama_model_free(governor->llm_model);
+      governor->llm_model = NULL;
+    }
   }
 
   // Free pre-tokenized wrappers
@@ -2992,6 +3066,15 @@ ethervox_result_t ethervox_governor_init(ethervox_governor_t** governor,
 
   // Initialize conversation history with capacity for 100 turns
   if (init_conversation_history(&gov->conversation_history, 100) != 0) {
+    free(gov);
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
+  }
+
+  // C3.6b: serializes chat generation, transcribe_audio, load/unload/reload,
+  // reset_conversation and summarization against each other - see ctx_mutex's
+  // own doc comment on the struct field.
+  if (ethervox_mutex_init(&gov->ctx_mutex) != ETHERVOX_SUCCESS) {
+    cleanup_conversation_history(&gov->conversation_history);
     free(gov);
     return ETHERVOX_ERROR_INVALID_ARGUMENT;
   }
@@ -3333,6 +3416,7 @@ ethervox_governor_status_t ethervox_governor_execute(
     *error = strdup("llama.cpp not available");
   return ETHERVOX_GOVERNOR_ERROR;
 #else
+  GOVERNOR_CTX_LOCK(governor);
 
   // Reset iteration counter and interrupt flag
   governor->last_iteration_count = 0;
@@ -5726,13 +5810,24 @@ void ethervox_governor_cleanup(ethervox_governor_t* governor) {
     free(governor->cache_dir_saved);
     governor->cache_dir_saved = NULL;
   }
-  if (governor->llm_ctx) {
-    llama_free(governor->llm_ctx);
+  // C3.6a: same reasoning as ethervox_governor_unload_model() - a pool-backed
+  // model/context must be released through the pool, not freed directly,
+  // since another consumer (e.g. STT) may still hold a live handle sharing
+  // the same underlying llama_model.
+  if (governor->pool && governor->model_handle) {
+    ethervox_model_pool_unload(governor->pool, governor->model_handle);
+    governor->model_handle = NULL;
     governor->llm_ctx = NULL;
-  }
-  if (governor->llm_model) {
-    llama_model_free(governor->llm_model);
     governor->llm_model = NULL;
+  } else {
+    if (governor->llm_ctx) {
+      llama_free(governor->llm_ctx);
+      governor->llm_ctx = NULL;
+    }
+    if (governor->llm_model) {
+      llama_model_free(governor->llm_model);
+      governor->llm_model = NULL;
+    }
   }
   if (governor->model_path) {
     free(governor->model_path);
@@ -5763,6 +5858,8 @@ void ethervox_governor_cleanup(ethervox_governor_t* governor) {
   // Cleanup conversation history
   cleanup_conversation_history(&governor->conversation_history);
 
+  ethervox_mutex_destroy(&governor->ctx_mutex);
+
   free(governor);
 }
 
@@ -5774,6 +5871,8 @@ ethervox_result_t ethervox_governor_reset_conversation(ethervox_governor_t* gove
 #if !defined(ETHERVOX_WITH_LLAMA) || !LLAMA_HEADER_AVAILABLE
   return ETHERVOX_ERROR_INVALID_ARGUMENT;
 #else
+  GOVERNOR_CTX_LOCK(governor);
+
   // Clear KV cache back to system prompt
   if (!governor->llm_ctx || governor->system_prompt_token_count == 0) {
     GOV_LOG("Cannot reset: model not loaded");
@@ -6030,6 +6129,8 @@ ethervox_result_t ethervox_governor_summarize_and_clear_cache(ethervox_governor_
 #if !defined(ETHERVOX_WITH_LLAMA) || !LLAMA_HEADER_AVAILABLE
   return ETHERVOX_ERROR_INVALID_ARGUMENT;
 #else
+  GOVERNOR_CTX_LOCK(governor);
+
   if (!governor->llm_ctx || governor->system_prompt_token_count == 0) {
     GOV_LOG("Cannot summarize: model not loaded");
     return ETHERVOX_ERROR_INVALID_ARGUMENT;
@@ -6284,6 +6385,8 @@ ethervox_result_t ethervox_governor_summarize_conversation_to_cache(
 #if !defined(ETHERVOX_WITH_LLAMA) || !LLAMA_HEADER_AVAILABLE
   return ETHERVOX_ERROR_INVALID_ARGUMENT;
 #else
+  GOVERNOR_CTX_LOCK(governor);
+
   if (!governor->llm_loaded || !governor->llm_ctx || governor->system_prompt_token_count == 0) {
     GOV_ERROR("Cannot summarize: model not loaded");
     return ETHERVOX_ERROR_INVALID_ARGUMENT;
