@@ -40,6 +40,26 @@ See TASK-C0.1 execution log in `ethervoxai-planning/tasks/PHASE-C/C0.1-unify-the
 ## [Unreleased]
 
 ### Added
+- **C3.6b (partial, second pass)**: byte-identical-conversation + threading rule verified for real
+  - `tests/integration/test_c36b_threading_and_context.c`: loads a Governor with audio support,
+    populates a real conversation via `ethervox_governor_execute()`, snapshots `get_kv_pos()` +
+    `get_kv_cache_contents()`, runs a real `ethervox_governor_transcribe_audio()` pass, confirms
+    both are byte-for-byte unchanged, then runs `execute()` and `transcribe_audio()` concurrently
+    from separate threads to exercise the new `ctx_mutex` under real contention
+  - **Found and fixed two more real bugs**: (1) `ethervox_governor_transcribe_audio()` had never
+    worked - `load_model_with_audio()`'s own `mtmd_init_from_file()` call left `media_marker` at
+    mtmd's default based on a comment claiming the mmproj GGUF's metadata overrides it, which it
+    doesn't; every call failed with `mtmd_tokenize rc=1`, the exact bug STT's own loader had already
+    worked around elsewhere, never carried here. (2) `ethervox_governor_unload_model()` and
+    `ethervox_governor_cleanup()` called `llama_free()`/`llama_model_free()` unconditionally even
+    when pool-backed (C3.6a) - a real use-after-free/double-free once governor and STT actually
+    share weights; both now route through `ethervox_model_pool_unload()` when appropriate
+  - Added `ctx_mutex`: `governor.c` had zero mutex protection anywhere, yet Mode 1's unified voice
+    architecture runs chat generation (seq 0) and ASR decode (seq 2) against the SAME
+    `llama_context` - unsafe to decode concurrently regardless of sequence. Locked at every public
+    entry point that touches `llm_ctx`, using a `cleanup`-attribute guard (not hand-placed
+    lock/unlock) since `ethervox_governor_execute()` alone has many early returns across hundreds
+    of lines where a missed unlock would deadlock permanently
 - **C3.6b (partial)**: real governor+STT model sharing verified against a live model
   - `tests/integration/test_c36b_shared_governor_stt.c`: loads a governor-shaped handle
     (`role="main"`, no mmproj) then an STT handle (`role="speech"`, with mmproj) against the same
