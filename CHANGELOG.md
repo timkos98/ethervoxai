@@ -39,6 +39,24 @@ See TASK-C0.1 execution log in `ethervoxai-planning/tasks/PHASE-C/C0.1-unify-the
 
 ## [Unreleased]
 
+### Fixed
+- **`ethervox_embed_texts` (C2.4) never actually worked** - found while writing `ev-llm`'s first
+  real `EmbeddingSession` test (`TASK-E4.7`), the C unit test only exercised NULL-argument checks:
+  - `llama_tokenize(vocab, text, len, NULL, 0, ...)` is llama.cpp's own "probe the required count"
+    idiom - it returns the *negative* of the token count on a too-small buffer (0 always is, for
+    non-empty text), not a failure. The code checked `n_tokens < 0` directly, so every non-empty
+    text failed tokenization unconditionally
+  - `ethervox_model_config_t` had no way to request an embeddings-capable context -
+    `llama_get_embeddings()`/`llama_get_embeddings_seq()` return `NULL` from a context created
+    without `embeddings=true`, even on a model that otherwise supports it. Added a new
+    `embeddings` field, threaded into context creation
+  - `llama_get_embeddings_seq()` additionally requires `pooling_type` set at context-creation time
+    - it cannot be chosen per-call the way `ethervox_embed_texts`'s own `pooling` parameter implies.
+    Context creation now sets `pooling_type = LLAMA_POOLING_TYPE_MEAN` whenever `embeddings=true`.
+    **Known limitation**: `ETHERVOX_EMBED_POOLING_CLS`/`_LAST` are accepted but not yet honored -
+    every embeddings-enabled context is pooled as MEAN regardless of the per-call `pooling`
+    argument, since `ethervox_model_config_t` has no per-strategy field yet
+
 ### Added
 - **C3.6b (complete)**: runtime projector attach/detach without a model reload
   - `ethervox_stt_granite_speech_release_projector()`/`_reattach_projector()`: new public API on

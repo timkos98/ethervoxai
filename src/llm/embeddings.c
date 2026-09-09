@@ -178,8 +178,13 @@ ethervox_result_t ethervox_embed_texts(
             return ETHERVOX_ERROR_NULL_POINTER;
         }
         
-        // Tokenize text
-        int n_tokens = llama_tokenize(vocab, text, (int)strlen(text), NULL, 0, true, false);
+        // Tokenize text. Passing n_tokens_max=0 with a NULL buffer is llama_tokenize()'s own
+        // "probe the required count" idiom: on a too-small buffer (0 always is, for non-empty
+        // text) it returns the NEGATIVE of the token count that would have been produced, not a
+        // failure - negate it back to get the real count. A genuine failure is INT32_MIN
+        // (overflow) or a positive-required-count negation that still comes out non-positive,
+        // i.e. this only ever happens for empty text (handled separately below).
+        int n_tokens = -llama_tokenize(vocab, text, (int)strlen(text), NULL, 0, true, false);
         if (n_tokens < 0) {
             ETHERVOX_LOG_ERROR("[Embeddings] Tokenization failed for text %zu", i);
             return ETHERVOX_ERROR_FAILED;

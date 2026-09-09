@@ -64,6 +64,10 @@ typedef struct {
     uint32_t n_seq_max;            /**< Max number of sequences (0 = default 1) */
     bool use_gpu;                  /**< Whether to use GPU acceleration */
     bool kv_unified;               /**< Use unified KV buffer for shared prefixes */
+    bool embeddings;               /**< Create the context with embeddings output enabled -
+                                         required for ethervox_embed_texts(); llama_get_embeddings()/
+                                         llama_get_embeddings_seq() return NULL otherwise, even on a
+                                         model that otherwise supports it */
     const char* role;              /**< Model role (e.g., "main", "vision", "embed") */
     ethervox_residency_class_t residency;  /**< Residency class (C3.4) */
     uint32_t ttl_seconds;          /**< TTL for on-demand models (0 = default 90s) */
