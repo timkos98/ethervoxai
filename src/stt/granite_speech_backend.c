@@ -353,6 +353,54 @@ void ethervox_stt_granite_speech_cleanup(ethervox_stt_runtime_t* runtime) {
   runtime->backend_context = NULL;
 }
 
+ethervox_result_t ethervox_stt_granite_speech_release_projector(ethervox_stt_runtime_t* runtime) {
+  granite_speech_context_t* gs = (granite_speech_context_t*)runtime->backend_context;
+  if (!gs) return ETHERVOX_ERROR_NOT_INITIALIZED;
+
+  if (!gs->pool || !gs->model_handle) {
+    LOG_ERROR("Granite Speech: release_projector requires pool-backed loading (no pool configured)");
+    return ETHERVOX_ERROR_NOT_SUPPORTED;
+  }
+
+  ethervox_result_t result = ethervox_model_pool_detach_projector(gs->pool, gs->model_handle);
+  if (ethervox_is_error(result)) {
+    return result;
+  }
+  // The handle's own mtmd_ctx is now NULL (detach_projector's job) - refresh our cached copy so
+  // finalize()/transcribe calls fail fast with NOT_INITIALIZED rather than use a freed pointer.
+  gs->mctx = ethervox_model_handle_get_mtmd(gs->model_handle);
+  LOG_INFO("Granite Speech: projector released, model stays resident");
+  return ETHERVOX_SUCCESS;
+}
+
+ethervox_result_t ethervox_stt_granite_speech_reattach_projector(ethervox_stt_runtime_t* runtime) {
+  granite_speech_context_t* gs = (granite_speech_context_t*)runtime->backend_context;
+  if (!gs) return ETHERVOX_ERROR_NOT_INITIALIZED;
+
+  if (!gs->pool || !gs->model_handle) {
+    LOG_ERROR("Granite Speech: reattach_projector requires pool-backed loading (no pool configured)");
+    return ETHERVOX_ERROR_NOT_SUPPORTED;
+  }
+  if (gs->mctx) {
+    return ETHERVOX_SUCCESS;  // Already attached - no-op, matching detach's own no-op contract.
+  }
+
+  // Same media_marker as the original load (see ethervox_stt_granite_speech_init) - mtmd's own
+  // default never matches granite_speech_decode.c's literal "<|audio|>" token.
+  ethervox_result_t result = ethervox_model_pool_attach_projector(
+      gs->pool, gs->model_handle, runtime->config.mmproj_path, "<|audio|>");
+  if (ethervox_is_error(result)) {
+    return result;
+  }
+  gs->mctx = ethervox_model_handle_get_mtmd(gs->model_handle);
+  if (!gs->mctx) {
+    LOG_ERROR("Granite Speech: reattach_projector succeeded but handle has no mtmd context");
+    return ETHERVOX_ERROR_INVALID_ARGUMENT;
+  }
+  LOG_INFO("Granite Speech: projector re-attached without reloading the model");
+  return ETHERVOX_SUCCESS;
+}
+
 #else  // !(LLAMA_CPP_AVAILABLE && MTMD_AVAILABLE)
 
 // Stub implementation for builds without llama.cpp/mtmd (e.g. mtmd not yet
@@ -382,5 +430,13 @@ ethervox_result_t ethervox_stt_granite_speech_finalize(ethervox_stt_runtime_t* r
 }
 void ethervox_stt_granite_speech_stop(ethervox_stt_runtime_t* runtime) { (void)runtime; }
 void ethervox_stt_granite_speech_cleanup(ethervox_stt_runtime_t* runtime) { (void)runtime; }
+ethervox_result_t ethervox_stt_granite_speech_release_projector(ethervox_stt_runtime_t* runtime) {
+  (void)runtime;
+  return ETHERVOX_ERROR_NOT_SUPPORTED;
+}
+ethervox_result_t ethervox_stt_granite_speech_reattach_projector(ethervox_stt_runtime_t* runtime) {
+  (void)runtime;
+  return ETHERVOX_ERROR_NOT_SUPPORTED;
+}
 
 #endif  // LLAMA_CPP_AVAILABLE && MTMD_AVAILABLE

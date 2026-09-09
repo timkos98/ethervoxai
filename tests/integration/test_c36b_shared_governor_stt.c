@@ -223,9 +223,58 @@ int main(int argc, char** argv) {
     printf("%s: governor and STT contexts are distinct objects\n",
            contexts_distinct ? "PASS" : "SKIP (could not compare)");
 
+    // Step 5: release the projector without unloading the model (C3.6b) - memory should drop by
+    // roughly the projector's size, and reloaded audio decode should stop working until reattached.
+    uint64_t mem_before_release = 0;
+    ethervox_model_pool_memory_usage(pool, &mem_before_release, NULL);
+    ethervox_result_t release_rc = ethervox_stt_granite_speech_release_projector(&stt);
+    uint64_t mem_after_release = 0;
+    ethervox_model_pool_memory_usage(pool, &mem_after_release, NULL);
+    int64_t released_mb = (int64_t)(mem_before_release - mem_after_release) / (1024 * 1024);
+    bool release_ok = ethervox_is_success(release_rc) && released_mb > 500;
+    printf("%s: release_projector freed %lld MB without unloading (rc=%d)\n",
+           release_ok ? "PASS" : "FAIL", (long long)released_mb, release_rc);
+
+    // Step 6: reattach and confirm transcription works again, without reloading the base model -
+    // memory should climb back to (roughly) where it was before release.
+    ethervox_result_t reattach_rc = ethervox_stt_granite_speech_reattach_projector(&stt);
+    uint64_t mem_after_reattach = 0;
+    ethervox_model_pool_memory_usage(pool, &mem_after_reattach, NULL);
+    bool reattach_ok = ethervox_is_success(reattach_rc) &&
+                        mem_after_reattach >= mem_before_release - (10 * 1024 * 1024);
+    printf("%s: reattach_projector restored the projector (rc=%d, %llu MB resident)\n",
+           reattach_ok ? "PASS" : "FAIL", reattach_rc,
+           (unsigned long long)(mem_after_reattach / (1024 * 1024)));
+
+    bool post_reattach_transcript_ok = false;
+    float* samples2 = load_wav_mono16_as_float(wav_path, &n_samples);
+    if (samples2 && ethervox_stt_start(&stt) == ETHERVOX_SUCCESS) {
+        ethervox_audio_buffer_t buf2 = {0};
+        buf2.data = samples2;
+        buf2.size = n_samples;
+        ethervox_stt_result_t partial2 = {0};
+        ethervox_stt_process(&stt, &buf2, &partial2);
+        ethervox_stt_result_free(&partial2);
+
+        ethervox_stt_result_t final2 = {0};
+        ethervox_result_t fin2 = ethervox_stt_finalize(&stt, &final2);
+        post_reattach_transcript_ok =
+            ethervox_is_success(fin2) && final2.text && strlen(final2.text) > 0;
+        if (post_reattach_transcript_ok) {
+            printf("Post-reattach transcript: \"%s\"\n", final2.text);
+        }
+        ethervox_stt_result_free(&final2);
+        ethervox_stt_stop(&stt);
+    }
+    free(samples2);
+    printf("%s: transcription works again after reattach, model never reloaded\n",
+           post_reattach_transcript_ok ? "PASS" : "FAIL");
+
     ethervox_stt_cleanup(&stt);
     ethervox_model_pool_unload(pool, gov_handle);
     ethervox_model_pool_destroy(pool);
 
-    return (shared && transcript_ok) ? 0 : 1;
+    return (shared && transcript_ok && release_ok && reattach_ok && post_reattach_transcript_ok)
+               ? 0
+               : 1;
 }

@@ -189,6 +189,31 @@ ethervox_result_t ethervox_stt_granite_speech_finalize(ethervox_stt_runtime_t* r
 void ethervox_stt_granite_speech_stop(ethervox_stt_runtime_t* runtime);
 void ethervox_stt_granite_speech_cleanup(ethervox_stt_runtime_t* runtime);
 
+/**
+ * Release the ~1.1 GB audio projector while keeping the underlying model resident (C3.6b) -
+ * for a host that wants to free memory between utterances/sessions without paying the full
+ * model-reload cost of ethervox_stt_granite_speech_cleanup()+init() next time.
+ *
+ * Only meaningful when this runtime was loaded through a model pool (runtime->config.pool set) -
+ * that's the only path where the projector is a separately-freeable allocation the pool tracks;
+ * the legacy direct-loading path (no pool) returns ETHERVOX_ERROR_NOT_SUPPORTED, since there's
+ * nothing pool-level to detach there. A no-op, successful call if already released.
+ *
+ * @param runtime STT runtime, previously initialized via ethervox_stt_granite_speech_init()
+ * @return ETHERVOX_SUCCESS on success (including already-released), error code otherwise
+ */
+ethervox_result_t ethervox_stt_granite_speech_release_projector(ethervox_stt_runtime_t* runtime);
+
+/**
+ * Re-attaches the audio projector previously released via
+ * ethervox_stt_granite_speech_release_projector(), without reloading the model. A no-op,
+ * successful call if already attached.
+ *
+ * @param runtime STT runtime
+ * @return ETHERVOX_SUCCESS on success, error code otherwise
+ */
+ethervox_result_t ethervox_stt_granite_speech_reattach_projector(ethervox_stt_runtime_t* runtime);
+
 #ifdef __cplusplus
 }
 #endif

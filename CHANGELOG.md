@@ -40,6 +40,18 @@ See TASK-C0.1 execution log in `ethervoxai-planning/tasks/PHASE-C/C0.1-unify-the
 ## [Unreleased]
 
 ### Added
+- **C3.6b (complete)**: runtime projector attach/detach without a model reload
+  - `ethervox_stt_granite_speech_release_projector()`/`_reattach_projector()`: new public API on
+    the STT runtime, pool-backed only (`runtime->config.pool` set) - detaches/reattaches the
+    ~1.1 GB audio projector via the existing `ethervox_model_pool_detach_projector()`/
+    `attach_projector()` primitives (C3.6a), refreshing the backend's cached `mtmd_ctx` pointer so
+    a stale pointer can never be used after detach. Legacy direct-loading (no pool) returns
+    `ETHERVOX_ERROR_NOT_SUPPORTED` - there's nothing pool-level to detach there
+  - Verified end-to-end in `tests/integration/test_c36b_shared_governor_stt.c` against the real
+    Granite Speech Plus GGUF: `release_projector()` frees 1113 MB without unloading the model,
+    `reattach_projector()` restores it, and a transcription run afterward produces the identical
+    correct transcript, proving the model was never reloaded
+  - This was C3.6b's last open acceptance criterion - the packet is now done
 - **C3.6b (partial, second pass)**: byte-identical-conversation + threading rule verified for real
   - `tests/integration/test_c36b_threading_and_context.c`: loads a Governor with audio support,
     populates a real conversation via `ethervox_governor_execute()`, snapshots `get_kv_pos()` +
