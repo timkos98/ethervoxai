@@ -700,12 +700,19 @@ else()
 endif()
 
 # Add file tools plugin sources
-if(NOT WIN32)
+# TASK-C2.6b: gated on ETHERVOX_FEATURE_FILE_TOOLS (OFF for EDGE/WORKSPACE, see
+# cmake/EthervoxFeatures.cmake) so an EDGE/WORKSPACE binary contains no
+# file_tools code or catalogue contract, not just an unreached registration
+# call - previously this flag only skipped the main.c call site, while the
+# plugin (and its embedded catalogue JSON) still linked into every profile.
+if(NOT WIN32 AND ETHERVOX_FEATURE_FILE_TOOLS)
     file(GLOB FILE_TOOLS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/file_tools/*.c")
     list(APPEND ETHERVOXAI_CORE_SOURCES ${FILE_TOOLS_SOURCES})
     message(STATUS "File tools plugin sources included")
-else()
+elseif(WIN32)
     message(STATUS "File tools plugin SKIPPED on Windows (requires PATH_MAX)")
+else()
+    message(STATUS "File tools plugin SKIPPED (ETHERVOX_FEATURE_FILE_TOOLS=OFF)")
 endif()
 
 # Add unit conversion plugin sources
