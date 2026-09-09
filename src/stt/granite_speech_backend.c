@@ -143,7 +143,10 @@ ethervox_result_t ethervox_stt_granite_speech_init(ethervox_stt_runtime_t* runti
       .n_seq_max = 3,    // Typical for multimodal models
     };
     
-    ethervox_result_t pool_result = ethervox_model_pool_load(
+    // shared_context so a handle already resident under a different role
+    // (e.g. the governor's "main" role, same GGUF) is reused instead of
+    // loading a second copy of the weights (C3.6a).
+    ethervox_result_t pool_result = ethervox_model_pool_load_shared_context(
       gs->pool, &pool_config, NULL, NULL, &gs->model_handle
     );
     

@@ -1866,8 +1866,10 @@ static ethervox_result_t governor_load_model_impl(ethervox_governor_t* governor,
       .callback_user_data = user_data
     };
     
-    // Load through pool
-    ethervox_result_t pool_result = ethervox_model_pool_load(
+    // Load through pool - shared_context so a handle already resident under a
+    // different role (e.g. STT's "speech" role, same GGUF) is reused instead
+    // of loading a second copy of the weights (C3.6a).
+    ethervox_result_t pool_result = ethervox_model_pool_load_shared_context(
         governor->pool,
         &pool_config,
         pool_progress_adapter,
