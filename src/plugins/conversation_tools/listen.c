@@ -14,6 +14,8 @@
 #include "ethervox/conversation_tools.h"
 #include "ethervox/governor.h"
 #include "ethervox/logging.h"
+#include "ethervox/tool_catalogue.h"
+#include "conversation_tools_catalogue.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -200,16 +202,6 @@ static int tool_listen_wrapper(
  */
 ethervox_tool_t* ethervox_tool_listen_create(void) {
     static ethervox_tool_t tool = {
-        .name = "listen",
-        .description = 
-            "Capture speech input (English/Chinese/German). Use for clarifications/multi-turn. "
-            "Waits timeout_ms for user speech. Returns transcript or null on timeout. "
-            "Not available in CLI mode.",
-        .parameters_json_schema =
-            "{\"type\":\"object\",\"properties\":{"
-            "\"timeout_ms\":{\"type\":\"integer\",\"description\":\"Maximum time to wait for user input in milliseconds (default: 5000, range: 1000-30000)\"},"
-            "\"prompt_hint\":{\"type\":\"string\",\"description\":\"Optional hint about what you're waiting for (e.g., 'waiting for your answer...')\"}"
-            "},\"required\":[]}",
         .test_scenario = "Listen to my voice note",
         .execute = tool_listen_wrapper,
         .is_deterministic = false,      // User input varies
@@ -217,6 +209,12 @@ ethervox_tool_t* ethervox_tool_listen_create(void) {
         .is_stateful = true,            // Changes conversation state (turn management)
         .estimated_latency_ms = 2000.0f // Depends on user response time
     };
+    static bool tool_loaded = false;
+    if (!tool_loaded) {
+        ethervox_tool_catalogue_load(ETHERVOX_CATALOGUE_CONVERSATION_TOOLS_JSON, "listen",
+            ethervox_tool_catalogue_build_profile(), &tool);
+        tool_loaded = true;
+    }
     
     return &tool;
 }

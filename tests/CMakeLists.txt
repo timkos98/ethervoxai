@@ -442,7 +442,7 @@ target_include_directories(test_adapter PRIVATE ${CMAKE_SOURCE_DIR}/include)
 # Tool catalogue: contracts as data (TASK-C2.6a)
 add_executable(test_tool_catalogue test_tool_catalogue.c)
 target_link_libraries(test_tool_catalogue ethervoxai)
-target_include_directories(test_tool_catalogue PRIVATE ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/tests)
+target_include_directories(test_tool_catalogue PRIVATE ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/tests ${ETHERVOX_CATALOGUE_GENERATED_DIR})
 add_test(NAME test_tool_catalogue COMMAND test_tool_catalogue)
 # Run: ./tests/test_tool_catalogue
 # Tests: golden byte-identical contracts for the migrated compute_tools group,

@@ -20,7 +20,9 @@
 #include "ethervox/unit_conversion.h"
 #include "ethervox/memory_tools.h"
 #include "ethervox/file_tools.h"
+#include "ethervox/conversation_tools.h"
 #include "ethervox/tool_catalogue.h"
+#include "workspace_tools_catalogue.h"
 #include "ethervox/error.h"
 #include "unit/test_utils.h"
 #include <stdio.h>
@@ -271,6 +273,64 @@ static void test_golden_file_tools(void) {
     ethervox_tool_registry_cleanup(&registry);
 }
 
+static void test_golden_conversation_tools(void) {
+    ethervox_tool_registry_t registry;
+    CHECK(ethervox_is_success(ethervox_tool_registry_init(&registry, 8)));
+    CHECK(ethervox_is_success(ethervox_conversation_tools_register(&registry)));
+
+    const ethervox_tool_t* t = ethervox_tool_registry_find(&registry, "speak");
+    CHECK(t != NULL);
+    CHECK(strcmp(t->test_scenario, "Say hello out loud") == 0);
+
+    t = ethervox_tool_registry_find(&registry, "listen");
+    CHECK(t != NULL);
+    CHECK(strcmp(t->parameters_json_schema,
+        "{\"type\":\"object\",\"properties\":{"
+        "\"timeout_ms\":{\"type\":\"integer\",\"description\":\"Maximum time to wait for user input in milliseconds (default: 5000, range: 1000-30000)\"},"
+        "\"prompt_hint\":{\"type\":\"string\",\"description\":\"Optional hint about what you're waiting for (e.g., 'waiting for your answer...')\"}"
+        "},\"required\":[]}") == 0);
+
+    ethervox_tool_registry_cleanup(&registry);
+}
+
+// workspace_tools' ethervox_workspace_tools_register() takes a private
+// workspace_operations_t (src/plugins/workspace_tools/, not include/) - go
+// straight at the embedded catalogue instead of standing up a fake registry.
+static void test_golden_workspace_tools_catalogue(void) {
+    // workspace_tools is WORKSPACE-only; pass that profile explicitly rather
+    // than ethervox_tool_catalogue_build_profile(), which reflects this test
+    // binary's own (DESKTOP) build, not the profile this contract targets.
+    //
+    // workspace_create_note's description is 514 chars - already over
+    // ethervox_tool_t's 256-byte description[] before this migration existed
+    // (a pre-existing bug: the original static initializer's string literal
+    // didn't fit either, so it truncated with no guaranteed NUL terminator -
+    // undefined behaviour in C, not "byte-identical" to preserve). The
+    // loader's memset+strncpy makes truncation deterministic and
+    // NUL-terminated instead, which is a genuine (if incidental) fix, so this
+    // asserts the safe truncated form rather than the un-truncatable original.
+    ethervox_tool_t tool = {0};
+    CHECK(ethervox_is_success(ethervox_tool_catalogue_load(
+        ETHERVOX_CATALOGUE_WORKSPACE_TOOLS_JSON, "workspace_create_note",
+        "WORKSPACE", &tool)));
+    const char* full_description =
+        "CREATE a new graph node/object in the workspace (stored as a markdown note). Use this "
+        "when the user asks to create/add a new 'node', 'object', 'note', or 'item' in the graph. "
+        "Parameters: 'title' (string, required) - the node name/title, and 'content' (string, "
+        "required) - node content in markdown format. Returns the newly created node's UUID. "
+        "IMPORTANT: This creates a NEW standalone graph node. To add info to an EXISTING node, "
+        "first search for it with workspace_search_objects, then use workspace_update_object.";
+    CHECK(strlen(tool.description) == sizeof(tool.description) - 1);
+    CHECK(strncmp(tool.description, full_description, sizeof(tool.description) - 1) == 0);
+
+    CHECK(ethervox_is_success(ethervox_tool_catalogue_load(
+        ETHERVOX_CATALOGUE_WORKSPACE_TOOLS_JSON, "workspace_highlight_nodes",
+        "WORKSPACE", &tool)));
+    CHECK(strcmp(tool.parameters_json_schema,
+        "{\"node_ids\":{\"type\":\"array\",\"description\":\"Array of node UUIDs to highlight "
+        "in the graph\",\"items\":{\"type\":\"string\"},\"required\":true}}") == 0);
+}
+
 int main(void) {
     RUN_TEST(test_golden_calculator);
     RUN_TEST(test_golden_percentage);
@@ -283,6 +343,8 @@ int main(void) {
     RUN_TEST(test_golden_unit_conversion);
     RUN_TEST(test_golden_memory_tools);
     RUN_TEST(test_golden_file_tools);
+    RUN_TEST(test_golden_conversation_tools);
+    RUN_TEST(test_golden_workspace_tools_catalogue);
     RUN_TEST(test_loader_not_found);
     RUN_TEST(test_loader_profile_excluded);
     RUN_TEST(test_loader_unknown_profile_is_error);

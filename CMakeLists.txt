@@ -638,6 +638,16 @@ ethervox_embed_catalogue(
     ETHERVOX_CATALOGUE_FILE_TOOLS_JSON
     ${ETHERVOX_CATALOGUE_GENERATED_DIR}/file_tools_catalogue.h
 )
+ethervox_embed_catalogue(
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools/catalogue/conversation_tools.json
+    ETHERVOX_CATALOGUE_CONVERSATION_TOOLS_JSON
+    ${ETHERVOX_CATALOGUE_GENERATED_DIR}/conversation_tools_catalogue.h
+)
+ethervox_embed_catalogue(
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools/catalogue/workspace_tools.json
+    ETHERVOX_CATALOGUE_WORKSPACE_TOOLS_JSON
+    ${ETHERVOX_CATALOGUE_GENERATED_DIR}/workspace_tools_catalogue.h
+)
 
 # Note: src/dialogue/voice_conversation.c is included via GLOB above
 

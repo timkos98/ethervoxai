@@ -9,6 +9,8 @@
  */
 
 #include "ethervox/voice_tools.h"
+#include "ethervox/tool_catalogue.h"
+#include "conversation_tools_catalogue.h"
 
 #include <errno.h>
 #include <pthread.h>
@@ -1339,27 +1341,20 @@ static int tool_listen_and_summarize_wrapper(const char* args_json, char** resul
  * Tool definition for listen_and_summarize
  */
 static ethervox_tool_t listen_tool = {
-    .name = "listen_and_summarize",
-    .description =
-        "Start or stop voice recording with Granite Speech STT transcription and speaker detection. "
-        "Call with {\"action\":\"start\"} to begin recording (user will use /stoptranscribe "
-        "command to end), "
-        "or {\"action\":\"stop\"} to get the final transcript with speaker labels. "
-        "Transcript will be automatically stored in memory.",
-    .parameters_json_schema =
-        "{\"type\":\"object\","
-        "\"properties\":{"
-        "\"action\":{\"type\":\"string\",\"enum\":[\"start\",\"stop\",\"status\"],"
-        "\"description\":\"Action to perform: start recording, stop and get transcript, or check "
-        "status\"}"
-        "},"
-        "\"required\":[\"action\"]}",
     .test_scenario = "Listen to this recording and summarize it",
         .execute = tool_listen_and_summarize_wrapper,
     .is_deterministic = false,
     .requires_confirmation = false,
     .is_stateful = true,
     .estimated_latency_ms = 100.0f};
+static bool listen_tool_loaded = false;
+
+static void load_listen_tool_catalogue_once(void) {
+    if (listen_tool_loaded) return;
+    ethervox_tool_catalogue_load(ETHERVOX_CATALOGUE_CONVERSATION_TOOLS_JSON, "listen_and_summarize",
+        ethervox_tool_catalogue_build_profile(), &listen_tool);
+    listen_tool_loaded = true;
+}
 
 /**
  * Register base voice tools with Governor
@@ -1376,6 +1371,7 @@ ethervox_result_t ethervox_voice_tools_register(void* registry, ethervox_voice_s
 
   ethervox_tool_registry_t* reg = (ethervox_tool_registry_t*)registry;
 
+  load_listen_tool_catalogue_once();
   if (ethervox_tool_registry_add(reg, &listen_tool) != 0) {
     LOG_ERROR("Failed to register listen_and_summarize tool");
     return ETHERVOX_ERROR_INVALID_ARGUMENT;

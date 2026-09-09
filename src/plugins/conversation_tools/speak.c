@@ -15,6 +15,8 @@
 #include "ethervox/conversation_tools.h"
 #include "ethervox/governor.h"
 #include "ethervox/logging.h"
+#include "ethervox/tool_catalogue.h"
+#include "conversation_tools_catalogue.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -265,24 +267,6 @@ static int tool_speak_wrapper(
  */
 ethervox_tool_t* ethervox_tool_speak_create(void) {
     static ethervox_tool_t tool = {
-        .name = "speak",
-        .description = 
-            "TTS audio output with language and emotion control. Use for voice responses. "
-            "CRITICAL: Call this tool sentence-by-sentence. Split responses into individual sentences for natural speech flow. "
-            "Never send multiple sentences in one call - break them up for better prosody and interruption support. "
-            "ALWAYS specify language parameter (en/de/es/zh) to match the user's language - this is critical for proper voice selection. "
-            "Languages: en (English), de (German), es (Spanish), zh (Chinese). "
-            "Emotions: neutral, happy, sad, calm, excited. "
-            "wait_for_response=true auto-opens mic after speaking. "
-            "allow_interrupt=true lets user interrupt. Degrades to text in CLI mode.",
-        .parameters_json_schema =
-            "{\"type\":\"object\",\"properties\":{"
-            "\"text\":{\"type\":\"string\",\"description\":\"The text to speak aloud\"},"
-            "\"language\":{\"type\":\"string\",\"enum\":[\"en\",\"de\",\"es\",\"zh\"],\"description\":\"Language code for TTS voice (en=English, de=German, es=Spanish, zh=Chinese). If omitted, auto-detects from text.\"},"
-            "\"emotion\":{\"type\":\"string\",\"enum\":[\"neutral\",\"happy\",\"sad\",\"calm\",\"excited\",\"professional\",\"friendly\",\"serious\",\"enthusiastic\",\"somber\",\"soothing\",\"energetic\",\"formal\",\"warm\",\"grave\"],\"description\":\"Voice emotion/style to use (default: neutral). For system prompts use: neutral, happy, sad, calm, excited.\"},"
-            "\"wait_for_response\":{\"type\":\"boolean\",\"description\":\"If true, automatically open microphone after speaking to listen for user's response (turn-taking)\"},"
-            "\"allow_interrupt\":{\"type\":\"boolean\",\"description\":\"If true, user can interrupt by speaking during playback (default: true)\"}"
-            "},\"required\":[\"text\"]}",
         .test_scenario = "Say hello out loud",
         .execute = tool_speak_wrapper,
         .is_deterministic = false,      // TTS playback state varies
@@ -290,6 +274,12 @@ ethervox_tool_t* ethervox_tool_speak_create(void) {
         .is_stateful = true,            // Changes conversation state
         .estimated_latency_ms = 500.0f  // TTS synthesis + playback startup
     };
+    static bool tool_loaded = false;
+    if (!tool_loaded) {
+        ethervox_tool_catalogue_load(ETHERVOX_CATALOGUE_CONVERSATION_TOOLS_JSON, "speak",
+            ethervox_tool_catalogue_build_profile(), &tool);
+        tool_loaded = true;
+    }
     
     return &tool;
 }

@@ -40,31 +40,36 @@ See TASK-C0.1 execution log in `ethervoxai-planning/tasks/PHASE-C/C0.1-unify-the
 ## [Unreleased]
 
 ### Added
-- **C2.6b (in progress)**: Tool catalogue migration continued
-  - `tools/catalogue/memory_tools.json`: all 10 memory tools migrated (`memory_complete_reminder`,
-    `memory_update_reminder`, `memory_store`, `memory_search`, `memory_reminder_list`,
-    `memory_export`, `memory_forget`, `memory_delete`, `memory_store_correction`,
-    `memory_store_pattern`)
-  - `tools/catalogue/file_tools.json`: all 9 file/path tools migrated (`file_list`, `file_read`,
-    `file_search`, `file_write`, `file_append`, `path_list`, `path_get`, `path_set`,
-    `path_check_unverified`, `file_set_safe_mode`) - corrected `file_write`/`file_append`'s
-    `profiles` to exclude `WORKSPACE`, matching the plugin's existing
+- **C2.6b (complete)**: Tool catalogue migration finished — all ~40 tools now data
+  - `tools/catalogue/conversation_tools.json`: `speak`, `listen`, `listen_and_summarize` migrated
+  - `tools/catalogue/workspace_tools.json`: all 7 Tauri workspace tools migrated
+    (`workspace_list_objects`, `workspace_search_objects`, `workspace_get_object`,
+    `workspace_create_note`, `workspace_create_connection`, `workspace_update_object`,
+    `workspace_export_to_docx`, `workspace_highlight_nodes`) - the only `WORKSPACE`-only contracts
+    in the catalogue so far
+  - `tools/catalogue/memory_tools.json`: all 10 memory tools migrated
+  - `tools/catalogue/file_tools.json`: all 9 file/path tools migrated - corrected
+    `file_write`/`file_append`'s `profiles` to exclude `WORKSPACE`, matching the plugin's existing
     `ETHERVOX_FEATURE_FILE_TOOLS=OFF` build-time exclusion for that profile
-  - `tools/catalogue/system_info_tools.json`: `system_version`, `system_capabilities` migrated
-  - `tools/catalogue/weather_tools.json`: `get_weather_forecast` migrated (its `WORKSPACE` exclusion
-    was already enforced via `ETHERVOX_FEATURE_WEATHER`; catalogue now documents it consistently)
-  - `tools/catalogue/context_tools.json`: `context_manage` migrated
-  - `tools/catalogue/meta_tools.json`: `get_tool_info` migrated
-  - `tools/catalogue/startup_prompt_tools.json`: `startup_prompt_update`, `startup_prompt_read`
-    migrated
-  - `tools/catalogue/timer_tools.json`: `timer_create`, `timer_cancel`, `timer_list`,
-    `alarm_create` migrated
-  - `tools/catalogue/unit_conversion.json`: `unit_convert` migrated
+  - `tools/catalogue/system_info_tools.json`, `weather_tools.json`, `context_tools.json`,
+    `meta_tools.json`, `startup_prompt_tools.json`, `timer_tools.json`, `unit_conversion.json`:
+    remaining groups migrated (see prior entries in this section)
   - Deleted dead `src/plugins/conversation_tools/train_pronunciation.c` - unreferenced since C1.0's
-    phonemizer removal, so `train_pronunciation` was already out of the registry, but its source
-    still compiled and linked
-  - `tests/test_tool_catalogue.c`: golden tests added for every group above (15 tests total)
-  - 37 tools migrated so far; ~10 remain (conversation_tools, voice_tools, workspace_tools)
+    phonemizer removal
+  - No `.parameters_json_schema =` literal remains anywhere under `src/plugins/`
+  - `tests/test_tool_catalogue.c`: 17 golden + loader-behaviour tests, covering every migrated group
+  - **Found a real, pre-existing bug while migrating** (BACKLOG-29): `ethervox_tool_t.description`
+    is `char[256]`, but 7 tools' descriptions exceed that (`speak` 655 chars, `unit_convert` 569,
+    `workspace_update_object` 516, `workspace_create_note` 514, `workspace_highlight_nodes` 477,
+    `workspace_export_to_docx` 381, `listen_and_summarize` 307) - these were already
+    over-length string-literal initializers before this migration, a C99 constraint violation most
+    compilers only warn on and silently truncate **without a guaranteed NUL terminator** (undefined
+    behaviour on every read). The catalogue loader's `memset`+`strncpy` makes the truncation
+    deterministic and NUL-terminated instead - strictly safer, though it does still drop the
+    description's tail. Growing the field is an ABI change to a struct copied by value everywhere
+    in the registry, so it's filed as BACKLOG-29 rather than fixed in this migration packet.
+  - Verified all four `ETHERVOX_PROFILE` values (`EDGE`, `MOBILE`, `DESKTOP`, `WORKSPACE`)
+    configure and build `libethervoxai.a` cleanly with the new catalogue embedding
 - **C2.6a (complete)**: Tool catalogue format, loader and pilot migration
   - `tools/catalogue/compute_tools.json`: tool contracts (name, profiles, description, is_mutating,
     schema) for the `compute_tools` group, replacing hardcoded C literals (`16-TOOLS.md`)
