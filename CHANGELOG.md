@@ -44,12 +44,18 @@ See TASK-C0.1 execution log in `ethervoxai-planning/tasks/PHASE-C/C0.1-unify-the
   - `tools/catalogue/system_info_tools.json`: `system_version`, `system_capabilities` migrated
   - `tools/catalogue/weather_tools.json`: `get_weather_forecast` migrated (its `WORKSPACE` exclusion
     was already enforced via `ETHERVOX_FEATURE_WEATHER`; catalogue now documents it consistently)
+  - `tools/catalogue/context_tools.json`: `context_manage` migrated
+  - `tools/catalogue/meta_tools.json`: `get_tool_info` migrated
+  - `tools/catalogue/startup_prompt_tools.json`: `startup_prompt_update`, `startup_prompt_read`
+    migrated
+  - `tools/catalogue/timer_tools.json`: `timer_create`, `timer_cancel`, `timer_list`,
+    `alarm_create` migrated
+  - `tools/catalogue/unit_conversion.json`: `unit_convert` migrated
   - Deleted dead `src/plugins/conversation_tools/train_pronunciation.c` - unreferenced since C1.0's
     phonemizer removal, so `train_pronunciation` was already out of the registry, but its source
     still compiled and linked
-  - `tests/test_tool_catalogue.c`: added golden test for `system_info_tools` via a real registry
-  - ~31 tools remain (memory, file, context, startup_prompt, conversation, voice, meta, workspace,
-    timer groups)
+  - `tests/test_tool_catalogue.c`: golden tests added for every group above (13 tests total)
+  - 15 tools migrated so far; ~19 remain (memory, file, conversation, voice, workspace groups)
 - **C2.6a (complete)**: Tool catalogue format, loader and pilot migration
   - `tools/catalogue/compute_tools.json`: tool contracts (name, profiles, description, is_mutating,
     schema) for the `compute_tools` group, replacing hardcoded C literals (`16-TOOLS.md`)

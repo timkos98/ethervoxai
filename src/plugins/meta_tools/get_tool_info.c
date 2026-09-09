@@ -8,6 +8,8 @@
 
 #include "ethervox/governor.h"
 #include "ethervox/tool_manifest.h"
+#include "ethervox/tool_catalogue.h"
+#include "meta_tools_catalogue.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -226,21 +228,14 @@ ethervox_result_t ethervox_get_tool_info_register(ethervox_tool_registry_t* regi
     }
     
     ethervox_tool_t tool = {
-        .name = "get_tool_info",
-        .description = "Get detailed schema and documentation for any tool. "
-                      "Use tool_name=\"*\" to list all available tools, or specify a tool name "
-                      "to get its parameters, types, and usage examples. "
-                      "Call this before using unfamiliar tools to understand their parameters.",
-        .parameters_json_schema =
-            "{\"type\":\"object\",\"properties\":{"
-            "\"tool_name\":{\"type\":\"string\",\"description\":\"Name of tool to get info for, or '*' for all tools\"}"
-            "},\"required\":[\"tool_name\"]}",
         .execute = tool_get_tool_info_wrapper,
         .is_deterministic = true,
         .requires_confirmation = false,
         .is_stateful = false,
         .estimated_latency_ms = 1.0f
     };
+    ethervox_tool_catalogue_load(ETHERVOX_CATALOGUE_META_TOOLS_JSON, "get_tool_info",
+        ethervox_tool_catalogue_build_profile(), &tool);
     
     return ethervox_tool_registry_add(registry, &tool);
 }

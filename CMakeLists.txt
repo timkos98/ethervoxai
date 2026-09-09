@@ -603,6 +603,31 @@ ethervox_embed_catalogue(
     ETHERVOX_CATALOGUE_WEATHER_TOOLS_JSON
     ${ETHERVOX_CATALOGUE_GENERATED_DIR}/weather_tools_catalogue.h
 )
+ethervox_embed_catalogue(
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools/catalogue/context_tools.json
+    ETHERVOX_CATALOGUE_CONTEXT_TOOLS_JSON
+    ${ETHERVOX_CATALOGUE_GENERATED_DIR}/context_tools_catalogue.h
+)
+ethervox_embed_catalogue(
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools/catalogue/meta_tools.json
+    ETHERVOX_CATALOGUE_META_TOOLS_JSON
+    ${ETHERVOX_CATALOGUE_GENERATED_DIR}/meta_tools_catalogue.h
+)
+ethervox_embed_catalogue(
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools/catalogue/startup_prompt_tools.json
+    ETHERVOX_CATALOGUE_STARTUP_PROMPT_TOOLS_JSON
+    ${ETHERVOX_CATALOGUE_GENERATED_DIR}/startup_prompt_tools_catalogue.h
+)
+ethervox_embed_catalogue(
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools/catalogue/timer_tools.json
+    ETHERVOX_CATALOGUE_TIMER_TOOLS_JSON
+    ${ETHERVOX_CATALOGUE_GENERATED_DIR}/timer_tools_catalogue.h
+)
+ethervox_embed_catalogue(
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools/catalogue/unit_conversion.json
+    ETHERVOX_CATALOGUE_UNIT_CONVERSION_JSON
+    ${ETHERVOX_CATALOGUE_GENERATED_DIR}/unit_conversion_catalogue.h
+)
 
 # Note: src/dialogue/voice_conversation.c is included via GLOB above
 

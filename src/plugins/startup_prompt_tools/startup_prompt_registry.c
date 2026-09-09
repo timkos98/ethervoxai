@@ -10,6 +10,8 @@
 #include "ethervox/startup_prompt_tools.h"
 #include "ethervox/governor.h"
 #include "ethervox/logging.h"
+#include "ethervox/tool_catalogue.h"
+#include "startup_prompt_tools_catalogue.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -251,16 +253,12 @@ ethervox_result_t ethervox_startup_prompt_tools_register(void* registry_ptr) {
     
     // Register startup_prompt_update tool
     ethervox_tool_t update_tool = {
-        .name = "startup_prompt_update",
-        .description = "Update the startup prompt that runs when the assistant starts. Use this to customize the initial greeting or behavior. The prompt will be saved and used on next restart.",
-        .parameters_json_schema = 
-            "{\"type\":\"object\",\"properties\":{"
-                "\"prompt_text\":{\"type\":\"string\",\"description\":\"The new startup prompt text. Should be a natural greeting or instruction for the assistant.\"}"
-            "},\"required\":[\"prompt_text\"]}",
         .test_scenario = "Change your personality to be more formal",
         .execute = tool_startup_prompt_update,
         .is_deterministic = false
     };
+    ethervox_tool_catalogue_load(ETHERVOX_CATALOGUE_STARTUP_PROMPT_TOOLS_JSON, "startup_prompt_update",
+        ethervox_tool_catalogue_build_profile(), &update_tool);
     
     if (ethervox_tool_registry_add(registry, &update_tool) != 0) {
         STARTUP_ERROR("Failed to register startup_prompt_update tool");
@@ -269,13 +267,12 @@ ethervox_result_t ethervox_startup_prompt_tools_register(void* registry_ptr) {
     
     // Register startup_prompt_read tool
     ethervox_tool_t read_tool = {
-        .name = "startup_prompt_read",
-        .description = "Read the current custom startup prompt. Returns the prompt text if a custom one exists, or indicates if using the default.",
-        .parameters_json_schema = "{\"type\":\"object\",\"properties\":{}}",
         .test_scenario = "Show me your current system prompt",
         .execute = tool_startup_prompt_read,
         .is_deterministic = true
     };
+    ethervox_tool_catalogue_load(ETHERVOX_CATALOGUE_STARTUP_PROMPT_TOOLS_JSON, "startup_prompt_read",
+        ethervox_tool_catalogue_build_profile(), &read_tool);
     
     if (ethervox_tool_registry_add(registry, &read_tool) != 0) {
         STARTUP_ERROR("Failed to register startup_prompt_read tool");

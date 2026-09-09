@@ -13,6 +13,11 @@
 
 #include "ethervox/compute_tools.h"
 #include "ethervox/system_info_tools.h"
+#include "ethervox/context_tools.h"
+#include "ethervox/get_tool_info.h"
+#include "ethervox/startup_prompt_tools.h"
+#include "ethervox/timer_tools.h"
+#include "ethervox/unit_conversion.h"
 #include "ethervox/tool_catalogue.h"
 #include "ethervox/error.h"
 #include "unit/test_utils.h"
@@ -73,6 +78,85 @@ static void test_golden_time_tools(void) {
     CHECK(strcmp(t->description,
         "Get the current week number of the year. Use when user asks 'what week is it' or 'what week number'.") == 0);
     CHECK(strcmp(t->parameters_json_schema, "{}") == 0);
+}
+
+// Loader behaviour, independent of the embedded compute_tools.json above.
+static void test_golden_context_manage(void) {
+    ethervox_tool_registry_t registry;
+    CHECK(ethervox_is_success(ethervox_tool_registry_init(&registry, 4)));
+    CHECK(register_context_manage_tool(&registry, NULL) == 0);
+
+    const ethervox_tool_t* t = ethervox_tool_registry_find(&registry, "context_manage");
+    CHECK(t != NULL);
+    CHECK(strcmp(t->description,
+        "Manage context window when running low on space. "
+        "CRITICAL: You MUST call this when context usage exceeds 80%. "
+        "Choose action based on situation: summarize_old (best - preserves info), "
+        "shift_window (fast - drops old), prune_unimportant (selective).") == 0);
+
+    ethervox_tool_registry_cleanup(&registry);
+}
+
+static void test_golden_get_tool_info(void) {
+    ethervox_tool_registry_t registry;
+    CHECK(ethervox_is_success(ethervox_tool_registry_init(&registry, 4)));
+    CHECK(ethervox_is_success(ethervox_get_tool_info_register(&registry)));
+
+    const ethervox_tool_t* t = ethervox_tool_registry_find(&registry, "get_tool_info");
+    CHECK(t != NULL);
+    CHECK(strcmp(t->parameters_json_schema,
+        "{\"type\":\"object\",\"properties\":{"
+        "\"tool_name\":{\"type\":\"string\",\"description\":\"Name of tool to get info for, or '*' for all tools\"}"
+        "},\"required\":[\"tool_name\"]}") == 0);
+
+    ethervox_tool_registry_cleanup(&registry);
+}
+
+static void test_golden_startup_prompt_tools(void) {
+    ethervox_tool_registry_t registry;
+    CHECK(ethervox_is_success(ethervox_tool_registry_init(&registry, 4)));
+    CHECK(ethervox_is_success(ethervox_startup_prompt_tools_register(&registry)));
+
+    const ethervox_tool_t* t = ethervox_tool_registry_find(&registry, "startup_prompt_update");
+    CHECK(t != NULL);
+    CHECK(strcmp(t->description,
+        "Update the startup prompt that runs when the assistant starts. Use this to customize the "
+        "initial greeting or behavior. The prompt will be saved and used on next restart.") == 0);
+
+    t = ethervox_tool_registry_find(&registry, "startup_prompt_read");
+    CHECK(t != NULL);
+    CHECK(strcmp(t->parameters_json_schema, "{\"type\":\"object\",\"properties\":{}}") == 0);
+
+    ethervox_tool_registry_cleanup(&registry);
+}
+
+static void test_golden_timer_tools(void) {
+    const ethervox_tool_t* t = ethervox_tool_timer_create();
+    CHECK(strcmp(t->name, "timer_create") == 0);
+    CHECK(strcmp(t->description,
+        "Create a timer with duration in seconds. Use for countdown timers (e.g., '5 minute timer', "
+        "'timer for 30 seconds')") == 0);
+
+    t = ethervox_tool_alarm_create();
+    CHECK(strcmp(t->name, "alarm_create") == 0);
+    CHECK(strcmp(t->parameters_json_schema,
+        "{\"type\":\"object\",\"properties\":{"
+        "\"hour\":{\"type\":\"integer\",\"description\":\"Hour in 24-hour format (0-23)\"},"
+        "\"minute\":{\"type\":\"integer\",\"description\":\"Minute (0-59)\"},"
+        "\"label\":{\"type\":\"string\",\"description\":\"Optional label/name for the alarm\"}"
+        "},\"required\":[\"hour\",\"minute\"]}") == 0);
+}
+
+static void test_golden_unit_conversion(void) {
+    ethervox_tool_registry_t registry;
+    CHECK(ethervox_is_success(ethervox_tool_registry_init(&registry, 4)));
+    CHECK(ethervox_is_success(ethervox_unit_conversion_register(&registry)));
+
+    const ethervox_tool_t* t = ethervox_tool_registry_find(&registry, "unit_convert");
+    CHECK(t != NULL);
+    CHECK(strcmp(t->test_scenario, "Convert 10 miles to kilometers") == 0);
+
+    ethervox_tool_registry_cleanup(&registry);
 }
 
 // Loader behaviour, independent of the embedded compute_tools.json above.
@@ -138,6 +222,11 @@ int main(void) {
     RUN_TEST(test_golden_percentage);
     RUN_TEST(test_golden_time_tools);
     RUN_TEST(test_golden_system_info);
+    RUN_TEST(test_golden_context_manage);
+    RUN_TEST(test_golden_get_tool_info);
+    RUN_TEST(test_golden_startup_prompt_tools);
+    RUN_TEST(test_golden_timer_tools);
+    RUN_TEST(test_golden_unit_conversion);
     RUN_TEST(test_loader_not_found);
     RUN_TEST(test_loader_profile_excluded);
     RUN_TEST(test_loader_unknown_profile_is_error);
