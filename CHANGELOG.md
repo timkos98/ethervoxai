@@ -56,10 +56,19 @@ See TASK-C0.1 execution log in `ethervoxai-planning/tasks/PHASE-C/C0.1-unify-the
     the struct for a future backend with real incremental decoding, not exercised by this one
   - `tests/test_streaming_transcription.c`: event struct shape, callback register/clear/NULL-safety,
     callback invocation with expected field values
+  - **Backpressure implemented**: `finalize_chunk_and_restart()` no longer calls the host's
+    callback directly from the capture thread. Segments are pushed onto a bounded (16-slot) queue
+    and delivered by a dedicated dispatch thread instead, so a slow callback can no longer stall
+    audio capture. Capacity is generous (>10 minutes of undelivered backlog at one push per
+    `GRANITE_SPEECH_CHUNK_SECONDS`) specifically so the push never actually blocks in any realistic
+    scenario; if it ever did (a pathologically slow host), it blocks rather than drops, since every
+    segment this call site produces is final and the design constraint says never drop those. Torn
+    down cleanly in `ethervox_voice_tools_stop_listen()`/`_cleanup()`. Build- and
+    code-review-verified; no dedicated concurrency test (the queue is static to `voice_tools.c`)
   - **Not verified this session** (needs a live Granite Speech Plus model + real audio, not
     available in this environment): segments actually arriving before stop end-to-end, revision
-    semantics, UTF-8 boundary safety across segment splits, slow-consumer backpressure dropping
-    only non-final revisions. C3.5 stays open until one of those is exercised for real
+    semantics, UTF-8 boundary safety across segment splits. C3.5 stays open until one of those is
+    exercised for real
   - Verified: all four `ETHERVOX_PROFILE` values build; `ethervoxai-android`'s
     `./gradlew assembleDevDebug` and `ethervoxai-ios`'s `./build_backend.sh macos` both succeed
 - **C2.6b (complete)**: Tool catalogue migration finished — all ~40 tools now data

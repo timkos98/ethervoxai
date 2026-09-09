@@ -95,6 +95,169 @@ static ethervox_result_t download_granite_speech_plus_model(void) {
 // Global session pointer for tool wrappers
 static ethervox_voice_session_t* g_voice_session = NULL;
 
+// ============================================================================
+// TASK-C3.5 backpressure: bounded async transcription-event delivery queue
+//
+// finalize_chunk_and_restart() runs on the capture thread; if it called the
+// host's event callback directly and the host were slow (e.g. blocked on
+// UI), that delay would propagate straight into the capture thread's next
+// audio read, risking dropped/overrun audio (the "never stall capture"
+// design constraint). Pushing onto this queue instead is O(1); a dedicated
+// dispatch thread invokes the callback.
+//
+// Capacity is deliberately generous - 16 slots at one push per
+// GRANITE_SPEECH_CHUNK_SECONDS is >10 minutes of undelivered backlog -
+// specifically so the only segments this queue ever pushes (all final,
+// see finalize_chunk_and_restart) are never dropped in any realistic
+// scenario. If a host callback is ever so pathologically slow that the
+// queue does fill, push blocks rather than drops: "never drop a final
+// segment" outranks "never stall" in that unsatisfiable edge case.
+// ============================================================================
+#define ETHERVOX_TRANSCRIPTION_QUEUE_CAPACITY 16
+
+typedef struct {
+    uint32_t segment_id;
+    int32_t speaker_id;
+    bool is_final;
+    char* text;  // heap copy, owned by the queue entry until dispatched
+} transcription_queue_entry_t;
+
+typedef struct {
+    transcription_queue_entry_t entries[ETHERVOX_TRANSCRIPTION_QUEUE_CAPACITY];
+    int head;
+    int tail;
+    int count;
+    pthread_mutex_t lock;
+    pthread_cond_t not_empty;
+    pthread_cond_t not_full;
+    pthread_t dispatch_thread;
+    bool dispatch_thread_running;
+    bool shutdown_requested;
+    ethervox_voice_session_t* session;  // for reading the current callback/user_data
+} transcription_event_queue_t;
+
+static void* transcription_dispatch_thread_main(void* arg) {
+    transcription_event_queue_t* queue = (transcription_event_queue_t*)arg;
+
+    for (;;) {
+        pthread_mutex_lock(&queue->lock);
+        while (queue->count == 0 && !queue->shutdown_requested) {
+            pthread_cond_wait(&queue->not_empty, &queue->lock);
+        }
+        if (queue->count == 0 && queue->shutdown_requested) {
+            pthread_mutex_unlock(&queue->lock);
+            break;
+        }
+
+        transcription_queue_entry_t entry = queue->entries[queue->head];
+        queue->head = (queue->head + 1) % ETHERVOX_TRANSCRIPTION_QUEUE_CAPACITY;
+        queue->count--;
+        pthread_cond_signal(&queue->not_full);
+        pthread_mutex_unlock(&queue->lock);
+
+        ethervox_event_cb cb = queue->session->transcription_event_cb;
+        void* user_data = queue->session->transcription_event_user_data;
+        if (cb) {
+            ethervox_event_t event = {0};
+            event.type = ETHERVOX_EVENT_TRANSCRIPTION_SEGMENT;
+            event.transcription_segment.segment_id = entry.segment_id;
+            event.transcription_segment.speaker_id = entry.speaker_id;
+            event.transcription_segment.text = entry.text;
+            event.transcription_segment.is_final = entry.is_final;
+            cb(&event, user_data);
+        }
+        free(entry.text);
+    }
+
+    return NULL;
+}
+
+// Lazily starts the dispatch thread on first use; a session that never
+// registers a callback never allocates or spins up any of this.
+static transcription_event_queue_t* get_or_create_event_queue(ethervox_voice_session_t* session) {
+    if (session->event_queue) {
+        return (transcription_event_queue_t*)session->event_queue;
+    }
+
+    transcription_event_queue_t* queue =
+        (transcription_event_queue_t*)calloc(1, sizeof(transcription_event_queue_t));
+    if (!queue) return NULL;
+
+    queue->session = session;
+    pthread_mutex_init(&queue->lock, NULL);
+    pthread_cond_init(&queue->not_empty, NULL);
+    pthread_cond_init(&queue->not_full, NULL);
+
+    if (pthread_create(&queue->dispatch_thread, NULL, transcription_dispatch_thread_main, queue) == 0) {
+        queue->dispatch_thread_running = true;
+    } else {
+        LOG_ERROR("Failed to start transcription event dispatch thread");
+        pthread_mutex_destroy(&queue->lock);
+        pthread_cond_destroy(&queue->not_empty);
+        pthread_cond_destroy(&queue->not_full);
+        free(queue);
+        return NULL;
+    }
+
+    session->event_queue = queue;
+    return queue;
+}
+
+// Copies `text` and pushes it for async delivery; blocks only if the queue
+// is completely full (see capacity note above). Safe to call whether or not
+// a callback is currently registered - the dispatch thread simply drops the
+// entry if `session->transcription_event_cb` is NULL when it's popped.
+static void push_transcription_event(ethervox_voice_session_t* session, uint32_t segment_id,
+                                      int32_t speaker_id, bool is_final, const char* text) {
+    transcription_event_queue_t* queue = get_or_create_event_queue(session);
+    if (!queue) return;
+
+    char* text_copy = strdup(text);
+    if (!text_copy) return;
+
+    pthread_mutex_lock(&queue->lock);
+    while (queue->count == ETHERVOX_TRANSCRIPTION_QUEUE_CAPACITY) {
+        pthread_cond_wait(&queue->not_full, &queue->lock);
+    }
+    int slot = queue->tail;
+    queue->entries[slot].segment_id = segment_id;
+    queue->entries[slot].speaker_id = speaker_id;
+    queue->entries[slot].is_final = is_final;
+    queue->entries[slot].text = text_copy;
+    queue->tail = (queue->tail + 1) % ETHERVOX_TRANSCRIPTION_QUEUE_CAPACITY;
+    queue->count++;
+    pthread_cond_signal(&queue->not_empty);
+    pthread_mutex_unlock(&queue->lock);
+}
+
+// Joins the dispatch thread and frees the queue. Safe to call on a session
+// whose queue was never created (event callback never registered).
+static void destroy_event_queue(ethervox_voice_session_t* session) {
+    if (!session->event_queue) return;
+    transcription_event_queue_t* queue = (transcription_event_queue_t*)session->event_queue;
+
+    pthread_mutex_lock(&queue->lock);
+    queue->shutdown_requested = true;
+    pthread_cond_broadcast(&queue->not_empty);
+    pthread_mutex_unlock(&queue->lock);
+
+    if (queue->dispatch_thread_running) {
+        pthread_join(queue->dispatch_thread, NULL);
+    }
+
+    // Drop any entries still queued at shutdown (host stopped listening).
+    for (int i = 0; i < queue->count; i++) {
+        int idx = (queue->head + i) % ETHERVOX_TRANSCRIPTION_QUEUE_CAPACITY;
+        free(queue->entries[idx].text);
+    }
+
+    pthread_mutex_destroy(&queue->lock);
+    pthread_cond_destroy(&queue->not_empty);
+    pthread_cond_destroy(&queue->not_full);
+    free(queue);
+    session->event_queue = NULL;
+}
+
 /**
  * Extract the highest [Speaker N]: id referenced anywhere in `text` and
  * fold it into session->max_speaker_id. Native Granite Speech Plus SAA tags
@@ -198,14 +361,12 @@ static bool finalize_chunk_and_restart(ethervox_voice_session_t* session) {
       // to revise, so every segment this call site emits is final at birth;
       // the is_final=false/revision path exists in the event struct for a
       // future backend with real incremental decoding, not exercised here.
+      // Pushed onto the async queue (not called directly) so a slow host
+      // callback can never stall this capture thread - see
+      // push_transcription_event()'s doc comment.
       if (session->transcription_event_cb) {
-        ethervox_event_t event = {0};
-        event.type = ETHERVOX_EVENT_TRANSCRIPTION_SEGMENT;
-        event.transcription_segment.segment_id = session->segment_count;
-        event.transcription_segment.speaker_id = max_speaker_id_in_text(result.text);
-        event.transcription_segment.text = result.text;
-        event.transcription_segment.is_final = true;
-        session->transcription_event_cb(&event, session->transcription_event_user_data);
+        push_transcription_event(session, session->segment_count,
+                                  max_speaker_id_in_text(result.text), true, result.text);
       }
 
       // Carry a bounded tail of the raw (untagged-timestamp) transcript
@@ -773,6 +934,15 @@ ethervox_result_t ethervox_voice_tools_stop_listen(ethervox_voice_session_t* ses
                final_result.language ? final_result.language : "auto", final_result.text);
 
       append_transcript_segment(session, formatted_segment);
+
+      // TASK-C3.5: same event push as finalize_chunk_and_restart() - this
+      // is the session's last segment, produced synchronously at stop time
+      // rather than mid-recording, but a host listening for events should
+      // still see it rather than only the ones before it.
+      if (session->transcription_event_cb) {
+        push_transcription_event(session, session->segment_count,
+                                  max_speaker_id_in_text(final_result.text), true, final_result.text);
+      }
     }
     ethervox_stt_result_free(&final_result);
   }
@@ -853,6 +1023,11 @@ ethervox_result_t ethervox_voice_tools_stop_listen(ethervox_voice_session_t* ses
 
   LOG_INFO("Voice recording session stopped - %zu chars transcribed", session->transcript_len);
 
+  // TASK-C3.5: flush and join the dispatch thread now that no more events
+  // will be pushed for this session - drains any already-queued segments
+  // before returning (see transcription_dispatch_thread_main()'s loop).
+  destroy_event_queue(session);
+
   return ETHERVOX_SUCCESS;
 }
 
@@ -885,6 +1060,11 @@ void ethervox_voice_tools_cleanup(ethervox_voice_session_t* session) {
     const char* transcript;
     ethervox_voice_tools_stop_listen(session, &transcript);
   }
+
+  // Safety net: stop_listen() already tears this down on every normal path;
+  // a no-op if event_queue is already NULL (session never registered a
+  // callback, or was already stopped).
+  destroy_event_queue(session);
 
   ethervox_stt_cleanup(&session->stt_runtime);
 

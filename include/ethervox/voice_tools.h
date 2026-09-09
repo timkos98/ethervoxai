@@ -98,6 +98,11 @@ typedef struct {
     ethervox_event_cb transcription_event_cb;
     void* transcription_event_user_data;
 
+    // TASK-C3.5 backpressure: bounded async delivery queue (opaque, see
+    // voice_tools.c) so a slow event consumer never stalls the capture
+    // thread. Allocated lazily on first event push; NULL until then.
+    void* event_queue;
+
 } ethervox_voice_session_t;
 
 

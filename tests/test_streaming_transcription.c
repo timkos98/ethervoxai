@@ -3,10 +3,16 @@
  * @brief Tests for streaming transcription events (TASK-C3.5)
  *
  * Full end-to-end coverage (segments actually arriving mid-recording from a
- * live Granite Speech Plus model, revision semantics, UTF-8 boundary safety,
- * slow-consumer backpressure) needs a real model and audio pipeline and is
- * not exercised here. This covers what's testable without one: the event
- * struct's shape, and the callback registration API's contract.
+ * live Granite Speech Plus model, revision semantics, UTF-8 boundary safety)
+ * needs a real model and audio pipeline and is not exercised here. This
+ * covers what's testable without one: the event struct's shape, and the
+ * callback registration API's contract.
+ *
+ * The async delivery queue that backs backpressure (push_transcription_event
+ * et al. in voice_tools.c) is static to that translation unit and isn't
+ * exercised by a dedicated concurrency test here either - it's build- and
+ * code-review-verified (bounded capacity, dedicated dispatch thread, no
+ * direct callback invocation from the capture thread), not test-verified.
  *
  * Copyright (c) 2024-2026 EthervoxAI Team
  * SPDX-License-Identifier: LicenseRef-EthervoxAI-Proprietary
