@@ -628,6 +628,16 @@ ethervox_embed_catalogue(
     ETHERVOX_CATALOGUE_UNIT_CONVERSION_JSON
     ${ETHERVOX_CATALOGUE_GENERATED_DIR}/unit_conversion_catalogue.h
 )
+ethervox_embed_catalogue(
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools/catalogue/memory_tools.json
+    ETHERVOX_CATALOGUE_MEMORY_TOOLS_JSON
+    ${ETHERVOX_CATALOGUE_GENERATED_DIR}/memory_tools_catalogue.h
+)
+ethervox_embed_catalogue(
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools/catalogue/file_tools.json
+    ETHERVOX_CATALOGUE_FILE_TOOLS_JSON
+    ${ETHERVOX_CATALOGUE_GENERATED_DIR}/file_tools_catalogue.h
+)
 
 # Note: src/dialogue/voice_conversation.c is included via GLOB above
 

@@ -18,6 +18,8 @@
 #include "ethervox/startup_prompt_tools.h"
 #include "ethervox/timer_tools.h"
 #include "ethervox/unit_conversion.h"
+#include "ethervox/memory_tools.h"
+#include "ethervox/file_tools.h"
 #include "ethervox/tool_catalogue.h"
 #include "ethervox/error.h"
 #include "unit/test_utils.h"
@@ -217,6 +219,58 @@ static void test_loader_success(void) {
     CHECK(strcmp(tool.parameters_json_schema, "{\"type\":\"object\"}") == 0);
 }
 
+static void test_golden_memory_tools(void) {
+    ethervox_tool_registry_t registry;
+    CHECK(ethervox_is_success(ethervox_tool_registry_init(&registry, 16)));
+    ethervox_memory_store_t store;
+    CHECK(ethervox_is_success(ethervox_memory_init(&store, "test_tool_catalogue", NULL)));
+    CHECK(ethervox_is_success(ethervox_memory_tools_register(&registry, &store)));
+
+    const ethervox_tool_t* t = ethervox_tool_registry_find(&registry, "memory_store");
+    CHECK(t != NULL);
+    CHECK(strcmp(t->test_scenario, "Remember my favorite color is blue") == 0);
+
+    t = ethervox_tool_registry_find(&registry, "memory_store_pattern");
+    CHECK(t != NULL);
+    CHECK(strcmp(t->parameters_json_schema,
+        "{\"type\":\"object\",\"properties\":{"
+        "\"pattern\":{\"type\":\"string\",\"description\":\"Description of what worked well (required)\"}"
+        "},\"required\":[\"pattern\"]}") == 0);
+
+    ethervox_memory_cleanup(&store);
+    ethervox_tool_registry_cleanup(&registry);
+}
+
+static void test_golden_file_tools(void) {
+    ethervox_tool_registry_t registry;
+    CHECK(ethervox_is_success(ethervox_tool_registry_init(&registry, 16)));
+
+    ethervox_file_tools_config_t config;
+    const char* base_paths[] = { "/tmp", NULL };
+    CHECK(ethervox_file_tools_init(&config, base_paths, ETHERVOX_FILE_ACCESS_READ_ONLY) == 0);
+    CHECK(ethervox_is_success(ethervox_file_tools_register(&registry, &config)));
+
+    const ethervox_tool_t* t = ethervox_tool_registry_find(&registry, "file_read");
+    CHECK(t != NULL);
+    CHECK(strcmp(t->description,
+        "Read contents of a text based file (.txt, .md, .org, .c, etc.). Maximum 10MB.") == 0);
+
+    ethervox_path_config_t path_config = {0};
+    CHECK(ethervox_is_success(ethervox_path_config_register(&registry, &path_config)));
+
+    t = ethervox_tool_registry_find(&registry, "path_set");
+    CHECK(t != NULL);
+    CHECK(strcmp(t->parameters_json_schema,
+        "{\"type\":\"object\",\"properties\":{"
+        "\"label\":{\"type\":\"string\",\"description\":\"Human-friendly label (e.g., 'Notes', 'Projects', 'Documents')\"},"
+        "\"path\":{\"type\":\"string\",\"description\":\"Absolute directory path\"},"
+        "\"description\":{\"type\":\"string\",\"description\":\"Optional description of what this path contains\"}"
+        "},\"required\":[\"label\",\"path\"]}") == 0);
+
+    ethervox_file_tools_cleanup(&config);
+    ethervox_tool_registry_cleanup(&registry);
+}
+
 int main(void) {
     RUN_TEST(test_golden_calculator);
     RUN_TEST(test_golden_percentage);
@@ -227,6 +281,8 @@ int main(void) {
     RUN_TEST(test_golden_startup_prompt_tools);
     RUN_TEST(test_golden_timer_tools);
     RUN_TEST(test_golden_unit_conversion);
+    RUN_TEST(test_golden_memory_tools);
+    RUN_TEST(test_golden_file_tools);
     RUN_TEST(test_loader_not_found);
     RUN_TEST(test_loader_profile_excluded);
     RUN_TEST(test_loader_unknown_profile_is_error);

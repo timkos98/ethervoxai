@@ -41,6 +41,15 @@ See TASK-C0.1 execution log in `ethervoxai-planning/tasks/PHASE-C/C0.1-unify-the
 
 ### Added
 - **C2.6b (in progress)**: Tool catalogue migration continued
+  - `tools/catalogue/memory_tools.json`: all 10 memory tools migrated (`memory_complete_reminder`,
+    `memory_update_reminder`, `memory_store`, `memory_search`, `memory_reminder_list`,
+    `memory_export`, `memory_forget`, `memory_delete`, `memory_store_correction`,
+    `memory_store_pattern`)
+  - `tools/catalogue/file_tools.json`: all 9 file/path tools migrated (`file_list`, `file_read`,
+    `file_search`, `file_write`, `file_append`, `path_list`, `path_get`, `path_set`,
+    `path_check_unverified`, `file_set_safe_mode`) - corrected `file_write`/`file_append`'s
+    `profiles` to exclude `WORKSPACE`, matching the plugin's existing
+    `ETHERVOX_FEATURE_FILE_TOOLS=OFF` build-time exclusion for that profile
   - `tools/catalogue/system_info_tools.json`: `system_version`, `system_capabilities` migrated
   - `tools/catalogue/weather_tools.json`: `get_weather_forecast` migrated (its `WORKSPACE` exclusion
     was already enforced via `ETHERVOX_FEATURE_WEATHER`; catalogue now documents it consistently)
@@ -54,8 +63,8 @@ See TASK-C0.1 execution log in `ethervoxai-planning/tasks/PHASE-C/C0.1-unify-the
   - Deleted dead `src/plugins/conversation_tools/train_pronunciation.c` - unreferenced since C1.0's
     phonemizer removal, so `train_pronunciation` was already out of the registry, but its source
     still compiled and linked
-  - `tests/test_tool_catalogue.c`: golden tests added for every group above (13 tests total)
-  - 15 tools migrated so far; ~19 remain (memory, file, conversation, voice, workspace groups)
+  - `tests/test_tool_catalogue.c`: golden tests added for every group above (15 tests total)
+  - 37 tools migrated so far; ~10 remain (conversation_tools, voice_tools, workspace_tools)
 - **C2.6a (complete)**: Tool catalogue format, loader and pilot migration
   - `tools/catalogue/compute_tools.json`: tool contracts (name, profiles, description, is_mutating,
     schema) for the `compute_tools` group, replacing hardcoded C literals (`16-TOOLS.md`)
