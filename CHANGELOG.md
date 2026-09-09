@@ -40,6 +40,19 @@ See TASK-C0.1 execution log in `ethervoxai-planning/tasks/PHASE-C/C0.1-unify-the
 ## [Unreleased]
 
 ### Added
+- **C3.6b (partial)**: real governor+STT model sharing verified against a live model
+  - `tests/integration/test_c36b_shared_governor_stt.c`: loads a governor-shaped handle
+    (`role="main"`, no mmproj) then an STT handle (`role="speech"`, with mmproj) against the same
+    real GGUF (`granite-speech-4.1-2b-plus-Q4_K_M.gguf`), confirms the memory delta matches
+    KV+projector only (not a second full model), and runs a real transcription through the shared
+    model - transcript comes out correct (`"[Speaker 1]: The quick brown fox jumps over..."`)
+  - **Found and fixed a real accounting bug** while writing that test: `load_shared_context()`
+    added the projector's bytes to `pool->used_bytes` twice - once directly inside
+    `attach_projector()`, once again via the handle's `memory_bytes` at registration. A correctly
+    shared model looked like a second full copy had loaded (delta 2235 MB, now 1121 MB)
+  - Still open: runtime projector detach/reattach without a full handle unload (the API exists,
+    nothing calls it from STT's lifecycle yet), the threading rule between governor and STT
+    contexts sharing one model, and the full quality-comparison/ASan pass (→ C3.6c)
 - **C3.6a (complete)**: Model-pool weight sharing wired into governor + STT
   - `ethervox_model_pool_load_shared_context()`/`attach_projector()`/`detach_projector()` were
     already fully implemented in `model_pool.c` but never declared in `model_pool.h` - an
