@@ -4076,7 +4076,7 @@ file_tools_cleanup:
   }
 
   // Initialize and register voice tools
-  result = ethervox_voice_tools_init(&voice_state, &memory);
+  result = ethervox_voice_tools_init(&voice_state, &memory, NULL);
   if (ethervox_is_success(result)) {
     result = ethervox_voice_tools_register(&registry, &voice_state);
     if (ethervox_is_success(result)) {

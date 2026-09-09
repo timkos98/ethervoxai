@@ -53,9 +53,12 @@ struct ethervox_model_handle {
     struct llama_model* model;
     struct llama_context* ctx;
     void* mtmd_ctx;              // mtmd_context* for multimodal support (NULL if not supported)
+    uint64_t mmproj_bytes;       // C3.6: projector size, so attach/detach can charge/refund exactly
     ethervox_mutex_t inference_mutex;     // Serializes inference on this model
     uint64_t memory_bytes;       // Actual memory used
     char role[64];               // Model role (main, vision, embed)
+    char model_path[512];        // C3.6: so load_shared_context() can find an existing handle to share
+    bool use_gpu;                // C3.6: remembered so attach_projector() matches the model's own load flags
     
     // C3.4: Memory pressure and LRU eviction
     ethervox_residency_class_t residency;  // RESIDENT or ON_DEMAND
@@ -68,6 +71,18 @@ struct ethervox_model_handle {
 };
 
 /**
+ * C3.6: registry entry tracking one resident llama_model shared by potentially
+ * several handles (their own context, optionally their own projector). The model's
+ * weights are freed only when the last handle referencing it unloads.
+ */
+typedef struct ethervox_shared_model {
+    struct llama_model* model;
+    char model_path[512];
+    int refcount;
+    struct ethervox_shared_model* next;
+} ethervox_shared_model_t;
+
+/**
  * Model pool structure
  */
 struct ethervox_model_pool {
@@ -76,6 +91,7 @@ struct ethervox_model_pool {
     uint64_t used_bytes;
     ethervox_mutex_t pool_mutex;  // Protects pool state
     ethervox_model_handle_t* models;  // Linked list of loaded models
+    ethervox_shared_model_t* shared_models;  // C3.6: models loaded via load_shared_context()
     
     // C3.4: Memory pressure and LRU eviction
     ethervox_memory_pressure_cb pressure_callback;  // OS pressure handler
@@ -345,8 +361,12 @@ ethervox_result_t ethervox_model_pool_load(
     handle->ctx = ctx;
     handle->mtmd_ctx = NULL;  // Initialize to NULL
     handle->memory_bytes = required_bytes;
+    handle->use_gpu = config->use_gpu;
     if (config->role) {
         strncpy(handle->role, config->role, sizeof(handle->role) - 1);
+    }
+    if (config->model_path) {
+        strncpy(handle->model_path, config->model_path, sizeof(handle->model_path) - 1);
     }
     
     // C3.4: Initialize LRU and residency fields
@@ -447,6 +467,26 @@ ethervox_result_t ethervox_model_pool_unload(
             pool->current_on_demand--;
         }
     }
+
+    // C3.6: if this handle's model is shared (loaded via load_shared_context()),
+    // only the last sharer to unload actually frees the weights.
+    ethervox_shared_model_t** shared_prev = &pool->shared_models;
+    ethervox_shared_model_t* shared = NULL;
+    while (*shared_prev) {
+        if ((*shared_prev)->model == handle->model) {
+            shared = *shared_prev;
+            break;
+        }
+        shared_prev = &(*shared_prev)->next;
+    }
+    bool free_model = true;
+    if (shared) {
+        shared->refcount--;
+        free_model = (shared->refcount <= 0);
+        if (free_model) {
+            *shared_prev = shared->next;
+        }
+    }
     MUTEX_UNLOCK(pool->pool_mutex);
     
     // Free resources
@@ -462,10 +502,14 @@ ethervox_result_t ethervox_model_pool_unload(
     if (handle->ctx) {
         llama_free(handle->ctx);
     }
-    if (handle->model) {
+    if (free_model && handle->model) {
         llama_free_model(handle->model);
     }
 #endif
+
+    if (shared && free_model) {
+        free(shared);
+    }
     
     MUTEX_DESTROY(handle->inference_mutex);
     free(handle);
@@ -691,3 +735,212 @@ ethervox_result_t ethervox_model_pool_evict_lru(
     
     return ETHERVOX_SUCCESS;
 }
+
+// ============================================================================
+// C3.6: Shared model handle (one llama_model, multiple contexts) + runtime
+// projector attach/detach
+// ============================================================================
+
+ethervox_result_t ethervox_model_pool_attach_projector(
+    ethervox_model_pool_t* pool,
+    ethervox_model_handle_t* handle,
+    const char* mmproj_path,
+    const char* media_marker
+) {
+    if (!pool || !handle || !mmproj_path) {
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
+
+#if !LLAMA_AVAILABLE || !(defined(MTMD_AVAILABLE) && MTMD_AVAILABLE)
+    (void)media_marker;
+    ETHERVOX_LOG_ERROR("[ModelPool] MTMD not available in this build - cannot attach a projector");
+    return ETHERVOX_ERROR_NOT_IMPLEMENTED;
+#else
+    if (handle->mtmd_ctx) {
+        ETHERVOX_LOG_ERROR("[ModelPool] Projector already attached to this handle - detach first");
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
+
+    struct mtmd_context_params mtmd_params = mtmd_context_params_default();
+    mtmd_params.print_timings = false;
+    if (media_marker) {
+        mtmd_params.media_marker = media_marker;
+    }
+
+    void* mctx = mtmd_init_from_file(mmproj_path, handle->model, mtmd_params);
+    if (!mctx) {
+        ETHERVOX_LOG_ERROR("[ModelPool] Failed to attach projector: %s", mmproj_path);
+        return ETHERVOX_ERROR_FILE_READ;
+    }
+
+    struct stat st;
+    uint64_t mmproj_bytes = (stat(mmproj_path, &st) == 0) ? (uint64_t)st.st_size : 0;
+
+    handle->mtmd_ctx = mctx;
+    handle->mmproj_bytes = mmproj_bytes;
+
+    MUTEX_LOCK(pool->pool_mutex);
+    handle->memory_bytes += mmproj_bytes;
+    pool->used_bytes += mmproj_bytes;
+    MUTEX_UNLOCK(pool->pool_mutex);
+
+    ETHERVOX_LOG_INFO("[ModelPool] Attached projector %s (+%llu MB, vision=%d, audio=%d)",
+                     mmproj_path,
+                     (unsigned long long)(mmproj_bytes / (1024 * 1024)),
+                     mtmd_support_vision(mctx),
+                     mtmd_support_audio(mctx));
+    return ETHERVOX_SUCCESS;
+#endif
+}
+
+ethervox_result_t ethervox_model_pool_detach_projector(
+    ethervox_model_pool_t* pool,
+    ethervox_model_handle_t* handle
+) {
+    if (!pool || !handle) {
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
+
+#if defined(MTMD_AVAILABLE) && MTMD_AVAILABLE
+    if (!handle->mtmd_ctx) {
+        return ETHERVOX_SUCCESS;  // Nothing attached - no-op.
+    }
+
+    mtmd_free((mtmd_context*)handle->mtmd_ctx);
+    handle->mtmd_ctx = NULL;
+
+    MUTEX_LOCK(pool->pool_mutex);
+    handle->memory_bytes -= handle->mmproj_bytes;
+    pool->used_bytes -= handle->mmproj_bytes;
+    MUTEX_UNLOCK(pool->pool_mutex);
+
+    ETHERVOX_LOG_INFO("[ModelPool] Detached projector (-%llu MB)",
+                     (unsigned long long)(handle->mmproj_bytes / (1024 * 1024)));
+    handle->mmproj_bytes = 0;
+#endif
+    return ETHERVOX_SUCCESS;
+}
+
+ethervox_result_t ethervox_model_pool_load_shared_context(
+    ethervox_model_pool_t* pool,
+    const ethervox_model_config_t* config,
+    ethervox_progress_cb progress_cb,
+    void* user_data,
+    ethervox_model_handle_t** out
+) {
+    if (!pool || !config || !out) {
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
+
+#if !LLAMA_AVAILABLE
+    (void)progress_cb;
+    (void)user_data;
+    ETHERVOX_LOG_ERROR("[ModelPool] llama.cpp not available");
+    return ETHERVOX_ERROR_NOT_IMPLEMENTED;
+#else
+    MUTEX_LOCK(pool->pool_mutex);
+    ethervox_shared_model_t* shared = pool->shared_models;
+    while (shared && strncmp(shared->model_path, config->model_path, sizeof(shared->model_path)) != 0) {
+        shared = shared->next;
+    }
+    MUTEX_UNLOCK(pool->pool_mutex);
+
+    if (!shared) {
+        // First caller for this model_path: load it exactly as ethervox_model_pool_load()
+        // would, then register it so later callers share its weights instead of reloading.
+        ethervox_result_t result = ethervox_model_pool_load(pool, config, progress_cb, user_data, out);
+        if (result != ETHERVOX_SUCCESS) {
+            return result;
+        }
+
+        ethervox_shared_model_t* entry = (ethervox_shared_model_t*)calloc(1, sizeof(*entry));
+        if (!entry) {
+            ETHERVOX_LOG_WARN("[ModelPool] Out of memory registering shared model entry - "
+                             "%s loaded but future callers will not share its weights",
+                             config->model_path);
+            return ETHERVOX_SUCCESS;
+        }
+        entry->model = (*out)->model;
+        strncpy(entry->model_path, config->model_path, sizeof(entry->model_path) - 1);
+        entry->refcount = 1;
+
+        MUTEX_LOCK(pool->pool_mutex);
+        entry->next = pool->shared_models;
+        pool->shared_models = entry;
+        MUTEX_UNLOCK(pool->pool_mutex);
+
+        return ETHERVOX_SUCCESS;
+    }
+
+    // Model already resident: a new context (and, if requested, a new projector)
+    // is all that's needed - the weights are not reloaded and are not charged again.
+    ETHERVOX_LOG_INFO("[ModelPool] Sharing resident model for a new context: %s", config->model_path);
+
+    struct llama_context_params ctx_params = llama_context_default_params();
+    ctx_params.n_ctx = config->context_size;
+    ctx_params.n_threads = config->n_threads;
+    ctx_params.n_threads_batch = config->n_threads;
+    ctx_params.n_seq_max = config->n_seq_max > 0 ? config->n_seq_max : 1;
+    ctx_params.kv_unified = config->kv_unified;
+
+    struct llama_context* ctx = llama_init_from_model(shared->model, ctx_params);
+    if (!ctx) {
+        ETHERVOX_LOG_ERROR("[ModelPool] Failed to create shared context for %s", config->model_path);
+        return ETHERVOX_ERROR_OUT_OF_MEMORY;
+    }
+
+    ethervox_model_handle_t* handle = (ethervox_model_handle_t*)calloc(1, sizeof(ethervox_model_handle_t));
+    if (!handle) {
+        llama_free(ctx);
+        return ETHERVOX_ERROR_OUT_OF_MEMORY;
+    }
+
+    handle->model = shared->model;
+    handle->ctx = ctx;
+    handle->mtmd_ctx = NULL;
+    // Only the new KV cache is charged here - the weights are already accounted for
+    // on whichever handle first loaded this model_path.
+    handle->memory_bytes = (uint64_t)config->context_size * KV_BYTES_PER_TOKEN_F16;
+    if (config->role) {
+        strncpy(handle->role, config->role, sizeof(handle->role) - 1);
+    }
+
+    time_t now = time(NULL);
+    handle->residency = config->residency;
+    handle->last_use = now;
+    handle->loaded_at = now;
+    handle->refcount = 0;
+    handle->ttl_seconds = (config->ttl_seconds > 0) ? config->ttl_seconds : 90;
+
+    MUTEX_INIT(handle->inference_mutex);
+
+    if (config->mmproj_path) {
+        ethervox_result_t attach_result = ethervox_model_pool_attach_projector(
+            pool, handle, config->mmproj_path, config->media_marker);
+        if (attach_result != ETHERVOX_SUCCESS) {
+            MUTEX_DESTROY(handle->inference_mutex);
+            free(handle);
+            llama_free(ctx);
+            return attach_result;
+        }
+    }
+
+    MUTEX_LOCK(pool->pool_mutex);
+    handle->next = pool->models;
+    pool->models = handle;
+    pool->used_bytes += handle->memory_bytes;
+    if (handle->residency == ETHERVOX_RESIDENCY_ON_DEMAND) {
+        pool->current_on_demand++;
+    }
+    shared->refcount++;
+    MUTEX_UNLOCK(pool->pool_mutex);
+
+    ETHERVOX_LOG_INFO("[ModelPool] Shared-context load complete: model refcount now %d, "
+                     "new handle uses %llu MB (weights not recharged)",
+                     shared->refcount, (unsigned long long)(handle->memory_bytes / (1024 * 1024)));
+
+    *out = handle;
+    return ETHERVOX_SUCCESS;
+#endif
+}
+

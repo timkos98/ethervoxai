@@ -190,7 +190,86 @@ static int test_refcounted_backend(void) {
     return 0;
 }
 
-int main(void) {
+// C3.6a: load_shared_context() must dedup by model_path - a second call against
+// the same GGUF gets its own llama_context but does not reload the weights, and
+// pool accounting must only charge the second handle's KV cache, not the model
+// again. Needs a real GGUF (argv[1]) - SKIPPED otherwise, since would_fit()'s
+// memory estimate requires stat()-ing a real file.
+static int test_shared_context(const char* model_path) {
+    printf("test_shared_context...\n");
+    if (!model_path) {
+        printf("  SKIPPED (no model path provided - pass a GGUF as argv[1])\n");
+        return 0;
+    }
+
+    ethervox_paths_t paths = {
+        .data_dir = "/tmp/ethervox/data",
+        .cache_dir = "/tmp/ethervox/cache",
+        .models_dir = "/tmp/ethervox/models"
+    };
+
+    ethervox_model_pool_t* pool = NULL;
+    CHECK_SUCCESS(ethervox_model_pool_create(&paths, 0 /* unlimited budget */, &pool));
+
+    ethervox_model_config_t config_a = {
+        .model_path = model_path,
+        .context_size = 512,
+        .n_threads = 2,
+        .use_gpu = false,
+        .role = "main",
+        .residency = ETHERVOX_RESIDENCY_RESIDENT,
+    };
+
+    ethervox_model_handle_t* handle_a = NULL;
+    CHECK_SUCCESS(ethervox_model_pool_load_shared_context(pool, &config_a, NULL, NULL, &handle_a));
+    CHECK(handle_a != NULL);
+
+    uint64_t used_after_first = 0;
+    CHECK_SUCCESS(ethervox_model_pool_memory_usage(pool, &used_after_first, NULL));
+    CHECK(used_after_first > 0);
+
+    // Second caller, same model_path, different role - must share the model.
+    ethervox_model_config_t config_b = config_a;
+    config_b.role = "speech";
+    config_b.context_size = 256;  // deliberately smaller, to tell its KV charge apart from A's
+
+    ethervox_model_handle_t* handle_b = NULL;
+    CHECK_SUCCESS(ethervox_model_pool_load_shared_context(pool, &config_b, NULL, NULL, &handle_b));
+    CHECK(handle_b != NULL);
+    CHECK(handle_b != handle_a);
+
+    // Same model, different contexts.
+    CHECK(ethervox_model_handle_get_model(handle_a) == ethervox_model_handle_get_model(handle_b));
+    CHECK(ethervox_model_handle_get_context(handle_a) != ethervox_model_handle_get_context(handle_b));
+
+    uint64_t used_after_second = 0;
+    CHECK_SUCCESS(ethervox_model_pool_memory_usage(pool, &used_after_second, NULL));
+    // The second handle must only add its own KV cache - nowhere near a full
+    // second copy of the model file (which is at least a few hundred MB for any
+    // real GGUF; the KV-only delta for a 256-token context is a few hundred KB).
+    uint64_t delta = used_after_second - used_after_first;
+    CHECK(delta > 0);
+    CHECK(delta < used_after_first);
+
+    // Unloading the first handle must not free the shared weights out from under
+    // the second - handle_b's context must remain usable.
+    CHECK_SUCCESS(ethervox_model_pool_unload(pool, handle_a));
+    CHECK(ethervox_model_handle_get_model(handle_b) != NULL);
+    CHECK(ethervox_model_handle_get_context(handle_b) != NULL);
+
+    CHECK_SUCCESS(ethervox_model_pool_unload(pool, handle_b));
+
+    uint64_t used_after_both_unloaded = 0;
+    CHECK_SUCCESS(ethervox_model_pool_memory_usage(pool, &used_after_both_unloaded, NULL));
+    CHECK(used_after_both_unloaded == 0);
+
+    ethervox_model_pool_destroy(pool);
+
+    printf("  PASS\n");
+    return 0;
+}
+
+int main(int argc, char** argv) {
     printf("Running model pool tests...\n\n");
     
     int failed = 0;
@@ -200,6 +279,7 @@ int main(void) {
     failed += test_would_fit_no_budget();
     failed += test_null_safety();
     failed += test_refcounted_backend();
+    failed += test_shared_context(argc > 1 ? argv[1] : NULL);
     
     printf("\n");
     if (failed == 0) {

@@ -288,6 +288,77 @@ ethervox_result_t ethervox_model_pool_set_max_on_demand(
     uint32_t max_concurrent
 );
 
+/**
+ * Attach a multimodal projector to an already-loaded handle at runtime (C3.6)
+ *
+ * Loads an mtmd projector bound to the handle's existing model and attaches it to
+ * this handle's context, so a text-only handle can gain audio/vision capability
+ * without reloading the model. Errors if a projector is already attached to this
+ * handle - call `ethervox_model_pool_detach_projector()` first.
+ *
+ * @param pool Pool the handle belongs to
+ * @param handle Handle to attach the projector to
+ * @param mmproj_path Path to the mmproj GGUF
+ * @param media_marker Media placeholder marker used in prompts (NULL = mtmd's own default)
+ * @return ETHERVOX_SUCCESS or error code
+ */
+ethervox_result_t ethervox_model_pool_attach_projector(
+    ethervox_model_pool_t* pool,
+    ethervox_model_handle_t* handle,
+    const char* mmproj_path,
+    const char* media_marker
+);
+
+/**
+ * Detach and free a handle's multimodal projector at runtime (C3.6)
+ *
+ * Frees the projector's weights without touching the handle's underlying model or
+ * context - text generation on that context is unaffected. Safe to call when no
+ * projector is attached (no-op).
+ *
+ * @param pool Pool the handle belongs to
+ * @param handle Handle to detach the projector from
+ * @return ETHERVOX_SUCCESS or error code
+ */
+ethervox_result_t ethervox_model_pool_detach_projector(
+    ethervox_model_pool_t* pool,
+    ethervox_model_handle_t* handle
+);
+
+/**
+ * Load a new context against an already-resident model, sharing its weights (C3.6)
+ *
+ * If a handle in this pool was already loaded from `config->model_path`, this skips
+ * loading the model file again and creates a second `llama_context` (and, if
+ * `config->mmproj_path` is set, its own mtmd projector) against the **same**
+ * `llama_model`. Memory accounting only charges the new KV cache and any newly
+ * loaded projector - not the model weights again - so `would_fit()`/
+ * `ethervox_model_pool_memory_usage()` stay honest about shared weights.
+ *
+ * If no handle with `config->model_path` exists yet, behaves exactly like
+ * `ethervox_model_pool_load()` (loads the model fresh, as the first sharer).
+ *
+ * The two resulting handles' contexts must never be used concurrently from the
+ * caller's own generation and ASR threads without external synchronization - the
+ * pool only serializes within a single handle's own inference mutex, not across
+ * handles that share a model (see the C3.6 task packet's threading rule).
+ *
+ * @param pool Model pool
+ * @param config Model configuration for the new context (model_path must match an
+ *   existing handle's, or a fresh model load is performed)
+ * @param progress_cb Optional progress callback (only invoked on a fresh model load)
+ * @param user_data User data for progress callback
+ * @param out Receives the new handle (caller must unload)
+ * @return ETHERVOX_SUCCESS or error code
+ */
+ethervox_result_t ethervox_model_pool_load_shared_context(
+    ethervox_model_pool_t* pool,
+    const ethervox_model_config_t* config,
+    ethervox_progress_cb progress_cb,
+    void* user_data,
+    ethervox_model_handle_t** out
+);
+
 #ifdef __cplusplus
 }
 #endif
