@@ -593,6 +593,16 @@ ethervox_embed_catalogue(
     ETHERVOX_CATALOGUE_COMPUTE_TOOLS_JSON
     ${ETHERVOX_CATALOGUE_GENERATED_DIR}/compute_tools_catalogue.h
 )
+ethervox_embed_catalogue(
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools/catalogue/system_info_tools.json
+    ETHERVOX_CATALOGUE_SYSTEM_INFO_TOOLS_JSON
+    ${ETHERVOX_CATALOGUE_GENERATED_DIR}/system_info_tools_catalogue.h
+)
+ethervox_embed_catalogue(
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools/catalogue/weather_tools.json
+    ETHERVOX_CATALOGUE_WEATHER_TOOLS_JSON
+    ${ETHERVOX_CATALOGUE_GENERATED_DIR}/weather_tools_catalogue.h
+)
 
 # Note: src/dialogue/voice_conversation.c is included via GLOB above
 

@@ -12,6 +12,8 @@
 #include "ethervox/config.h"
 #include "ethervox/error.h"
 #include "ethervox/logging.h"
+#include "ethervox/tool_catalogue.h"
+#include "system_info_tools_catalogue.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -139,9 +141,6 @@ ethervox_result_t ethervox_system_info_tools_register(ethervox_tool_registry_t* 
     
     // Register system_version tool
     ethervox_tool_t version_tool = {
-        .name = "system_version",
-        .description = "Get EthervoxAI version and build information including version number, git commit hash, build type, and platform.",
-        .parameters_json_schema = "{\"type\":\"object\",\"properties\":{},\"required\":[]}",
         .test_scenario = "What version are you?",
         .execute = tool_system_version,
         .is_deterministic = true,
@@ -149,14 +148,13 @@ ethervox_result_t ethervox_system_info_tools_register(ethervox_tool_registry_t* 
         .is_stateful = false,
         .estimated_latency_ms = 1.0f
     };
+    ethervox_tool_catalogue_load(ETHERVOX_CATALOGUE_SYSTEM_INFO_TOOLS_JSON, "system_version",
+        ethervox_tool_catalogue_build_profile(), &version_tool);
     
     ret |= ethervox_tool_registry_add(registry, &version_tool);
     
     // Register system_capabilities tool
     ethervox_tool_t capabilities_tool = {
-        .name = "system_capabilities",
-        .description = "Get system capabilities and configuration limits including max languages, plugins, audio settings, and platform type.",
-        .parameters_json_schema = "{\"type\":\"object\",\"properties\":{},\"required\":[]}",
         .test_scenario = "What can you do?",
         .execute = tool_system_capabilities,
         .is_deterministic = true,
@@ -164,6 +162,8 @@ ethervox_result_t ethervox_system_info_tools_register(ethervox_tool_registry_t* 
         .is_stateful = false,
         .estimated_latency_ms = 1.0f
     };
+    ethervox_tool_catalogue_load(ETHERVOX_CATALOGUE_SYSTEM_INFO_TOOLS_JSON, "system_capabilities",
+        ethervox_tool_catalogue_build_profile(), &capabilities_tool);
     
     ret |= ethervox_tool_registry_add(registry, &capabilities_tool);
     

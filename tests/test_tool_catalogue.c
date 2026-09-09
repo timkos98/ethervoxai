@@ -12,6 +12,7 @@
  */
 
 #include "ethervox/compute_tools.h"
+#include "ethervox/system_info_tools.h"
 #include "ethervox/tool_catalogue.h"
 #include "ethervox/error.h"
 #include "unit/test_utils.h"
@@ -75,6 +76,27 @@ static void test_golden_time_tools(void) {
 }
 
 // Loader behaviour, independent of the embedded compute_tools.json above.
+static void test_golden_system_info(void) {
+    ethervox_tool_registry_t registry;
+    CHECK(ethervox_is_success(ethervox_tool_registry_init(&registry, 8)));
+    CHECK(ethervox_is_success(ethervox_system_info_tools_register(&registry)));
+
+    const ethervox_tool_t* t = ethervox_tool_registry_find(&registry, "system_version");
+    CHECK(t != NULL);
+    CHECK(strcmp(t->description,
+        "Get EthervoxAI version and build information including version number, git commit hash, "
+        "build type, and platform.") == 0);
+    CHECK(strcmp(t->parameters_json_schema, "{\"type\":\"object\",\"properties\":{},\"required\":[]}") == 0);
+
+    t = ethervox_tool_registry_find(&registry, "system_capabilities");
+    CHECK(t != NULL);
+    CHECK(strcmp(t->description,
+        "Get system capabilities and configuration limits including max languages, plugins, audio "
+        "settings, and platform type.") == 0);
+    CHECK(strcmp(t->parameters_json_schema, "{\"type\":\"object\",\"properties\":{},\"required\":[]}") == 0);
+
+    ethervox_tool_registry_cleanup(&registry);
+}
 static void test_loader_not_found(void) {
     ethervox_tool_t tool = {0};
     ethervox_result_t r = ethervox_tool_catalogue_load(
@@ -115,6 +137,7 @@ int main(void) {
     RUN_TEST(test_golden_calculator);
     RUN_TEST(test_golden_percentage);
     RUN_TEST(test_golden_time_tools);
+    RUN_TEST(test_golden_system_info);
     RUN_TEST(test_loader_not_found);
     RUN_TEST(test_loader_profile_excluded);
     RUN_TEST(test_loader_unknown_profile_is_error);
