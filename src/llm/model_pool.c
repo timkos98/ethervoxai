@@ -928,7 +928,10 @@ ethervox_result_t ethervox_model_pool_load_shared_context(
     MUTEX_LOCK(pool->pool_mutex);
     handle->next = pool->models;
     pool->models = handle;
-    pool->used_bytes += handle->memory_bytes;
+    // attach_projector() (above) already added handle->mmproj_bytes to pool->used_bytes
+    // directly when it attached - only the KV-cache portion of memory_bytes is new here,
+    // or the whole thing double-counts the projector.
+    pool->used_bytes += (handle->memory_bytes - handle->mmproj_bytes);
     if (handle->residency == ETHERVOX_RESIDENCY_ON_DEMAND) {
         pool->current_on_demand++;
     }

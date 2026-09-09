@@ -463,5 +463,15 @@ target_include_directories(test_streaming_transcription_live PRIVATE ${CMAKE_SOU
 # Run: ./tests/test_streaming_transcription_live <model.gguf> <mmproj.gguf> <chunk1.wav> <chunk2.wav>
 # Tests: real two-chunk decode with prefix_text carry-forward, UTF-8/non-Latin script survival
 # Set C35_NO_PREFIX=1 to isolate BACKLOG-31 (prefix_text carry-forward degrades chunk 2 quality)
+
+# Shared governor/STT model (TASK-C3.6b) - not add_test'd: needs real model/mmproj
+# GGUF paths and real audio.
+add_executable(test_c36b_shared_governor_stt integration/test_c36b_shared_governor_stt.c)
+target_link_libraries(test_c36b_shared_governor_stt ethervoxai)
+target_include_directories(test_c36b_shared_governor_stt PRIVATE ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/tests)
+# Run: ./tests/test_c36b_shared_governor_stt <model.gguf> <mmproj.gguf> <speech.wav>
+# Tests: governor-shaped load (role=main) then STT load (role=speech) against the
+# same model_path shares weights (memory delta < 700MB, not a second full model),
+# and STT still produces a real transcript through the shared model + its own context
 # Tests: golden byte-identical contracts for the migrated compute_tools group,
 # loader NOT_FOUND/NOT_SUPPORTED/INVALID_ARGUMENT/success paths
