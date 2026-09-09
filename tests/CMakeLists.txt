@@ -438,3 +438,12 @@ target_include_directories(test_adapter PRIVATE ${CMAKE_SOURCE_DIR}/include)
 # Run: ./tests/test_adapter [<model.gguf> <adapter.gguf>]
 # Tests: adapter loading, metadata reading, apply/clear adapters, NULL handling
 # Note: Without adapter file, runs API contract tests only
+
+# Tool catalogue: contracts as data (TASK-C2.6a)
+add_executable(test_tool_catalogue test_tool_catalogue.c)
+target_link_libraries(test_tool_catalogue ethervoxai)
+target_include_directories(test_tool_catalogue PRIVATE ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/tests)
+add_test(NAME test_tool_catalogue COMMAND test_tool_catalogue)
+# Run: ./tests/test_tool_catalogue
+# Tests: golden byte-identical contracts for the migrated compute_tools group,
+# loader NOT_FOUND/NOT_SUPPORTED/INVALID_ARGUMENT/success paths

@@ -581,6 +581,19 @@ file(GLOB ETHERVOXAI_CORE_SOURCES
 list(REMOVE_ITEM ETHERVOXAI_CORE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/dialogue/voice_training.c")
 list(REMOVE_ITEM ETHERVOXAI_CORE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/dialogue/global_tts.c")
 
+# TASK-C2.6a: tool contracts (name/description/schema/profiles) come from
+# tools/catalogue/*.json, not C literals - see ethervox_tool_catalogue_load().
+# Embedded at configure time so there is no runtime file I/O (works sandboxed
+# and on ESP32).
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/EmbedCatalogue.cmake)
+set(ETHERVOX_CATALOGUE_GENERATED_DIR "${CMAKE_BINARY_DIR}/generated")
+file(MAKE_DIRECTORY "${ETHERVOX_CATALOGUE_GENERATED_DIR}")
+ethervox_embed_catalogue(
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools/catalogue/compute_tools.json
+    ETHERVOX_CATALOGUE_COMPUTE_TOOLS_JSON
+    ${ETHERVOX_CATALOGUE_GENERATED_DIR}/compute_tools_catalogue.h
+)
+
 # Note: src/dialogue/voice_conversation.c is included via GLOB above
 
 # Exclude test files from the main library
@@ -843,7 +856,8 @@ target_include_directories(ethervoxai
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${ETHERVOX_CATALOGUE_GENERATED_DIR})
 
 # Link llama.cpp if available
 if(WITH_LLAMA)

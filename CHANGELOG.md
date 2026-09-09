@@ -40,6 +40,20 @@ See TASK-C0.1 execution log in `ethervoxai-planning/tasks/PHASE-C/C0.1-unify-the
 ## [Unreleased]
 
 ### Added
+- **C2.6a (complete)**: Tool catalogue format, loader and pilot migration
+  - `tools/catalogue/compute_tools.json`: tool contracts (name, profiles, description, is_mutating,
+    schema) for the `compute_tools` group, replacing hardcoded C literals (`16-TOOLS.md`)
+  - `ethervox_tool_catalogue_load()` (`tool_catalogue.h`/`.c`): fills a tool's name/description/schema
+    from a catalogue JSON array by name; refuses a build profile not in the contract's `profiles`
+    list; rejects an unrecognised profile name as a data error
+  - `cmake/EmbedCatalogue.cmake`: embeds catalogue JSON into a generated C header at configure time
+    — no runtime file I/O, so it works sandboxed and on ESP32
+  - Migrated `calculator_compute`, `percentage_calculate`, `get_time`, `get_date`, `get_day`,
+    `time_get_week_number` to load their contracts from the catalogue; `execute`/`test_scenario`/
+    flags remain hand-written C (a function pointer isn't data)
+  - `tests/test_tool_catalogue.c`: golden test proving byte-identical name/description/schema for
+    all six migrated tools, plus loader NOT_FOUND/NOT_SUPPORTED/INVALID_ARGUMENT/success tests
+  - Remaining ~34 tools' migration split out to C2.6b (`ethervoxai-planning/tasks/PHASE-C/C2.6b-*.md`)
 - **C2.2b: wire host tools into the governor's actual tool-dispatch loop** — C2.2 built the
   `is_mutating` refusal primitive (`ethervox_host_tool_is_mutating`/`_invoke`) but never connected
   it to `governor.c`'s real tool-execution path (`execute_tool_call_json`), which only ever
