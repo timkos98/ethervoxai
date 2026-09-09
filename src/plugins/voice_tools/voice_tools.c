@@ -372,6 +372,15 @@ static bool finalize_chunk_and_restart(ethervox_voice_session_t* session) {
       // Carry a bounded tail of the raw (untagged-timestamp) transcript
       // forward as prefix_text so the next chunk keeps consistent
       // [Speaker N]: numbering (see GRANITE_SPEECH_PREFIX_CARRY_MAX_CHARS).
+      //
+      // BACKLOG-31 fix: config.prefix_text must always be either NULL or a
+      // pointer ethervox_stt_cleanup() may safely free() - it does so
+      // unconditionally (stt_core.c). Pointing it directly at
+      // session->prefix_carry (a fixed array embedded in the session, not
+      // heap memory) was undefined behaviour: on cleanup, free() would be
+      // called on non-heap memory, corrupting the heap. Discovered via a
+      // live-model test (tests/test_streaming_transcription_live.c) that
+      // reliably crashed on ethervox_voice_tools_cleanup() after >=1 chunk.
       size_t text_len = strlen(result.text);
       size_t carry_len = text_len < (GRANITE_SPEECH_PREFIX_CARRY_MAX_CHARS - 1)
                              ? text_len
@@ -379,7 +388,8 @@ static bool finalize_chunk_and_restart(ethervox_voice_session_t* session) {
       const char* carry_start = result.text + (text_len - carry_len);
       strncpy(session->prefix_carry, carry_start, carry_len);
       session->prefix_carry[carry_len] = '\0';
-      session->stt_runtime.config.prefix_text = session->prefix_carry;
+      free((void*)session->stt_runtime.config.prefix_text);
+      session->stt_runtime.config.prefix_text = strdup(session->prefix_carry);
 
       produced_segment = true;
     }
@@ -774,6 +784,10 @@ ethervox_result_t ethervox_voice_tools_start_listen(ethervox_voice_session_t* se
   // Reset chunked-decoding state (see GRANITE_SPEECH_CHUNK_SECONDS in voice_tools.h)
   session->chunk_start_time = time(NULL);
   session->prefix_carry[0] = '\0';
+  // BACKLOG-31 fix: free() the previous (heap-owned, see
+  // finalize_chunk_and_restart()) prefix_text before clearing it, rather
+  // than leaking it - a fresh recording never carries a prior one forward.
+  free((void*)session->stt_runtime.config.prefix_text);
   session->stt_runtime.config.prefix_text = NULL;
 
   // Start STT

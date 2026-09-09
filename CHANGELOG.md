@@ -40,7 +40,7 @@ See TASK-C0.1 execution log in `ethervoxai-planning/tasks/PHASE-C/C0.1-unify-the
 ## [Unreleased]
 
 ### Added
-- **C3.5 (partial)**: Streaming transcription events
+- **C3.5 (complete)**: Streaming transcription events
   - `ETHERVOX_EVENT_TRANSCRIPTION_SEGMENT` + `ethervox_event_transcription_segment_t`
     (`event_stream.h`): segment_id (stable across revisions), speaker_id, text, is_final - reuses
     the existing C1.5 event stream rather than a new callback type
@@ -54,22 +54,31 @@ See TASK-C0.1 execution log in `ethervoxai-planning/tasks/PHASE-C/C0.1-unify-the
   - Every segment from this call site is emitted `is_final=true` at birth: Granite Speech Plus's
     `finalize()` is one-shot per chunk with no intra-chunk partial, so the revision path exists in
     the struct for a future backend with real incremental decoding, not exercised by this one
+  - **Backpressure**: segments push onto a bounded (16-slot) queue delivered by a dedicated
+    dispatch thread, so a slow host callback can never stall the capture thread. Capacity is
+    generous (>10 minutes of undelivered backlog at this call site's own cadence); a
+    pathologically slow host blocks the push rather than dropping a final segment. Torn down
+    cleanly in `stop_listen()`/`cleanup()`
   - `tests/test_streaming_transcription.c`: event struct shape, callback register/clear/NULL-safety,
-    callback invocation with expected field values
-  - **Backpressure implemented**: `finalize_chunk_and_restart()` no longer calls the host's
-    callback directly from the capture thread. Segments are pushed onto a bounded (16-slot) queue
-    and delivered by a dedicated dispatch thread instead, so a slow callback can no longer stall
-    audio capture. Capacity is generous (>10 minutes of undelivered backlog at one push per
-    `GRANITE_SPEECH_CHUNK_SECONDS`) specifically so the push never actually blocks in any realistic
-    scenario; if it ever did (a pathologically slow host), it blocks rather than drops, since every
-    segment this call site produces is final and the design constraint says never drop those. Torn
-    down cleanly in `ethervox_voice_tools_stop_listen()`/`_cleanup()`. Build- and
-    code-review-verified; no dedicated concurrency test (the queue is static to `voice_tools.c`)
-  - **Not verified this session** (needs a live Granite Speech Plus model + real audio, not
-    available in this environment): segments actually arriving before stop end-to-end, revision
-    semantics, UTF-8 boundary safety across segment splits. C3.5 stays open until one of those is
-    exercised for real
-  - Verified: all four `ETHERVOX_PROFILE` values build; `ethervoxai-android`'s
+    callback invocation with expected field values (13 assertions, no live model needed)
+  - `tests/test_streaming_transcription_live.c`: **live-model, real-audio verification** - two
+    chunks fed through the real `ethervox_stt_init/start/process/finalize` sequence, mirroring
+    `finalize_chunk_and_restart()` exactly. Confirms: real Granite Speech Plus decode produces a
+    correct transcript per chunk (segments genuinely arrive incrementally, not just at stop);
+    real non-Latin script (Japanese) survives a segment boundary intact as valid UTF-8
+  - **Found and fixed a real crash bug** (BACKLOG-31): `config.prefix_text` was pointed directly
+    at `session->prefix_carry` (a fixed array embedded in `ethervox_voice_session_t`, not heap
+    memory), but `ethervox_stt_cleanup()` unconditionally `free()`s it - undefined behaviour,
+    reliably crashing on cleanup after >=1 chunk with `prefix_text` set. Fixed by always
+    `strdup()`ing into `config.prefix_text` and `free()`ing the previous value first, in both
+    `finalize_chunk_and_restart()` and `ethervox_voice_tools_start_listen()`'s reset path
+  - **Found and filed a separate quality bug** (BACKLOG-31): with the crash fixed, chunk 2's
+    transcription still degrades to near-empty output whenever `prefix_text` is carried forward
+    from the previous chunk - same audio, same model, only that field differs. Root cause not
+    isolated; needs further live-model iteration on `granite_speech_decode.c`'s prefix-injection
+    point, out of scope for this event-plumbing packet
+  - Verified: all four `ETHERVOX_PROFILE` values build; `ctest -R
+    "test_streaming_transcription|test_tool_catalogue"` green; `ethervoxai-android`'s
     `./gradlew assembleDevDebug` and `ethervoxai-ios`'s `./build_backend.sh macos` both succeed
 - **C2.6b (complete)**: Tool catalogue migration finished — all ~40 tools now data
   - `tools/catalogue/conversation_tools.json`: `speak`, `listen`, `listen_and_summarize` migrated

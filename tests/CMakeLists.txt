@@ -454,5 +454,14 @@ add_test(NAME test_streaming_transcription COMMAND test_streaming_transcription)
 # Run: ./tests/test_streaming_transcription
 # Tests: event struct shape, callback register/clear/NULL-safety, callback invocation fields
 # Note: full pipeline (real segments arriving mid-recording) needs a live Granite Speech Plus model
+
+# Streaming transcription, live model (TASK-C3.5) - not add_test'd: needs real
+# model/mmproj GGUF paths and real audio, unlike the unit test above.
+add_executable(test_streaming_transcription_live test_streaming_transcription_live.c)
+target_link_libraries(test_streaming_transcription_live ethervoxai)
+target_include_directories(test_streaming_transcription_live PRIVATE ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/tests)
+# Run: ./tests/test_streaming_transcription_live <model.gguf> <mmproj.gguf> <chunk1.wav> <chunk2.wav>
+# Tests: real two-chunk decode with prefix_text carry-forward, UTF-8/non-Latin script survival
+# Set C35_NO_PREFIX=1 to isolate BACKLOG-31 (prefix_text carry-forward degrades chunk 2 quality)
 # Tests: golden byte-identical contracts for the migrated compute_tools group,
 # loader NOT_FOUND/NOT_SUPPORTED/INVALID_ARGUMENT/success paths
