@@ -1,6 +1,6 @@
 # Unified Voice Model Architecture
 
-**Status:** Design complete, ready for implementation. Not yet implemented.
+**Status:** Implemented and wired into `voice_conversation.c` (Mode 1). `ethervox_governor_load_model_with_audio()` / `ethervox_governor_transcribe_audio()` / `ethervox_governor_has_audio_support()` exist in `governor.c` exactly as specified below (seq 0/1/2 layout, ASR confined to seq 2). This header is stale where it says "not yet implemented" — kept for the design rationale, which still applies.
 
 **Audience:** The engineer/agent implementing this in `ethervoxai` native
 core, and the parallel Android/JNI session integrating against the new API
