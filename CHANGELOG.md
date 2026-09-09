@@ -40,6 +40,22 @@ See TASK-C0.1 execution log in `ethervoxai-planning/tasks/PHASE-C/C0.1-unify-the
 ## [Unreleased]
 
 ### Added
+- **C3.6a (complete)**: Model-pool weight sharing wired into governor + STT
+  - `ethervox_model_pool_load_shared_context()`/`attach_projector()`/`detach_projector()` were
+    already fully implemented in `model_pool.c` but never declared in `model_pool.h` - an
+    implicit-declaration bug that made them uncallable outside that translation unit. Fixed the
+    header and added `model_path`/`use_gpu` tracking to `ethervox_model_handle_t` needed for the
+    by-path lookup
+  - `governor.c`'s pool-backed branch and `granite_speech_backend.c` both now call
+    `ethervox_model_pool_load_shared_context()` instead of `ethervox_model_pool_load()` - whichever
+    of governor (`role="main"`) or STT (`role="speech"`) loads a given GGUF first pays the full
+    weight cost; the other reuses it and only pays for its own context/KV cache. Falls back to a
+    fresh load when no handle for that `model_path` exists yet - a no-op for either caller alone
+  - Verified end-to-end against a real GGUF (`granite-4.0-h-1b-Q4_K_M.gguf`, 988 MB): first handle
+    charges the full 988 MB, a second handle sharing it charges +0 MB (KV-only)
+  - `tests/unit/test_model_pool.c`'s `test_shared_context()`, runs against a real model path
+    passed as `argv[1]` (skips without one)
+  - `ethervoxai-android`/`ethervoxai-ios` consumer builds verified (ADR-0023)
 - **C3.5 (complete)**: Streaming transcription events
   - `ETHERVOX_EVENT_TRANSCRIPTION_SEGMENT` + `ethervox_event_transcription_segment_t`
     (`event_stream.h`): segment_id (stable across revisions), speaker_id, text, is_final - reuses
