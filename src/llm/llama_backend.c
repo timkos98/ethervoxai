@@ -608,7 +608,7 @@ static ethervox_result_t llama_backend_generate(ethervox_llm_backend_t* backend,
   // Sampler chain order (following llama.cpp convention): penalties → temp → grammar → top_k → top_p → dist
   // Grammar MUST come before truncating samplers to ensure at least one valid token survives
   llama_sampler_chain_add(
-      sampler, llama_sampler_init_penalties(llama_vocab_n_tokens(vocab), 128, 1.2f, 0.0f, 0.0f));
+      sampler, llama_sampler_init_penalties(128, 1.2f, 0.0f, 0.0f));
   llama_sampler_chain_add(sampler, llama_sampler_init_temp(ctx->temperature));
   
   // Grammar (if present) - constrain output format
@@ -911,7 +911,6 @@ static ethervox_result_t llama_backend_generate_stream(ethervox_llm_backend_t* b
   // Sampler chain order (following llama.cpp convention): penalties → temp → grammar → top_k → top_p → dist
   // Grammar MUST come before truncating samplers to ensure at least one valid token survives
   llama_sampler_chain_add(sampler, llama_sampler_init_penalties(
-    llama_vocab_n_tokens(vocab), // n_vocab: required since llama.cpp adb55e514
     128,    // penalty_last_n: look back 128 tokens
     1.2f,   // penalty_repeat: stronger penalty to break training patterns
     0.0f,   // penalty_freq: no frequency penalty
