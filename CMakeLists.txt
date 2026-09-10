@@ -389,6 +389,13 @@ if(WITH_LLAMA AND LLAMA_CPP_SOURCE_DIR)
     if(IOS OR CMAKE_SYSTEM_NAME STREQUAL "iOS" OR TARGET_PLATFORM STREQUAL "IOS" OR ANDROID)
         set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
         message(STATUS "Using static libraries for mobile platform")
+    elseif(ETHERVOX_FORCE_STATIC)
+        # Opt-in (default OFF, i.e. unchanged behavior for every other consumer): a macOS/desktop
+        # static build, for consumers that can't ship/rpath dylibs (e.g. an Xcode/SwiftPM
+        # XCFramework, `ethervoxai-apple` TASK-E6.3). Set via `-DETHERVOX_FORCE_STATIC=ON` or
+        # `ev-llm`'s `EV_LLM_STATIC_APPLE=1` (which passes this through).
+        set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+        message(STATUS "Using static libraries (ETHERVOX_FORCE_STATIC)")
     else()
         set(BUILD_SHARED_LIBS ON CACHE BOOL "" FORCE)
     endif()
