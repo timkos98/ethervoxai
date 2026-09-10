@@ -345,9 +345,14 @@ static ethervox_result_t generate_tokens(generation_context_t* gen_ctx) {
         
         // Get token text
         char piece[256];
-        int n_piece = llama_token_to_piece(gen_ctx->vocab, new_token, piece, sizeof(piece), 0, false);
+        int n_piece = llama_token_to_piece(gen_ctx->vocab, new_token, piece, sizeof(piece) - 1, 0, false);
         
         if (n_piece > 0) {
+            // llama_token_to_piece() does not NUL-terminate; callers across the FFI boundary
+            // (ev-llm's token_text()) read this as a C string via CStr::from_ptr, so leaving it
+            // unterminated reads past the real text into stale stack bytes from prior iterations.
+            piece[n_piece] = '\0';
+
             // Append to output
             ethervox_result_t append_result = append_token_text(gen_ctx, piece, n_piece);
             if (append_result != ETHERVOX_SUCCESS) {
