@@ -310,6 +310,11 @@ ethervox_result_t ethervox_stt_granite_speech_finalize(ethervox_stt_runtime_t* r
       /*is_saa=*/is_plus, /*prefix_text=*/runtime->config.prefix_text,
       /*max_tokens=*/runtime->config.max_transcript_tokens, &transcript);
   if (!ethervox_is_success(decode_result)) {
+    // Ready for the next utterance/chunk even on failure - otherwise the next process() call
+    // accumulates on top of this attempt's still-unreset write position, so a session that fails
+    // once and is reused (BUG: found via a_session_can_transcribe_more_than_once, real crash on
+    // the second call) mixes stale audio into the next attempt instead of starting clean.
+    runtime->accumulator_write_pos = 0;
     return decode_result;
   }
 
