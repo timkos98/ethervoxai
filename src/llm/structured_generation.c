@@ -8,6 +8,7 @@
  */
 
 #include "ethervox/structured_generation.h"
+#include "ethervox/chat_template.h"
 #include "ethervox/error.h"
 #include "ethervox/grammar.h"
 #include "ethervox/logging.h"
@@ -232,31 +233,67 @@ static struct llama_sampler* create_sampler(
 
 /**
  * Tokenize and evaluate prompt
+ *
+ * `prompt` arrives here as the caller's raw text (e.g. a user's chat message) -- with no chat
+ * template applied, an instruct-tuned model like Granite sees ungrammatical input with no role
+ * markers or turn-end signal and immediately predicts EOG (`0 content tokens`, confirmed against
+ * a real model). `governor.c` (the older, Android-facing code path) already solved this via
+ * `chat_template.c`; this path never carried that fix over when it was added. Every model this
+ * product ships is Granite (`MODELS-LICENSING.md`'s allow-list), so the template is fixed rather
+ * than filename-sniffed via `chat_template_detect()` (Android's own use of that detector is a
+ * best-effort fallback for user-supplied models, not applicable here).
  */
 static ethervox_result_t prefill_prompt(
     generation_context_t* gen_ctx,
     const char* prompt
 ) {
+    const chat_template_t* tmpl = chat_template_get(CHAT_TEMPLATE_GRANITE, NULL);
+    // Heap-allocated, not a stack array: prompt length is caller-controlled and the role-marker
+    // overhead is small, but a large prompt on a constrained thread stack would be a real risk.
+    size_t formatted_capacity = strlen(prompt) + 512;
+    char* formatted = malloc(formatted_capacity);
+    if (!formatted) {
+        return ETHERVOX_ERROR_OUT_OF_MEMORY;
+    }
+    size_t offset = 0;
+
+    ethervox_result_t result = chat_template_format_user(tmpl, prompt, formatted, formatted_capacity);
+    if (result != ETHERVOX_SUCCESS) {
+        free(formatted);
+        return result;
+    }
+    offset = strlen(formatted);
+
+    result = chat_template_format_assistant_start(
+        tmpl, formatted + offset, formatted_capacity - offset);
+    if (result != ETHERVOX_SUCCESS) {
+        free(formatted);
+        return result;
+    }
+
     // Tokenize prompt
-    int n_tokens_max = strlen(prompt) + 256;  // Over-estimate
+    int n_tokens_max = (int)strlen(formatted) + 256;  // Over-estimate
     llama_token* tokens = malloc(n_tokens_max * sizeof(llama_token));
     if (!tokens) {
+        free(formatted);
         return ETHERVOX_ERROR_OUT_OF_MEMORY;
     }
     
     const struct llama_vocab* vocab = llama_model_get_vocab(gen_ctx->model);
     int n_tokens = llama_tokenize(
         vocab,
-        prompt,
-        strlen(prompt),
+        formatted,
+        (int)strlen(formatted),
         tokens,
         n_tokens_max,
         true,   // add_special (add BOS)
-        false   // parse_special
+        true    // parse_special -- the role markers above are literal text and must be
+                // recognised as the model's actual special tokens, not tokenized as sub-word text
     );
     
     if (n_tokens < 0) {
         free(tokens);
+        free(formatted);
         return ETHERVOX_ERROR_FAILED;
     }
     
@@ -270,11 +307,13 @@ static ethervox_result_t prefill_prompt(
         int result = llama_decode(gen_ctx->ctx, batch);
         if (result != 0) {
             free(tokens);
+            free(formatted);
             return ETHERVOX_ERROR_FAILED;
         }
     }
     
     free(tokens);
+    free(formatted);
     return ETHERVOX_SUCCESS;
 }
 
