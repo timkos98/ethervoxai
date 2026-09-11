@@ -277,6 +277,8 @@ option(BUILD_EXECUTABLES "Build CLI executables (main app and tools)" ON)
 option(ENABLE_DEBUG "Enable debug logging" OFF)
 option(WITH_LLAMA "Enable Llama.cpp backend support" ON)
 option(WITH_TINYLLAMA "Enable TinyLlama backend support" ON)
+# TASK-N7.7: temporary transcription-latency instrumentation, removed by N7.8 - never on in playRelease.
+option(ETHERVOX_LATENCY_TRACE "Log transcription pipeline stage timings (temporary, N7.7)" OFF)
 
 # Fetch cJSON for settings persistence
 include(FetchContent)
@@ -339,6 +341,10 @@ endif()
 
 if(ENABLE_DEBUG)
     add_definitions(-DDEBUG_ENABLED=1)
+endif()
+
+if(ETHERVOX_LATENCY_TRACE)
+    add_definitions(-DETHERVOX_LATENCY_TRACE=1)
 endif()
 
 # LLM backend configuration
