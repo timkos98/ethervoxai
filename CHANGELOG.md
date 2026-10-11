@@ -19,7 +19,14 @@ All notable changes to this project are documented here, following
   exhausted even a modest context regardless of any single prompt's size. Confirmed live: a
   handful of short calls aborted `llama_decode` with `"failed to find a memory slot"`, after
   which the same handle could never decode again for the rest of its lifetime. Fixed by clearing
-  memory at the start of `prefill_prompt`, matching every other call site.
+  memory at the start of `prefill_prompt`, matching every other call site. **Follow-up**: that
+  first fix passed `data=true` (clears the data buffers too, not just position bookkeeping),
+  copying the nearby call sites without noticing they clear for a real "wipe this session"
+  reason — here it just needs to reset positions so new tokens claim fresh slots; the new decode
+  overwrites whatever bytes were there regardless. `data=true` physically zeroes the underlying
+  buffers on every single turn of a multi-turn tool-calling conversation, real Metal/CPU work
+  reported as the whole machine staying unresponsive for up to a minute after a reply had already
+  appeared. Changed to `data=false`.
 
 - **`ethervox_generate_structured` ignored its own cancellation signal.** `ethervox_event_cb`
   returns a `bool` (continue/stop), and the Rust FFI layer correctly returned `false` on

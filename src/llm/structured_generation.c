@@ -289,8 +289,14 @@ static ethervox_result_t prefill_prompt(
     // `ethervox_generate_structured` calls against one loaded model exhausted a 4096-token
     // context and `llama_decode` aborted with "failed to find a memory slot", after which the
     // same handle could never decode again for the rest of its lifetime.
+    //
+    // `data=false`: only the logical bookkeeping (positions/sequences) needs resetting so new
+    // tokens can claim fresh slots -- the new decode overwrites whatever K/V bytes were there
+    // regardless, so physically zeroing the underlying buffers too (`data=true`, what
+    // governor.c's conversation-reset call sites want, for a real "wipe this session" reason)
+    // is pure wasted work here, repeated on every single turn of a multi-turn tool-calling loop.
     llama_memory_t mem = llama_get_memory(gen_ctx->ctx);
-    llama_memory_clear(mem, true);
+    llama_memory_clear(mem, false);
 
     const chat_template_t* tmpl = chat_template_get(CHAT_TEMPLATE_GRANITE, NULL);
     // Heap-allocated, not a stack array: prompt length is caller-controlled and the role-marker
