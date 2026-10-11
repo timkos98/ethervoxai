@@ -40,6 +40,27 @@ See TASK-C0.1 execution log in `ethervoxai-planning/tasks/PHASE-C/C0.1-unify-the
 ## [Unreleased]
 
 ### Fixed
+- **`structured_generation.c`'s `create_sampler()` crashed on grammar-constrained generation at
+  `temperature <= 0`** (found while building `ev-agent`'s tool-call grammar, `BACKLOG-58`/`59`):
+  the sampler chain applied `temperature` *before* `grammar`, so greedy sampling collapsed every
+  candidate to `-inf` except the single argmax token before the grammar sampler ever saw them -- if
+  that one token wasn't grammar-valid, the chain was left sampling from an all-`-inf` distribution
+  and crashed deep in llama.cpp's sampling code (an uncaught exception crossing the C ABI,
+  `SIGABRT`). Reordered to `penalties → grammar → temperature → top_k → top_p → dist`, matching
+  the reasoning `llama_backend.c`'s own sampling path already uses more defensively. Reproduced
+  and verified fixed with two real-model probes, independent of lazy mode or grammar complexity
+  (`ev-llm::real_backend::tests::probe_temperature_zero_*`).
+- **`create_sampler()` ignored lazy-grammar mode entirely** -- `ethervox_grammar_set_lazy_mode`
+  (`grammar.h`) was fully implemented at the grammar-object level, but
+  `ethervox_generate_structured`'s sampler creation never checked
+  `ethervox_grammar_is_lazy`/`_get_trigger_words` and always built an immediate (non-lazy) grammar
+  sampler regardless of what the caller set. Added the same `llama_sampler_init_grammar_lazy_patterns`
+  branch `llama_backend.c` already uses. A separate, still-open crash remains once a lazy
+  grammar's trigger actually fires mid-generation -- narrowed to
+  `llama_sampler_init_grammar_lazy_patterns`'s own trigger-detection state machine, not this
+  ordering bug (`BACKLOG-59`, `ethervoxai-planning/tasks/BACKLOG.md`).
+
+### Fixed
 - **`ethervox_embed_texts` (C2.4) never actually worked** - found while writing `ev-llm`'s first
   real `EmbeddingSession` test (`TASK-E4.7`), the C unit test only exercised NULL-argument checks:
   - `llama_tokenize(vocab, text, len, NULL, 0, ...)` is llama.cpp's own "probe the required count"

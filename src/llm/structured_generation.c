@@ -191,22 +191,48 @@ static struct llama_sampler* create_sampler(
     llama_sampler_chain_add(sampler, 
         llama_sampler_init_penalties(128, 1.1f, 0.0f, 0.0f));
     
-    // Add temperature
-    llama_sampler_chain_add(sampler, 
-        llama_sampler_init_temp(gen_ctx->params->temperature));
-    
-    // Add grammar constraint
+    // Add grammar constraint BEFORE temperature. At temperature <= 0 (greedy), the temperature
+    // sampler collapses every candidate's logit to -inf except the single argmax token
+    // (llama_sampler_temp_impl's own "find the token with the highest logit and set the rest to
+    // -inf"). If grammar ran after that, and the argmax token happened not to be grammar-valid,
+    // the grammar sampler would be left filtering a candidate set that is already all -inf --
+    // producing a degenerate distribution the rest of the chain (top_k/top_p/dist) cannot sample
+    // from, which crashes deep in llama.cpp's sampling code (confirmed: reproduces with the most
+    // trivial possible grammar at temperature 0.0, independent of lazy mode or grammar
+    // complexity -- BACKLOG-59). Applying grammar first means temperature's argmax search only
+    // ever considers logits llama.cpp's grammar sampler has already left non -inf.
     if (gen_ctx->grammar) {
         // Get GBNF source from grammar
         const char* gbnf_source = ethervox_grammar_get_source(gen_ctx->grammar);
         const char* root_rule = ethervox_grammar_get_root(gen_ctx->grammar);
         
         if (gbnf_source && root_rule) {
-            struct llama_sampler* grammar_sampler = llama_sampler_init_grammar(
-                gen_ctx->vocab,
-                gbnf_source,
-                root_rule
-            );
+            struct llama_sampler* grammar_sampler = NULL;
+            size_t trigger_word_count = 0;
+            const char* const* trigger_words =
+                ethervox_grammar_get_trigger_words(gen_ctx->grammar, &trigger_word_count);
+            
+            if (ethervox_grammar_is_lazy(gen_ctx->grammar) && trigger_words && trigger_word_count > 0) {
+                // Lazy mode: free text until a trigger word appears, then the grammar engages
+                // (mirrors llama_backend.c's existing, working pattern -- this function
+                // previously ignored lazy mode entirely and always applied the grammar
+                // immediately, regardless of what the caller set via
+                // ethervox_grammar_set_lazy_mode).
+                grammar_sampler = llama_sampler_init_grammar_lazy_patterns(
+                    gen_ctx->vocab,
+                    gbnf_source,
+                    root_rule,
+                    trigger_words,
+                    trigger_word_count,
+                    NULL, 0
+                );
+            } else {
+                grammar_sampler = llama_sampler_init_grammar(
+                    gen_ctx->vocab,
+                    gbnf_source,
+                    root_rule
+                );
+            }
             
             if (grammar_sampler) {
                 llama_sampler_chain_add(sampler, grammar_sampler);
@@ -215,6 +241,10 @@ static struct llama_sampler* create_sampler(
             }
         }
     }
+    
+    // Add temperature
+    llama_sampler_chain_add(sampler, 
+        llama_sampler_init_temp(gen_ctx->params->temperature));
     
     // Add top-k and top-p
     llama_sampler_chain_add(sampler, llama_sampler_init_top_k(40));

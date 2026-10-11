@@ -357,6 +357,26 @@ static ethervox_result_t emit_whitespace_rule(conversion_context_t* ctx) {
 }
 
 /**
+ * Helper: Build a GBNF-safe rule-name segment from an arbitrary JSON property name.
+ *
+ * llama.cpp's own GBNF parser (`is_word_char`, llama-grammar.cpp) accepts only
+ * `[A-Za-z0-9-]` in identifiers -- notably NOT `_`. JSON Schema property names routinely
+ * contain underscores (`item_id`, `max_chars`, ...), and this converter was embedding them
+ * verbatim into generated rule names (`convert_object`'s `value_rule_name`), producing GBNF
+ * llama.cpp's own parser then rejects with "expecting ::= at _id-value ::= ..." -- the name
+ * parser silently stops at the first `_`, leaving the rest dangling. Only the *rule name* needs
+ * this; the literal JSON key text emitted into the grammar (`"\"item_id\""`) is unaffected and
+ * must stay exactly as the schema declares it, since that's matched against real JSON output.
+ */
+static void sanitize_rule_name_segment(const char* name, char* out, size_t out_size) {
+    size_t i = 0;
+    for (; name[i] != '\0' && i + 1 < out_size; i++) {
+        out[i] = (name[i] == '_') ? '-' : name[i];
+    }
+    out[i] = '\0';
+}
+
+/**
  * Type 8-10: Object types
  * Type 8: Empty object {"type": "object", "properties": {}}
  * Type 9: Required fields
@@ -422,8 +442,10 @@ static ethervox_result_t convert_object(
         }
         
         // Generate subrule for this property's value
+        char safe_prop_name[128];
+        sanitize_rule_name_segment(prop_name, safe_prop_name, sizeof(safe_prop_name));
         char value_rule_name[128];
-        snprintf(value_rule_name, sizeof(value_rule_name), "%s-%s-value", rule_name, prop_name);
+        snprintf(value_rule_name, sizeof(value_rule_name), "%s-%s-value", rule_name, safe_prop_name);
         
         // Convert property schema recursively
         result = convert_schema_to_gbnf(ctx, prop, value_rule_name);
