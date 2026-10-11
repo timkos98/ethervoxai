@@ -9,6 +9,18 @@ All notable changes to this project are documented here, following
 ## [Unreleased]
 
 ### Fixed
+- **`prefill_prompt` never cleared the context's KV cache before tokenizing a new prompt.**
+  Every other generation path in this codebase (`governor.c`, `llama_backend.c`, `session.c`,
+  `granite_speech_backend.c`) clears memory via `llama_memory_clear` before decoding; this one
+  never did. Since `ethervox_generate_structured`'s caller always resends the whole cumulative
+  prompt on every call (never an incremental continuation), each call just kept appending at the
+  context's own ever-advancing internal position — so repeated, entirely independent calls
+  against the same loaded handle (exactly what `ev-agent`'s multi-turn tool-calling loop does)
+  exhausted even a modest context regardless of any single prompt's size. Confirmed live: a
+  handful of short calls aborted `llama_decode` with `"failed to find a memory slot"`, after
+  which the same handle could never decode again for the rest of its lifetime. Fixed by clearing
+  memory at the start of `prefill_prompt`, matching every other call site.
+
 - **`ethervox_generate_structured` ignored its own cancellation signal.** `ethervox_event_cb`
   returns a `bool` (continue/stop), and the Rust FFI layer correctly returned `false` on
   cancellation, but `structured_generation.c`'s internal `fire_event()` helper was `void` and

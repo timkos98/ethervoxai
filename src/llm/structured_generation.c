@@ -279,6 +279,19 @@ static ethervox_result_t prefill_prompt(
     generation_context_t* gen_ctx,
     const char* prompt
 ) {
+    // Every call here is a fresh, complete prompt (the caller always resends the whole
+    // cumulative text, never an incremental continuation of a previous call's KV state) -- but
+    // nothing cleared the context's memory before this, unlike every other generation path in
+    // this codebase (governor.c, llama_backend.c, session.c, granite_speech_backend.c all clear
+    // before decoding). Without this, each call just kept appending at the context's own
+    // ever-advancing internal position, so the KV cache filled up across calls regardless of any
+    // single prompt's size -- confirmed live: a handful of small, entirely separate
+    // `ethervox_generate_structured` calls against one loaded model exhausted a 4096-token
+    // context and `llama_decode` aborted with "failed to find a memory slot", after which the
+    // same handle could never decode again for the rest of its lifetime.
+    llama_memory_t mem = llama_get_memory(gen_ctx->ctx);
+    llama_memory_clear(mem, true);
+
     const chat_template_t* tmpl = chat_template_get(CHAT_TEMPLATE_GRANITE, NULL);
     // Heap-allocated, not a stack array: prompt length is caller-controlled and the role-marker
     // overhead is small, but a large prompt on a constrained thread stack would be a real risk.
