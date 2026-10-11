@@ -122,15 +122,17 @@ static ethervox_result_t append_token_text(
 }
 
 /**
- * Fire an event if callback is set
+ * Fire an event if callback is set. Returns the callback's bool result (true = keep going,
+ * false = caller wants generation stopped now), or true when there is no callback.
  */
-static void fire_event(
+static bool fire_event(
     generation_context_t* gen_ctx,
     const ethervox_event_t* event
 ) {
     if (gen_ctx->event_callback) {
-        gen_ctx->event_callback(event, gen_ctx->user_data);
+        return gen_ctx->event_callback(event, gen_ctx->user_data);
     }
+    return true;
 }
 
 /**
@@ -390,7 +392,10 @@ static ethervox_result_t generate_tokens(generation_context_t* gen_ctx) {
                 return append_result;
             }
             
-            // Fire token event
+            // Fire token event. The callback returning false (e.g. the caller cancelled) must
+            // stop generation immediately -- previously this return value was discarded, so a
+            // cancelled generation ran all the way to max_tokens regardless, pegging the CPU for
+            // as long as that took and freezing the whole app/UI.
             ethervox_event_t token_event = {
                 .type = ETHERVOX_EVENT_TOKEN,
                 .token = {
@@ -398,7 +403,15 @@ static ethervox_result_t generate_tokens(generation_context_t* gen_ctx) {
                     .token_id = new_token
                 }
             };
-            fire_event(gen_ctx, &token_event);
+            if (!fire_event(gen_ctx, &token_event)) {
+                ethervox_event_t cancelled_event = {
+                    .type = ETHERVOX_EVENT_FINISHED,
+                    .finished = { .finish_reason = "cancelled" }
+                };
+                fire_event(gen_ctx, &cancelled_event);
+                llama_sampler_free(gen_ctx->sampler);
+                return ETHERVOX_SUCCESS;
+            }
         }
         
         // Extract log-probability (AFTER sampling, BEFORE decode)

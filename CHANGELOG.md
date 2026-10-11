@@ -6,6 +6,21 @@ All notable changes to this project are documented here, following
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- **`ethervox_generate_structured` ignored its own cancellation signal.** `ethervox_event_cb`
+  returns a `bool` (continue/stop), and the Rust FFI layer correctly returned `false` on
+  cancellation, but `structured_generation.c`'s internal `fire_event()` helper was `void` and
+  discarded that return value — so a cancelled generation always ran to `max_tokens` regardless.
+  Observed live: once a lazy tool-call grammar triggered, a run that never reached a grammar-valid
+  EOS token would grind through the full token budget with no way to interrupt it, pegging the CPU
+  and freezing the whole app (and, under heavy contention, the OS UI) for up to a minute.
+  `fire_event()` now returns the callback's result, and `generate_tokens()`'s main loop stops
+  immediately (firing a `"cancelled"` `Finished` event) the first time it sees `false`.
+
+---
+
 ## [core-v0.3.0] - 2026-08-10
 
 **ADR-0023: One `ethervox_core`, one line** — Merged `feature/granite-speech-voice-integration` (37 commits) into `main`. Deleted 8 stale branches. All products now track one main line via tags.
