@@ -35,6 +35,41 @@
 #define KV_BYTES_PER_TOKEN_F16 2048  // FP16 KV cache, typical for 7-8B models
 #define OVERHEAD_BYTES 128 * 1024 * 1024  // 128MB overhead per model
 
+#if LLAMA_AVAILABLE
+// Routes llama.cpp/ggml's own log output (grammar trigger tracing, warnings, etc.) through
+// ethervox_log instead of llama.cpp's default raw-stderr logger -- otherwise those lines never
+// get a timestamp or the rest of the system's log formatting at all.
+static void model_pool_ggml_log_callback(enum ggml_log_level level, const char* text, void* user_data) {
+    (void)user_data;
+    size_t len = strlen(text);
+    while (len > 0 && (text[len - 1] == '\n' || text[len - 1] == '\r')) {
+        len--;
+    }
+    if (len == 0) {
+        return;
+    }
+    char clean_text[1024];
+    size_t copy_len = len < sizeof(clean_text) - 1 ? len : sizeof(clean_text) - 1;
+    memcpy(clean_text, text, copy_len);
+    clean_text[copy_len] = '\0';
+
+    switch (level) {
+        case GGML_LOG_LEVEL_ERROR:
+            ETHERVOX_LOG_ERROR("[llama.cpp] %s", clean_text);
+            break;
+        case GGML_LOG_LEVEL_WARN:
+            ETHERVOX_LOG_WARN("[llama.cpp] %s", clean_text);
+            break;
+        case GGML_LOG_LEVEL_DEBUG:
+            ETHERVOX_LOG_DEBUG("[llama.cpp] %s", clean_text);
+            break;
+        default:
+            ETHERVOX_LOG_INFO("[llama.cpp] %s", clean_text);
+            break;
+    }
+}
+#endif
+
 // Global backend state (refcounted)
 static struct {
     ethervox_mutex_t mutex;
@@ -108,6 +143,8 @@ static ethervox_result_t backend_init(void) {
     
     if (!g_backend.initialized) {
 #if LLAMA_AVAILABLE
+        ggml_log_set(model_pool_ggml_log_callback, NULL);
+        llama_log_set(model_pool_ggml_log_callback, NULL);
         llama_backend_init();
         ggml_backend_load_all();
         if (ggml_backend_reg_count() == 0) {
