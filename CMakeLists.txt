@@ -531,6 +531,7 @@ set(COMMON_SOURCES
     src/common/event_stream.c
     src/common/language_detector.c
     src/common/model_downloader.c
+    src/common/version.c
     src/config/settings.c
 )
 
