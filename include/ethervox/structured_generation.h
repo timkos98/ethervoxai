@@ -48,6 +48,14 @@ typedef struct {
     float top_p;                /**< Nucleus sampling parameter (default: 0.9) */
     uint32_t seed;              /**< Random seed (0 = random, non-zero = deterministic) */
     bool include_logprobs;      /**< Fire ETHERVOX_EVENT_LOGPROB events (default: false) */
+    /**
+     * Optional standing instructions, rendered in the chat template's own system role
+     * (`chat_template_format_system`) ahead of `prompt`'s user turn, instead of folded into
+     * `prompt` itself (`BACKLOG-80`: the latter makes an instruct-tuned model answer the
+     * instructions conversationally rather than follow them). NULL (default) emits no system
+     * turn at all, preserving every existing caller's behaviour unchanged.
+     */
+    const char* system_prompt;
 } ethervox_structured_gen_params_t;
 
 /**

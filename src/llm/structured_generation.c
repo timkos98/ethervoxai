@@ -46,7 +46,12 @@ typedef struct {
     double log_prob_sum;
     int content_token_count;    // Tokens that were NOT grammar-forced
     int total_token_count;
-    
+
+    // Usage tracking (ETHERVOX_EVENT_USAGE) -- `n_prompt_tokens` set once by `prefill_prompt`;
+    // `total_token_count` above already tracks completion tokens, reused as-is.
+    int n_prompt_tokens;
+    struct timespec start_time;
+
     // Sampling state
     struct llama_sampler* sampler;
     const struct llama_vocab* vocab;
@@ -86,7 +91,8 @@ static ethervox_result_t init_generation_context(
     gen_ctx->output_len = 0;
     
     gen_ctx->vocab = llama_model_get_vocab(gen_ctx->model);
-    
+    clock_gettime(CLOCK_MONOTONIC, &gen_ctx->start_time);
+
     return ETHERVOX_SUCCESS;
 }
 
@@ -133,6 +139,29 @@ static bool fire_event(
         return gen_ctx->event_callback(event, gen_ctx->user_data);
     }
     return true;
+}
+
+/**
+ * Fires a real `ETHERVOX_EVENT_USAGE` -- always immediately before whichever `FINISHED` event
+ * ends this call, so the stream still always ends with `FINISHED` (`ev-llm`'s own contract,
+ * `generation.rs`'s doc comment: "the final element is always Finished"). Previously this event
+ * type was declared in `event_stream.h` but constructed nowhere in the codebase.
+ */
+static void fire_usage_event(generation_context_t* gen_ctx) {
+    struct timespec end_time;
+    clock_gettime(CLOCK_MONOTONIC, &end_time);
+    double elapsed_ms = (double)(end_time.tv_sec - gen_ctx->start_time.tv_sec) * 1000.0
+        + (double)(end_time.tv_nsec - gen_ctx->start_time.tv_nsec) / 1e6;
+    ethervox_event_t usage_event = {
+        .type = ETHERVOX_EVENT_USAGE,
+        .usage = {
+            .prompt_tokens = (uint32_t)gen_ctx->n_prompt_tokens,
+            .completion_tokens = (uint32_t)gen_ctx->total_token_count,
+            .total_tokens = (uint32_t)(gen_ctx->n_prompt_tokens + gen_ctx->total_token_count),
+            .elapsed_ms = elapsed_ms
+        }
+    };
+    fire_event(gen_ctx, &usage_event);
 }
 
 /**
@@ -274,9 +303,15 @@ static struct llama_sampler* create_sampler(
  * product ships is Granite (`MODELS-LICENSING.md`'s allow-list), so the template is fixed rather
  * than filename-sniffed via `chat_template_detect()` (Android's own use of that detector is a
  * best-effort fallback for user-supplied models, not applicable here).
+ *
+ * `system_prompt`, if non-NULL/non-empty, is rendered in the template's own system role ahead
+ * of `prompt`'s user turn (`BACKLOG-80`): standing instructions folded into the user turn
+ * instead make the model answer them conversationally rather than follow them -- the exact
+ * "Understood, I will handle questions..." failure `BACKLOG-73` chased through prompt wording.
  */
 static ethervox_result_t prefill_prompt(
     generation_context_t* gen_ctx,
+    const char* system_prompt,
     const char* prompt
 ) {
     // Every call here is a fresh, complete prompt (the caller always resends the whole
@@ -301,14 +336,26 @@ static ethervox_result_t prefill_prompt(
     const chat_template_t* tmpl = chat_template_get(CHAT_TEMPLATE_GRANITE, NULL);
     // Heap-allocated, not a stack array: prompt length is caller-controlled and the role-marker
     // overhead is small, but a large prompt on a constrained thread stack would be a real risk.
-    size_t formatted_capacity = strlen(prompt) + 512;
+    size_t system_len = system_prompt ? strlen(system_prompt) : 0;
+    size_t formatted_capacity = system_len + strlen(prompt) + 512;
     char* formatted = malloc(formatted_capacity);
     if (!formatted) {
         return ETHERVOX_ERROR_OUT_OF_MEMORY;
     }
     size_t offset = 0;
 
-    ethervox_result_t result = chat_template_format_user(tmpl, prompt, formatted, formatted_capacity);
+    if (system_prompt && system_len > 0) {
+        ethervox_result_t result = chat_template_format_system(
+            tmpl, system_prompt, formatted, formatted_capacity);
+        if (result != ETHERVOX_SUCCESS) {
+            free(formatted);
+            return result;
+        }
+        offset = strlen(formatted);
+    }
+
+    ethervox_result_t result = chat_template_format_user(
+        tmpl, prompt, formatted + offset, formatted_capacity - offset);
     if (result != ETHERVOX_SUCCESS) {
         free(formatted);
         return result;
@@ -365,6 +412,7 @@ static ethervox_result_t prefill_prompt(
     
     free(tokens);
     free(formatted);
+    gen_ctx->n_prompt_tokens = n_tokens;
     return ETHERVOX_SUCCESS;
 }
 
@@ -386,6 +434,7 @@ static ethervox_result_t generate_tokens(generation_context_t* gen_ctx) {
         // Check for EOS
         if (llama_vocab_is_eog(gen_ctx->vocab, new_token)) {
             // Fire finished event
+            fire_usage_event(gen_ctx);
             ethervox_event_t event = {
                 .type = ETHERVOX_EVENT_FINISHED,
                 .finished = { .finish_reason = "stop" }
@@ -423,6 +472,7 @@ static ethervox_result_t generate_tokens(generation_context_t* gen_ctx) {
                 }
             };
             if (!fire_event(gen_ctx, &token_event)) {
+                fire_usage_event(gen_ctx);
                 ethervox_event_t cancelled_event = {
                     .type = ETHERVOX_EVENT_FINISHED,
                     .finished = { .finish_reason = "cancelled" }
@@ -491,6 +541,12 @@ static ethervox_result_t generate_tokens(generation_context_t* gen_ctx) {
         }
     }
     
+    // Loop exhausted max_tokens without hitting EOS or cancellation -- no FINISHED event fires
+    // here; the caller (`ev-llm`'s `run_generation`/`run_tool_aware_generation`) synthesizes one
+    // when it sees the call succeeded without ever observing a Finished event. Usage still needs
+    // firing here, before that synthesized Finished, for the same "always ends with Finished"
+    // ordering.
+    fire_usage_event(gen_ctx);
     llama_sampler_free(gen_ctx->sampler);
     return ETHERVOX_SUCCESS;
 }
@@ -530,7 +586,8 @@ ethervox_structured_gen_params_t ethervox_structured_gen_params_default(void) {
         .temperature = 0.7f,
         .top_p = 0.9f,
         .seed = 0,
-        .include_logprobs = false
+        .include_logprobs = false,
+        .system_prompt = NULL
     };
     return params;
 }
@@ -566,7 +623,7 @@ ethervox_result_t ethervox_generate_structured(
     }
     
     // Prefill prompt
-    result = prefill_prompt(&gen_ctx, prompt);
+    result = prefill_prompt(&gen_ctx, params->system_prompt, prompt);
     if (result != ETHERVOX_SUCCESS) {
         free(gen_ctx.output_buffer);
         return result;
@@ -581,7 +638,7 @@ ethervox_result_t ethervox_generate_structured(
     
     // Calculate confidence
     float confidence = calculate_confidence(&gen_ctx);
-    
+
     // Return results
     *out_json = gen_ctx.output_buffer;  // Caller takes ownership
     

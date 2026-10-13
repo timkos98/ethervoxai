@@ -401,6 +401,13 @@ target_include_directories(test_structured_confidence PRIVATE ${CMAKE_SOURCE_DIR
 # Example: ./tests/test_structured_confidence ~/.ethervox/models/governor/granite-4.0-h-1b-Q4_K_M.gguf
 # Tests confidence calculation and log-prob extraction
 
+# system_prompt role plumbing, real-model smoke test (BACKLOG-80)
+add_executable(test_system_prompt_role test_system_prompt_role.c)
+target_link_libraries(test_system_prompt_role ethervoxai)
+target_include_directories(test_system_prompt_role PRIVATE ${CMAKE_SOURCE_DIR}/include)
+# Run: ./tests/test_system_prompt_role <model.gguf>
+# Example: ./tests/test_system_prompt_role ~/.ethervox/models/governor/granite-4.0-h-1b-Q4_K_M.gguf
+
 # LRU eviction and memory pressure (TASK-C3.4)
 add_executable(test_lru_eviction test_lru_eviction.c)
 target_link_libraries(test_lru_eviction ethervoxai)
