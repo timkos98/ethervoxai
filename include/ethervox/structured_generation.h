@@ -42,6 +42,17 @@ extern "C" {
  * For reproducible evals and golden tests: pin build, backend, threads, and seed.
  * Use seed=0 for true randomness (seeded from system entropy).
  */
+typedef enum {
+    ETHERVOX_CHAT_ROLE_ASSISTANT = 1,  /**< Prior model output (e.g. a <tool_call> block) */
+    ETHERVOX_CHAT_ROLE_TOOL = 2        /**< A tool's result, rendered the way the model was trained */
+} ethervox_chat_role_t;
+
+/** One turn after the initial user prompt. */
+typedef struct {
+    ethervox_chat_role_t role;
+    const char* content;
+} ethervox_chat_turn_t;
+
 typedef struct {
     uint32_t max_tokens;        /**< Maximum tokens to generate (default: 512) */
     float temperature;          /**< Sampling temperature (default: 0.7) */
@@ -51,12 +62,30 @@ typedef struct {
     /**
      * Optional standing instructions, rendered in the chat template's own system role
      * (`chat_template_format_system`) ahead of `prompt`'s user turn, instead of folded into
-     * `prompt` itself (`BACKLOG-80`: the latter makes an instruct-tuned model answer the
-     * instructions conversationally rather than follow them). NULL (default) emits no system
-     * turn at all, preserving every existing caller's behaviour unchanged.
+     * `prompt` itself (`BACKLOG-80`). NULL (default) emits no system turn at all.
      */
     const char* system_prompt;
+    /**
+     * Turns following `prompt`'s user turn, in order (assistant tool calls, tool results). NULL/0
+     * (default) = a single user turn. Rendered by the chat template, never concatenated into
+     * `prompt` -- the model must see real assistant and tool-result turns (`BACKLOG-80`).
+     */
+    const ethervox_chat_turn_t* turns;
+    uint32_t turn_count;
 } ethervox_structured_gen_params_t;
+
+/**
+ * Renders system + user + `turns` + the assistant-start marker exactly as
+ * `ethervox_generate_structured` feeds them to the tokenizer. Exposed so the byte string is
+ * testable without a model. Caller frees `*out` with free().
+ */
+ethervox_result_t ethervox_structured_render_prompt(
+    const char* system_prompt,
+    const char* prompt,
+    const ethervox_chat_turn_t* turns,
+    uint32_t turn_count,
+    char** out
+);
 
 /**
  * Generate structured output with calibrated confidence

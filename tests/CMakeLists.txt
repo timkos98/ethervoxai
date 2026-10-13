@@ -112,6 +112,20 @@ target_include_directories(test_chat_templates PRIVATE ${CMAKE_SOURCE_DIR}/inclu
 add_test(NAME ChatTemplates COMMAND test_chat_templates)
 set_tests_properties(ChatTemplates PROPERTIES TIMEOUT 30 LABELS "unit;chat_templates;conformance")
 
+# Role-structured prompt rendering for structured generation (TASK-C6.1a), model-free
+add_executable(test_structured_generation_roles unit/test_structured_generation_roles.c)
+target_link_libraries(test_structured_generation_roles ethervoxai)
+target_include_directories(test_structured_generation_roles PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME StructuredGenerationRoles COMMAND test_structured_generation_roles)
+set_tests_properties(StructuredGenerationRoles PROPERTIES TIMEOUT 30 LABELS "unit;chat_templates")
+
+# Object member order and comma placement in schema -> GBNF (BACKLOG-74), model-free
+add_executable(test_schema_object_members unit/test_schema_object_members.c)
+target_link_libraries(test_schema_object_members ethervoxai)
+target_include_directories(test_schema_object_members PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME SchemaObjectMembers COMMAND test_schema_object_members)
+set_tests_properties(SchemaObjectMembers PROPERTIES TIMEOUT 30 LABELS "unit;grammar")
+
 # Multimodal media API tests (TASK-C3.1)
 add_executable(test_media unit/test_media.c)
 target_link_libraries(test_media ethervoxai)

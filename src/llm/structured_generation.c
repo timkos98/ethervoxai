@@ -292,6 +292,69 @@ static struct llama_sampler* create_sampler(
     return sampler;
 }
 
+ethervox_result_t ethervox_structured_render_prompt(
+    const char* system_prompt,
+    const char* prompt,
+    const ethervox_chat_turn_t* turns,
+    uint32_t turn_count,
+    char** out
+) {
+    if (!prompt || !out || (turn_count > 0 && !turns)) {
+        return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    }
+    // Every model this product ships is Granite (`MODELS-LICENSING.md`), so the template is fixed.
+    const chat_template_t* tmpl = chat_template_get(CHAT_TEMPLATE_GRANITE, NULL);
+
+    // Heap-allocated: prompt length is caller-controlled. Each turn adds a bounded marker overhead.
+    size_t capacity = 512 + strlen(prompt) + (system_prompt ? strlen(system_prompt) : 0);
+    for (uint32_t i = 0; i < turn_count; i++) {
+        capacity += 512 + (turns[i].content ? strlen(turns[i].content) : 0);
+    }
+    char* buf = malloc(capacity);
+    if (!buf) {
+        return ETHERVOX_ERROR_OUT_OF_MEMORY;
+    }
+    buf[0] = '\0';
+    size_t offset = 0;
+    ethervox_result_t result = ETHERVOX_SUCCESS;
+
+    if (system_prompt && system_prompt[0] != '\0') {
+        result = chat_template_format_system(tmpl, system_prompt, buf + offset, capacity - offset);
+        if (result != ETHERVOX_SUCCESS) goto fail;
+        offset = strlen(buf);
+    }
+
+    result = chat_template_format_user(tmpl, prompt, buf + offset, capacity - offset);
+    if (result != ETHERVOX_SUCCESS) goto fail;
+    offset = strlen(buf);
+
+    for (uint32_t i = 0; i < turn_count; i++) {
+        const char* content = turns[i].content ? turns[i].content : "";
+        if (turns[i].role == ETHERVOX_CHAT_ROLE_ASSISTANT) {
+            int n = snprintf(buf + offset, capacity - offset, "%s%s%s",
+                             tmpl->assistant_start, content, tmpl->assistant_end);
+            if (n < 0 || (size_t)n >= capacity - offset) { result = ETHERVOX_ERROR_BUFFER_TOO_SMALL; goto fail; }
+        } else if (turns[i].role == ETHERVOX_CHAT_ROLE_TOOL) {
+            result = chat_template_format_tool_response(tmpl, content, buf + offset, capacity - offset);
+            if (result != ETHERVOX_SUCCESS) goto fail;
+        } else {
+            result = ETHERVOX_ERROR_INVALID_ARGUMENT;
+            goto fail;
+        }
+        offset = strlen(buf);
+    }
+
+    result = chat_template_format_assistant_start(tmpl, buf + offset, capacity - offset);
+    if (result != ETHERVOX_SUCCESS) goto fail;
+
+    *out = buf;
+    return ETHERVOX_SUCCESS;
+
+fail:
+    free(buf);
+    return result;
+}
+
 /**
  * Tokenize and evaluate prompt
  *
@@ -311,7 +374,7 @@ static struct llama_sampler* create_sampler(
  */
 static ethervox_result_t prefill_prompt(
     generation_context_t* gen_ctx,
-    const char* system_prompt,
+    const ethervox_structured_gen_params_t* params,
     const char* prompt
 ) {
     // Every call here is a fresh, complete prompt (the caller always resends the whole
@@ -333,40 +396,17 @@ static ethervox_result_t prefill_prompt(
     llama_memory_t mem = llama_get_memory(gen_ctx->ctx);
     llama_memory_clear(mem, false);
 
-    const chat_template_t* tmpl = chat_template_get(CHAT_TEMPLATE_GRANITE, NULL);
-    // Heap-allocated, not a stack array: prompt length is caller-controlled and the role-marker
-    // overhead is small, but a large prompt on a constrained thread stack would be a real risk.
-    size_t system_len = system_prompt ? strlen(system_prompt) : 0;
-    size_t formatted_capacity = system_len + strlen(prompt) + 512;
-    char* formatted = malloc(formatted_capacity);
-    if (!formatted) {
-        return ETHERVOX_ERROR_OUT_OF_MEMORY;
+    char* formatted = NULL;
+    ethervox_result_t render_result = ethervox_structured_render_prompt(
+        params->system_prompt, prompt, params->turns, params->turn_count, &formatted);
+    if (render_result != ETHERVOX_SUCCESS) {
+        return render_result;
     }
-    size_t offset = 0;
-
-    if (system_prompt && system_len > 0) {
-        ethervox_result_t result = chat_template_format_system(
-            tmpl, system_prompt, formatted, formatted_capacity);
-        if (result != ETHERVOX_SUCCESS) {
-            free(formatted);
-            return result;
-        }
-        offset = strlen(formatted);
-    }
-
-    ethervox_result_t result = chat_template_format_user(
-        tmpl, prompt, formatted + offset, formatted_capacity - offset);
-    if (result != ETHERVOX_SUCCESS) {
-        free(formatted);
-        return result;
-    }
-    offset = strlen(formatted);
-
-    result = chat_template_format_assistant_start(
-        tmpl, formatted + offset, formatted_capacity - offset);
-    if (result != ETHERVOX_SUCCESS) {
-        free(formatted);
-        return result;
+    // Opt-in: the exact bytes handed to the tokenizer, for diagnosing prompt-shape problems
+    // (`BACKLOG-80` -- the diagnosis was made from reading code, this is how to check it live).
+    if (getenv("ETHERVOX_LOG_PROMPT")) {
+        fprintf(stderr, "[structured_generation] prompt bytes (%zu):\n%s\n<<<end prompt>>>\n",
+                strlen(formatted), formatted);
     }
 
     // Tokenize prompt
@@ -426,6 +466,7 @@ static ethervox_result_t generate_tokens(generation_context_t* gen_ctx) {
     }
     
     uint32_t max_tokens = gen_ctx->params->max_tokens;
+    bool finished_on_eog = false;
     
     for (uint32_t i = 0; i < max_tokens; i++) {
         // Sample next token
@@ -440,6 +481,7 @@ static ethervox_result_t generate_tokens(generation_context_t* gen_ctx) {
                 .finished = { .finish_reason = "stop" }
             };
             fire_event(gen_ctx, &event);
+            finished_on_eog = true;
             break;
         }
         
@@ -545,8 +587,11 @@ static ethervox_result_t generate_tokens(generation_context_t* gen_ctx) {
     // here; the caller (`ev-llm`'s `run_generation`/`run_tool_aware_generation`) synthesizes one
     // when it sees the call succeeded without ever observing a Finished event. Usage still needs
     // firing here, before that synthesized Finished, for the same "always ends with Finished"
-    // ordering.
-    fire_usage_event(gen_ctx);
+    // ordering. Not on the EOG path: it already fired Usage then Finished, and a second Usage
+    // after Finished breaks the "stream ends with Finished" contract.
+    if (!finished_on_eog) {
+        fire_usage_event(gen_ctx);
+    }
     llama_sampler_free(gen_ctx->sampler);
     return ETHERVOX_SUCCESS;
 }
@@ -587,7 +632,9 @@ ethervox_structured_gen_params_t ethervox_structured_gen_params_default(void) {
         .top_p = 0.9f,
         .seed = 0,
         .include_logprobs = false,
-        .system_prompt = NULL
+        .system_prompt = NULL,
+        .turns = NULL,
+        .turn_count = 0
     };
     return params;
 }
@@ -623,7 +670,7 @@ ethervox_result_t ethervox_generate_structured(
     }
     
     // Prefill prompt
-    result = prefill_prompt(&gen_ctx, params->system_prompt, prompt);
+    result = prefill_prompt(&gen_ctx, params, prompt);
     if (result != ETHERVOX_SUCCESS) {
         free(gen_ctx.output_buffer);
         return result;

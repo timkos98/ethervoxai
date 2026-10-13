@@ -8,7 +8,24 @@ All notable changes to this project are documented here, following
 
 ## [Unreleased]
 
+### Added
+- **Role-structured prompts for `ethervox_generate_structured` (`C6.1a`).**
+  `ethervox_structured_gen_params_t` gains `system_prompt`, `turns`/`turn_count`
+  (`ethervox_chat_turn_t`: assistant or tool); `ethervox_structured_render_prompt` renders
+  system + user + turns + assistant-start through the chat template, byte-identical to Granite's
+  own Jinja output for a tool round trip. `chat_template_t` gains `tool_response_start/_end`
+  (Granite 4's `<tool_response>` user turn) and `chat_template_format_tool_response`; every other
+  template and `governor.c` are unchanged. `ETHERVOX_LOG_PROMPT=1` logs the exact tokenizer input.
+
 ### Fixed
+- **`convert_object` (`json_schema_to_gbnf.c`) emitted the comma between members unconditionally**, so
+  an optional member produced a mandatory comma (stray trailing/leading comma when omitted). The comma
+  now lives inside the optional group of the member that follows another; members keep `properties`
+  order (`BACKLOG-74`). New `test_schema_object_members`.
+- **`ethervox_generate_structured` fired `ETHERVOX_EVENT_USAGE` a second time after `FINISHED`** on the
+  EOG path, so the stream no longer ended with `Finished`.
+- Corrected the `CHAT_TEMPLATE_GRANITE_4` enum comment: Granite 4 tool calls are
+  `<tool_call>{json}</tool_call>`, not a `<|tool_call|>` token.
 - **`prefill_prompt` never cleared the context's KV cache before tokenizing a new prompt.**
   Every other generation path in this codebase (`governor.c`, `llama_backend.c`, `session.c`,
   `granite_speech_backend.c`) clears memory via `llama_memory_clear` before decoding; this one

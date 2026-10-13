@@ -37,7 +37,7 @@ typedef enum {
 typedef enum {
     CHAT_TEMPLATE_QWEN,      // Qwen 2.5 / ChatML format: <|im_start|>role\n...<|im_end|>
     CHAT_TEMPLATE_GRANITE_3, // IBM Granite 3.x format: <|start_of_role|>role<|end_of_role|>...< tool|>
-    CHAT_TEMPLATE_GRANITE_4, // IBM Granite 4.x format: <|start_of_role|>role<|end_of_role|>...<|tool_call|>
+    CHAT_TEMPLATE_GRANITE_4, // IBM Granite 4.x format: <|start_of_role|>role<|end_of_role|>...; tool calls are <tool_call>{json}</tool_call> (TOOL_FORMAT_JSON_IN_XML)
     CHAT_TEMPLATE_GRANITE = CHAT_TEMPLATE_GRANITE_4,  // Alias for latest Granite (backward compat)
     CHAT_TEMPLATE_PHI,       // Microsoft Phi format: <|system|>...<|end|><|user|>...<|end|>
     CHAT_TEMPLATE_LLAMA3,    // Meta Llama 3 format: <|begin_of_text|><|start_header_id|>role<|end_header_id|>
@@ -68,6 +68,13 @@ typedef struct {
     // Tool result wrapper
     const char* tool_result_start;
     const char* tool_result_end;
+
+    // Tool result wrapper as the model's own chat template renders it (Granite 4: a user turn
+    // holding <tool_response>...</tool_response>). NULL = fall back to tool_result_*; new
+    // role-structured callers use chat_template_format_tool_response, legacy callers (governor.c)
+    // keep tool_result_* unchanged.
+    const char* tool_response_start;
+    const char* tool_response_end;
     
     // Stop sequences for generation
     const char* stop_sequences[8];
@@ -161,6 +168,17 @@ ethervox_result_t chat_template_format_assistant_start(
  * @return ETHERVOX_SUCCESS on success, error code on failure
  */
 ethervox_result_t chat_template_format_tool_result(
+    const chat_template_t* tmpl,
+    const char* result,
+    char* output,
+    size_t output_size
+);
+
+/**
+ * Format a tool result the way the model's own template does (see tool_response_start); falls
+ * back to chat_template_format_tool_result's markers when the template defines none.
+ */
+ethervox_result_t chat_template_format_tool_response(
     const chat_template_t* tmpl,
     const char* result,
     char* output,

@@ -416,64 +416,91 @@ static ethervox_result_t convert_object(
         }
     }
     
-    // Start building object rule
-    string_builder_t obj_sb;
-    result = sb_init(&obj_sb, 1024);
-    if (result != ETHERVOX_SUCCESS) return result;
-    
-    char prefix[128];
-    snprintf(prefix, sizeof(prefix), "%s ::= \"{\" ws ", rule_name);
-    sb_append(&obj_sb, prefix);
-    
-    // Generate property rules
+    // Pass 1: convert every property's value schema and build its "key": value member pattern.
+    // Members are emitted in `properties` order (the grammar fixes key order, so callers that care
+    // -- e.g. a tool-call envelope wanting "name" before "arguments" -- control it by authoring
+    // order; BACKLOG-74).
+    enum { MAX_OBJECT_PROPS = 64 };
+    char members[MAX_OBJECT_PROPS][512];
+    int member_required[MAX_OBJECT_PROPS] = {0};
     int prop_count = 0;
     const cJSON* prop = NULL;
     cJSON_ArrayForEach(prop, properties) {
         const char* prop_name = prop->string;
         if (!prop_name) continue;
-        
-        // Check if required
-        int is_required = 0;
+        if (prop_count >= MAX_OBJECT_PROPS) return ETHERVOX_ERROR_INVALID_ARGUMENT;
+
         for (int i = 0; i < num_required; i++) {
             if (required_fields[i] && strcmp(required_fields[i], prop_name) == 0) {
-                is_required = 1;
+                member_required[prop_count] = 1;
                 break;
             }
         }
-        
-        // Generate subrule for this property's value
+
         char safe_prop_name[128];
         sanitize_rule_name_segment(prop_name, safe_prop_name, sizeof(safe_prop_name));
         char value_rule_name[128];
-        snprintf(value_rule_name, sizeof(value_rule_name), "%s-%s-value", rule_name, safe_prop_name);
-        
-        // Convert property schema recursively
+        int vn = snprintf(value_rule_name, sizeof(value_rule_name), "%s-%s-value", rule_name, safe_prop_name);
+        if (vn < 0 || (size_t)vn >= sizeof(value_rule_name)) return ETHERVOX_ERROR_BUFFER_TOO_SMALL;
+
         result = convert_schema_to_gbnf(ctx, prop, value_rule_name);
-        if (result != ETHERVOX_SUCCESS) {
-            sb_free(&obj_sb);
-            return result;
-        }
-        
-        // Add property to object rule
-        if (prop_count > 0) {
-            sb_append(&obj_sb, " ws \",\" ws ");
-        }
-        
-        char prop_pattern[512];
-        if (is_required) {
-            // Required: always present
-            snprintf(prop_pattern, sizeof(prop_pattern), "\"\\\"%s\\\"\" ws \":\" ws %s",
-                     prop_name, value_rule_name);
-        } else {
-            // Optional: may be present
-            snprintf(prop_pattern, sizeof(prop_pattern), "(\"\\\"%s\\\"\" ws \":\" ws %s)?",
-                     prop_name, value_rule_name);
-        }
-        sb_append(&obj_sb, prop_pattern);
-        
+        if (result != ETHERVOX_SUCCESS) return result;
+
+        int mn = snprintf(members[prop_count], sizeof(members[prop_count]),
+                          "\"\\\"%s\\\"\" ws \":\" ws %s", prop_name, value_rule_name);
+        if (mn < 0 || (size_t)mn >= sizeof(members[prop_count])) return ETHERVOX_ERROR_BUFFER_TOO_SMALL;
         prop_count++;
     }
-    
+
+    // Pass 2: assemble. A comma belongs to the member that FOLLOWS another member, so it must sit
+    // inside that member's optional group -- a comma emitted unconditionally between members
+    // forces a stray one whenever an optional member is omitted (BACKLOG-74).
+    int first_required = -1;
+    for (int i = 0; i < prop_count; i++) {
+        if (member_required[i]) { first_required = i; break; }
+    }
+
+    string_builder_t obj_sb;
+    result = sb_init(&obj_sb, 1024);
+    if (result != ETHERVOX_SUCCESS) return result;
+
+    char prefix[128];
+    snprintf(prefix, sizeof(prefix), "%s ::= \"{\" ws ", rule_name);
+    sb_append(&obj_sb, prefix);
+
+    if (first_required >= 0) {
+        // Optional members before the first required one carry their trailing comma with them.
+        for (int i = 0; i < first_required; i++) {
+            sb_append(&obj_sb, "(");
+            sb_append(&obj_sb, members[i]);
+            sb_append(&obj_sb, " ws \",\" ws) ");
+        }
+        sb_append(&obj_sb, members[first_required]);
+        for (int i = first_required + 1; i < prop_count; i++) {
+            if (member_required[i]) {
+                sb_append(&obj_sb, " ws \",\" ws ");
+                sb_append(&obj_sb, members[i]);
+            } else {
+                sb_append(&obj_sb, " (ws \",\" ws ");
+                sb_append(&obj_sb, members[i]);
+                sb_append(&obj_sb, ")?");
+            }
+        }
+    } else {
+        // Every member optional: any subset, in order, with commas only between present members.
+        sb_append(&obj_sb, "(");
+        for (int k = 0; k < prop_count; k++) {
+            if (k > 0) sb_append(&obj_sb, " | ");
+            sb_append(&obj_sb, members[k]);
+            for (int j = k + 1; j < prop_count; j++) {
+                sb_append(&obj_sb, " (ws \",\" ws ");
+                sb_append(&obj_sb, members[j]);
+                sb_append(&obj_sb, ")?");
+            }
+        }
+        sb_append(&obj_sb, ")?");
+    }
+
     sb_append(&obj_sb, " ws \"}\" ws\n");
     
     // Append to context output

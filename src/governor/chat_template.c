@@ -74,6 +74,8 @@ static const chat_template_t granite4_template = {
     .assistant_end = "<|end_of_text|>\n",
     .tool_result_start = "<|start_of_role|>user<|end_of_role|><tool_result>",
     .tool_result_end = "</tool_result><|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>",
+    .tool_response_start = "<|start_of_role|>user<|end_of_role|>\n<tool_response>\n",
+    .tool_response_end = "\n</tool_response><|end_of_text|>\n",
     .stop_sequences = {
         "<|end_of_text|>",
         "<|start_of_role|>",
@@ -289,6 +291,24 @@ ethervox_result_t chat_template_format_tool_result(
                            tmpl->tool_result_start,
                            result,
                            tmpl->tool_result_end);
+    return (written >= 0 && (size_t)written < output_size) ? ETHERVOX_SUCCESS : ETHERVOX_ERROR_BUFFER_TOO_SMALL;
+}
+
+ethervox_result_t chat_template_format_tool_response(
+    const chat_template_t* tmpl,
+    const char* result,
+    char* output,
+    size_t output_size
+) {
+    if (!tmpl || !result || !output || output_size == 0) return ETHERVOX_ERROR_INVALID_ARGUMENT;
+    if (!tmpl->tool_response_start || !tmpl->tool_response_end) {
+        return chat_template_format_tool_result(tmpl, result, output, output_size);
+    }
+
+    int written = snprintf(output, output_size, "%s%s%s",
+                           tmpl->tool_response_start,
+                           result,
+                           tmpl->tool_response_end);
     return (written >= 0 && (size_t)written < output_size) ? ETHERVOX_SUCCESS : ETHERVOX_ERROR_BUFFER_TOO_SMALL;
 }
 
