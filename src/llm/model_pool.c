@@ -9,6 +9,7 @@
 #include "ethervox/model_pool.h"
 #include "ethervox/logging.h"
 #include "ethervox/platform_thread.h"
+#include "ethervox/platform_mem.h"
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -222,6 +223,40 @@ static ethervox_result_t estimate_memory(
     return ETHERVOX_SUCCESS;
 }
 
+/**
+ * A requested context size of 0 means "as much of the model's trained context as fits": the KV
+ * cache (f16, from the model's own layer and head shape) may take up to an eighth of the
+ * machine's RAM. Any non-zero request is honoured as given.
+ */
+static uint32_t resolve_context_size(const struct llama_model* model, uint32_t requested) {
+    if (requested != 0) {
+        return requested;
+    }
+    int32_t train = llama_model_n_ctx_train(model);
+    int32_t heads = llama_model_n_head(model);
+    uint64_t bytes_per_token = 0;
+    if (heads > 0) {
+        bytes_per_token = 2ull * 2ull * (uint64_t)llama_model_n_layer(model) *
+                          (uint64_t)llama_model_n_head_kv(model) *
+                          ((uint64_t)llama_model_n_embd(model) / (uint64_t)heads);
+    }
+    uint64_t ram_mb = 0;
+    if (ethervox_mem_get_info(&ram_mb, NULL) != ETHERVOX_SUCCESS) {
+        ram_mb = 0;
+    }
+    uint64_t fit = (bytes_per_token > 0 && ram_mb > 0)
+                       ? (ram_mb * 1024ull * 1024ull / 8ull) / bytes_per_token
+                       : 8192;
+    uint64_t size = fit < (uint64_t)train ? fit : (uint64_t)train;
+    size &= ~1023ull;
+    if (size < 4096) {
+        size = 4096;
+    }
+    ETHERVOX_LOG_INFO("[ModelPool] Auto context: %llu tokens (model trained for %d, %llu MB RAM)",
+                      (unsigned long long)size, train, (unsigned long long)ram_mb);
+    return (uint32_t)size;
+}
+
 ethervox_result_t ethervox_model_pool_create(
     const ethervox_paths_t* paths,
     uint64_t budget_bytes,
@@ -373,7 +408,7 @@ ethervox_result_t ethervox_model_pool_load(
     
     // Create context
     struct llama_context_params ctx_params = llama_context_default_params();
-    ctx_params.n_ctx = config->context_size;
+    ctx_params.n_ctx = resolve_context_size(model, config->context_size);
     ctx_params.n_threads = config->n_threads;
     ctx_params.n_threads_batch = config->n_threads;
     ctx_params.n_seq_max = config->n_seq_max > 0 ? config->n_seq_max : 1;
@@ -925,7 +960,7 @@ ethervox_result_t ethervox_model_pool_load_shared_context(
     ETHERVOX_LOG_INFO("[ModelPool] Sharing resident model for a new context: %s", config->model_path);
 
     struct llama_context_params ctx_params = llama_context_default_params();
-    ctx_params.n_ctx = config->context_size;
+    ctx_params.n_ctx = resolve_context_size(shared->model, config->context_size);
     ctx_params.n_threads = config->n_threads;
     ctx_params.n_threads_batch = config->n_threads;
     ctx_params.n_seq_max = config->n_seq_max > 0 ? config->n_seq_max : 1;
