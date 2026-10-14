@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <pthread.h>
 
 // Maximum response length (256 KB)
 #define MAX_RESPONSE_LENGTH (256 * 1024)
@@ -299,7 +300,20 @@ ethervox_result_t ethervox_structured_render_prompt(
     uint32_t turn_count,
     char** out
 ) {
-    if (!prompt || !out || (turn_count > 0 && !turns)) {
+    return ethervox_structured_render_prompt_with_history(
+        system_prompt, NULL, 0, prompt, turns, turn_count, out);
+}
+
+ethervox_result_t ethervox_structured_render_prompt_with_history(
+    const char* system_prompt,
+    const ethervox_chat_turn_t* history,
+    uint32_t history_count,
+    const char* prompt,
+    const ethervox_chat_turn_t* turns,
+    uint32_t turn_count,
+    char** out
+) {
+    if (!prompt || !out || (turn_count > 0 && !turns) || (history_count > 0 && !history)) {
         return ETHERVOX_ERROR_INVALID_ARGUMENT;
     }
     // Every model this product ships is Granite (`MODELS-LICENSING.md`), so the template is fixed.
@@ -309,6 +323,9 @@ ethervox_result_t ethervox_structured_render_prompt(
     size_t capacity = 512 + strlen(prompt) + (system_prompt ? strlen(system_prompt) : 0);
     for (uint32_t i = 0; i < turn_count; i++) {
         capacity += 512 + (turns[i].content ? strlen(turns[i].content) : 0);
+    }
+    for (uint32_t i = 0; i < history_count; i++) {
+        capacity += 512 + (history[i].content ? strlen(history[i].content) : 0);
     }
     char* buf = malloc(capacity);
     if (!buf) {
@@ -321,6 +338,22 @@ ethervox_result_t ethervox_structured_render_prompt(
     if (system_prompt && system_prompt[0] != '\0') {
         result = chat_template_format_system(tmpl, system_prompt, buf + offset, capacity - offset);
         if (result != ETHERVOX_SUCCESS) goto fail;
+        offset = strlen(buf);
+    }
+
+    for (uint32_t i = 0; i < history_count; i++) {
+        const char* content = history[i].content ? history[i].content : "";
+        if (history[i].role == ETHERVOX_CHAT_ROLE_USER) {
+            result = chat_template_format_user(tmpl, content, buf + offset, capacity - offset);
+            if (result != ETHERVOX_SUCCESS) goto fail;
+        } else if (history[i].role == ETHERVOX_CHAT_ROLE_ASSISTANT) {
+            int n = snprintf(buf + offset, capacity - offset, "%s%s%s",
+                             tmpl->assistant_start, content, tmpl->assistant_end);
+            if (n < 0 || (size_t)n >= capacity - offset) { result = ETHERVOX_ERROR_BUFFER_TOO_SMALL; goto fail; }
+        } else {
+            result = ETHERVOX_ERROR_INVALID_ARGUMENT;
+            goto fail;
+        }
         offset = strlen(buf);
     }
 
@@ -356,6 +389,66 @@ fail:
 }
 
 /**
+ * The prompt tokens last evaluated into one context, so the next call can reuse the part of its
+ * prompt that matches. A single entry: one assistant conversation drives the governor model at a
+ * time, and a second context simply replaces it (a miss, never a wrong hit -- the KV state itself
+ * is checked before anything is reused).
+ */
+static struct {
+    pthread_mutex_t lock;
+    const struct llama_context* ctx;
+    llama_token* tokens;
+    int count;
+} g_prefix = { .lock = PTHREAD_MUTEX_INITIALIZER };
+
+static void prefix_cache_invalidate(void) {
+    pthread_mutex_lock(&g_prefix.lock);
+    free(g_prefix.tokens);
+    g_prefix.tokens = NULL;
+    g_prefix.count = 0;
+    g_prefix.ctx = NULL;
+    pthread_mutex_unlock(&g_prefix.lock);
+}
+
+static void prefix_cache_store(const struct llama_context* ctx, const llama_token* tokens, int count) {
+    llama_token* copy = malloc((size_t)count * sizeof(llama_token));
+    pthread_mutex_lock(&g_prefix.lock);
+    free(g_prefix.tokens);
+    if (copy) {
+        memcpy(copy, tokens, (size_t)count * sizeof(llama_token));
+    }
+    g_prefix.tokens = copy;
+    g_prefix.count = copy ? count : 0;
+    g_prefix.ctx = copy ? ctx : NULL;
+    pthread_mutex_unlock(&g_prefix.lock);
+}
+
+/**
+ * How many leading tokens of `tokens` are already in `ctx`'s KV cache from the previous call.
+ * At least one token is always left to evaluate, so the logits for sampling exist. 0 when reuse
+ * is off (ETHERVOX_DISABLE_PREFIX_CACHE), the context differs, or its KV state no longer holds
+ * what was cached (freed and reallocated context, another path decoded into it).
+ */
+static int prefix_cache_common_length(
+    const struct llama_context* ctx, llama_memory_t mem, const llama_token* tokens, int n_tokens
+) {
+    if (getenv("ETHERVOX_DISABLE_PREFIX_CACHE")) {
+        return 0;
+    }
+    int common = 0;
+    pthread_mutex_lock(&g_prefix.lock);
+    if (g_prefix.ctx == ctx && g_prefix.tokens && g_prefix.count > 0 &&
+        llama_memory_seq_pos_max(mem, 0) >= (llama_pos)g_prefix.count - 1) {
+        int limit = g_prefix.count < n_tokens - 1 ? g_prefix.count : n_tokens - 1;
+        while (common < limit && g_prefix.tokens[common] == tokens[common]) {
+            common++;
+        }
+    }
+    pthread_mutex_unlock(&g_prefix.lock);
+    return common;
+}
+
+/**
  * Tokenize and evaluate prompt
  *
  * `prompt` arrives here as the caller's raw text (e.g. a user's chat message) -- with no chat
@@ -378,27 +471,18 @@ static ethervox_result_t prefill_prompt(
     const char* prompt
 ) {
     // Every call here is a fresh, complete prompt (the caller always resends the whole
-    // cumulative text, never an incremental continuation of a previous call's KV state) -- but
-    // nothing cleared the context's memory before this, unlike every other generation path in
-    // this codebase (governor.c, llama_backend.c, session.c, granite_speech_backend.c all clear
-    // before decoding). Without this, each call just kept appending at the context's own
-    // ever-advancing internal position, so the KV cache filled up across calls regardless of any
-    // single prompt's size -- confirmed live: a handful of small, entirely separate
-    // `ethervox_generate_structured` calls against one loaded model exhausted a 4096-token
-    // context and `llama_decode` aborted with "failed to find a memory slot", after which the
-    // same handle could never decode again for the rest of its lifetime.
-    //
-    // `data=false`: only the logical bookkeeping (positions/sequences) needs resetting so new
-    // tokens can claim fresh slots -- the new decode overwrites whatever K/V bytes were there
-    // regardless, so physically zeroing the underlying buffers too (`data=true`, what
-    // governor.c's conversation-reset call sites want, for a real "wipe this session" reason)
-    // is pure wasted work here, repeated on every single turn of a multi-turn tool-calling loop.
+    // cumulative text, never an incremental continuation of a previous call's KV state), so the
+    // context must not just keep appending at its ever-advancing position -- confirmed live: a
+    // handful of separate calls against one model exhausted a 4096-token context and
+    // `llama_decode` aborted with "failed to find a memory slot". Instead of always clearing,
+    // the tokens shared with the previous call's prompt are kept (see `prefix_cache` below) and
+    // only the differing tail is evaluated; anything else is discarded, same as a clear.
     llama_memory_t mem = llama_get_memory(gen_ctx->ctx);
-    llama_memory_clear(mem, false);
 
     char* formatted = NULL;
-    ethervox_result_t render_result = ethervox_structured_render_prompt(
-        params->system_prompt, prompt, params->turns, params->turn_count, &formatted);
+    ethervox_result_t render_result = ethervox_structured_render_prompt_with_history(
+        params->system_prompt, params->history, params->history_count, prompt, params->turns,
+        params->turn_count, &formatted);
     if (render_result != ETHERVOX_SUCCESS) {
         return render_result;
     }
@@ -435,20 +519,34 @@ static ethervox_result_t prefill_prompt(
         return ETHERVOX_ERROR_FAILED;
     }
     
-    // Evaluate prompt in batches
+    // Keep the longest prefix the context already holds for exactly these tokens.
+    int reuse = prefix_cache_common_length(gen_ctx->ctx, mem, tokens, n_tokens);
+    // Recurrent/hybrid models cannot drop the tail of a sequence: the trim reports failure and
+    // the whole context is cleared instead (`data=false`: only the bookkeeping needs resetting).
+    if (reuse > 0 && !llama_memory_seq_rm(mem, 0, reuse, -1)) {
+        reuse = 0;
+    }
+    if (reuse == 0) {
+        llama_memory_clear(mem, false);
+    }
+    ETHERVOX_LOG_INFO("Prompt %d tokens, %d reused from the previous call", n_tokens, reuse);
+
+    // Evaluate the rest of the prompt in batches
     int batch_size = 512;
-    for (int i = 0; i < n_tokens; i += batch_size) {
+    for (int i = reuse; i < n_tokens; i += batch_size) {
         int batch_count = (i + batch_size > n_tokens) ? (n_tokens - i) : batch_size;
         
         struct llama_batch batch = llama_batch_get_one(tokens + i, batch_count);
         
         int result = llama_decode(gen_ctx->ctx, batch);
         if (result != 0) {
+            prefix_cache_invalidate();
             free(tokens);
             free(formatted);
             return ETHERVOX_ERROR_FAILED;
         }
     }
+    prefix_cache_store(gen_ctx->ctx, tokens, n_tokens);
     
     free(tokens);
     free(formatted);
@@ -634,7 +732,9 @@ ethervox_structured_gen_params_t ethervox_structured_gen_params_default(void) {
         .include_logprobs = false,
         .system_prompt = NULL,
         .turns = NULL,
-        .turn_count = 0
+        .turn_count = 0,
+        .history = NULL,
+        .history_count = 0
     };
     return params;
 }

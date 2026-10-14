@@ -44,7 +44,8 @@ extern "C" {
  */
 typedef enum {
     ETHERVOX_CHAT_ROLE_ASSISTANT = 1,  /**< Prior model output (e.g. a <tool_call> block) */
-    ETHERVOX_CHAT_ROLE_TOOL = 2        /**< A tool's result, rendered the way the model was trained */
+    ETHERVOX_CHAT_ROLE_TOOL = 2,       /**< A tool's result, rendered the way the model was trained */
+    ETHERVOX_CHAT_ROLE_USER = 3        /**< A user message; only meaningful in `history` */
 } ethervox_chat_role_t;
 
 /** One turn after the initial user prompt. */
@@ -72,6 +73,14 @@ typedef struct {
      */
     const ethervox_chat_turn_t* turns;
     uint32_t turn_count;
+    /**
+     * Earlier conversation (USER and ASSISTANT turns), rendered as real turns between the system
+     * prompt and `prompt`'s user turn. NULL/0 (default) = none. Because it precedes `prompt`, a
+     * follow-up's prompt starts with the previous call's prompt, which lets the KV cache reuse
+     * that shared prefix instead of re-evaluating it.
+     */
+    const ethervox_chat_turn_t* history;
+    uint32_t history_count;
 } ethervox_structured_gen_params_t;
 
 /**
@@ -81,6 +90,17 @@ typedef struct {
  */
 ethervox_result_t ethervox_structured_render_prompt(
     const char* system_prompt,
+    const char* prompt,
+    const ethervox_chat_turn_t* turns,
+    uint32_t turn_count,
+    char** out
+);
+
+/** As above, with earlier conversation turns rendered between the system prompt and `prompt`. */
+ethervox_result_t ethervox_structured_render_prompt_with_history(
+    const char* system_prompt,
+    const ethervox_chat_turn_t* history,
+    uint32_t history_count,
     const char* prompt,
     const ethervox_chat_turn_t* turns,
     uint32_t turn_count,
